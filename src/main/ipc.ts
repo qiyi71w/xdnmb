@@ -1,5 +1,5 @@
 import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy, type ReadOutcome } from '../shared/api'
+import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy } from '../shared/api'
 import type { FeedRef, PostId, ReadingMode } from '../shared/forum'
 import { DEFAULT_SETTINGS, type AppSettings, type ReadingAnchor } from '../shared/reading'
 import type { ReadingService } from './reading/service'
@@ -104,7 +104,7 @@ async function attempt(write: () => Promise<unknown>): Promise<boolean> {
 class OperationRegistry {
   private readonly active = new Map<string, AbortController>()
 
-  async run<T>(sender: WebContents, id: string, work: (signal: AbortSignal) => Promise<ReadOutcome<T>>): Promise<ReadOutcome<T>> {
+  async run<T>(sender: WebContents, id: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const key = `${sender.id}:${id}`
     this.active.get(key)?.abort()
     const controller = new AbortController()
@@ -163,6 +163,18 @@ export function registerIpc({ reading, store, getStatus, isTrustedSender }: IpcD
     const threadId = forumId(input.threadId)
     const mode = readingMode(input.mode)
     return operations.run(event.sender, operationId(input), (signal) => reading.locateThreadEnd(threadId, mode, signal))
+  })
+
+  handle(IpcChannel.previewQuote, async (event, raw) => {
+    const input = record(raw)
+    const postId = forumId(input.postId)
+    return operations.run(event.sender, operationId(input), (signal) => reading.previewQuote(postId, signal))
+  })
+
+  handle(IpcChannel.locateQuote, async (event, raw) => {
+    const input = record(raw)
+    const postId = forumId(input.postId)
+    return operations.run(event.sender, operationId(input), (signal) => reading.locateQuote(postId, signal))
   })
 
   handle(IpcChannel.cancel, async (event, raw) => {

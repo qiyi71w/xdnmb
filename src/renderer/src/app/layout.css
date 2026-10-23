@@ -94,6 +94,22 @@
   background: transparent;
 }
 
+/* The same back control, expanded while the current entry came from a quote. The short label
+   stays in narrow windows; the tab strip shrinks instead. */
+.btn-back-quote {
+  flex: none;
+  min-height: 30px;
+  padding: 3px 10px 3px 8px;
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.btn-back-quote .icon {
+  color: var(--accent-ink);
+}
+
 .tab-strip {
   flex: 1;
   min-width: 0;

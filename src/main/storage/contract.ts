@@ -3,6 +3,7 @@ import type {
   BoardDirectory,
   FeedPage,
   FeedRef,
+  Post,
   PostId,
   ReadingMode,
   ThreadCoverage,
@@ -25,6 +26,17 @@ export interface Stored<T> {
   fetchedAt: string
 }
 
+/** Locally recorded ownership of a post, used to locate quotes without guessing. */
+export interface PostThreadRelation {
+  threadId: ThreadId
+  /** The post is the thread's main post (shown on page 1 of both modes). */
+  isHead: boolean
+  /** Saved mode preference of the thread; `all` when none was saved. */
+  preferredMode: ReadingMode
+  /** Latest-fetched stored page of each mode whose replies include the post; `null` when none. */
+  pages: Record<ReadingMode, number | null>
+}
+
 /**
  * Persistence used by reading. Implemented by a single database worker owned by the main process;
  * every call is one short transaction executed serially in that worker.
@@ -39,6 +51,11 @@ export interface ReadingStore {
   saveThreadPage(page: ThreadPage, fetchedAt: string): Promise<ThreadCoverage>
   loadThreadPage(threadId: ThreadId, mode: ReadingMode, page: number): Promise<Stored<ThreadPage> | null>
   getThreadCoverage(threadId: ThreadId, mode: ReadingMode): Promise<ThreadCoverage>
+  /** Saves one post's content without any thread relation (a quote preview carries none). */
+  savePost(post: Post, fetchedAt: string): Promise<void>
+  loadPost(postId: PostId): Promise<Stored<Post> | null>
+  /** Recorded thread of a post and where stored pages contain it; `null` when never observed in a thread or list. */
+  findPostThread(postId: PostId): Promise<PostThreadRelation | null>
 
   /** Mode preference, positions, read/unread posts, attention and both coverages of one thread. */
   getReadingState(threadId: ThreadId): Promise<ThreadReadingState>

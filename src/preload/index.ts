@@ -10,6 +10,10 @@ const api: XidaoApi = {
     locateThreadEnd: (input) => ipcRenderer.invoke(IpcChannel.locateThreadEnd, input),
     cancel: (input) => ipcRenderer.invoke(IpcChannel.cancel, input)
   },
+  quotes: {
+    preview: (input) => ipcRenderer.invoke(IpcChannel.previewQuote, input),
+    locate: (input) => ipcRenderer.invoke(IpcChannel.locateQuote, input)
+  },
   readingState: {
     get: (input) => ipcRenderer.invoke(IpcChannel.getReadingState, input),
     setMode: (input) => ipcRenderer.invoke(IpcChannel.setReadingMode, input),

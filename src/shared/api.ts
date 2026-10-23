@@ -1,4 +1,4 @@
-import type { BoardDirectory, FeedPage, FeedRef, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
+import type { BoardDirectory, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
 import type { AppSettings, MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
 
 /**
@@ -63,6 +63,44 @@ export type ThreadEndResult =
   | { status: 'insufficient'; probedPages: number[]; coverage: ThreadCoverage }
   | { status: 'interrupted'; probedPages: number[]; coverage: ThreadCoverage; failedPage: number; error: ReadError }
 
+/**
+ * Content of a quoted post (`/api/ref`). `threadId` is the owning thread when this machine has
+ * observed the post in a thread page or a list; `null` means not known locally. The ref response
+ * itself carries no thread or page, so ownership is never derived from it.
+ */
+export interface QuotePreview {
+  post: Post
+  threadId: ThreadId | null
+}
+
+/** Where a quote target is shown: a post verified on `page` of `mode` of its thread. */
+export interface QuoteTarget {
+  postId: PostId
+  page: number
+  mode: ReadingMode
+}
+
+/**
+ * Result of locating a quoted post. Only recorded ownership is used: the post's thread from local
+ * observations, then the latest stored page of each mode that contained it, verified by reading
+ * that page again; or, with no record at all, whether the post is itself a thread's main post.
+ * Never scans a thread, trusts web-ref page numbers or guesses an owner.
+ * - `located`: the post was found on `target.page` of `target.mode` now (`fresh`), or on the stored
+ *   copy of that page after the network read failed (`cached`, `networkError` set).
+ * - `thread-known`: the owning thread is known and was just read (its recorded page, or page 1 of the
+ *   preferred mode when no stored page records the post), but the post was not on its recorded page
+ *   or no page records it. Opening the thread (打开原串) is a separate user action.
+ * - `unknown-thread`: no local record and the post is not a thread's main post.
+ * - `failed`: reading what was needed failed; `threadId` when the owner is known.
+ * - `cancelled`: superseded or cancelled; must be ignored.
+ */
+export type QuoteLocation =
+  | { status: 'located'; threadId: ThreadId; head: Post; target: QuoteTarget; source: 'fresh' | 'cached'; networkError: ReadError | null }
+  | { status: 'thread-known'; threadId: ThreadId; head: Post }
+  | { status: 'unknown-thread' }
+  | { status: 'failed'; threadId: ThreadId | null; error: ReadError }
+  | { status: 'cancelled' }
+
 export type DirectoryStrategy =
   /** Use stored directory if any; otherwise fetch in the foreground lane. */
   | 'cache-first'
@@ -108,6 +146,16 @@ export interface XidaoApi {
     /** Cancels queued and in-flight reads of the operation. Unknown IDs are ignored. */
     cancel(input: { operationId: OperationId }): Promise<void>
   }
+  /**
+   * Quote preview and location. Both are foreground reads that never mark anything read and never
+   * navigate; the renderer decides what to do with a result.
+   */
+  quotes: {
+    /** Network first (`/api/ref`), falling back to the stored post with the failure reason. */
+    preview(input: { operationId: OperationId; postId: PostId }): Promise<ReadOutcome<QuotePreview>>
+    /** Resolves owner, page and mode of a quoted post; see QuoteLocation. Cancel with `reading.cancel`. */
+    locate(input: { operationId: OperationId; postId: PostId }): Promise<QuoteLocation>
+  }
   /** Local reading context. Never touches the network; downloads and previews never call it. */
   readingState: {
     /** Mode preference, per-mode positions, read/unread posts, attention and coverage of one thread. */
@@ -144,6 +192,8 @@ export const IpcChannel = {
   readThreadPage: 'reading:read-thread-page',
   locateThreadEnd: 'reading:locate-thread-end',
   cancel: 'reading:cancel',
+  previewQuote: 'quotes:preview',
+  locateQuote: 'quotes:locate',
   getReadingState: 'reading-state:get',
   setReadingMode: 'reading-state:set-mode',
   saveReadingPosition: 'reading-state:save-position',

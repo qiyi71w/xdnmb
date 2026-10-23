@@ -16,7 +16,7 @@ import type {
 import { DEFAULT_SETTINGS } from '../../shared/reading'
 import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, SavedPosition, ThreadReadingState } from '../../shared/reading'
 import { StorageWriteRefusedError } from './contract'
-import type { ReadingStore, Stored } from './contract'
+import type { PostThreadRelation, ReadingStore, Stored } from './contract'
 import { computeCoverage } from './coverage'
 import { buildReadingState, emptyReadingState, endObservation, type AttentionRecord } from './reading-state'
 import { MIGRATIONS } from './migrations'
@@ -42,6 +42,25 @@ interface PostRow {
   plain_text: string
   image_path: string | null
   image_ext: string | null
+  fetched_at: string
+}
+
+function postFromRow(row: PostRow): Post {
+  return {
+    id: row.id,
+    forumId: row.forum_id,
+    createdAt: row.created_at,
+    userHash: row.user_hash,
+    name: row.name,
+    title: row.title,
+    isAdmin: row.is_admin === null ? null : row.is_admin !== 0,
+    isSage: row.is_sage === null ? null : row.is_sage !== 0,
+    content: JSON.parse(row.content_json) as ContentNode[],
+    plainText: row.plain_text,
+    image: row.image_path === null || row.image_ext === null
+      ? null
+      : { path: row.image_path, ext: row.image_ext }
+  }
 }
 
 interface FeedSummaryRow {
@@ -103,16 +122,10 @@ class SqliteReadingDatabase implements ReadingDatabase {
     return this.db
   }
 
-  private postWriter(db: Database.Database, fetchedAt: string) {
-    const postStatement = db.prepare(UPSERT_POST)
-    const relationStatement = db.prepare(`
-      INSERT INTO post_threads (
-        post_id, thread_id, observed_as, feed_kind, feed_id, mode, page, fetched_at
-      ) VALUES (@postId, @threadId, @observedAs, @feedKind, @feedId, @mode, @page, @fetchedAt)
-      ON CONFLICT(post_id) DO NOTHING
-    `)
-    return (post: Post, threadId: ThreadId, source: RelationSource): void => {
-      postStatement.run({
+  private postUpserter(db: Database.Database, fetchedAt: string) {
+    const statement = db.prepare(UPSERT_POST)
+    return (post: Post): void => {
+      statement.run({
         id: post.id,
         forumId: post.forumId,
         createdAt: post.createdAt,
@@ -127,6 +140,19 @@ class SqliteReadingDatabase implements ReadingDatabase {
         imageExt: post.image?.ext ?? null,
         fetchedAt
       })
+    }
+  }
+
+  private postWriter(db: Database.Database, fetchedAt: string) {
+    const upsert = this.postUpserter(db, fetchedAt)
+    const relationStatement = db.prepare(`
+      INSERT INTO post_threads (
+        post_id, thread_id, observed_as, feed_kind, feed_id, mode, page, fetched_at
+      ) VALUES (@postId, @threadId, @observedAs, @feedKind, @feedId, @mode, @page, @fetchedAt)
+      ON CONFLICT(post_id) DO NOTHING
+    `)
+    return (post: Post, threadId: ThreadId, source: RelationSource): void => {
+      upsert(post)
       relationStatement.run({ postId: post.id, threadId, ...source, fetchedAt })
     }
   }
@@ -136,21 +162,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     return (id: string): Post => {
       const row = statement.get(id)
       if (!row) throw new Error('cached page references a missing post')
-      return {
-        id: row.id,
-        forumId: row.forum_id,
-        createdAt: row.created_at,
-        userHash: row.user_hash,
-        name: row.name,
-        title: row.title,
-        isAdmin: row.is_admin === null ? null : row.is_admin !== 0,
-        isSage: row.is_sage === null ? null : row.is_sage !== 0,
-        content: JSON.parse(row.content_json) as ContentNode[],
-        plainText: row.plain_text,
-        image: row.image_path === null || row.image_ext === null
-          ? null
-          : { path: row.image_path, ext: row.image_ext }
-      }
+      return postFromRow(row)
     }
   }
 
@@ -325,6 +337,38 @@ class SqliteReadingDatabase implements ReadingDatabase {
       skippedItems: row.skipped_items
     }))
     return computeCoverage(threadId, mode, pages, latestCount?.reply_count ?? null)
+  }
+
+  savePost(post: Post, fetchedAt: string): void {
+    const db = this.writable()
+    this.postUpserter(db, fetchedAt)(post)
+  }
+
+  loadPost(postId: PostId): Stored<Post> | null {
+    if (!this.db) return null
+    const row = this.db.prepare<[string], PostRow>('SELECT * FROM posts WHERE id = ?').get(postId)
+    return row ? { value: postFromRow(row), fetchedAt: row.fetched_at } : null
+  }
+
+  findPostThread(postId: PostId): PostThreadRelation | null {
+    if (!this.db) return null
+    const db = this.db
+    return db.transaction(() => {
+      const relation = db.prepare<[string], { thread_id: string }>('SELECT thread_id FROM post_threads WHERE post_id = ?').get(postId)
+      if (!relation) return null
+      const threadId = relation.thread_id
+      const preference = db.prepare<[string], { mode: ReadingMode }>('SELECT mode FROM thread_reading WHERE thread_id = ?').get(threadId)
+      const pages: Record<ReadingMode, number | null> = { all: null, po: null }
+      if (threadId !== postId) {
+        const rows = db.prepare<[string, string], { mode: ReadingMode; page: number }>(`
+          SELECT thread_pages.mode, thread_pages.page FROM thread_pages, json_each(thread_pages.reply_ids_json) AS reply
+          WHERE thread_pages.thread_id = ? AND reply.value = ?
+          ORDER BY julianday(thread_pages.fetched_at) DESC, thread_pages.page DESC
+        `).all(threadId, postId)
+        for (const row of rows) pages[row.mode] ??= row.page
+      }
+      return { threadId, isHead: threadId === postId, preferredMode: preference?.mode ?? 'all', pages }
+    })()
   }
 
   getReadingState(threadId: ThreadId): ThreadReadingState {

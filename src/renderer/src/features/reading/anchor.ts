@@ -1,3 +1,4 @@
+import { comparePostIds } from '../../../../shared/forum'
 import type { ReadingAnchor } from '../../../../shared/reading'
 
 /** Layout box of one rendered post in scroll-content coordinates (offset from the content top). */
@@ -40,4 +41,24 @@ export function captureAnchor(boxes: readonly PostBox[], scrollTop: number, line
  */
 export function scrollTopForAnchor(anchor: ReadingAnchor, box: { top: number; height: number }): number {
   return Math.max(0, box.top + anchor.offsetRatio * box.height - anchor.viewportOffset)
+}
+
+/**
+ * Replacement for an anchor whose post is no longer in the loaded range: the nearest loaded post
+ * before it on the anchor's page (by post ID; the reading line at that post's end, where the
+ * missing post began), else the nearest one after it (at its start). Null when the page shows no
+ * post at all; the caller then falls back to the page top.
+ */
+export function nearbyAnchor(boxes: readonly PostBox[], anchor: ReadingAnchor): ReadingAnchor | null {
+  let before: PostBox | undefined
+  let after: PostBox | undefined
+  for (const box of boxes) {
+    if (box.page !== anchor.page) continue
+    const order = comparePostIds(box.postId, anchor.postId)
+    if (order < 0 && (before === undefined || comparePostIds(box.postId, before.postId) > 0)) before = box
+    if (order > 0 && (after === undefined || comparePostIds(box.postId, after.postId) < 0)) after = box
+  }
+  if (before !== undefined) return { postId: before.postId, page: anchor.page, offsetRatio: 1, viewportOffset: anchor.viewportOffset }
+  if (after !== undefined) return { postId: after.postId, page: anchor.page, offsetRatio: 0, viewportOffset: anchor.viewportOffset }
+  return null
 }

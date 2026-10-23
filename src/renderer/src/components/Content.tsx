@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import type { ContentNode, EmphasisStyle } from '../../../shared/forum'
 import './content.css'
 
@@ -18,7 +18,21 @@ const EMPHASIS_TAG: Record<EmphasisStyle, 'strong' | 'em' | 'u' | 's' | 'small' 
   sub: 'sub'
 }
 
-function renderNodes(nodes: readonly ContentNode[], mode: Mode, path: string): ReactNode[] {
+/**
+ * Renders an interactive quote reference; `quoteIndex` is its document order in this body, from 0.
+ * Without it (excerpts, previews, other bodies) quote references are static text.
+ */
+export type RenderQuote = (node: Extract<ContentNode, { type: 'quoteRef' }>, quoteIndex: number) => ReactNode
+
+interface RenderContext {
+  mode: Mode
+  /** Unset inside links: a control cannot sit inside another control. Indexes still count. */
+  renderQuote: RenderQuote | undefined
+  quoteCount: number
+}
+
+function renderNodes(nodes: readonly ContentNode[], ctx: RenderContext, path: string): ReactNode[] {
+  const mode = ctx.mode
   return nodes.map((node, index) => {
     const key = `${path}.${index}`
     switch (node.type) {
@@ -26,24 +40,30 @@ function renderNodes(nodes: readonly ContentNode[], mode: Mode, path: string): R
         return node.text
       case 'lineBreak':
         return mode === 'excerpt' ? ' ' : <br key={key} />
-      case 'quoteRef':
+      case 'quoteRef': {
+        const quoteIndex = ctx.quoteCount++
+        if (ctx.renderQuote !== undefined) return <Fragment key={key}>{ctx.renderQuote(node, quoteIndex)}</Fragment>
         return (
           <span key={key} className="quote-ref">
             {node.raw}
           </span>
         )
+      }
       case 'emphasis': {
         const Tag = EMPHASIS_TAG[node.style]
-        return <Tag key={key}>{renderNodes(node.children, mode, key)}</Tag>
+        return <Tag key={key}>{renderNodes(node.children, ctx, key)}</Tag>
       }
       case 'greentext':
         return (
           <span key={key} className="greentext">
-            {renderNodes(node.children, mode, key)}
+            {renderNodes(node.children, ctx, key)}
           </span>
         )
       case 'link': {
-        const children = node.children.length > 0 ? renderNodes(node.children, mode, key) : node.href
+        const renderQuote = ctx.renderQuote
+        ctx.renderQuote = undefined
+        const children = node.children.length > 0 ? renderNodes(node.children, ctx, key) : node.href
+        ctx.renderQuote = renderQuote
         if (mode === 'excerpt') {
           return (
             <span key={key} className="content-link is-static">
@@ -73,17 +93,21 @@ function renderNodes(nodes: readonly ContentNode[], mode: Mode, path: string): R
 export function Content({
   nodes,
   mode = 'body',
-  className
+  className,
+  renderQuote
 }: {
   nodes: readonly ContentNode[]
   mode?: Mode
   className?: string
+  /** Body mode only: makes quote references interactive (reader posts). */
+  renderQuote?: RenderQuote
 }) {
   const base = mode === 'body' ? 'content-body' : 'content-excerpt'
   const classes = className === undefined ? base : `${base} ${className}`
+  const ctx: RenderContext = { mode, renderQuote: mode === 'body' ? renderQuote : undefined, quoteCount: 0 }
   // Excerpts sit inside buttons, which only allow phrasing content.
-  if (mode === 'excerpt') return <span className={classes}>{renderNodes(nodes, mode, 'n')}</span>
-  return <div className={classes}>{renderNodes(nodes, mode, 'n')}</div>
+  if (mode === 'excerpt') return <span className={classes}>{renderNodes(nodes, ctx, 'n')}</span>
+  return <div className={classes}>{renderNodes(nodes, ctx, 'n')}</div>
 }
 
 /** Plain text of a content tree, for short summaries. */

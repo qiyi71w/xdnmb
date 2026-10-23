@@ -11,7 +11,7 @@ import {
 
 const forum4 = { kind: 'forum', id: '4' } as const
 const forum5 = { kind: 'forum', id: '5' } as const
-const thread = (threadId: string): ThreadOpen => ({ threadId, head: null, target: null, snapshot: null })
+const thread = (threadId: string): ThreadOpen => ({ threadId, head: null, target: null, snapshot: null, unlocatedPostId: null })
 const run = (state: TabsState, ...actions: TabsAction[]) => actions.reduce(tabsReducer, state)
 
 describe('tabs and per-tab history', () => {
@@ -67,7 +67,7 @@ describe('tabs and per-tab history', () => {
       { type: 'select-thread', tabId: first, thread: { ...thread('100'), target: { postId: '150', page: 2, mode: 'all' } } }
     )
     const left = currentEntry(activeTab(state))
-    const snapshot = { mode: 'po' as const, anchor: { postId: '160', page: 1, offsetRatio: 0.4, viewportOffset: 60 } }
+    const snapshot = { mode: 'po' as const, anchor: { postId: '160', page: 1, offsetRatio: 0.4, viewportOffset: 60 }, temporaryOf: null, focus: null }
     state = run(
       state,
       { type: 'snapshot', tabId: first, entryKey: left.key, snapshot },

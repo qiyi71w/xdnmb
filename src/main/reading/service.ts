@@ -1,5 +1,5 @@
-import type { DirectoryStrategy, ReadError, ReadOutcome, ThreadEndResult, ThreadPageResult } from '../../shared/api'
-import type { BoardDirectory, CoveragePage, FeedPage, FeedRef, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from '../../shared/forum'
+import type { DirectoryStrategy, QuoteLocation, QuotePreview, ReadError, ReadOutcome, ThreadEndResult, ThreadPageResult } from '../../shared/api'
+import type { BoardDirectory, CoveragePage, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from '../../shared/forum'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
 import type { ReadingStore, Stored } from '../storage/contract'
 import { computeCoverage } from '../storage/coverage'
@@ -15,6 +15,8 @@ export interface ReadingService {
   readFeedPage(feed: FeedRef, page: number, signal: AbortSignal): Promise<ReadOutcome<FeedPage>>
   readThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal): Promise<ReadOutcome<ThreadPageResult>>
   locateThreadEnd(threadId: ThreadId, mode: ReadingMode, signal: AbortSignal): Promise<ReadOutcome<ThreadEndResult>>
+  previewQuote(postId: PostId, signal: AbortSignal): Promise<ReadOutcome<QuotePreview>>
+  locateQuote(postId: PostId, signal: AbortSignal): Promise<QuoteLocation>
 }
 
 interface ReadingServiceDeps {
@@ -103,6 +105,21 @@ export function createReadingService({ client, store, scheduler, now = () => new
     return { value: { page: stored.value, coverage }, fetchedAt: stored.fetchedAt }
   }
 
+  function readThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal): Promise<ReadOutcome<ThreadPageResult>> {
+    return readWithFallback(
+      'foreground',
+      signal,
+      (s) => client.getThreadPage(threadId, mode, page, s),
+      persistThreadPage,
+      () => loadStoredThreadPage(threadId, mode, page)
+    )
+  }
+
+  /** Owner from local records only; a lookup failure counts as no record. */
+  async function ownerOf(postId: PostId): Promise<ThreadId | null> {
+    return (await store.findPostThread(postId).catch(() => null))?.threadId ?? null
+  }
+
   return {
     async loadDirectory(strategy, signal) {
       if (strategy === 'cache-first') {
@@ -128,14 +145,81 @@ export function createReadingService({ client, store, scheduler, now = () => new
       )
     },
 
-    readThreadPage(threadId, mode, page, signal) {
-      return readWithFallback(
+    readThreadPage,
+
+    async previewQuote(postId, signal) {
+      const outcome = await readWithFallback(
         'foreground',
         signal,
-        (s) => client.getThreadPage(threadId, mode, page, s),
-        persistThreadPage,
-        () => loadStoredThreadPage(threadId, mode, page)
+        (s) => client.getRef(postId, s),
+        async (post, fetchedAt) => ({ saved: await trySave(() => store.savePost(post, fetchedAt)), result: post }),
+        () => store.loadPost(postId)
       )
+      if (outcome.status === 'failed' || outcome.status === 'cancelled') return outcome
+      return { ...outcome, data: { post: outcome.data, threadId: await ownerOf(postId) } }
+    },
+
+    async locateQuote(postId, signal) {
+      const relation = await store.findPostThread(postId).catch(() => null)
+      if (relation === null) {
+        // Without any local record the only verifiable owner is the post itself as a main post:
+        // its own thread's first page must come back with it as the head.
+        const outcome = await readThreadPage(postId, 'all', 1, signal)
+        if (outcome.status === 'cancelled') return outcome
+        if (outcome.status === 'failed') {
+          return outcome.error.kind === 'not-found' ? { status: 'unknown-thread' } : { status: 'failed', threadId: null, error: outcome.error }
+        }
+        return {
+          status: 'located',
+          threadId: postId,
+          head: outcome.data.page.head,
+          target: { postId, page: 1, mode: 'all' },
+          source: outcome.status,
+          networkError: outcome.status === 'cached' ? outcome.networkError : null
+        }
+      }
+
+      const { threadId, preferredMode } = relation
+      const otherMode: ReadingMode = preferredMode === 'all' ? 'po' : 'all'
+      // The main post is on page 1 of either mode; a reply is checked only on the latest stored page
+      // that contained it, preferred mode first. Nothing else is read: no scanning for a moved reply.
+      const candidates: { mode: ReadingMode; page: number }[] = relation.isHead
+        ? [{ mode: preferredMode, page: 1 }]
+        : [preferredMode, otherMode].flatMap((mode) => {
+            const page = relation.pages[mode]
+            return page === null ? [] : [{ mode, page }]
+          })
+      let failure: ReadError | null = null
+      let reached: Post | null = null
+      for (const { mode, page } of candidates) {
+        const outcome = await readThreadPage(threadId, mode, page, signal)
+        if (outcome.status === 'cancelled') return outcome
+        if (outcome.status === 'failed') {
+          failure ??= outcome.error
+          continue
+        }
+        const shown = outcome.data.page
+        reached = shown.head
+        if (relation.isHead || shown.replies.some((reply) => reply.id === postId)) {
+          return {
+            status: 'located',
+            threadId,
+            head: shown.head,
+            target: { postId, page, mode },
+            source: outcome.status,
+            networkError: outcome.status === 'cached' ? outcome.networkError : null
+          }
+        }
+      }
+      if (failure !== null) return { status: 'failed', threadId, error: failure }
+      if (reached === null) {
+        // Owner known only from a list: 打开原串 is offered only for a thread that can be read now.
+        const outcome = await readThreadPage(threadId, preferredMode, 1, signal)
+        if (outcome.status === 'cancelled') return outcome
+        if (outcome.status === 'failed') return { status: 'failed', threadId, error: outcome.error }
+        reached = outcome.data.page.head
+      }
+      return { status: 'thread-known', threadId, head: reached }
     },
 
     async locateThreadEnd(threadId, mode, signal) {

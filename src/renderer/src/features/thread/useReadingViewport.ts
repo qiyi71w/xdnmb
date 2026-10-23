@@ -3,7 +3,7 @@ import type { PostId } from '../../../../shared/forum'
 import type { ReadingAnchor } from '../../../../shared/reading'
 import { useDocumentVisible } from '../../lib/useDocumentVisible'
 import { useWindowFocused } from '../../lib/useWindowFocused'
-import { captureAnchor, scrollTopForAnchor, type PostBox } from '../reading/anchor'
+import { captureAnchor, nearbyAnchor, scrollTopForAnchor, type PostBox } from '../reading/anchor'
 import { ReadJudge, type PostVisibility } from '../reading/readJudge'
 import type { ReaderPosition } from './readingStart'
 
@@ -24,8 +24,11 @@ export interface ReadingViewportOptions {
   knownRead: readonly PostId[]
   onRead: (postIds: PostId[]) => void
   onSave: (anchor: ReadingAnchor) => void
-  /** A requested post or anchor was not in the loaded range; the reader was placed nearby. */
-  onNearby: () => void
+  /**
+   * A requested position was not in the loaded range; the reader was placed nearby. `anchor`: a
+   * remembered anchor (snapshot, saved position) whose post is gone; `post`: an explicit post.
+   */
+  onNearby: (kind: 'anchor' | 'post') => void
 }
 
 function sameAnchor(a: ReadingAnchor, b: ReadingAnchor | null): boolean {
@@ -207,7 +210,7 @@ export function useReadingViewport(options: ReadingViewportOptions) {
         return
       }
       pendingRef.current = null
-      let nearby = false
+      let nearby: 'anchor' | 'post' | null = null
       /**
        * The anchor that was asked for. When the content below is still too short, the browser clamps
        * the scroll position; keeping the requested anchor (not a capture of the clamped position)
@@ -223,8 +226,11 @@ export function useReadingViewport(options: ReadingViewportOptions) {
           if (applyAnchor({ ...target.anchor, viewportOffset: Math.max(target.anchor.viewportOffset, line) })) {
             requested = target.anchor
           } else {
-            nearby = true
-            if (!scrollToPage(target.anchor.page)) setScrollTop(0)
+            // The anchor post vanished: nearest known post of that page, then the page top.
+            nearby = 'anchor'
+            const near = nearbyAnchor(boxes(), target.anchor)
+            if (near !== null && applyAnchor({ ...near, viewportOffset: Math.max(near.viewportOffset, line) })) requested = near
+            else if (!scrollToPage(target.anchor.page)) setScrollTop(0)
           }
           break
         case 'post': {
@@ -232,7 +238,7 @@ export function useReadingViewport(options: ReadingViewportOptions) {
           if (applyAnchor(anchor)) {
             requested = anchor
           } else {
-            nearby = true
+            nearby = 'post'
             if (!scrollToPage(target.page)) setScrollTop(0)
           }
           break
@@ -259,9 +265,9 @@ export function useReadingViewport(options: ReadingViewportOptions) {
       // An explicit position is a reading position like a scrolled one: save it after the same delay
       // (skipped while a temporary target mode is shown, and when it equals the saved anchor).
       scheduleSave()
-      if (nearby) opts.current.onNearby()
+      if (nearby !== null) opts.current.onNearby(nearby)
     },
-    [measurable, lineOffset, setScrollTop, applyAnchor, scrollToPage, contentRef, capture, schedule, scheduleSave]
+    [measurable, lineOffset, setScrollTop, applyAnchor, boxes, scrollToPage, contentRef, capture, schedule, scheduleSave]
   )
 
   const onScroll = useCallback(() => {
@@ -362,5 +368,18 @@ export function useReadingViewport(options: ReadingViewportOptions) {
     [contentRef]
   )
 
-  return { onScroll, position, currentAnchor, saveNow, hasPost }
+  /** Whether `postId` is displayed and at least partly inside the reading viewport below the toolbar. */
+  const isVisible = useCallback(
+    (postId: PostId) => {
+      const scroller = scrollRef.current
+      const element = contentRef.current?.querySelector<HTMLElement>(`[data-post-id="${CSS.escape(postId)}"]`)
+      if (!measurable() || !restoredRef.current || scroller === null || element == null) return false
+      const rect = scroller.getBoundingClientRect()
+      const box = element.getBoundingClientRect()
+      return Math.min(box.bottom, rect.top + scroller.clientHeight) - Math.max(box.top, rect.top + toolbarHeight()) > 0
+    },
+    [scrollRef, contentRef, measurable, toolbarHeight]
+  )
+
+  return { onScroll, position, currentAnchor, saveNow, hasPost, isVisible }
 }

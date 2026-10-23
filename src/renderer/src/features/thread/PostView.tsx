@@ -2,24 +2,29 @@ import type { Post } from '../../../../shared/forum'
 import { Content } from '../../components/Content'
 import { Icon } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
+import { QuoteRef } from '../quote/QuoteRef'
 
 export function PostView({
   post,
   isHead,
   poHash,
-  unread
+  unread,
+  highlighted = false
 }: {
   post: Post
   isHead: boolean
   poHash: string | null
   /** Confirmed unread: a quiet dot with a spoken “未读”, never color alone. */
   unread: boolean
+  /** Target of a quote jump, briefly marked. Purely visual: never a read. */
+  highlighted?: boolean
 }) {
   const name = meaningfulName(post.name)
   const title = isHead ? null : meaningfulTitle(post.title)
   const isPo = !isHead && poHash !== null && post.userHash === poHash
+  const classes = `${isHead ? 'post is-head' : 'post'}${highlighted ? ' is-highlighted' : ''}`
   return (
-    <article className={isHead ? 'post is-head' : 'post'} data-post-id={post.id} aria-label={`${isHead ? '主帖' : '回复'} No.${post.id}`}>
+    <article className={classes} data-post-id={post.id} aria-label={`${isHead ? '主帖' : '回复'} No.${post.id}`}>
       <header className="post-meta">
         {unread && (
           <span className="unread-mark" title="未读">
@@ -42,7 +47,11 @@ export function PostView({
         <span className="post-no">No.{post.id}</span>
       </header>
       {title !== null && <p className="post-title">{title}</p>}
-      <Content nodes={post.content} className="post-body" />
+      <Content
+        nodes={post.content}
+        className="post-body"
+        renderQuote={(node, quoteIndex) => <QuoteRef hostPostId={post.id} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} />}
+      />
     </article>
   )
 }

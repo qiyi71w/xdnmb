@@ -20,6 +20,7 @@ export function TopBar({
   titleOf,
   platform,
   canBack,
+  backToQuote,
   canForward,
   splitToggle,
   navTrigger,
@@ -36,6 +37,8 @@ export function TopBar({
   titleOf: (tab: Tab) => string
   platform: AppPlatform | null
   canBack: boolean
+  /** The current entry came from a quote (or 打开原串) and back is possible: back reads 返回引用处. */
+  backToQuote: boolean
   canForward: boolean
   /** Shown only for list entries. */
   splitToggle: { pressed: boolean; onToggle: () => void } | null
@@ -89,13 +92,14 @@ export function TopBar({
       <div className="history-buttons" role="group" aria-label="当前标签历史">
         <button
           type="button"
-          className="icon-btn"
-          aria-label="后退"
-          title={withShortcut('后退', shortcutLabel('back', platform))}
+          className={backToQuote ? 'btn btn-back-quote' : 'icon-btn'}
+          aria-label={backToQuote ? '返回引用处' : '后退'}
+          title={withShortcut(backToQuote ? '返回引用处' : '后退', shortcutLabel('back', platform))}
           disabled={!canBack}
           onClick={onBack}
         >
           <Icon name="arrowLeft" />
+          {backToQuote && <span aria-hidden="true">返回引用处</span>}
         </button>
         <button
           type="button"

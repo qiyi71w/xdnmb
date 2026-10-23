@@ -4,7 +4,7 @@ import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/readi
 import { Loading } from '../../components/Notices'
 import { ContentRegistryContext } from '../tabs/contentRegistry'
 import type { ThreadOpen } from '../tabs/tabsState'
-import { decideStart, markReadChunks, savedStart, type ReaderStart } from './readingStart'
+import { decideView, markReadChunks, savedStart, type ReaderStart } from './readingStart'
 import { ThreadReader } from './ThreadReader'
 import './thread.css'
 
@@ -43,9 +43,10 @@ export function ThreadPane({
   const visited = useRef(false)
   const [readingState, setReadingState] = useState<ThreadReadingState | null>(null)
   /**
-   * Mode and start of the mounted reader. `temporaryOf` is set only while an explicit target opened
-   * in a mode other than the saved preference is shown: it names that preference. Snapshots, other
-   * tabs changing the preference, or a later refetch never make a display temporary.
+   * Mode and start of the mounted reader. `temporaryOf` names the saved preference while a temporary
+   * target display is shown (an explicit target in another mode, or coming back to an entry left
+   * during one); see `decideView`. Other tabs changing the preference or a later refetch never make
+   * a display temporary.
    */
   const [view, setView] = useState<{ start: ReaderStart; seq: number; temporaryOf: ReadingMode | null } | null>(null)
   const [readNow, setReadNow] = useState<ReadonlySet<PostId>>(NOTHING_READ)
@@ -61,10 +62,7 @@ export function ThreadPane({
       .then((state) => {
         if (cancelled) return
         setReadingState(state)
-        const start = decideStart(openRef.current, state)
-        const target = openRef.current.target
-        const preference = state?.mode ?? 'all'
-        setView({ start, seq: 0, temporaryOf: target !== null && target.mode !== preference ? preference : null })
+        setView({ ...decideView(openRef.current, state), seq: 0 })
       })
     return () => {
       cancelled = true
@@ -211,6 +209,10 @@ export function ThreadPane({
       onObserved={onObserved}
       onMarkAllRead={() => void markAllRead()}
       onBackToList={onBackToList}
+      unlocatedPostId={openRef.current.unlocatedPostId}
+      // Only the first reader of the entry arrives from the opening: a later mode switch does not.
+      restoreFocus={view.seq === 0 && openRef.current.target === null ? (openRef.current.snapshot?.focus ?? null) : null}
+      highlightPostId={view.seq === 0 ? (openRef.current.target?.postId ?? null) : null}
     />
   )
 }
