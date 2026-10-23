@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import type { AppPlatform, StorageStatus } from '../../../shared/api'
 import type { FeedRef, ThreadSummary } from '../../../shared/forum'
-import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/reading'
+import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/settings'
 import { Icon } from '../components/Icon'
 import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/directory/feeds'
 import { Navigation, NavMeasure } from '../features/directory/Navigation'
@@ -19,11 +20,15 @@ import {
   type TabsState,
   type ThreadOpen
 } from '../features/tabs/tabsState'
+import { AppCoveredContext } from '../lib/appCovered'
 import { meaningfulTitle } from '../lib/format'
+import { useAppearance } from '../lib/useAppearance'
 import { usePopover } from '../lib/usePopover'
+import { SettingsDialog } from './SettingsDialog'
 import { isEditableTarget, matchShortcut, type ShortcutAction } from './shortcuts'
 import { TabView } from './TabView'
 import { TopBar } from './TopBar'
+import { useSettingsWriter } from './useSettingsWriter'
 import './layout.css'
 
 function StorageBanner({ storage }: { storage: StorageStatus | null }) {
@@ -69,6 +74,8 @@ export function App() {
   const [storage, setStorage] = useState<StorageStatus | null>(null)
   const [platform, setPlatform] = useState<AppPlatform | null>(null)
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
+  useAppearance(settings)
+  const settingsWriter = useSettingsWriter(settings, setSettings)
   const [tabs, dispatch] = useReducer(shellReducer, null)
   const registry = useMemo(createContentRegistry, [])
   const directory = useDirectory()
@@ -190,6 +197,44 @@ export function App() {
     stateRef.current = { tabs, settings, singlePane: layout.singlePane }
   })
   const pendingTabFocus = useRef(false)
+
+  // ---------- Settings dialog ----------
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsOpenRef = useRef(false)
+  const settingsButtonRef = useRef<HTMLButtonElement>(null)
+  /** What had focus when the dialog opened (button, Ctrl/Cmd+, from anywhere); it gets focus back. */
+  const settingsOpener = useRef<Element | null>(null)
+  const { clearStatus: clearSettingsStatus } = settingsWriter
+
+  const openSettings = useCallback(() => {
+    if (settingsOpenRef.current || stateRef.current.tabs === null) return
+    settingsOpenRef.current = true
+    settingsOpener.current = document.activeElement
+    // The dialog becomes the only layer: an open navigation overlay closes first.
+    closeNav(false)
+    clearSettingsStatus()
+    setSettingsOpen(true)
+  }, [closeNav, clearSettingsStatus])
+
+  const closeSettings = useCallback(() => {
+    settingsOpenRef.current = false
+    setSettingsOpen(false)
+  }, [])
+
+  // Runs after the commit that removed `inert` from the app, so the opener can take focus again.
+  const settingsWasOpen = useRef(false)
+  useLayoutEffect(() => {
+    if (settingsOpen) {
+      settingsWasOpen.current = true
+      return
+    }
+    if (!settingsWasOpen.current) return
+    settingsWasOpen.current = false
+    const opener = settingsOpener.current
+    settingsOpener.current = null
+    const target = opener instanceof HTMLElement && opener.isConnected && opener !== document.body ? opener : settingsButtonRef.current
+    target?.focus()
+  }, [settingsOpen])
 
   /** Before leaving an entry that shows a thread, remember its mode and anchor in the entry. */
   const leave = useCallback(
@@ -321,7 +366,8 @@ export function App() {
       'previous-tab': () => dispatch({ type: 'cycle', delta: -1 }),
       refresh,
       back: goBack,
-      forward: goForward
+      forward: goForward,
+      'open-settings': openSettings
     }
   })
 
@@ -331,9 +377,12 @@ export function App() {
       if (event.defaultPrevented || event.isComposing) return
       const action = matchShortcut(event, platform)
       if (action === null) return
+      // Text fields keep their editing keys (history keys); Ctrl/Cmd+, is not one and works there too.
       if ((action === 'back' || action === 'forward') && isEditableTarget(event.target)) return
       event.preventDefault()
-      if (event.repeat && (action === 'new-tab' || action === 'close-tab' || action === 'refresh')) return
+      // The modal dialog is the only layer: shortcuts never act on the tabs behind it.
+      if (settingsOpenRef.current) return
+      if (event.repeat && (action === 'new-tab' || action === 'close-tab' || action === 'refresh' || action === 'open-settings')) return
       actions.current?.[action]()
     }
     window.addEventListener('keydown', onKeyDown)
@@ -362,90 +411,104 @@ export function App() {
   } as CSSProperties
 
   return (
-    <div className="app" ref={appRef}>
+    <div className="app" ref={appRef} inert={settingsOpen}>
       <StorageBanner storage={storage} />
       <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
       <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
       <NavMeasure directory={dirData} onMeasure={setNavCompactMin} />
-      <ContentRegistryContext.Provider value={registry}>
-        <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
-          {!navOverlay && (
-            <div
-              className="nav-column"
-              onFocus={() => (navHadFocus.current = true)}
-              onBlur={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) navHadFocus.current = false
-              }}
-            >
-              <Navigation
-                state={directory.state}
-                selected={selectedFeed}
-                onSelect={selectFeed}
-                onRetry={directory.retry}
-                variant="inline"
-                progress={layout.navProgress}
-                panelRef={inlineNavRef}
-              />
-            </div>
-          )}
-
-          <div className="main-column">
-            {tabs !== null && current !== null && entry !== null && (
-              <>
-                <TopBar
-                  tabs={tabs.tabs}
-                  activeId={tabs.activeId}
-                  titleOf={titleOf}
-                  platform={platform}
-                  canBack={current.index > 0}
-                  canForward={current.index < current.entries.length - 1}
-                  splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
-                  navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
-                  settings={settings}
-                  onBack={goBack}
-                  onForward={goForward}
-                  onActivate={activate}
-                  onClose={closeTab}
-                  onNewTab={newTab}
-                  onSettingsChange={setSettings}
+      <AppCoveredContext.Provider value={settingsOpen}>
+        <ContentRegistryContext.Provider value={registry}>
+          <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
+            {!navOverlay && (
+              <div
+                className="nav-column"
+                onFocus={() => (navHadFocus.current = true)}
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) navHadFocus.current = false
+                }}
+              >
+                <Navigation
+                  state={directory.state}
+                  selected={selectedFeed}
+                  onSelect={selectFeed}
+                  onRetry={directory.retry}
+                  variant="inline"
+                  progress={layout.navProgress}
+                  panelRef={inlineNavRef}
                 />
-                <div className="tab-host">
-                  {tabs.tabs.map((tab) => (
-                    <TabView
-                      key={tab.id}
-                      tab={tab}
-                      active={tab.id === tabs.activeId}
-                      layout={layout}
-                      feedInfo={feedInfo}
-                      forumNames={names}
-                      forumName={forumName}
-                      onSelectThread={selectThread}
-                      onShowPane={showPane}
-                      onOpenNav={navOverlay ? navPopover.toggle : null}
-                    />
-                  ))}
-                </div>
+              </div>
+            )}
+
+            <div className="main-column">
+              {tabs !== null && current !== null && entry !== null && (
+                <>
+                  <TopBar
+                    tabs={tabs.tabs}
+                    activeId={tabs.activeId}
+                    titleOf={titleOf}
+                    platform={platform}
+                    canBack={current.index > 0}
+                    canForward={current.index < current.entries.length - 1}
+                    splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
+                    navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
+                    settingsTrigger={{ ref: settingsButtonRef, expanded: settingsOpen, onOpen: openSettings }}
+                    onBack={goBack}
+                    onForward={goForward}
+                    onActivate={activate}
+                    onClose={closeTab}
+                    onNewTab={newTab}
+                  />
+                  <div className="tab-host">
+                    {tabs.tabs.map((tab) => (
+                      <TabView
+                        key={tab.id}
+                        tab={tab}
+                        active={tab.id === tabs.activeId}
+                        layout={layout}
+                        feedInfo={feedInfo}
+                        forumNames={names}
+                        forumName={forumName}
+                        onSelectThread={selectThread}
+                        onShowPane={showPane}
+                        onOpenNav={navOverlay ? navPopover.toggle : null}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {navOverlay && navPopover.open && (
+              <>
+                <div className="nav-overlay-layer" aria-hidden="true" />
+                <Navigation
+                  state={directory.state}
+                  selected={selectedFeed}
+                  onSelect={selectFeed}
+                  onRetry={directory.retry}
+                  variant="overlay"
+                  progress={0}
+                  panelRef={navPanelRef}
+                  id="nav-overlay"
+                />
               </>
             )}
           </div>
-
-          {navOverlay && navPopover.open && (
-            <>
-              <div className="nav-overlay-layer" aria-hidden="true" />
-              <Navigation
-                state={directory.state}
-                selected={selectedFeed}
-                onSelect={selectFeed}
-                onRetry={directory.retry}
-                variant="overlay"
-                progress={0}
-                panelRef={navPanelRef}
-                id="nav-overlay"
-              />
-            </>
-          )}
-        </div>
-      </ContentRegistryContext.Provider>
+        </ContentRegistryContext.Provider>
+      </AppCoveredContext.Provider>
+      {/* Outside the app element (which is inert while the dialog is open). */}
+      {settingsOpen &&
+        createPortal(
+          <SettingsDialog
+            settings={settings}
+            platform={platform}
+            status={settingsWriter.status}
+            write={settingsWriter.write}
+            adopt={settingsWriter.adopt}
+            onClose={closeSettings}
+          />,
+          document.body
+        )}
     </div>
   )
 }

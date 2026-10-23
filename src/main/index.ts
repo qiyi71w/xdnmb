@@ -1,7 +1,9 @@
-import { app, BrowserWindow, Menu, session, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, Menu, nativeTheme, session, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { AppPlatform } from '../shared/api'
+import type { ZoomAction } from '../shared/settings'
+import { createSettingsService } from './appearance'
 import { createForumClient } from './forum/client'
 import { createForumTransport } from './forum/transport'
 import { registerIpc } from './ipc'
@@ -10,6 +12,7 @@ import { createRequestScheduler } from './reading/scheduler'
 import type { ReadingStore } from './storage/contract'
 import { openReadingStore } from './storage/store'
 import createStorageWorker from './storage/worker?nodeWorker'
+import { applyZoom, zoomActionOf } from './zoom'
 
 /** The only forum origin this ticket reads from (verified public JSON API). */
 const FORUM_API_ORIGIN = 'https://api.nmb.best'
@@ -53,10 +56,23 @@ const platform: AppPlatform = process.platform === 'darwin' || process.platform 
 /**
  * Application menu without the default Reload / Force Reload / Close Window accelerators:
  * Ctrl/Cmd+R refreshes the current content and Ctrl/Cmd+W closes the current tab inside the app.
- * Edit roles keep native copy/paste (required on macOS); zoom roles keep interface zoom.
+ * Edit roles keep native copy/paste (required on macOS). Zoom keys are handled in `before-input-event`
+ * (so `=`, `+` and the numpad all work); the menu only shows them.
  */
 function installMenu(): void {
-  const view: MenuItemConstructorOptions[] = [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }]
+  const zoomItem = (label: string, accelerator: string, action: ZoomAction): MenuItemConstructorOptions => ({
+    label,
+    accelerator,
+    registerAccelerator: false,
+    click: () => {
+      if (mainWindow) applyZoom(mainWindow.webContents, action)
+    }
+  })
+  const view: MenuItemConstructorOptions[] = [
+    zoomItem('实际大小', 'CommandOrControl+0', 'reset'),
+    zoomItem('放大', 'CommandOrControl+=', 'in'),
+    zoomItem('缩小', 'CommandOrControl+-', 'out')
+  ]
   if (rendererDevUrl) view.push({ type: 'separator' }, { role: 'toggleDevTools' })
   const template: MenuItemConstructorOptions[] = [
     ...(platform === 'darwin' ? [{ role: 'appMenu' } satisfies MenuItemConstructorOptions] : []),
@@ -90,6 +106,12 @@ function createWindow(): BrowserWindow {
   // Windows/Linux keep the menu's accelerators but show no menu bar.
   if (platform !== 'darwin') window.setMenuBarVisibility(false)
   window.once('ready-to-show', () => window.show())
+  window.webContents.on('before-input-event', (event, input) => {
+    const action = zoomActionOf(input, platform)
+    if (action === null) return
+    event.preventDefault()
+    applyZoom(window.webContents, action)
+  })
   if (rendererDevUrl) void window.loadURL(rendererDevUrl)
   else void window.loadFile(rendererFile)
   return window
@@ -117,7 +139,9 @@ async function start(): Promise<void> {
   const ipc = registerIpc({
     reading,
     store: openedStore,
+    settings: createSettingsService(openedStore),
     getStatus: () => ({ storage: openedStore.status, platform }),
+    systemPrefersDark: () => nativeTheme.shouldUseDarkColors,
     isTrustedSender: (event: IpcMainInvokeEvent) =>
       mainWindow !== null &&
       event.sender === mainWindow.webContents &&

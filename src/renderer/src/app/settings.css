@@ -1,0 +1,323 @@
+/* Settings dialog: a frosted overlay (frost belongs to overlays) whose body scrolls inside the
+   viewport, so it stays usable at 200% interface zoom. Rows wrap instead of overflowing. */
+
+.dialog-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: oklch(0.2 0.02 240 / 0.18);
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(600px, 100%);
+  max-height: calc(100vh - 32px);
+  min-height: 0;
+  border-radius: var(--radius-l);
+  background: var(--glass-strong);
+  backdrop-filter: blur(28px) saturate(1.6);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+  overflow: hidden;
+}
+
+.dialog:focus {
+  outline: none;
+}
+
+.dialog-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 12px 10px 20px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.dialog-title {
+  font-size: 1.0625rem;
+  font-weight: 650;
+}
+
+.dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding: 4px 20px 20px;
+}
+
+.settings-section {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+.settings-section + .settings-section {
+  border-top: 1px solid var(--line-soft);
+}
+
+.settings-section-title {
+  font-size: var(--text-md);
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.setting-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.setting-text {
+  flex: 1 1 12em;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.setting-label {
+  font-weight: 600;
+}
+
+.setting-help {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.setting-control {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Four scheme options wrap as a group when narrow. */
+.setting-choice {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.setting-slider {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  max-width: 100%;
+}
+
+.setting-slider input[type='range'] {
+  width: min(220px, 100%);
+  min-height: 24px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.setting-value {
+  min-width: 4.5em;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+
+.text-input {
+  min-height: 28px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+/* Invalid fields: thicker border plus a written reason or the issue list, not color alone. */
+.text-input[aria-invalid='true'] {
+  border: 2px solid var(--danger-ink);
+}
+
+.theme-empty,
+.theme-editor {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.theme-editor {
+  justify-items: stretch;
+}
+
+.theme-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.theme-field .text-input {
+  flex: 1 1 12em;
+}
+
+.theme-colors {
+  display: grid;
+  gap: 10px;
+}
+
+.theme-color {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.theme-color-label {
+  flex: 1 1 12em;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.theme-color-inputs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-swatch {
+  flex: none;
+  width: 36px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--paper);
+  cursor: pointer;
+}
+
+.color-text {
+  width: 7.5em;
+  font-family: var(--font-mono);
+}
+
+.field-error {
+  flex-basis: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--danger-ink);
+}
+
+.issue-list {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  font-size: var(--text-sm);
+}
+
+.issue-list-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.issue-list-title .icon {
+  flex: none;
+  margin-top: 3px;
+}
+
+.issue-items {
+  display: grid;
+  gap: 2px;
+  padding-left: 1.6em;
+  list-style: disc;
+  overflow-wrap: anywhere;
+}
+
+.theme-transfer {
+  display: grid;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.theme-transfer-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.theme-transfer-result .notice-inline {
+  align-items: flex-start;
+  font-size: var(--text-sm);
+}
+
+.theme-transfer-result .notice-inline .icon {
+  margin-top: 3px;
+}
+
+.theme-transfer-result .issue-items {
+  color: var(--warn-ink);
+  font-size: var(--text-sm);
+}
+
+.notice-inline.is-done {
+  color: var(--ink-2);
+}
+
+.notice-inline.is-done .icon {
+  color: var(--accent-ink);
+}
+
+/* Reading preview on a solid surface, in the chosen reading font and size. */
+.reading-preview {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px 12px;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--line-soft);
+}
+
+.reading-preview-text {
+  font-family: var(--font-reading);
+  font-size: var(--text-body);
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.zoom-controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.zoom-step {
+  min-width: 32px;
+  justify-content: center;
+  font-size: var(--text-md);
+}
+
+.zoom-value {
+  min-width: 3.5em;
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+:root[data-density='compact'] .settings-section {
+  gap: 10px;
+  padding: 12px 0;
+}

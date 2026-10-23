@@ -1,10 +1,13 @@
-import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy, type ReadOutcome } from '../shared/api'
 import type { FeedRef, PostId, ReadingMode } from '../shared/forum'
-import { DEFAULT_SETTINGS, type AppSettings, type ReadingAnchor } from '../shared/reading'
+import type { ReadingAnchor } from '../shared/reading'
+import type { ZoomAction } from '../shared/settings'
+import { themeFileName, type SettingsService } from './appearance'
 import type { ReadingService } from './reading/service'
 import type { ReadingStore } from './storage/contract'
 import { emptyReadingState } from './storage/reading-state'
+import { applyZoom, currentZoom } from './zoom'
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
@@ -23,7 +26,10 @@ class InvalidRequestError extends Error {
 interface IpcDeps {
   reading: ReadingService
   store: ReadingStore
+  settings: SettingsService
   getStatus: () => AppStatus
+  /** Operating system light/dark preference, for exporting a built-in scheme under `system`. */
+  systemPrefersDark: () => boolean
   /** True only for the app's own renderer document in its main frame. */
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
 }
@@ -77,16 +83,6 @@ function postIds(value: unknown): PostId[] {
   return value.map(forumId)
 }
 
-function settingsPatch(value: unknown): Partial<AppSettings> {
-  const input = record(value)
-  const patch: Partial<AppSettings> = {}
-  for (const [key, item] of Object.entries(input)) {
-    if (key !== 'newTabSplitDefault' || typeof item !== 'boolean') throw new InvalidRequestError()
-    patch.newTabSplitDefault = item
-  }
-  return patch
-}
-
 /** Local writes report refusal/failure as `saved: false`; they never fail the renderer's call. */
 async function attempt(write: () => Promise<unknown>): Promise<boolean> {
   try {
@@ -126,7 +122,7 @@ class OperationRegistry {
   }
 }
 
-export function registerIpc({ reading, store, getStatus, isTrustedSender }: IpcDeps): { cancelAllFor: (sender: WebContents) => void } {
+export function registerIpc({ reading, store, settings, getStatus, systemPrefersDark, isTrustedSender }: IpcDeps): { cancelAllFor: (sender: WebContents) => void } {
   const operations = new OperationRegistry()
 
   function handle(channel: string, handler: (event: IpcMainInvokeEvent, input: unknown) => Promise<unknown>): void {
@@ -210,17 +206,32 @@ export function registerIpc({ reading, store, getStatus, isTrustedSender }: IpcD
     return { saved: await attempt(() => store.recordVisit(threadId, new Date().toISOString())) }
   })
 
-  /** A settings row that cannot be read leaves the defaults in effect rather than failing the UI. */
-  const loadSettings = () => store.loadSettings().catch((): AppSettings => ({ ...DEFAULT_SETTINGS }))
+  handle(IpcChannel.getSettings, async () => settings.get())
 
-  handle(IpcChannel.getSettings, async () => loadSettings())
+  handle(IpcChannel.updateSettings, async (_event, raw) => settings.update(record(raw)))
 
-  handle(IpcChannel.updateSettings, async (_event, raw) => {
-    const patch = settingsPatch(raw)
-    const current = await loadSettings()
-    const next: AppSettings = { ...current, ...patch }
-    const saved = await attempt(() => store.saveSettings(next))
-    return { saved, settings: saved ? next : current }
+  const themeFilters = [{ name: '汐岛主题', extensions: ['json'] }]
+
+  handle(IpcChannel.importTheme, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const options = { title: '导入主题', properties: ['openFile' as const], filters: themeFilters }
+    const choice = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options)
+    return settings.importTheme(choice.canceled ? null : (choice.filePaths[0] ?? null))
+  })
+
+  handle(IpcChannel.exportTheme, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const options = { title: '导出主题', defaultPath: themeFileName(await settings.get()), filters: themeFilters }
+    const choice = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options)
+    return settings.exportTheme(choice.canceled || !choice.filePath ? null : choice.filePath, systemPrefersDark())
+  })
+
+  handle(IpcChannel.getZoom, async (event) => currentZoom(event.sender))
+
+  handle(IpcChannel.zoom, async (event, raw) => {
+    const action = record(raw).action
+    if (action !== 'in' && action !== 'out' && action !== 'reset') throw new InvalidRequestError()
+    return applyZoom(event.sender, action satisfies ZoomAction)
   })
 
   handle(IpcChannel.openExternal, async (_event, raw) => {

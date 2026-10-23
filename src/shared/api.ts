@@ -1,5 +1,7 @@
 import type { BoardDirectory, FeedPage, FeedRef, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
-import type { AppSettings, MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
+import type { MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
+import type { AppSettings, ZoomAction, ZoomState } from './settings'
+import type { AppearanceIssue } from './theme'
 
 /**
  * Classified read failure. Server/body text is never included except a short
@@ -92,6 +94,34 @@ export interface AppStatus {
 /** Upper bound of post IDs per `markRead` call. */
 export const MAX_MARK_READ_IDS = 2000
 
+/**
+ * Result of a settings update. Non-empty `issues` means the update was refused as a whole and nothing
+ * changed; `saved: false` with no issues means local storage refused the write. `settings` is always
+ * what is now in effect.
+ */
+export interface SettingsUpdateResult {
+  saved: boolean
+  settings: AppSettings
+  issues: AppearanceIssue[]
+}
+
+/**
+ * Theme import through the system open dialog. On `imported` the file's theme became the custom theme,
+ * its reading parameters became the reading settings and the custom scheme is selected. Every other
+ * outcome leaves the settings unchanged.
+ */
+export type ThemeImportResult =
+  | { status: 'imported'; settings: AppSettings }
+  | { status: 'cancelled' }
+  | { status: 'rejected'; issues: AppearanceIssue[] }
+  | { status: 'failed'; reason: 'read' | 'too-large' | 'not-saved' }
+
+/**
+ * Theme export through the system save dialog: the custom theme (or, without one, a custom theme seeded
+ * from the built-in scheme in effect) with the current reading parameters.
+ */
+export type ThemeExportResult = { status: 'exported' } | { status: 'cancelled' } | { status: 'failed' }
+
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
   reading: {
@@ -126,7 +156,18 @@ export interface XidaoApi {
   }
   settings: {
     get(): Promise<AppSettings>
-    update(input: Partial<AppSettings>): Promise<WriteResult & { settings: AppSettings }>
+    /** Partial update of any `AppSettings` keys; validated as a whole (see `SettingsUpdateResult`). */
+    update(input: Partial<AppSettings>): Promise<SettingsUpdateResult>
+  }
+  /** Theme files. The renderer never sees or chooses a path: the main process shows the system dialog. */
+  theme: {
+    import(): Promise<ThemeImportResult>
+    export(): Promise<ThemeExportResult>
+  }
+  /** Interface zoom of the window (also bound to Ctrl/Cmd + = / - / 0 by the main process). */
+  view: {
+    getZoom(): Promise<ZoomState>
+    zoom(input: { action: ZoomAction }): Promise<ZoomState>
   }
   links: {
     /** Opens an absolute http(s) URL in the system browser; anything else is refused. */
@@ -151,6 +192,10 @@ export const IpcChannel = {
   recordVisit: 'reading-state:record-visit',
   getSettings: 'settings:get',
   updateSettings: 'settings:update',
+  importTheme: 'theme:import',
+  exportTheme: 'theme:export',
+  getZoom: 'view:get-zoom',
+  zoom: 'view:zoom',
   openExternal: 'links:open-external',
   getStatus: 'app:get-status'
 } as const

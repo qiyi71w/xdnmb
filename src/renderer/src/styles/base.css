@@ -72,15 +72,17 @@ ul {
   transition: background-color 0.15s var(--ease-out), border-color 0.15s var(--ease-out);
 }
 
-.btn:hover:not(:disabled) {
+.btn:hover:not(:disabled, [aria-disabled='true']) {
   background: color-mix(in oklch, var(--paper), var(--ink) 5%);
 }
 
-.btn:active:not(:disabled) {
+.btn:active:not(:disabled, [aria-disabled='true']) {
   background: color-mix(in oklch, var(--paper), var(--ink) 9%);
 }
 
-.btn:disabled {
+/* aria-disabled keeps the control focusable (zoom limits, unavailable choices) so focus is not lost. */
+.btn:disabled,
+.btn[aria-disabled='true'] {
   color: var(--ink-3);
   cursor: default;
   opacity: 0.7;
@@ -103,7 +105,7 @@ ul {
   color: var(--accent-ink);
 }
 
-.btn-quiet:hover:not(:disabled) {
+.btn-quiet:hover:not(:disabled, [aria-disabled='true']) {
   background: var(--hover);
 }
 
@@ -164,6 +166,12 @@ ul {
 
 .segmented-item:focus-visible {
   outline-offset: 0;
+}
+
+.segmented-item[aria-disabled='true'] {
+  color: var(--ink-3);
+  cursor: default;
+  opacity: 0.7;
 }
 
 /* On/off switch: state is spoken (role=switch) and written (开／关), not color alone. */
@@ -289,12 +297,37 @@ ul {
   animation: skeleton-pulse 1.6s ease-in-out infinite;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation: none !important;
-    transition: none !important;
-    scroll-behavior: auto !important;
-  }
+/* Effective reduced motion (setting or operating system, see lib/useAppearance.ts): nothing moves.
+   Results and positions are always shown statically; motion only accompanies them. */
+:root[data-motion='reduce'] *,
+:root[data-motion='reduce'] *::before,
+:root[data-motion='reduce'] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+/* Compact density: less padding in controls only; text sizes stay, targets stay ≥ 24 × 24 px. */
+:root[data-density='compact'] .btn {
+  min-height: 24px;
+  padding: 1px 8px;
+  gap: 5px;
+}
+
+:root[data-density='compact'] .icon-btn {
+  width: 26px;
+  height: 26px;
+}
+
+:root[data-density='compact'] .segmented {
+  padding: 1px;
+}
+
+:root[data-density='compact'] .segmented-item {
+  padding: 1px 8px;
+}
+
+:root[data-density='compact'] .switch {
+  min-height: 24px;
+  padding-block: 1px;
 }

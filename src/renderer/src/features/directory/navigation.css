@@ -116,9 +116,25 @@
   background: var(--hover);
 }
 
+/* Current item: tint, bold and a leading bar (not color alone). */
 .nav-item.is-current {
   background: var(--nav-current);
   font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* Compact density: item padding only; the measured compact minimum follows (nav-measure shares it). */
+:root[data-density='compact'] .nav-list {
+  gap: 0;
+}
+
+:root[data-density='compact'] .nav-item {
+  min-height: 26px;
+  padding-block: 2px;
+}
+
+:root[data-density='compact'] .nav-section + .nav-section {
+  margin-top: 8px;
 }
 
 .nav-item:focus-visible {

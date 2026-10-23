@@ -70,8 +70,10 @@
 
 /* ---------- Top bar ---------- */
 
+/* Wraps when narrow (200% zoom): the tab strip then takes its own line instead of being squeezed. */
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   min-width: 0;
@@ -95,7 +97,7 @@
 }
 
 .tab-strip {
-  flex: 1;
+  flex: 1 1 160px;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -167,8 +169,8 @@
   flex: none;
   display: inline-grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   margin-right: 4px;
   border: 0;
   border-radius: var(--radius-s);
@@ -203,50 +205,22 @@
   color: var(--ink-3);
 }
 
-/* ---------- Settings popover ---------- */
-
-.settings-menu {
-  position: relative;
-  flex: none;
+/* Compact density: tab strip and top bar padding only (targets stay ≥ 24 px, text unchanged). */
+:root[data-density='compact'] .topbar {
+  padding: 5px 8px 4px;
 }
 
-.popover {
-  position: absolute;
-  z-index: 40;
-  top: calc(100% + 6px);
-  right: 0;
-  width: min(320px, calc(100vw - 24px));
-  padding: 12px 14px;
-  border-radius: var(--radius-l);
-  background: var(--glass-strong);
-  backdrop-filter: blur(28px) saturate(1.6);
-  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
-}
-
-.setting-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.setting-text {
-  flex: 1;
-  min-width: 0;
-  display: grid;
+:root[data-density='compact'] .tab-strip {
   gap: 2px;
 }
 
-.setting-label {
-  font-weight: 600;
+:root[data-density='compact'] .tab-button {
+  min-height: 26px;
+  padding: 2px 4px 2px 8px;
 }
 
-.setting-help {
-  font-size: var(--text-xs);
-  color: var(--ink-2);
-}
-
-.popover .notice-inline {
-  margin: 10px 0 0;
+:root[data-density='compact'] .tab-close {
+  margin-right: 2px;
 }
 
 /* ---------- Tab content ---------- */

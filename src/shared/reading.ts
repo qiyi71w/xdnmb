@@ -79,14 +79,6 @@ export interface ThreadReadingState {
   coverage: Record<ReadingMode, ThreadCoverage>
 }
 
-/** Global preferences used by this ticket. Missing values use these defaults. */
-export interface AppSettings {
-  /** Split preference given to tabs created from now on; existing tabs keep their own. */
-  newTabSplitDefault: boolean
-}
-
-export const DEFAULT_SETTINGS: AppSettings = { newTabSplitDefault: true }
-
 /** Result of a reading-state write. `saved` is false when local storage refused or failed it. */
 export interface WriteResult {
   saved: boolean

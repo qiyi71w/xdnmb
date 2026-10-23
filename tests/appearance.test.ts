@@ -1,0 +1,244 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createSettingsService, type SettingsStore } from '../src/main/appearance'
+import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
+import { applySettingsPatch, DEFAULT_SETTINGS, nextZoomFactor, settingsFromStored } from '../src/shared/settings'
+import {
+  BUILTIN_PALETTES,
+  contrastRatio,
+  customPalette,
+  MAX_THEME_FILE_BYTES,
+  paletteContrastFailures,
+  parseColor,
+  parseCustomTheme,
+  parseThemeDocument,
+  serializeThemeDocument,
+  themeDocument,
+  themeFromBuiltin,
+  type CustomTheme
+} from '../src/shared/theme'
+
+const folders: string[] = []
+const databases: ReadingDatabase[] = []
+
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close()
+  for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true })
+})
+
+function folder(): string {
+  const path = mkdtempSync(join(tmpdir(), 'xidao-appearance-'))
+  folders.push(path)
+  return path
+}
+
+function open(path: string): ReadingDatabase {
+  const db = openReadingDatabase(path)
+  databases.push(db)
+  return db
+}
+
+function storeOf(db: ReadingDatabase): SettingsStore {
+  return { loadSettings: async () => db.loadSettings(), saveSettings: async (settings) => db.saveSettings(settings) }
+}
+
+const color = (text: string) => parseColor(text)!
+
+const sepia: CustomTheme = {
+  name: '旧纸',
+  base: 'light',
+  colors: { background: '#efe6d6', surface: '#fbf6ec', text: '#2b2118', secondaryText: '#5a4a3a', accent: '#7a3e12' },
+  opacity: 0.7,
+  radius: 10
+}
+
+describe('contrast', () => {
+  it('computes WCAG ratios at the 4.5:1 boundary', () => {
+    expect(contrastRatio(color('#000000'), color('#ffffff'))).toBeCloseTo(21, 5)
+    expect(contrastRatio(color('#767676'), color('#ffffff'))).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(color('#777777'), color('#ffffff'))).toBeLessThan(4.5)
+  })
+
+  it('keeps every ordinary text color of both built-in themes at 4.5:1 or more', () => {
+    expect(paletteContrastFailures(BUILTIN_PALETTES.light)).toEqual([])
+    expect(paletteContrastFailures(BUILTIN_PALETTES.dark)).toEqual([])
+  })
+
+  it('checks translucent glass as composited over the window, not the solid surface alone', () => {
+    // Secondary text passes on the solid surface but not on 50% glass over a dark window.
+    const theme: CustomTheme = { ...sepia, colors: { ...sepia.colors, background: '#5c5c5c', secondaryText: '#6e6e6e' }, opacity: 0.5 }
+    expect(contrastRatio(color('#6e6e6e'), color(sepia.colors.surface))).toBeGreaterThanOrEqual(4.5)
+    const result = parseCustomTheme(theme)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues).toContainEqual(expect.objectContaining({ kind: 'contrast', foreground: 'ink-2', surface: ['window', 'glass'] }))
+  })
+
+  it('checks the transparent top bar text directly on the window tints', () => {
+    // Secondary text passes on the plain window (4.52:1) but not on the accent tint drawn behind the tabs.
+    const theme: CustomTheme = {
+      ...sepia,
+      colors: { background: '#ababab', surface: '#ffffff', text: '#000000', secondaryText: '#404040', accent: '#000000' },
+      opacity: 0.5
+    }
+    const result = parseCustomTheme(theme)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues).toContainEqual(expect.objectContaining({ kind: 'contrast', foreground: 'ink-2', surface: ['window-tint-a'] }))
+  })
+})
+
+describe('custom themes', () => {
+  it('uses the user colors as given and keeps derived status text legible', () => {
+    const palette = customPalette(sepia)
+    expect([palette.window, palette.paper, palette.ink, palette['ink-2'], palette['accent-ink']]).toEqual([
+      sepia.colors.background,
+      sepia.colors.surface,
+      sepia.colors.text,
+      sepia.colors.secondaryText,
+      sepia.colors.accent
+    ])
+    expect(paletteContrastFailures(palette)).toEqual([])
+  })
+
+  it('refuses a theme whose own colors are too low in contrast, naming the pair and ratio', () => {
+    const result = parseCustomTheme({ ...sepia, colors: { ...sepia.colors, text: '#b0a898' } })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    const issue = result.issues.find((i) => i.kind === 'contrast' && i.foreground === 'ink' && i.surface.join() === 'paper')
+    expect(issue).toMatchObject({ minimum: 4.5 })
+    expect(issue && issue.kind === 'contrast' && issue.ratio).toBeLessThan(4.5)
+  })
+
+  it('seeds custom themes from both built-in schemes that pass the same checks', () => {
+    expect(parseCustomTheme(themeFromBuiltin('light')).ok).toBe(true)
+    expect(parseCustomTheme(themeFromBuiltin('dark')).ok).toBe(true)
+  })
+})
+
+describe('theme documents', () => {
+  const valid = () => themeDocument(sepia, { font: 'serif', fontSize: 18, readingWidth: 38 })
+
+  it('round-trips through the file format', () => {
+    const parsed = parseThemeDocument(serializeThemeDocument(valid()))
+    expect(parsed).toEqual({ ok: true, theme: sepia, reading: { font: 'serif', fontSize: 18, readingWidth: 38 } })
+  })
+
+  it.each([
+    ['not JSON', '{', { kind: 'syntax' }],
+    ['another format', JSON.stringify({ format: 'other', version: 1 }), { kind: 'format' }],
+    ['a newer version', JSON.stringify({ ...valid(), version: 2 }), { kind: 'version', found: 2 }],
+    ['an unknown field', JSON.stringify({ ...valid(), css: 'body{}' }), { kind: 'field', field: 'css', problem: 'unknown' }],
+    ['a non-hex color', JSON.stringify({ ...valid(), colors: { ...sepia.colors, text: 'red' } }), { kind: 'field', field: 'colors.text', problem: 'range' }],
+    ['an out-of-range size', JSON.stringify({ ...valid(), fontSize: 40 }), { kind: 'field', field: 'fontSize', problem: 'range' }],
+    ['an unknown font', JSON.stringify({ ...valid(), font: 'Comic Sans' }), { kind: 'field', field: 'font', problem: 'range' }],
+    ['a missing field', JSON.stringify({ ...valid(), radius: undefined }), { kind: 'field', field: 'radius', problem: 'missing' }]
+  ])('refuses %s', (_label, text, issue) => {
+    const parsed = parseThemeDocument(text)
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) expect(parsed.issues).toContainEqual(issue)
+  })
+})
+
+describe('settings', () => {
+  it('refuses a whole update when any part is invalid', () => {
+    const result = applySettingsPatch(DEFAULT_SETTINGS, { density: 'compact', reading: { font: 'sans', fontSize: 99, readingWidth: 42 } })
+    expect(result).toEqual({ ok: false, issues: [{ kind: 'field', field: 'reading.fontSize', problem: 'range' }] })
+  })
+
+  it('refuses the custom scheme without a custom theme', () => {
+    expect(applySettingsPatch(DEFAULT_SETTINGS, { colorScheme: 'custom' })).toMatchObject({ ok: false, issues: [{ field: 'colorScheme', problem: 'unavailable' }] })
+  })
+
+  it('falls back per value when stored settings are no longer valid', () => {
+    const stored = new Map<string, unknown>([
+      ['density', 'compact'],
+      ['colorScheme', 'custom'],
+      ['customTheme', { ...sepia, colors: { ...sepia.colors, text: sepia.colors.surface } }],
+      ['reading', { font: 'serif', fontSize: 12, readingWidth: 42 }]
+    ])
+    expect(settingsFromStored(stored)).toEqual({ ...DEFAULT_SETTINGS, density: 'compact', colorScheme: 'system', customTheme: null })
+  })
+
+  it('steps interface zoom through exactly 200% and stops at both ends', () => {
+    let factor = 1
+    const seen: number[] = []
+    for (let i = 0; i < 20; i++) seen.push((factor = nextZoomFactor(factor, 'in')))
+    expect(seen).toContain(2)
+    expect(nextZoomFactor(factor, 'in')).toBe(factor)
+    expect(nextZoomFactor(0.5, 'out')).toBe(0.5)
+    expect(nextZoomFactor(1.3, 'out')).toBe(1.25)
+    expect(nextZoomFactor(2.5, 'reset')).toBe(1)
+  })
+})
+
+describe('settings service with real storage', () => {
+  it('persists updates across reopening and leaves settings untouched when an update is refused', async () => {
+    const path = join(folder(), 'reading.sqlite')
+    const service = createSettingsService(storeOf(open(path)))
+    const saved = await service.update({ density: 'compact', motion: 'reduce', reading: { font: 'serif', fontSize: 20, readingWidth: 36 } })
+    expect(saved).toMatchObject({ saved: true, issues: [] })
+    const refused = await service.update({ customTheme: { ...sepia, colors: { ...sepia.colors, accent: '#fbf6ec' } }, colorScheme: 'custom' })
+    expect(refused.saved).toBe(false)
+    expect(refused.issues.length).toBeGreaterThan(0)
+    expect(refused.settings).toEqual(saved.settings)
+    expect(open(path).loadSettings()).toEqual(saved.settings)
+  })
+
+  it('keeps the previous theme when an import is invalid, too large or unreadable', async () => {
+    const dir = folder()
+    const db = open(join(dir, 'reading.sqlite'))
+    const service = createSettingsService(storeOf(db))
+    await service.update({ customTheme: sepia, colorScheme: 'custom' })
+    const before = db.loadSettings()
+
+    const lowContrast = join(dir, 'low.json')
+    writeFileSync(lowContrast, serializeThemeDocument(themeDocument({ ...sepia, colors: { ...sepia.colors, text: '#d8d0c0' } }, DEFAULT_SETTINGS.reading)))
+    expect(await service.importTheme(lowContrast)).toMatchObject({
+      status: 'rejected',
+      issues: expect.arrayContaining([expect.objectContaining({ kind: 'contrast', foreground: 'ink', surface: ['paper'] })])
+    })
+
+    const large = join(dir, 'large.json')
+    writeFileSync(large, ' '.repeat(MAX_THEME_FILE_BYTES + 1))
+    expect(await service.importTheme(large)).toEqual({ status: 'failed', reason: 'too-large' })
+
+    const notUtf8 = join(dir, 'bytes.json')
+    writeFileSync(notUtf8, Buffer.from([0x7b, 0xff, 0xfe, 0x7d]))
+    expect(await service.importTheme(notUtf8)).toEqual({ status: 'rejected', issues: [{ kind: 'syntax' }] })
+
+    expect(await service.importTheme(join(dir, 'missing.json'))).toEqual({ status: 'failed', reason: 'read' })
+    expect(await service.importTheme(null)).toEqual({ status: 'cancelled' })
+    expect(db.loadSettings()).toEqual(before)
+  })
+
+  it('restores the exported theme and reading parameters in another profile', async () => {
+    const dir = folder()
+    const source = createSettingsService(storeOf(open(join(dir, 'a.sqlite'))))
+    await source.update({ customTheme: sepia, colorScheme: 'light', reading: { font: 'serif', fontSize: 19, readingWidth: 34 } })
+    const file = join(dir, 'theme.json')
+    expect(await source.exportTheme(file, false)).toEqual({ status: 'exported' })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ format: 'xidao-theme', version: 1 })
+
+    const targetDb = open(join(dir, 'b.sqlite'))
+    const target = createSettingsService(storeOf(targetDb))
+    expect(await target.importTheme(file)).toMatchObject({ status: 'imported' })
+    expect(targetDb.loadSettings()).toEqual({
+      ...DEFAULT_SETTINGS,
+      colorScheme: 'custom',
+      customTheme: sepia,
+      reading: { font: 'serif', fontSize: 19, readingWidth: 34 }
+    })
+  })
+
+  it('exports a seed of the built-in scheme in effect when there is no custom theme', async () => {
+    const dir = folder()
+    const service = createSettingsService(storeOf(open(join(dir, 'a.sqlite'))))
+    const file = join(dir, 'theme.json')
+    expect(await service.exportTheme(file, true)).toEqual({ status: 'exported' })
+    const parsed = parseThemeDocument(readFileSync(file, 'utf8'))
+    expect(parsed).toMatchObject({ ok: true, theme: themeFromBuiltin('dark') })
+  })
+})

@@ -9,7 +9,8 @@ import type {
   ThreadId,
   ThreadPage
 } from '../../shared/forum'
-import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, ThreadReadingState } from '../../shared/reading'
+import type { AttentionSource, AttentionState, ReadingAnchor, ThreadReadingState } from '../../shared/reading'
+import type { AppSettings } from '../../shared/settings'
 
 /** A write was refused because the database is read-only (newer schema) or unavailable. */
 export class StorageWriteRefusedError extends Error {

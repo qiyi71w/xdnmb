@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
 import type { PostId } from '../../../../shared/forum'
 import type { ReadingAnchor } from '../../../../shared/reading'
+import { useAppCovered } from '../../lib/appCovered'
 import { useDocumentVisible } from '../../lib/useDocumentVisible'
 import { useWindowFocused } from '../../lib/useWindowFocused'
 import { captureAnchor, scrollTopForAnchor, type PostBox } from '../reading/anchor'
@@ -55,6 +56,7 @@ export function useReadingViewport(options: ReadingViewportOptions) {
   })
   const visible = useDocumentVisible()
   const focused = useWindowFocused()
+  const covered = useAppCovered()
 
   const anchorRef = useRef<ReadingAnchor | null>(null)
   const savedRef = useRef<ReadingAnchor | null>(null)
@@ -331,12 +333,13 @@ export function useReadingViewport(options: ReadingViewportOptions) {
   useEffect(() => {
     const judge = judgeRef.current
     if (judge === null) return
-    // Foreground reading: window focused and visible, tab active, reader pane displayed. Losing any
-    // of these cancels unfinished dwells (setActive(false)); regaining them starts them afresh.
-    const active = displayed && visible && focused
+    // Foreground reading: window focused and visible, no modal layer over the app, tab active, reader
+    // pane displayed. Losing any of these cancels unfinished dwells (setActive(false)); regaining them
+    // starts them afresh.
+    const active = displayed && visible && focused && !covered
     judge.setActive(active)
     if (active) schedule(false)
-  }, [displayed, visible, focused, schedule])
+  }, [displayed, visible, focused, covered, schedule])
 
   // Leaving the screen (tab hidden, single pane shows the list) saves the position now.
   useEffect(() => {

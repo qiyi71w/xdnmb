@@ -21,6 +21,14 @@ const api: XidaoApi = {
     get: () => ipcRenderer.invoke(IpcChannel.getSettings),
     update: (input) => ipcRenderer.invoke(IpcChannel.updateSettings, input)
   },
+  theme: {
+    import: () => ipcRenderer.invoke(IpcChannel.importTheme),
+    export: () => ipcRenderer.invoke(IpcChannel.exportTheme)
+  },
+  view: {
+    getZoom: () => ipcRenderer.invoke(IpcChannel.getZoom),
+    zoom: (input) => ipcRenderer.invoke(IpcChannel.zoom, input)
+  },
   links: {
     openExternal: (input) => ipcRenderer.invoke(IpcChannel.openExternal, input)
   },

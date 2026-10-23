@@ -186,8 +186,10 @@
   background: var(--hover);
 }
 
+/* Selected row: tint plus a leading bar (not color alone); aria-current names it. */
 .thread-row.is-selected {
   background: var(--selected);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .thread-row.is-selected::before,
@@ -197,6 +199,20 @@
 
 .thread-row:focus-visible {
   outline-offset: -2px;
+}
+
+/* Compact density: row and list padding only; text sizes and line clamps stay. */
+:root[data-density='compact'] .thread-list {
+  padding: 4px 6px 0;
+}
+
+:root[data-density='compact'] .thread-row {
+  gap: 2px;
+  padding: 6px 10px;
+}
+
+:root[data-density='compact'] .list-header {
+  padding: 8px 8px 7px 14px;
 }
 
 .row-top {

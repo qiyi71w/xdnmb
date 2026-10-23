@@ -13,6 +13,7 @@ import { openReadingDatabase } from '../src/main/storage/database'
 import type { ReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS } from '../src/main/storage/migrations'
 import { openReadingStore } from '../src/main/storage/store'
+import { DEFAULT_SETTINGS } from '../src/shared/settings'
 
 const fetchedAt = '2026-10-23T08:00:00.000Z'
 const later = '2026-10-23T08:01:00.000Z'
@@ -506,10 +507,10 @@ describe('reading context', () => {
   it('defaults new tabs to split and persists the global setting', () => {
     const path = databasePath()
     const db = open(path)
-    expect(db.loadSettings()).toEqual({ newTabSplitDefault: true })
-    db.saveSettings({ newTabSplitDefault: false })
+    expect(db.loadSettings().newTabSplitDefault).toBe(true)
+    db.saveSettings({ ...DEFAULT_SETTINGS, newTabSplitDefault: false })
     db.close()
-    expect(open(path).loadSettings()).toEqual({ newTabSplitDefault: false })
+    expect(open(path).loadSettings().newTabSplitDefault).toBe(false)
   })
 })
 
