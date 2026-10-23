@@ -1,37 +1,319 @@
-/* Fixed D layout: frosted navigation | thread list | reading pane.
-   Below the minimum width (e.g. at 200% zoom) the page scrolls horizontally instead of clipping. */
+/* Responsive D layout: frosted navigation | top bar + tab content (list | reader).
+   Column widths come from computeLayout (features/layout/layout.ts) via --nav-width; reader
+   gutters shrink by centring. Nothing has a fixed page minimum: no horizontal page scrollbar. */
 
 .app {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-width: 840px;
+  overflow: hidden;
   background:
     radial-gradient(55% 60% at 0% 0%, var(--window-tint-a), transparent 70%),
     radial-gradient(45% 55% at 0% 100%, var(--window-tint-b), transparent 70%),
     var(--window);
 }
 
+/* Measures the preferred reading width at the current font size. */
+.measure-reading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--reading-width);
+  height: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Same scrollbar as the reader scroller (thin, from base.css): offsetWidth - clientWidth is the
+   width it takes from the reading column; 0 with overlay scrollbars. */
+.measure-scrollbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100px;
+  height: 40px;
+  overflow: hidden scroll;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .workspace {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: clamp(180px, 18vw, 236px) clamp(260px, 26vw, 340px) minmax(380px, 1fr);
+  grid-template-columns: var(--nav-width) minmax(0, 1fr);
+}
+
+.workspace.is-nav-overlay {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nav-column {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.nav-column > .nav {
+  flex: 1;
+  min-width: 0;
+}
+
+.main-column {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Top bar ---------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 8px 6px;
+}
+
+.history-buttons {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+.icon-btn:disabled {
+  color: var(--ink-3);
+  opacity: 0.55;
+  cursor: default;
+}
+
+.icon-btn:disabled:hover {
+  background: transparent;
+}
+
+.tab-strip {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: auto hidden;
+  scrollbar-width: none;
+  padding: 2px;
+}
+
+.tab {
+  position: relative;
+  flex: 0 1 220px;
+  min-width: 96px;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-m);
+  color: var(--ink-2);
+}
+
+.tab:hover {
+  background: var(--hover);
+}
+
+.tab.is-active {
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--line-soft), var(--shadow-bar);
+}
+
+.tab-button {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 4px 4px 10px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tab.is-active .tab-button {
+  font-weight: 600;
+}
+
+.tab-button:focus-visible,
+.tab-close:focus-visible {
+  outline-offset: -2px;
+}
+
+.tab-icon {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-close {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 4px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+.tab-close:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.btn-toggle {
+  flex: none;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.btn-toggle[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.btn-toggle[aria-pressed='true'] .icon {
+  color: var(--accent-ink);
+}
+
+.btn-toggle[aria-pressed='false'] .icon {
+  color: var(--ink-3);
+}
+
+/* ---------- Settings popover ---------- */
+
+.settings-menu {
+  position: relative;
+  flex: none;
+}
+
+.popover {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(320px, calc(100vw - 24px));
+  padding: 12px 14px;
+  border-radius: var(--radius-l);
+  background: var(--glass-strong);
+  backdrop-filter: blur(28px) saturate(1.6);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+}
+
+.setting-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.setting-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.setting-label {
+  font-weight: 600;
+}
+
+.setting-help {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.popover .notice-inline {
+  margin: 10px 0 0;
+}
+
+/* ---------- Tab content ---------- */
+
+.tab-host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 0 8px 8px;
+  border-radius: var(--radius-l);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--line-soft), var(--shadow-bar);
+  overflow: hidden;
+}
+
+.tab-panel {
+  height: 100%;
+}
+
+.tab-panel[hidden],
+.list-column[hidden],
+.reader-wrap[hidden] {
+  display: none;
+}
+
+.split {
+  display: flex;
+  height: 100%;
 }
 
 .list-column {
+  flex: none;
+  width: var(--list-width);
   min-width: 0;
   min-height: 0;
-  margin-left: 8px;
   background: var(--pane);
-  border-left: 1px solid var(--line-soft);
   border-right: 1px solid var(--line-soft);
 }
 
-.reader-column-wrap {
+.split.is-single .list-column {
+  flex: 1;
+  width: auto;
+  border-right: 0;
+}
+
+.reader-wrap {
+  flex: 1;
   min-width: 0;
-  min-height: 0;
+  height: 100%;
   background: var(--paper);
+}
+
+.reader-wrap:focus {
+  outline: none;
+}
+
+/* List without the reader: a centred column as wide as the reading text. */
+.list-only {
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  background: var(--pane);
+}
+
+.list-only > .list-pane {
+  width: min(100%, calc(var(--reading-width) + 2 * var(--gutter-min)));
+  border-inline: 1px solid var(--line-soft);
 }
 
 .storage-banner {
@@ -54,6 +336,7 @@
   height: 100%;
   display: grid;
   place-content: center;
+  justify-items: center;
   gap: 4px;
   padding: 24px;
   text-align: center;
@@ -69,4 +352,8 @@
   max-width: 28em;
   font-size: var(--text-sm);
   color: var(--ink-3);
+}
+
+.pane-empty-action {
+  margin-top: 8px;
 }

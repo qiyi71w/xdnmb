@@ -1,5 +1,5 @@
 import type { ReadError } from '../../shared/api'
-import type { BoardDirectory, FeedPage, FeedRef, ThreadId, ThreadPage } from '../../shared/forum'
+import type { BoardDirectory, FeedPage, FeedRef, ReadingMode, ThreadId, ThreadPage } from '../../shared/forum'
 
 /** A classified forum read failure. Never carries raw bodies, URLs with secrets or full server pages. */
 export class ForumReadError extends Error {
@@ -38,6 +38,6 @@ export interface ForumClient {
   getDirectory(signal: AbortSignal): Promise<BoardDirectory>
   /** showf (forum) or timeline list page. */
   getFeedPage(feed: FeedRef, page: number, signal: AbortSignal): Promise<FeedPage>
-  /** One `all`-mode thread page. */
-  getThreadPage(threadId: ThreadId, page: number, signal: AbortSignal): Promise<ThreadPage>
+  /** One thread page: `all` reads `thread`, `po` reads the PO-only `po` pages (own page numbering). */
+  getThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal): Promise<ThreadPage>
 }

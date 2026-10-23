@@ -1,9 +1,11 @@
 import type { Worker, WorkerOptions } from 'node:worker_threads'
 import type { StorageStatus } from '../../shared/api'
 import type { ReadingMode, ThreadId } from '../../shared/forum'
+import { DEFAULT_SETTINGS } from '../../shared/reading'
 import { StorageWriteRefusedError } from './contract'
 import type { ReadingStore } from './contract'
 import { computeCoverage } from './coverage'
+import { emptyReadingState } from './reading-state'
 import type { ReadingDatabase } from './database'
 import type { StorageMethod, StorageResponse } from './worker'
 
@@ -53,16 +55,22 @@ export async function openReadingStore(options: {
     }
   }
 
+  /** Without a usable database: reads see nothing stored, every write is refused. */
   function unavailable<Method extends StorageMethod>(
     method: Method,
     args: Parameters<ReadingDatabase[Method]>
   ): ReturnType<ReadingDatabase[Method]> {
-    if (method === 'saveDirectory' || method === 'saveFeedPage' || method === 'saveThreadPage') {
-      throw new StorageWriteRefusedError(status)
+    let value: unknown
+    switch (method) {
+      case 'getThreadCoverage': value = computeCoverage(args[0] as ThreadId, args[1] as ReadingMode, [], null); break
+      case 'getReadingState': value = emptyReadingState(args[0] as ThreadId); break
+      case 'loadSettings': value = { ...DEFAULT_SETTINGS }; break
+      case 'loadDirectory':
+      case 'loadFeedPage':
+      case 'loadThreadPage': value = null; break
+      case 'close': value = undefined; break
+      default: throw new StorageWriteRefusedError(status)
     }
-    const value = method === 'getThreadCoverage'
-      ? computeCoverage(args[0] as ThreadId, args[1] as ReadingMode, [], null)
-      : method === 'close' ? undefined : null
     return value as ReturnType<ReadingDatabase[Method]>
   }
 
@@ -108,6 +116,14 @@ export async function openReadingStore(options: {
     saveThreadPage: (page, fetchedAt) => request('saveThreadPage', page, fetchedAt),
     loadThreadPage: (threadId, mode, page) => request('loadThreadPage', threadId, mode, page),
     getThreadCoverage: (threadId, mode) => request('getThreadCoverage', threadId, mode),
+    getReadingState: (threadId) => request('getReadingState', threadId),
+    setReadingMode: (threadId, mode, at) => request('setReadingMode', threadId, mode, at),
+    saveReadingPosition: (threadId, mode, anchor, at) => request('saveReadingPosition', threadId, mode, anchor, at),
+    markPostsRead: (threadId, postIds, at) => request('markPostsRead', threadId, postIds, at),
+    recordVisit: (threadId, at) => request('recordVisit', threadId, at),
+    establishAttention: (threadId, source, at) => request('establishAttention', threadId, source, at),
+    loadSettings: () => request('loadSettings'),
+    saveSettings: (settings) => request('saveSettings', settings),
     close() {
       if (!closePromise) {
         closing = true

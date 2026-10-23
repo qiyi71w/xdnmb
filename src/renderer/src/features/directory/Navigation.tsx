@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import type { FeedRef } from '../../../../shared/forum'
+import { useLayoutEffect, useMemo, useRef, type CSSProperties, type Ref } from 'react'
+import type { BoardDirectory, FeedRef } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, Loading, SourceNotice } from '../../components/Notices'
 import { describeFailure, formatLocalTime } from '../../lib/format'
@@ -19,46 +19,65 @@ interface NavSection {
   items: NavItem[]
 }
 
+function navSections(directory: BoardDirectory | null): NavSection[] {
+  if (directory === null) return []
+  const result: NavSection[] = []
+  if (directory.timelines.length > 0) {
+    result.push({
+      id: 'timelines',
+      title: '时间线',
+      items: directory.timelines.map((timeline) => ({ ref: { kind: 'timeline', id: timeline.id }, label: timeline.displayName }))
+    })
+  }
+  for (const group of directory.groups) {
+    if (group.forums.length === 0) continue
+    result.push({
+      id: `group-${group.id}`,
+      title: group.name,
+      items: group.forums.map((forum) => ({ ref: { kind: 'forum', id: forum.id }, label: forum.displayName }))
+    })
+  }
+  return result
+}
+
+/**
+ * Navigation panel. `inline` sits in the layout column and narrows continuously (`progress` 0 → 1
+ * reduces its padding); `overlay` is the floating panel opened from the top bar.
+ */
 export function Navigation({
   state,
   selected,
   onSelect,
-  onRetry
+  onRetry,
+  variant,
+  progress = 0,
+  panelRef,
+  id
 }: {
   state: DirectoryState
   selected: FeedRef | null
   onSelect: (ref: FeedRef) => void
   onRetry: () => void
+  variant: 'inline' | 'overlay'
+  progress?: number
+  panelRef?: Ref<HTMLElement>
+  id?: string
 }) {
   const { directory } = state
-
-  const sections = useMemo<NavSection[]>(() => {
-    if (directory === null) return []
-    const result: NavSection[] = []
-    if (directory.timelines.length > 0) {
-      result.push({
-        id: 'timelines',
-        title: '时间线',
-        items: directory.timelines.map((timeline) => ({ ref: { kind: 'timeline', id: timeline.id }, label: timeline.displayName }))
-      })
-    }
-    for (const group of directory.groups) {
-      if (group.forums.length === 0) continue
-      result.push({
-        id: `group-${group.id}`,
-        title: group.name,
-        items: group.forums.map((forum) => ({ ref: { kind: 'forum', id: forum.id }, label: forum.displayName }))
-      })
-    }
-    return result
-  }, [directory])
+  const sections = useMemo(() => navSections(directory), [directory])
 
   const ids = useMemo(() => sections.flatMap((section) => section.items.map((item) => feedKey(item.ref))), [sections])
   const selectedKey = selected === null ? null : feedKey(selected)
   const roving = useRovingFocus(ids, selectedKey)
 
   return (
-    <nav className="nav" aria-label="时间线与版面">
+    <nav
+      ref={panelRef}
+      id={id}
+      className={variant === 'overlay' ? 'nav is-overlay' : 'nav'}
+      aria-label="时间线与版面"
+      style={{ '--nav-t': progress } as CSSProperties}
+    >
       <div className="nav-brand">
         <span className="nav-mark" aria-hidden="true" />
         <span>汐岛</span>
@@ -115,6 +134,58 @@ export function Navigation({
 
       <DirectoryStatus state={state} />
     </nav>
+  )
+}
+
+/** Space outside the measured panel: the column's left margin (`.nav` margin-left). */
+const NAV_OUTER_MARGIN = 8
+
+/**
+ * Invisible copy of the navigation at its compact padding, laid out at max-content width: the
+ * narrowest column in which every heading and label stays complete on one line beside its icon.
+ * Reports the width (including the column margin) whenever the content or font size changes;
+ * reports nothing while there are no entries to measure.
+ */
+export function NavMeasure({ directory, onMeasure }: { directory: BoardDirectory | null; onMeasure: (width: number) => void }) {
+  const sections = useMemo(() => navSections(directory), [directory])
+  const ref = useRef<HTMLDivElement>(null)
+  const report = useRef(onMeasure)
+  useLayoutEffect(() => {
+    report.current = onMeasure
+  })
+
+  const empty = sections.length === 0
+  useLayoutEffect(() => {
+    const element = ref.current
+    if (element === null || empty) return
+    const measure = () => report.current(Math.ceil(element.getBoundingClientRect().width) + NAV_OUTER_MARGIN)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [empty])
+
+  if (empty) return null
+  return (
+    <div ref={ref} className="nav nav-measure" aria-hidden="true" inert style={{ '--nav-t': 1 } as CSSProperties}>
+      <div className="nav-brand">
+        <span className="nav-mark" />
+        <span>汐岛</span>
+      </div>
+      <div className="nav-scroll">
+        {sections.map((section) => (
+          <div key={section.id} className="nav-section">
+            <p className="nav-heading">{section.title}</p>
+            {section.items.map((item) => (
+              <span key={feedKey(item.ref)} className="nav-item">
+                <Icon name={item.ref.kind === 'timeline' ? 'timeline' : 'forum'} className="nav-item-icon" />
+                <span className="nav-item-label">{item.label}</span>
+              </span>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 

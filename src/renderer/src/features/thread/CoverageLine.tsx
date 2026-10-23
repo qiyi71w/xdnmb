@@ -1,8 +1,16 @@
-import type { ThreadCoverage } from '../../../../shared/forum'
+import type { ReadingMode, ThreadCoverage } from '../../../../shared/forum'
 import { formatPageList } from '../../lib/format'
 
-/** What has actually been observed for this thread. ReplyCount is never shown as completeness. */
-export function CoverageLine({ coverage }: { coverage: ThreadCoverage | null }) {
+/** “第 3 页” or “只看 PO 第 3 页”: PO page numbers are not the pages of 全部. */
+export function pageLabel(mode: ReadingMode, pages: string | number): string {
+  return mode === 'po' ? `只看 PO 第 ${pages} 页` : `第 ${pages} 页`
+}
+
+/**
+ * What has actually been observed for this thread in the mode being read. ReplyCount is never
+ * shown as completeness; PO pages are labelled as PO pages.
+ */
+export function CoverageLine({ coverage, mode }: { coverage: ThreadCoverage | null; mode: ReadingMode }) {
   if (coverage === null) return <p className="coverage">尚未取得页面</p>
   const pages = coverage.pages.map((item) => item.page)
   const reported = coverage.reportedReplyCount
@@ -16,9 +24,9 @@ export function CoverageLine({ coverage }: { coverage: ThreadCoverage | null }) 
 
   return (
     <p className="coverage">
-      <span>已取得第 {pages.length > 0 ? formatPageList(pages) : '—'} 页</span>
-      {coverage.gaps.length > 0 && <span className="coverage-gap">缺页：第 {formatPageList(coverage.gaps)} 页</span>}
-      {coverage.endCandidatePage !== null && <span>末尾候选：第 {coverage.endCandidatePage} 页</span>}
+      <span>已取得{pageLabel(mode, pages.length > 0 ? formatPageList(pages) : '—')}</span>
+      {coverage.gaps.length > 0 && <span className="coverage-gap">缺页：{pageLabel(mode, formatPageList(coverage.gaps))}</span>}
+      {coverage.endCandidatePage !== null && <span>末尾候选：{pageLabel(mode, coverage.endCandidatePage)}</span>}
       <span>{counts}</span>
     </p>
   )

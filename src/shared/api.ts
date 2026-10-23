@@ -1,4 +1,5 @@
-import type { BoardDirectory, FeedPage, FeedRef, ThreadCoverage, ThreadId, ThreadPage } from './forum'
+import type { BoardDirectory, FeedPage, FeedRef, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
+import type { AppSettings, MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
 
 /**
  * Classified read failure. Server/body text is never included except a short
@@ -80,9 +81,16 @@ export type StorageStatus =
   /** Database could not be opened or migrated; the original file is left untouched. */
   | { state: 'unavailable'; reason: 'open-failed' | 'migration-failed' }
 
+/** Desktop platform of the running app; decides which modifier keys the shortcuts use. */
+export type AppPlatform = 'darwin' | 'win32' | 'linux'
+
 export interface AppStatus {
   storage: StorageStatus
+  platform: AppPlatform
 }
+
+/** Upper bound of post IDs per `markRead` call. */
+export const MAX_MARK_READ_IDS = 2000
 
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
@@ -90,12 +98,35 @@ export interface XidaoApi {
     loadDirectory(input: { operationId: OperationId; strategy: DirectoryStrategy }): Promise<ReadOutcome<BoardDirectory>>
     /** Foreground read; falls back to the stored page when the network read fails. */
     readFeedPage(input: { operationId: OperationId; feed: FeedRef; page: number }): Promise<ReadOutcome<FeedPage>>
-    /** Foreground read of one `all`-mode thread page; falls back to the stored page on failure. */
-    readThreadPage(input: { operationId: OperationId; threadId: ThreadId; page: number }): Promise<ReadOutcome<ThreadPageResult>>
-    /** Bounded tail probe in the foreground lane; cancellable between and during page reads. */
-    locateThreadEnd(input: { operationId: OperationId; threadId: ThreadId }): Promise<ReadOutcome<ThreadEndResult>>
+    /**
+     * Foreground read of one thread page in the given mode (`po` reads the forum's PO-only pages);
+     * falls back to the stored page of the same mode on failure. Modes never stand in for each other.
+     */
+    readThreadPage(input: { operationId: OperationId; threadId: ThreadId; mode: ReadingMode; page: number }): Promise<ReadOutcome<ThreadPageResult>>
+    /** Bounded tail probe of one mode in the foreground lane; cancellable between and during page reads. */
+    locateThreadEnd(input: { operationId: OperationId; threadId: ThreadId; mode: ReadingMode }): Promise<ReadOutcome<ThreadEndResult>>
     /** Cancels queued and in-flight reads of the operation. Unknown IDs are ignored. */
     cancel(input: { operationId: OperationId }): Promise<void>
+  }
+  /** Local reading context. Never touches the network; downloads and previews never call it. */
+  readingState: {
+    /** Mode preference, per-mode positions, read/unread posts, attention and coverage of one thread. */
+    get(input: { threadId: ThreadId }): Promise<ThreadReadingState>
+    /** Saves the thread's mode preference. Temporary target display must not call this. */
+    setMode(input: { threadId: ThreadId; mode: ReadingMode }): Promise<WriteResult>
+    /** Saves the position of one mode; the other mode's position is untouched. */
+    savePosition(input: { threadId: ThreadId; mode: ReadingMode; anchor: ReadingAnchor }): Promise<WriteResult>
+    /**
+     * Records posts as read. Called only by the foreground reader's dwell judgement and by the explicit
+     * “全部标为已读” with the confirmed unread IDs it showed. Posts not observed in this thread are ignored.
+     */
+    markRead(input: { threadId: ThreadId; postIds: PostId[] }): Promise<MarkReadResult>
+    /** Records a visit to the thread (browsing history). Not a navigation step and not a read. */
+    recordVisit(input: { threadId: ThreadId }): Promise<WriteResult>
+  }
+  settings: {
+    get(): Promise<AppSettings>
+    update(input: Partial<AppSettings>): Promise<WriteResult & { settings: AppSettings }>
   }
   links: {
     /** Opens an absolute http(s) URL in the system browser; anything else is refused. */
@@ -113,6 +144,13 @@ export const IpcChannel = {
   readThreadPage: 'reading:read-thread-page',
   locateThreadEnd: 'reading:locate-thread-end',
   cancel: 'reading:cancel',
+  getReadingState: 'reading-state:get',
+  setReadingMode: 'reading-state:set-mode',
+  saveReadingPosition: 'reading-state:save-position',
+  markRead: 'reading-state:mark-read',
+  recordVisit: 'reading-state:record-visit',
+  getSettings: 'settings:get',
+  updateSettings: 'settings:update',
   openExternal: 'links:open-external',
   getStatus: 'app:get-status'
 } as const

@@ -23,15 +23,29 @@ describe('forum JSON normalization', () => {
     const client = fixture(thread(Array.from({ length: 5 }, (_, index) => ({
       id: String(200 + index), content: 'reply'
     }))))
-    const result = await client.getThreadPage('100', 1, signal)
+    const result = await client.getThreadPage('100', 'all', 1, signal)
     expect(result.replies).toHaveLength(5)
     expect(result.endCandidate).toBe(false)
     expect(result.replyCount).toBeNull()
     expect(result.mode).toBe('all')
   })
 
+  it('reads PO pages from the PO endpoint and labels them as PO observations', async () => {
+    const requested: string[] = []
+    const transport: ForumTransport = {
+      async get(url) {
+        requested.push(`${url.pathname}?${url.searchParams}`)
+        return { mediaType: 'application/json', text: JSON.stringify(thread([tips, { id: '201', content: 'po reply' }])) }
+      }
+    }
+    const result = await createForumClient({ transport }).getThreadPage('100', 'po', 2, signal)
+    expect(requested).toEqual(['/api/po?id=100&page=2'])
+    expect(result).toMatchObject({ mode: 'po', page: 2, endCandidate: false })
+    expect(result.replies.map((post) => post.id)).toEqual(['201'])
+  })
+
   it('excludes Tips from replies, skips and end-candidate counts', async () => {
-    const result = await fixture(thread([tips])).getThreadPage('100', 2, signal)
+    const result = await fixture(thread([tips])).getThreadPage('100', 'all', 2, signal)
     expect(result.replies).toEqual([])
     expect(result.skippedItems).toBe(0)
     expect(result.endCandidate).toBe(true)
@@ -43,7 +57,7 @@ describe('forum JSON normalization', () => {
       { id: '201', content: 'duplicate' },
       { id: '9999999', user_hash: 'not Tips', content: 'ordinary' },
       { id: '202', content: 'last' }
-    ])).getThreadPage('100', 1, signal)
+    ])).getThreadPage('100', 'all', 1, signal)
     expect(result.replies.map((post) => [post.id, post.plainText])).toEqual([
       ['201', 'first'], ['9999999', 'ordinary'], ['202', 'last']
     ])
@@ -53,7 +67,7 @@ describe('forum JSON normalization', () => {
 
   it.each(['该串不存在', { success: false, error: '该串不存在' }])(
     'classifies HTTP-200 business failures instead of returning an empty page: %j', async (body) => {
-      await expect(fixture(body).getThreadPage('100', 1, signal)).rejects.toMatchObject({
+      await expect(fixture(body).getThreadPage('100', 'all', 1, signal)).rejects.toMatchObject({
         error: { kind: 'not-found', detail: 'business', serverMessage: '该串不存在' }
       })
     }
@@ -62,7 +76,7 @@ describe('forum JSON normalization', () => {
   it.each([
     ['请登录并确认饼干', 'permission'], ['请求太快，请稍后', 'rate-limited'], ['其他错误', 'unknown-structure']
   ])('classifies business message %s', async (message, kind) => {
-    await expect(fixture(message).getThreadPage('100', 1, signal)).rejects.toMatchObject({
+    await expect(fixture(message).getThreadPage('100', 'all', 1, signal)).rejects.toMatchObject({
       error: { kind, detail: 'business' }
     })
   })
@@ -73,12 +87,12 @@ describe('forum JSON normalization', () => {
   ])('rejects an HTML error body before JSON parsing', async (body, mediaType, kind) => {
     const transport: ForumTransport = { async get() { return { mediaType, text: body } } }
     const client = createForumClient({ transport })
-    await expect(client.getThreadPage('100', 1, signal)).rejects.toMatchObject({ error: { kind, detail: 'html' } })
+    await expect(client.getThreadPage('100', 'all', 1, signal)).rejects.toMatchObject({ error: { kind, detail: 'html' } })
   })
 
   it('counts malformed replies and blocks end-candidate classification', async () => {
     const result = await fixture(thread([tips, { id: '201' }, { content: 'missing id' }, null]))
-      .getThreadPage('100', 1, signal)
+      .getThreadPage('100', 'all', 1, signal)
     expect(result.replies).toEqual([])
     expect(result.skippedItems).toBe(3)
     expect(result.endCandidate).toBe(false)
@@ -88,7 +102,7 @@ describe('forum JSON normalization', () => {
     thread([], { id: '101' }), { id: '100', content: 'head' },
     thread([], { content: null }), thread([], { Replies: {} }), []
   ])('rejects an invalid target or thread shape', async (body) => {
-    await expect(fixture(body).getThreadPage('100', 1, signal)).rejects.toMatchObject({
+    await expect(fixture(body).getThreadPage('100', 'all', 1, signal)).rejects.toMatchObject({
       error: { kind: 'unknown-structure', detail: 'shape' }
     })
   })
@@ -101,7 +115,7 @@ describe('forum JSON normalization', () => {
           '"Replies":[{"id":12345678901234567892,"content":"reply"}]}' }
       }
     }
-    const result = await createForumClient({ transport }).getThreadPage('12345678901234567890', 1, signal)
+    const result = await createForumClient({ transport }).getThreadPage('12345678901234567890', 'all', 1, signal)
     expect(result.head.id).toBe('12345678901234567890')
     expect(result.head.forumId).toBe('12345678901234567891')
     expect(result.replies[0]?.id).toBe('12345678901234567892')
@@ -111,13 +125,13 @@ describe('forum JSON normalization', () => {
     const result = await fixture(thread([], {
       fid: {}, now: 123, user_hash: null, admin: '1', sage: 0,
       img: '2026-10-23/image', ext: '.png'
-    })).getThreadPage('100', 1, signal)
+    })).getThreadPage('100', 'all', 1, signal)
     expect(result.head).toMatchObject({
       forumId: null, createdAt: null, userHash: null, name: null, title: null,
       isAdmin: null, isSage: false, image: { path: '2026-10-23/image', ext: '.png' },
       content: [{ type: 'emphasis', style: 'bold', children: [{ type: 'text', text: 'head' }] }]
     })
-    expect((await fixture(thread([])).getThreadPage('100', 1, signal)).head.image).toBeNull()
+    expect((await fixture(thread([])).getThreadPage('100', 'all', 1, signal)).head.image).toBeNull()
   })
 
   it('accepts an empty feed page without inventing entries', async () => {
@@ -144,6 +158,7 @@ describe('forum JSON normalization', () => {
         { id: '-1', name: 'timeline' },
         { id: '4', name: 'forum', showName: 'display', msg: 'rules<br>next', interval: '30' },
         { id: '5', name: 'fallback', showName: '', interval: 'bad' },
+        { id: '7', name: 'marked', showName: '任天堂<font color="DeepSkyBlue">N</font><font color="Red">S</font>' },
         { id: '6' }
       ] }]) },
       { mediaType: 'application/json', text: JSON.stringify([
@@ -154,8 +169,9 @@ describe('forum JSON normalization', () => {
     let index = 0
     const transport: ForumTransport = { async get() { return responses[index++]! } }
     const result = await createForumClient({ transport }).getDirectory(signal)
-    expect(result.groups[0]?.forums.map((forum) => forum.id)).toEqual(['4', '5'])
+    expect(result.groups[0]?.forums.map((forum) => forum.id)).toEqual(['4', '5', '7'])
     expect(result.skippedItems).toBe(2)
+    expect(result.groups[0]?.forums[2]?.displayName).toBe('任天堂NS')
     expect(result.groups[0]?.forums[0]).toMatchObject({
       displayName: 'display', postIntervalSeconds: 30,
       rules: [{ type: 'text', text: 'rules' }, { type: 'lineBreak' }, { type: 'text', text: 'next' }]
@@ -183,13 +199,13 @@ describe('forum JSON normalization', () => {
 
   it.each([['invalid', 1], ['100', 0], ['100', 1.5], ['100', Number.NaN]])(
     'rejects invalid input without accepting a successful-looking response', async (threadId, page) => {
-      await expect(fixture(thread([])).getThreadPage(String(threadId), Number(page), signal)).rejects.toBeInstanceOf(Error)
+      await expect(fixture(thread([])).getThreadPage(String(threadId), 'all', Number(page), signal)).rejects.toBeInstanceOf(Error)
     }
   )
 
   it('reports invalid JSON as a parse error', async () => {
     const transport: ForumTransport = { async get() { return { mediaType: 'application/json', text: '{bad' } } }
-    await expect(createForumClient({ transport }).getThreadPage('100', 1, signal)).rejects.toMatchObject({
+    await expect(createForumClient({ transport }).getThreadPage('100', 'all', 1, signal)).rejects.toMatchObject({
       error: { kind: 'unknown-structure', detail: 'json' }
     })
   })
@@ -197,6 +213,6 @@ describe('forum JSON normalization', () => {
   it('keeps classified transport failures intact', async () => {
     const failure = new ForumReadError({ kind: 'network', detail: 'timeout' })
     const transport: ForumTransport = { async get() { throw failure } }
-    await expect(createForumClient({ transport }).getThreadPage('100', 1, signal)).rejects.toBe(failure)
+    await expect(createForumClient({ transport }).getThreadPage('100', 'all', 1, signal)).rejects.toBe(failure)
   })
 })

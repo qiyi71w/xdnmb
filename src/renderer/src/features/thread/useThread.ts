@@ -1,29 +1,32 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react'
-import type { Post, ThreadId } from '../../../../shared/forum'
+import type { Post, ReadingMode, ThreadId } from '../../../../shared/forum'
 import { OperationScope } from '../../lib/operations'
 import { initialThreadState, threadReducer, type ThreadTask } from './threadState'
 
 type PageTask = Exclude<ThreadTask, { type: 'locate' }>
 
 /**
- * Continuous reading of one thread. The owning component is keyed by thread ID: switching threads
- * unmounts this hook and cancels its reads. Within a thread at most one read runs; explicit
- * actions (jump, 开头, 末尾, 刷新) cancel the running read, whose late result is then discarded.
+ * Continuous reading of one thread in one mode. The owning component is keyed by thread and mode:
+ * switching either unmounts this hook and cancels its reads. Within a reader at most one read runs;
+ * explicit actions (jump, 开头, 末尾, 首条未读, 刷新) cancel the running read, whose late result is
+ * then discarded. `firstPage` is the page loaded first (resume, target or page 1).
  */
-export function useThread(threadId: ThreadId, initialHead: Post | null) {
+export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Post | null, firstPage: number) {
   const [state, dispatch] = useReducer(threadReducer, initialHead, initialThreadState)
   const scope = useRef(new OperationScope())
   const threadRef = useRef(threadId)
+  const modeRef = useRef(mode)
+  const firstPageRef = useRef(firstPage)
   const stateRef = useRef(state)
   useEffect(() => {
     stateRef.current = state
   })
 
   const readPage = useCallback(async (task: PageTask) => {
-    const page = task.type === 'initial' ? 1 : task.page
+    const page = task.type === 'initial' ? (task.page ?? 1) : task.page
     dispatch({ type: 'start', task })
     const settled = await scope.current.run((operationId) =>
-      window.xidao.reading.readThreadPage({ operationId, threadId: threadRef.current, page })
+      window.xidao.reading.readThreadPage({ operationId, threadId: threadRef.current, mode: modeRef.current, page })
     )
     switch (settled.type) {
       case 'stale':
@@ -43,7 +46,7 @@ export function useThread(threadId: ThreadId, initialHead: Post | null) {
     const task: ThreadTask = { type: 'locate' }
     dispatch({ type: 'start', task })
     const settled = await scope.current.run((operationId) =>
-      window.xidao.reading.locateThreadEnd({ operationId, threadId: threadRef.current })
+      window.xidao.reading.locateThreadEnd({ operationId, threadId: threadRef.current, mode: modeRef.current })
     )
     switch (settled.type) {
       case 'stale':
@@ -91,12 +94,12 @@ export function useThread(threadId: ThreadId, initialHead: Post | null) {
 
   useEffect(() => {
     const current = scope.current
-    void readPage({ type: 'initial' })
+    void readPage({ type: 'initial', page: firstPageRef.current })
     return () => current.cancelAll()
   }, [readPage])
 
   const lastPage = state.pages.at(-1)
-  const firstPage = state.pages[0]
+  const loadedFirst = state.pages[0]
   const canAppend =
     state.task === null && state.error?.task.type !== 'append' && lastPage !== undefined && !lastPage.endCandidate
 
@@ -118,7 +121,7 @@ export function useThread(threadId: ThreadId, initialHead: Post | null) {
   /** Re-reads the last loaded page (including an end-candidate page) and merges it. */
   const refresh = useCallback(() => {
     const last = stateRef.current.pages.at(-1)
-    supersede(last === undefined ? { type: 'initial' } : { type: 'refresh', page: last.page })
+    supersede(last === undefined ? { type: 'initial', page: firstPageRef.current } : { type: 'refresh', page: last.page })
   }, [supersede])
 
   const jump = useCallback((page: number) => supersede({ type: 'jump', page }), [supersede])
@@ -134,5 +137,17 @@ export function useThread(threadId: ThreadId, initialHead: Post | null) {
     if (error !== null) supersede(error.task)
   }, [supersede])
 
-  return { state, firstPage, lastPage, canAppend, appendNext, prependPrevious, refresh, jump, locateEnd, cancel, retry }
+  return {
+    state,
+    firstPage: loadedFirst,
+    lastPage,
+    canAppend,
+    appendNext,
+    prependPrevious,
+    refresh,
+    jump,
+    locateEnd,
+    cancel,
+    retry
+  }
 }

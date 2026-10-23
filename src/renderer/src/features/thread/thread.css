@@ -2,26 +2,60 @@
   height: 100%;
 }
 
-/* Appended pages land below the viewport and never move it; scroll anchoring stays on so
-   content merged above the reading position does not shift it either. */
+/* Browser scroll anchoring is off: the reader keeps its own anchor (post ID + position inside the
+   post + viewport offset) under the reading line whenever content above or the width changes, and
+   content appended below never moves the viewport. Overflow-x stays hidden: long text wraps. */
 .reader-scroll {
   height: 100%;
-  overflow: auto;
+  overflow: hidden auto;
   overscroll-behavior: contain;
-  overflow-anchor: auto;
+  overflow-anchor: none;
+}
+
+.reader-scroll:focus {
+  outline: none;
+}
+
+.reader-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .reader-toolbar {
   position: sticky;
   top: 0;
   z-index: 3;
-  display: grid;
-  gap: 6px;
-  padding: 10px 24px 8px;
+  padding: 10px 0 8px;
   background: color-mix(in oklch, var(--paper) 76%, transparent);
   backdrop-filter: blur(20px) saturate(1.5);
   border-bottom: 1px solid var(--line-soft);
   box-shadow: var(--shadow-bar);
+}
+
+/* Aligned with the reading column below it. */
+.reader-toolbar-inner {
+  display: grid;
+  gap: 6px;
+  max-width: calc(var(--reading-width) + 2 * var(--gutter-min));
+  margin: 0 auto;
+  padding: 0 var(--gutter-min);
+}
+
+.toolbar-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-m);
+  background: var(--info-bg);
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.toolbar-note .icon {
+  flex: none;
+  color: var(--accent-ink);
 }
 
 .toolbar-row {
@@ -125,10 +159,12 @@
   font-weight: 600;
 }
 
+/* Text width is --reading-width; side gutters are what is left, never below --gutter-min.
+   Font size and line height never change with the window width. */
 .reader-column {
-  max-width: 46rem;
+  max-width: calc(var(--reading-width) + 2 * var(--gutter-min));
   margin: 0 auto;
-  padding: 20px 32px 160px;
+  padding: 20px var(--gutter-min) 160px;
 }
 
 .thread-header {
@@ -182,6 +218,19 @@
 
 .post-no {
   margin-left: auto;
+}
+
+.unread-mark {
+  display: inline-flex;
+  align-items: center;
+}
+
+.unread-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .post-title {

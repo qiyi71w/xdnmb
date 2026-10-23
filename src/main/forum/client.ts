@@ -76,6 +76,16 @@ function nonNegativeNumber(value: unknown): number | null {
   return Number.isFinite(number) && number >= 0 ? number : null
 }
 
+/**
+ * Forum/timeline display names may carry markup (e.g. `任天堂<font color="DeepSkyBlue">N</font>`).
+ * Names are shown as plain text: markup is parsed safely and only its text is kept.
+ */
+function displayName(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback
+  const plain = parseContent(value).plainText.replace(/\s+/g, ' ').trim()
+  return plain.length > 0 ? plain : fallback
+}
+
 export function createForumClient(options: {
   transport: ForumTransport
   baseUrl?: string
@@ -148,8 +158,7 @@ export function createForumClient(options: {
             groupId,
             groupName: rawGroup.name,
             name: rawForum.name,
-            displayName: typeof rawForum.showName === 'string' && rawForum.showName.length > 0
-              ? rawForum.showName : rawForum.name,
+            displayName: displayName(rawForum.showName, rawForum.name),
             rules: parseContent(text(rawForum.msg) ?? '').nodes,
             postIntervalSeconds: nonNegativeNumber(rawForum.interval)
           })
@@ -167,8 +176,7 @@ export function createForumClient(options: {
         timelines.push({
           id: timelineId,
           name: raw.name,
-          displayName: typeof raw.display_name === 'string' && raw.display_name.length > 0
-            ? raw.display_name : raw.name,
+          displayName: displayName(raw.display_name, raw.name),
           notice: parseContent(text(raw.notice) ?? '').nodes,
           maxPage: nonNegativeNumber(raw.max_page)
         })
@@ -203,8 +211,9 @@ export function createForumClient(options: {
       }
       return { feed, page, threads, skippedItems }
     },
-    async getThreadPage(threadId, page, signal): Promise<ThreadPage> {
-      const value = await read('/api/thread', signal, { id: threadId, page })
+    async getThreadPage(threadId, mode, page, signal): Promise<ThreadPage> {
+      if (mode !== 'all' && mode !== 'po') throw new Error('Invalid reading mode')
+      const value = await read(mode === 'po' ? '/api/po' : '/api/thread', signal, { id: threadId, page })
       if (!isObject(value) || value.id !== threadId || !Array.isArray(value.Replies)) throw shapeError()
       const head = normalizePost(value)
       if (head === null) throw shapeError()
@@ -220,7 +229,7 @@ export function createForumClient(options: {
         replies.push(reply)
       }
       return {
-        threadId, mode: 'all', page, head, replies,
+        threadId, mode, page, head, replies,
         replyCount: finiteNumber(value.ReplyCount),
         skippedItems,
         endCandidate: replies.length === 0 && skippedItems === 0

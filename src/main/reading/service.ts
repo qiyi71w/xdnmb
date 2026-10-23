@@ -1,5 +1,5 @@
 import type { DirectoryStrategy, ReadError, ReadOutcome, ThreadEndResult, ThreadPageResult } from '../../shared/api'
-import type { BoardDirectory, CoveragePage, FeedPage, FeedRef, ThreadCoverage, ThreadId, ThreadPage } from '../../shared/forum'
+import type { BoardDirectory, CoveragePage, FeedPage, FeedRef, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from '../../shared/forum'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
 import type { ReadingStore, Stored } from '../storage/contract'
 import { computeCoverage } from '../storage/coverage'
@@ -13,8 +13,8 @@ const MAX_PROBE_STEPS = 2
 export interface ReadingService {
   loadDirectory(strategy: DirectoryStrategy, signal: AbortSignal): Promise<ReadOutcome<BoardDirectory>>
   readFeedPage(feed: FeedRef, page: number, signal: AbortSignal): Promise<ReadOutcome<FeedPage>>
-  readThreadPage(threadId: ThreadId, page: number, signal: AbortSignal): Promise<ReadOutcome<ThreadPageResult>>
-  locateThreadEnd(threadId: ThreadId, signal: AbortSignal): Promise<ReadOutcome<ThreadEndResult>>
+  readThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal): Promise<ReadOutcome<ThreadPageResult>>
+  locateThreadEnd(threadId: ThreadId, mode: ReadingMode, signal: AbortSignal): Promise<ReadOutcome<ThreadEndResult>>
 }
 
 interface ReadingServiceDeps {
@@ -96,10 +96,10 @@ export function createReadingService({ client, store, scheduler, now = () => new
     }
   }
 
-  async function loadStoredThreadPage(threadId: ThreadId, page: number): Promise<Stored<ThreadPageResult> | null> {
-    const stored = await store.loadThreadPage(threadId, 'all', page)
+  async function loadStoredThreadPage(threadId: ThreadId, mode: ReadingMode, page: number): Promise<Stored<ThreadPageResult> | null> {
+    const stored = await store.loadThreadPage(threadId, mode, page)
     if (!stored) return null
-    const coverage: ThreadCoverage = await store.getThreadCoverage(threadId, 'all')
+    const coverage: ThreadCoverage = await store.getThreadCoverage(threadId, mode)
     return { value: { page: stored.value, coverage }, fetchedAt: stored.fetchedAt }
   }
 
@@ -128,19 +128,19 @@ export function createReadingService({ client, store, scheduler, now = () => new
       )
     },
 
-    readThreadPage(threadId, page, signal) {
+    readThreadPage(threadId, mode, page, signal) {
       return readWithFallback(
         'foreground',
         signal,
-        (s) => client.getThreadPage(threadId, page, s),
+        (s) => client.getThreadPage(threadId, mode, page, s),
         persistThreadPage,
-        () => loadStoredThreadPage(threadId, page)
+        () => loadStoredThreadPage(threadId, mode, page)
       )
     },
 
-    async locateThreadEnd(threadId, signal) {
-      const stored = await store.getThreadCoverage(threadId, 'all').catch(() => null)
-      let coverage = stored ?? computeCoverage(threadId, 'all', [], null)
+    async locateThreadEnd(threadId, mode, signal) {
+      const stored = await store.getThreadCoverage(threadId, mode).catch(() => null)
+      let coverage = stored ?? computeCoverage(threadId, mode, [], null)
       const probedPages: number[] = []
       const probed = new Map<number, ThreadPageResult>()
       let fetchedAt = ''
@@ -158,7 +158,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
       ): Promise<{ ok: true; value: ThreadPageResult } | { ok: false; outcome: ReadOutcome<ThreadEndResult> }> => {
         const known = probed.get(page)
         if (known) return { ok: true, value: known }
-        const fetched = await fetchOnce('foreground', signal, (s) => client.getThreadPage(threadId, page, s))
+        const fetched = await fetchOnce('foreground', signal, (s) => client.getThreadPage(threadId, mode, page, s))
         if (!fetched.ok) {
           const { outcome } = fetched
           if (outcome.status === 'failed' && probedPages.length > 0) {

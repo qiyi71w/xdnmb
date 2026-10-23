@@ -77,5 +77,57 @@ export const MIGRATIONS: readonly Migration[] = [
         );
       `)
     }
+  },
+  {
+    // Reading context. These are personal records, not cache: no foreign keys to cached posts, so
+    // evicting cached content never removes reads, positions, attention or visits.
+    version: 2,
+    up(db) {
+      db.exec(`
+        CREATE TABLE thread_reading (
+          thread_id TEXT PRIMARY KEY NOT NULL,
+          mode TEXT NOT NULL CHECK (mode IN ('all', 'po')),
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE reading_positions (
+          thread_id TEXT NOT NULL,
+          mode TEXT NOT NULL CHECK (mode IN ('all', 'po')),
+          post_id TEXT NOT NULL,
+          page INTEGER NOT NULL CHECK (page >= 1),
+          offset_ratio REAL NOT NULL CHECK (offset_ratio >= 0 AND offset_ratio <= 1),
+          viewport_offset REAL NOT NULL,
+          saved_at TEXT NOT NULL,
+          PRIMARY KEY (thread_id, mode)
+        );
+
+        CREATE TABLE post_reads (
+          post_id TEXT PRIMARY KEY NOT NULL,
+          thread_id TEXT NOT NULL,
+          read_at TEXT NOT NULL
+        );
+        CREATE INDEX post_reads_thread_id ON post_reads(thread_id);
+
+        CREATE TABLE thread_attention (
+          thread_id TEXT PRIMARY KEY NOT NULL,
+          started_at TEXT NOT NULL,
+          source TEXT NOT NULL CHECK (source IN ('subscription', 'favorite', 'reminder', 'import')),
+          watermark_post_id TEXT,
+          boundary_post_id TEXT
+        );
+
+        CREATE TABLE thread_visits (
+          thread_id TEXT PRIMARY KEY NOT NULL,
+          first_visited_at TEXT NOT NULL,
+          last_visited_at TEXT NOT NULL,
+          visit_count INTEGER NOT NULL CHECK (visit_count >= 1)
+        );
+
+        CREATE TABLE settings (
+          key TEXT PRIMARY KEY NOT NULL,
+          value_json TEXT NOT NULL
+        );
+      `)
+    }
   }
 ]

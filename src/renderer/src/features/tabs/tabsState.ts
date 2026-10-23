@@ -1,0 +1,215 @@
+import type { FeedRef, Post, PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
+import type { ReadingAnchor } from '../../../../shared/reading'
+
+/**
+ * Explicit target inside a thread (首条未读 now; quotes, search and notifications later). It takes
+ * priority over every remembered position. When `mode` differs from the thread's saved preference
+ * the reader shows the target in `mode` temporarily and leaves the preference unchanged.
+ */
+export interface ThreadTarget {
+  postId: PostId
+  /** Page where the target was observed in `mode`. */
+  page: number
+  mode: ReadingMode
+}
+
+/** Where a history entry was left: restored when the reader comes back to this entry. */
+export interface ThreadSnapshot {
+  mode: ReadingMode
+  anchor: ReadingAnchor
+}
+
+export interface ThreadOpen {
+  threadId: ThreadId
+  /** Main post already known from the list, shown until page 1 arrives. */
+  head: Post | null
+  target: ThreadTarget | null
+  snapshot: ThreadSnapshot | null
+}
+
+/**
+ * One step of a tab's navigation history.
+ * - `list`: a forum/timeline list (`feed` null = a new tab that has not chosen one yet). In split
+ *   layout the open thread is shown beside the list; `pane` is what the single-pane fallback shows.
+ * - `thread`: a thread opened as a whole page (split off).
+ */
+export type TabEntry =
+  | { kind: 'list'; key: number; feed: FeedRef | null; thread: ThreadOpen | null; pane: 'list' | 'reader' }
+  | { kind: 'thread'; key: number; thread: ThreadOpen }
+
+export type EntryInit =
+  | { kind: 'list'; feed: FeedRef | null; thread?: ThreadOpen | null }
+  | { kind: 'thread'; thread: ThreadOpen }
+
+export interface Tab {
+  id: number
+  /** This tab's own split preference. Window width never changes it. */
+  split: boolean
+  entries: TabEntry[]
+  index: number
+}
+
+export interface TabsState {
+  tabs: Tab[]
+  activeId: number
+  nextId: number
+  nextKey: number
+}
+
+export type TabsAction =
+  /** `split` is the global “新标签默认开启分栏” value at creation time. */
+  | { type: 'open-tab'; entry: EntryInit; split: boolean; background: boolean }
+  /** Closing the last tab leaves one new empty tab with `split`. */
+  | { type: 'close-tab'; tabId: number; split: boolean }
+  | { type: 'activate'; tabId: number }
+  | { type: 'cycle'; delta: 1 | -1 }
+  | { type: 'set-split'; tabId: number; split: boolean }
+  /** New navigation step; drops the forward branch. Ignored when it would repeat the current list. */
+  | { type: 'navigate'; tabId: number; entry: EntryInit }
+  /** Opening a list item: split replaces the shown thread (no back step); otherwise a new step. */
+  | { type: 'select-thread'; tabId: number; thread: ThreadOpen }
+  /** Single-pane fallback switches between the list and the reader of the same entry. */
+  | { type: 'show-pane'; tabId: number; pane: 'list' | 'reader' }
+  | { type: 'back'; tabId: number }
+  | { type: 'forward'; tabId: number }
+  /**
+   * Remember where the thread of the current entry was left (and drop its consumed target) before
+   * leaving the entry, so coming back restores it.
+   */
+  | { type: 'snapshot'; tabId: number; entryKey: number; snapshot: ThreadSnapshot }
+
+function makeEntry(init: EntryInit, key: number): TabEntry {
+  return init.kind === 'list'
+    ? { kind: 'list', key, feed: init.feed, thread: init.thread ?? null, pane: init.thread ? 'reader' : 'list' }
+    : { kind: 'thread', key, thread: init.thread }
+}
+
+export function initialTabsState(split: boolean): TabsState {
+  return {
+    tabs: [{ id: 1, split, entries: [makeEntry({ kind: 'list', feed: null }, 1)], index: 0 }],
+    activeId: 1,
+    nextId: 2,
+    nextKey: 2
+  }
+}
+
+export function currentEntry(tab: Tab): TabEntry {
+  return tab.entries[tab.index] as TabEntry
+}
+
+export function activeTab(state: TabsState): Tab {
+  return state.tabs.find((tab) => tab.id === state.activeId) ?? (state.tabs[0] as Tab)
+}
+
+function sameFeed(a: FeedRef | null, b: FeedRef | null): boolean {
+  return a === null || b === null ? a === b : a.kind === b.kind && a.id === b.id
+}
+
+function updateTab(state: TabsState, tabId: number, update: (tab: Tab) => Tab): TabsState {
+  let changed = false
+  const tabs = state.tabs.map((tab) => {
+    if (tab.id !== tabId) return tab
+    const next = update(tab)
+    if (next !== tab) changed = true
+    return next
+  })
+  return changed ? { ...state, tabs } : state
+}
+
+function push(state: TabsState, tabId: number, init: EntryInit): TabsState {
+  const key = state.nextKey
+  const next = updateTab(state, tabId, (tab) => ({
+    ...tab,
+    entries: [...tab.entries.slice(0, tab.index + 1), makeEntry(init, key)],
+    index: tab.index + 1
+  }))
+  return next === state ? state : { ...next, nextKey: key + 1 }
+}
+
+function replaceCurrent(tab: Tab, entry: TabEntry): Tab {
+  const entries = tab.entries.slice()
+  entries[tab.index] = entry
+  return { ...tab, entries }
+}
+
+export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
+  switch (action.type) {
+    case 'open-tab': {
+      const tab: Tab = { id: state.nextId, split: action.split, entries: [makeEntry(action.entry, state.nextKey)], index: 0 }
+      const at = state.tabs.findIndex((item) => item.id === state.activeId)
+      const tabs = [...state.tabs.slice(0, at + 1), tab, ...state.tabs.slice(at + 1)]
+      return {
+        tabs,
+        activeId: action.background ? state.activeId : tab.id,
+        nextId: state.nextId + 1,
+        nextKey: state.nextKey + 1
+      }
+    }
+    case 'close-tab': {
+      const at = state.tabs.findIndex((tab) => tab.id === action.tabId)
+      if (at < 0) return state
+      const tabs = state.tabs.filter((tab) => tab.id !== action.tabId)
+      if (tabs.length === 0) {
+        const fresh: Tab = { id: state.nextId, split: action.split, entries: [makeEntry({ kind: 'list', feed: null }, state.nextKey)], index: 0 }
+        return { tabs: [fresh], activeId: fresh.id, nextId: state.nextId + 1, nextKey: state.nextKey + 1 }
+      }
+      const activeId = action.tabId === state.activeId ? (tabs[Math.min(at, tabs.length - 1)] as Tab).id : state.activeId
+      return { ...state, tabs, activeId }
+    }
+    case 'activate':
+      return state.tabs.some((tab) => tab.id === action.tabId) && state.activeId !== action.tabId
+        ? { ...state, activeId: action.tabId }
+        : state
+    case 'cycle': {
+      if (state.tabs.length < 2) return state
+      const at = state.tabs.findIndex((tab) => tab.id === state.activeId)
+      const next = state.tabs[(at + action.delta + state.tabs.length) % state.tabs.length] as Tab
+      return { ...state, activeId: next.id }
+    }
+    case 'set-split':
+      return updateTab(state, action.tabId, (tab) => (tab.split === action.split ? tab : { ...tab, split: action.split }))
+    case 'navigate': {
+      const tab = state.tabs.find((item) => item.id === action.tabId)
+      if (tab === undefined) return state
+      const current = currentEntry(tab)
+      if (
+        action.entry.kind === 'list' &&
+        current.kind === 'list' &&
+        !action.entry.thread &&
+        sameFeed(current.feed, action.entry.feed)
+      ) {
+        return state
+      }
+      return push(state, action.tabId, action.entry)
+    }
+    case 'select-thread': {
+      const tab = state.tabs.find((item) => item.id === action.tabId)
+      if (tab === undefined) return state
+      const current = currentEntry(tab)
+      if (current.kind === 'list' && tab.split) {
+        if (current.thread?.threadId === action.thread.threadId && current.pane === 'reader') return state
+        const thread = current.thread?.threadId === action.thread.threadId ? current.thread : action.thread
+        return updateTab(state, action.tabId, (item) => replaceCurrent(item, { ...current, thread, pane: 'reader' }))
+      }
+      return push(state, action.tabId, { kind: 'thread', thread: action.thread })
+    }
+    case 'show-pane':
+      return updateTab(state, action.tabId, (tab) => {
+        const current = currentEntry(tab)
+        if (current.kind !== 'list' || current.pane === action.pane) return tab
+        if (action.pane === 'reader' && current.thread === null) return tab
+        return replaceCurrent(tab, { ...current, pane: action.pane })
+      })
+    case 'back':
+      return updateTab(state, action.tabId, (tab) => (tab.index > 0 ? { ...tab, index: tab.index - 1 } : tab))
+    case 'forward':
+      return updateTab(state, action.tabId, (tab) => (tab.index < tab.entries.length - 1 ? { ...tab, index: tab.index + 1 } : tab))
+    case 'snapshot':
+      return updateTab(state, action.tabId, (tab) => {
+        const current = currentEntry(tab)
+        if (current.key !== action.entryKey || current.thread === null) return tab
+        const thread: ThreadOpen = { ...current.thread, target: null, snapshot: action.snapshot }
+        return replaceCurrent(tab, { ...current, thread } as TabEntry)
+      })
+  }
+}

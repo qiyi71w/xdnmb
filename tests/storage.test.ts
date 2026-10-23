@@ -101,7 +101,7 @@ describe('reading database', () => {
     })], { replyCount: 2 })
     const second = threadPage(2, [post('900719925474099312347')], { replyCount: null })
     const db = open(path)
-    expect(db.status).toEqual({ state: 'ready', schemaVersion: 1 })
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: 2 })
     db.saveThreadPage(first, fetchedAt)
     db.saveThreadPage(second, later)
     db.close()
@@ -255,9 +255,9 @@ describe('reading database', () => {
     const beforeSchema = schema(path)
     const failed = openReadingDatabase(path, [
       ...MIGRATIONS,
-      { version: 2, up(connection) { connection.exec('CREATE TABLE migration_two (id TEXT)') } },
-      { version: 3, up(connection) {
-        connection.exec('CREATE TABLE migration_three (id TEXT)')
+      { version: 3, up(connection) { connection.exec('CREATE TABLE migration_three (id TEXT)') } },
+      { version: 4, up(connection) {
+        connection.exec('CREATE TABLE migration_four (id TEXT)')
         throw new Error('injected migration failure')
       } }
     ])
@@ -271,13 +271,13 @@ describe('reading database', () => {
     expect(open(path).loadThreadPage(threadId, 'all', 1)).toEqual({ value: original, fetchedAt })
   })
 
-  it('rolls back an injected v2 migration that creates a table before throwing', () => {
+  it('rolls back an injected next migration that creates a table before throwing', () => {
     const path = databasePath()
     const db = open(path)
     db.close()
     const before = readFileSync(path)
     const failed = openReadingDatabase(path, [...MIGRATIONS, {
-      version: 2,
+      version: 3,
       up(connection) {
         connection.exec('CREATE TABLE must_not_survive (id TEXT)')
         throw new Error('injected failure')
@@ -286,7 +286,7 @@ describe('reading database', () => {
     databases.push(failed)
     expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
     expect(readFileSync(path)).toEqual(before)
-    expect(schema(path).version).toBe(1)
+    expect(schema(path).version).toBe(2)
   })
 
   it('opens newer schemas read-only, permits compatible loads, refuses every save and leaves bytes untouched', () => {
@@ -300,12 +300,15 @@ describe('reading database', () => {
     raw.close()
     const before = readFileSync(path)
     const newer = open(path)
-    expect(newer.status).toEqual({ state: 'read-only', reason: 'newer-schema', schemaVersion: 999, supportedVersion: 1 })
+    expect(newer.status).toEqual({ state: 'read-only', reason: 'newer-schema', schemaVersion: 999, supportedVersion: 2 })
     expect(newer.loadThreadPage(threadId, 'all', 1)).toEqual({ value: original, fetchedAt })
     expect(() => newer.saveThreadPage(original, later)).toThrow(StorageWriteRefusedError)
     expect(() => newer.saveDirectory({ groups: [], timelines: [], skippedItems: 0 }, later)).toThrow(StorageWriteRefusedError)
     expect(() => newer.saveFeedPage({ feed: { kind: 'forum', id: '4' }, page: 1, threads: [], skippedItems: 0 }, later))
       .toThrow(StorageWriteRefusedError)
+    expect(newer.getReadingState(threadId).unread.map((item) => item.postId)).toEqual(['1001', threadId])
+    expect(() => newer.markPostsRead(threadId, ['1001'], later)).toThrow(StorageWriteRefusedError)
+    expect(() => newer.setReadingMode(threadId, 'po', later)).toThrow(StorageWriteRefusedError)
     newer.close()
     expect(readFileSync(path)).toEqual(before)
     expect(schema(path).version).toBe(999)
@@ -323,6 +326,155 @@ describe('reading database', () => {
     expect(db.getThreadCoverage(threadId, 'po')).toEqual(computeCoverage(threadId, 'po', [], null))
     expect(() => db.saveDirectory({ groups: [], timelines: [], skippedItems: 0 }, fetchedAt)).toThrow(StorageWriteRefusedError)
     expect(readFileSync(path)).toEqual(bytes)
+  })
+})
+
+describe('reading context', () => {
+  const anchorA = { postId: '1002', page: 1, offsetRatio: 0.25, viewportOffset: 64 }
+  const anchorB = { postId: '1002', page: 1, offsetRatio: 0.5, viewportOffset: 72 }
+
+  function pageOf(thread: string, mode: 'all' | 'po', page: number, replyIds: string[]): ThreadPage {
+    return {
+      threadId: thread, mode, page, head: post(thread), replies: replyIds.map((id) => post(id)),
+      replyCount: null, skippedItems: 0, endCandidate: replyIds.length === 0
+    }
+  }
+
+  it('keeps the mode preference and each mode’s position independent across a restart', () => {
+    const path = databasePath()
+    const db = open(path)
+    db.saveThreadPage(threadPage(1, [post('1001'), post('1002')]), fetchedAt)
+    expect(db.getReadingState(threadId)).toMatchObject({ mode: 'all', positions: { all: null, po: null } })
+    db.setReadingMode(threadId, 'po', fetchedAt)
+    db.saveReadingPosition(threadId, 'all', anchorA, fetchedAt)
+    db.saveReadingPosition(threadId, 'po', anchorB, later)
+    db.saveReadingPosition(threadId, 'all', { ...anchorA, offsetRatio: 0.75 }, latest)
+    db.setReadingMode('77', 'all', later)
+    db.close()
+
+    const state = open(path).getReadingState(threadId)
+    expect(state.mode).toBe('po')
+    expect(state.positions).toEqual({
+      all: { anchor: { ...anchorA, offsetRatio: 0.75 }, savedAt: latest },
+      po: { anchor: anchorB, savedAt: later }
+    })
+  })
+
+  it('lists only observed posts as confirmed unread: a later page read leaves the middle unread and PO reading leaves others', () => {
+    const db = open(databasePath())
+    db.saveThreadPage(threadPage(1, [post('1001'), post('1002'), post('1003')]), fetchedAt)
+    db.saveThreadPage(threadPage(3, [post('3001'), post('3002')]), fetchedAt)
+    db.saveThreadPage(threadPage(1, [post('1002')], { mode: 'po' }), fetchedAt)
+    expect(db.markPostsRead(threadId, ['3001', '3002'], later)).toEqual(['3001', '3002'])
+    expect(db.markPostsRead(threadId, ['1002', '1002', '3001', '424242'], later)).toEqual(['1002'])
+
+    const state = db.getReadingState(threadId)
+    expect(state.readPostIds).toEqual(['1002', '3001', '3002'])
+    expect(state.unread).toEqual([
+      { postId: '1001', pages: { all: 1, po: null } },
+      { postId: '1003', pages: { all: 1, po: null } },
+      { postId: threadId, pages: { all: 1, po: 1 } }
+    ])
+    expect(state.coverage.all.gaps).toEqual([2])
+    expect(state.coverage.po.pages.map((page) => page.page)).toEqual([1])
+  })
+
+  it('ignores posts that were never observed in the thread', () => {
+    const db = open(databasePath())
+    db.saveThreadPage(threadPage(1, [post('1001')]), fetchedAt)
+    db.saveThreadPage(pageOf('88', 'all', 1, ['8801']), fetchedAt)
+    expect(db.markPostsRead(threadId, ['8801', '9999'], later)).toEqual([])
+    expect(db.getReadingState(threadId).readPostIds).toEqual([])
+    expect(db.getReadingState('88').readPostIds).toEqual([])
+  })
+
+  it('marking the confirmed set read leaves posts observed afterwards unread', () => {
+    const db = open(databasePath())
+    db.saveThreadPage(threadPage(1, [post('1001'), post('1002')]), fetchedAt)
+    const confirmed = db.getReadingState(threadId).unread.map((item) => item.postId)
+    db.saveThreadPage(threadPage(1, [post('1001'), post('1002'), post('1003')]), later)
+    db.markPostsRead(threadId, confirmed, latest)
+    expect(db.getReadingState(threadId).unread.map((item) => item.postId)).toEqual(['1003'])
+  })
+
+  it('never claims replies of unknown age as new; replies after an end observed since the start are new', () => {
+    const db = open(databasePath())
+    const thread = '50000000'
+    const t = (minute: number) => `2026-10-23T09:${String(minute).padStart(2, '0')}:00.000Z`
+    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002']), t(0))
+    expect(db.establishAttention(thread, 'subscription', t(1))).toEqual({
+      startedAt: t(1), source: 'subscription', watermarkPostId: '50000002', boundaryPostId: null,
+      newUnreadIds: [], uncertainUnreadIds: []
+    })
+    expect(db.getReadingState(thread).readPostIds).toEqual([])
+
+    // 50000003 may have been posted before attention began: first seen later, but not provably new.
+    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002', '50000003']), t(2))
+    expect(db.getReadingState(thread).attention).toMatchObject({ newUnreadIds: [], uncertainUnreadIds: ['50000003'] })
+
+    // Page 1 then an empty page 2, both observed after the start: everything existing then is ≤ 50000003.
+    db.saveThreadPage(pageOf(thread, 'all', 2, []), t(3))
+    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002', '50000003', '50000004']), t(4))
+    expect(db.establishAttention(thread, 'reminder', t(5))).toEqual({
+      startedAt: t(1), source: 'subscription', watermarkPostId: '50000002', boundaryPostId: '50000003',
+      newUnreadIds: ['50000004'], uncertainUnreadIds: ['50000003']
+    })
+    db.markPostsRead(thread, ['50000004'], t(5))
+    expect(db.getReadingState(thread).attention).toMatchObject({ newUnreadIds: [], uncertainUnreadIds: ['50000003'] })
+    expect(db.getReadingState(thread).unread.map((item) => item.postId)).toEqual([thread, '50000001', '50000002', '50000003'])
+  })
+
+  it('ignores end observations made before the start when fixing the boundary', () => {
+    const db = open(databasePath())
+    const thread = '50000000'
+    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001']), fetchedAt)
+    db.saveThreadPage(pageOf(thread, 'all', 2, []), fetchedAt)
+    db.establishAttention(thread, 'favorite', later)
+    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002']), latest)
+    expect(db.getReadingState(thread).attention).toMatchObject({ boundaryPostId: null, newUnreadIds: [], uncertainUnreadIds: ['50000002'] })
+  })
+
+  it('an import before anything was observed starts from the first local observation', () => {
+    const db = open(databasePath())
+    const thread = '50000000'
+    expect(db.establishAttention(thread, 'import', fetchedAt).watermarkPostId).toBeNull()
+    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001']), later)
+    db.saveThreadPage(pageOf(thread, 'all', 2, []), later)
+    expect(db.getReadingState(thread).attention).toMatchObject({
+      source: 'import', boundaryPostId: '50000001', newUnreadIds: [], uncertainUnreadIds: ['50000001']
+    })
+    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002']), latest)
+    expect(db.getReadingState(thread).attention).toMatchObject({ newUnreadIds: ['50000002'] })
+  })
+
+  it('upgrades a version 1 database without losing content and starts with empty reading state', () => {
+    const path = databasePath()
+    const writer = open(path)
+    writer.saveThreadPage(threadPage(1, [post('1001')]), fetchedAt)
+    writer.close()
+    // Turn the file into what a version 1 build left behind: no reading-context tables.
+    const raw = new Database(path)
+    raw.exec(`
+      DROP TABLE thread_reading; DROP TABLE reading_positions; DROP TABLE post_reads;
+      DROP TABLE thread_attention; DROP TABLE thread_visits; DROP TABLE settings;
+    `)
+    raw.pragma('user_version = 1')
+    raw.close()
+    expect(schema(path).version).toBe(1)
+    const upgraded = open(path)
+    expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: 2 })
+    expect(upgraded.loadThreadPage(threadId, 'all', 1)?.value.replies.map((reply) => reply.id)).toEqual(['1001'])
+    expect(upgraded.getReadingState(threadId)).toMatchObject({ mode: 'all', readPostIds: [], attention: null })
+    expect(upgraded.markPostsRead(threadId, ['1001'], later)).toEqual(['1001'])
+  })
+
+  it('defaults new tabs to split and persists the global setting', () => {
+    const path = databasePath()
+    const db = open(path)
+    expect(db.loadSettings()).toEqual({ newTabSplitDefault: true })
+    db.saveSettings({ newTabSplitDefault: false })
+    db.close()
+    expect(open(path).loadSettings()).toEqual({ newTabSplitDefault: false })
   })
 })
 

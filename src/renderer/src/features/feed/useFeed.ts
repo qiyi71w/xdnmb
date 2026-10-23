@@ -1,15 +1,22 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react'
 import type { FeedRef } from '../../../../shared/forum'
 import { OperationScope } from '../../lib/operations'
-import { feedReducer, initialFeedState, type FeedActivity } from './feedState'
+import { feedReducer, initialFeedState, type FeedActivity, type FeedState } from './feedState'
+
+/** A remembered list with loaded pages resumes as it was (reads in flight were cancelled). */
+function resumeState(remembered: FeedState | null): FeedState {
+  return remembered !== null && remembered.pages.length > 0 ? { ...remembered, activity: 'idle' } : initialFeedState
+}
 
 /**
  * Thread list of one feed. The owning component is keyed by feed, so the feed is fixed for the
  * hook's lifetime; switching feeds unmounts it and cancels its reads, and late results are
- * discarded by the operation scope.
+ * discarded by the operation scope. `remembered` (the same entry's list before it was unmounted)
+ * is resumed without reading page 1 again.
  */
-export function useFeed(feed: FeedRef, maxPage: number | null) {
-  const [state, dispatch] = useReducer(feedReducer, initialFeedState)
+export function useFeed(feed: FeedRef, maxPage: number | null, remembered: FeedState | null) {
+  const [state, dispatch] = useReducer(feedReducer, remembered, resumeState)
+  const resumed = useRef(state !== initialFeedState)
   const scope = useRef(new OperationScope())
   const feedRef = useRef(feed)
   const stateRef = useRef(state)
@@ -41,7 +48,7 @@ export function useFeed(feed: FeedRef, maxPage: number | null) {
 
   useEffect(() => {
     const current = scope.current
-    void read('initial', 1)
+    if (!resumed.current) void read('initial', 1)
     return () => current.cancelAll()
   }, [read])
 

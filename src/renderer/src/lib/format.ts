@@ -60,12 +60,6 @@ export function formatPageList(pages: readonly number[]): string {
   return parts.join('、')
 }
 
-/** Orders decimal-string post IDs numerically without losing precision. */
-export function comparePostIds(a: string, b: string): number {
-  if (a.length !== b.length) return a.length - b.length
-  return a < b ? -1 : a > b ? 1 : 0
-}
-
 const DEFAULT_TITLE = '无标题'
 const DEFAULT_NAME = '无名氏'
 

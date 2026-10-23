@@ -1,12 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { StorageStatus } from '../../../shared/api'
-import type { FeedRef, Post, ThreadId, ThreadSummary } from '../../../shared/forum'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react'
+import type { AppPlatform, StorageStatus } from '../../../shared/api'
+import type { FeedRef, ThreadSummary } from '../../../shared/forum'
+import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/reading'
 import { Icon } from '../components/Icon'
 import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/directory/feeds'
-import { Navigation } from '../features/directory/Navigation'
+import { Navigation, NavMeasure } from '../features/directory/Navigation'
 import { useDirectory } from '../features/directory/useDirectory'
-import { FeedPane } from '../features/feed/FeedPane'
-import { ThreadPane } from '../features/thread/ThreadPane'
+import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
+import { ContentRegistryContext, createContentRegistry } from '../features/tabs/contentRegistry'
+import {
+  activeTab,
+  currentEntry,
+  initialTabsState,
+  tabsReducer,
+  type Tab,
+  type TabEntry,
+  type TabsAction,
+  type TabsState,
+  type ThreadOpen
+} from '../features/tabs/tabsState'
+import { meaningfulTitle } from '../lib/format'
+import { usePopover } from '../lib/usePopover'
+import { isEditableTarget, matchShortcut, type ShortcutAction } from './shortcuts'
+import { TabView } from './TabView'
+import { TopBar } from './TopBar'
 import './layout.css'
 
 function StorageBanner({ storage }: { storage: StorageStatus | null }) {
@@ -21,19 +38,50 @@ function StorageBanner({ storage }: { storage: StorageStatus | null }) {
   )
 }
 
+/** Tabs exist only once the global split default is known (the first tab takes it). */
+type ShellAction = TabsAction | { type: 'init'; split: boolean }
+
+function shellReducer(state: TabsState | null, action: ShellAction): TabsState | null {
+  if (action.type === 'init') return state ?? initialTabsState(action.split)
+  return state === null ? null : tabsReducer(state, action)
+}
+
+function threadTitle(open: ThreadOpen): string {
+  const head = open.head
+  if (head === null) return `No.${open.threadId}`
+  const excerpt = head.plainText.replace(/\s+/g, ' ').trim()
+  return meaningfulTitle(head.title) ?? (excerpt === '' ? `No.${open.threadId}` : excerpt.slice(0, 40))
+}
+
+function viewOf(tab: Tab): LayoutView {
+  const entry = currentEntry(tab)
+  if (entry.kind === 'thread') return 'reader'
+  return entry.feed !== null && tab.split ? 'split' : 'list'
+}
+
+/** Whether the entry's thread is on screen (refresh targets it instead of the list). */
+function readerShown(tab: Tab, entry: TabEntry, singlePane: boolean): boolean {
+  if (entry.kind === 'thread') return true
+  return entry.thread !== null && entry.feed !== null && tab.split && (!singlePane || entry.pane === 'reader')
+}
+
 export function App() {
   const [storage, setStorage] = useState<StorageStatus | null>(null)
+  const [platform, setPlatform] = useState<AppPlatform | null>(null)
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
+  const [tabs, dispatch] = useReducer(shellReducer, null)
+  const registry = useMemo(createContentRegistry, [])
   const directory = useDirectory()
   const { start: startDirectory } = directory
-  const [feed, setFeed] = useState<FeedInfo | null>(null)
-  const [thread, setThread] = useState<{ id: ThreadId; head: Post } | null>(null)
 
   useEffect(() => {
     let alive = true
     window.xidao.app
       .getStatus()
       .then((status) => {
-        if (alive) setStorage(status.storage)
+        if (!alive) return
+        setStorage(status.storage)
+        setPlatform(status.platform)
       })
       .catch(() => undefined)
       .finally(() => {
@@ -44,63 +92,360 @@ export function App() {
     }
   }, [startDirectory])
 
-  // A refreshed directory replaces names and rules of the selected feed; a feed that disappeared
-  // from the directory keeps its last known details.
-  const dirData = directory.state.directory
   useEffect(() => {
-    if (dirData === null) return
-    setFeed((current) => (current === null ? current : (findFeed(dirData, current.ref) ?? current)))
-  }, [dirData])
+    let alive = true
+    window.xidao.settings
+      .get()
+      .catch(() => DEFAULT_SETTINGS)
+      .then((loaded) => {
+        if (!alive) return
+        setSettings(loaded)
+        dispatch({ type: 'init', split: loaded.newTabSplitDefault })
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
 
-  const names = useMemo(() => forumNames(dirData), [dirData])
-  const forumName = useCallback((forumId: string | null) => (forumId === null ? null : (names.get(forumId) ?? null)), [names])
-
-  const selectFeed = useCallback(
-    (ref: FeedRef) => {
-      if (dirData === null) return
-      setFeed((current) => (current !== null && feedKey(current.ref) === feedKey(ref) ? current : findFeed(dirData, ref)))
+  // Feed details come from the directory; a feed that disappeared keeps its last known details.
+  const dirData = directory.state.directory
+  const knownFeeds = useRef(new Map<string, FeedInfo>())
+  const feedInfo = useCallback(
+    (ref: FeedRef): FeedInfo | null => {
+      const key = feedKey(ref)
+      const found = dirData === null ? null : findFeed(dirData, ref)
+      if (found !== null) knownFeeds.current.set(key, found)
+      return found ?? knownFeeds.current.get(key) ?? null
     },
     [dirData]
   )
 
-  const openThread = useCallback((summary: ThreadSummary) => {
-    setThread((current) => (current?.id === summary.head.id ? current : { id: summary.head.id, head: summary.head }))
+  const names = useMemo(() => forumNames(dirData), [dirData])
+  const forumName = useCallback((forumId: string | null) => (forumId === null ? null : (names.get(forumId) ?? null)), [names])
+
+  // ---------- Measured layout ----------
+  const appRef = useRef<HTMLDivElement>(null)
+  const readingMeasureRef = useRef<HTMLDivElement>(null)
+  const scrollbarMeasureRef = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(0)
+  const [readingWidth, setReadingWidth] = useState(0)
+  /** Width the reader scroller's vertical scrollbar takes from its content (0 for overlay scrollbars). */
+  const [scrollbarWidth, setScrollbarWidth] = useState(0)
+  const [navCompactMin, setNavCompactMin] = useState<number>(LAYOUT_DEFAULTS.navCompactReference)
+
+  useLayoutEffect(() => {
+    const app = appRef.current
+    const reading = readingMeasureRef.current
+    const scrollbar = scrollbarMeasureRef.current
+    if (app === null || reading === null || scrollbar === null) return
+    const measure = () => {
+      setWidth(app.getBoundingClientRect().width)
+      setReadingWidth(reading.getBoundingClientRect().width)
+      setScrollbarWidth(scrollbar.offsetWidth - scrollbar.clientWidth)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(app)
+    observer.observe(reading)
+    return () => observer.disconnect()
   }, [])
 
-  return (
-    <div className="app">
-      <StorageBanner storage={storage} />
-      <div className="workspace">
-        <Navigation state={directory.state} selected={feed?.ref ?? null} onSelect={selectFeed} onRetry={directory.retry} />
+  const current = tabs === null ? null : activeTab(tabs)
+  const layout = computeLayout({
+    width,
+    view: current === null ? 'list' : viewOf(current),
+    navFull: LAYOUT_DEFAULTS.navFull,
+    navCompactMin,
+    listWidth: LAYOUT_DEFAULTS.listWidth,
+    readingWidth,
+    minGutter: LAYOUT_DEFAULTS.minGutter,
+    minSplitText: LAYOUT_DEFAULTS.minSplitText,
+    gap: LAYOUT_DEFAULTS.gap + scrollbarWidth
+  })
+  const navOverlay = layout.nav === 'overlay'
 
-        <div className="list-column">
-          {feed === null ? (
-            <div className="pane-empty">
-              <p className="pane-empty-title">选择时间线或版面</p>
-              <p className="pane-empty-text">串列表会显示在这里。</p>
+  // ---------- Navigation overlay ----------
+  const navTriggerRef = useRef<HTMLButtonElement>(null)
+  const navPanelRef = useRef<HTMLElement>(null)
+  const navPopover = usePopover(navTriggerRef, navPanelRef)
+  const { close: closeNav } = navPopover
+  const inlineNavRef = useRef<HTMLElement>(null)
+  const navHadFocus = useRef(false)
+
+  // Crossing the overlay threshold keeps keyboard focus near where it was.
+  useLayoutEffect(() => {
+    if (navOverlay) {
+      if (navHadFocus.current) navTriggerRef.current?.focus()
+      navHadFocus.current = false
+    } else {
+      const overlayFocused = navPanelRef.current?.contains(document.activeElement) ?? false
+      closeNav(false)
+      if (overlayFocused) inlineNavRef.current?.querySelector<HTMLElement>('[data-roving-item][tabindex="0"]')?.focus()
+    }
+  }, [navOverlay, closeNav])
+
+  // ---------- Navigation actions ----------
+  const stateRef = useRef({ tabs, settings, singlePane: layout.singlePane })
+  useLayoutEffect(() => {
+    stateRef.current = { tabs, settings, singlePane: layout.singlePane }
+  })
+  const pendingTabFocus = useRef(false)
+
+  /** Before leaving an entry that shows a thread, remember its mode and anchor in the entry. */
+  const leave = useCallback(
+    (tab: Tab) => {
+      const entry = currentEntry(tab)
+      if (entry.thread === null) return
+      const snapshot = registry.readers.get(entry.key)?.current.capture() ?? null
+      if (snapshot !== null) dispatch({ type: 'snapshot', tabId: tab.id, entryKey: entry.key, snapshot })
+    },
+    [registry]
+  )
+
+  const withActive = useCallback((run: (tab: Tab) => void) => {
+    const state = stateRef.current.tabs
+    if (state !== null) run(activeTab(state))
+  }, [])
+
+  const selectFeed = useCallback(
+    (ref: FeedRef) => {
+      closeNav()
+      withActive((tab) => {
+        const entry = currentEntry(tab)
+        if (entry.kind === 'list' && entry.feed !== null && feedKey(entry.feed) === feedKey(ref)) return
+        leave(tab)
+        dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'list', feed: ref } })
+      })
+    },
+    [closeNav, withActive, leave]
+  )
+
+  const selectThread = useCallback(
+    (tabId: number, summary: ThreadSummary) => {
+      const tab = stateRef.current.tabs?.tabs.find((item) => item.id === tabId)
+      if (tab === undefined) return
+      const entry = currentEntry(tab)
+      if (!(entry.kind === 'list' && tab.split)) leave(tab)
+      const thread: ThreadOpen = { threadId: summary.head.id, head: summary.head, target: null, snapshot: null }
+      dispatch({ type: 'select-thread', tabId, thread })
+    },
+    [leave]
+  )
+
+  const showPane = useCallback((tabId: number, pane: 'list' | 'reader') => dispatch({ type: 'show-pane', tabId, pane }), [])
+
+  const goBack = useCallback(
+    () =>
+      withActive((tab) => {
+        if (tab.index === 0) return
+        leave(tab)
+        dispatch({ type: 'back', tabId: tab.id })
+      }),
+    [withActive, leave]
+  )
+
+  const goForward = useCallback(
+    () =>
+      withActive((tab) => {
+        if (tab.index >= tab.entries.length - 1) return
+        leave(tab)
+        dispatch({ type: 'forward', tabId: tab.id })
+      }),
+    [withActive, leave]
+  )
+
+  const toggleSplit = useCallback(
+    () =>
+      withActive((tab) => {
+        if (tab.split) leave(tab)
+        dispatch({ type: 'set-split', tabId: tab.id, split: !tab.split })
+      }),
+    [withActive, leave]
+  )
+
+  const newTab = useCallback(() => {
+    dispatch({
+      type: 'open-tab',
+      entry: { kind: 'list', feed: null },
+      split: stateRef.current.settings.newTabSplitDefault,
+      background: false
+    })
+  }, [])
+
+  const closeTab = useCallback((tabId: number) => {
+    pendingTabFocus.current = true
+    dispatch({ type: 'close-tab', tabId, split: stateRef.current.settings.newTabSplitDefault })
+  }, [])
+
+  const activate = useCallback((tabId: number) => dispatch({ type: 'activate', tabId }), [])
+
+  /** Refreshes only the current content: the shown thread, otherwise the list. Never the app. */
+  const refresh = useCallback(
+    () =>
+      withActive((tab) => {
+        const entry = currentEntry(tab)
+        const reader = readerShown(tab, entry, stateRef.current.singlePane) ? registry.readers.get(entry.key) : undefined
+        if (reader !== undefined) reader.current.refresh()
+        else registry.lists.get(entry.key)?.current.refresh()
+      }),
+    [withActive, registry]
+  )
+
+  // List memory lives only as long as its entry is in some tab's history (forward branch replaced,
+  // tab closed → dropped).
+  useEffect(() => {
+    if (tabs === null) return
+    const live = new Set<number>()
+    for (const tab of tabs.tabs) for (const item of tab.entries) live.add(item.key)
+    for (const key of registry.listMemory.keys()) if (!live.has(key)) registry.listMemory.delete(key)
+  }, [tabs, registry])
+
+  // A closed tab takes its focused controls with it: hand focus to the newly active tab.
+  const activeId = tabs?.activeId ?? null
+  useLayoutEffect(() => {
+    if (!pendingTabFocus.current) return
+    pendingTabFocus.current = false
+    const focused = document.activeElement
+    if (focused === null || focused === document.body || !focused.isConnected) {
+      document.getElementById(`tab-${activeId}`)?.focus()
+    }
+  }, [activeId, tabs])
+
+  // ---------- Keyboard (spec I11): one app-level dispatcher ----------
+  const actions = useRef<Record<ShortcutAction, () => void> | null>(null)
+  useLayoutEffect(() => {
+    actions.current = {
+      'new-tab': newTab,
+      'close-tab': () => withActive((tab) => closeTab(tab.id)),
+      'next-tab': () => dispatch({ type: 'cycle', delta: 1 }),
+      'previous-tab': () => dispatch({ type: 'cycle', delta: -1 }),
+      refresh,
+      back: goBack,
+      forward: goForward
+    }
+  })
+
+  useEffect(() => {
+    if (platform === null) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return
+      const action = matchShortcut(event, platform)
+      if (action === null) return
+      if ((action === 'back' || action === 'forward') && isEditableTarget(event.target)) return
+      event.preventDefault()
+      if (event.repeat && (action === 'new-tab' || action === 'close-tab' || action === 'refresh')) return
+      actions.current?.[action]()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [platform])
+
+  // ---------- Render ----------
+  const titleOf = useCallback(
+    (tab: Tab) => {
+      const entry = currentEntry(tab)
+      if (entry.kind === 'thread') return threadTitle(entry.thread)
+      if (entry.feed === null) return '新标签'
+      const name = feedInfo(entry.feed)?.name ?? (entry.feed.kind === 'timeline' ? '时间线' : '版面')
+      return entry.thread !== null && tab.split ? `${name} › ${threadTitle(entry.thread)}` : name
+    },
+    [feedInfo]
+  )
+
+  const entry = current === null ? null : currentEntry(current)
+  const selectedFeed = entry?.kind === 'list' ? entry.feed : null
+
+  const workspaceStyle = {
+    '--nav-width': `${layout.navWidth}px`,
+    '--nav-full': `${LAYOUT_DEFAULTS.navFull}px`,
+    '--list-width': `${LAYOUT_DEFAULTS.listWidth}px`
+  } as CSSProperties
+
+  return (
+    <div className="app" ref={appRef}>
+      <StorageBanner storage={storage} />
+      <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
+      <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
+      <NavMeasure directory={dirData} onMeasure={setNavCompactMin} />
+      <ContentRegistryContext.Provider value={registry}>
+        <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
+          {!navOverlay && (
+            <div
+              className="nav-column"
+              onFocus={() => (navHadFocus.current = true)}
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) navHadFocus.current = false
+              }}
+            >
+              <Navigation
+                state={directory.state}
+                selected={selectedFeed}
+                onSelect={selectFeed}
+                onRetry={directory.retry}
+                variant="inline"
+                progress={layout.navProgress}
+                panelRef={inlineNavRef}
+              />
             </div>
-          ) : (
-            <FeedPane
-              key={feedKey(feed.ref)}
-              info={feed}
-              forumNames={names}
-              selectedThreadId={thread?.id ?? null}
-              onOpenThread={openThread}
-            />
+          )}
+
+          <div className="main-column">
+            {tabs !== null && current !== null && entry !== null && (
+              <>
+                <TopBar
+                  tabs={tabs.tabs}
+                  activeId={tabs.activeId}
+                  titleOf={titleOf}
+                  platform={platform}
+                  canBack={current.index > 0}
+                  canForward={current.index < current.entries.length - 1}
+                  splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
+                  navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
+                  settings={settings}
+                  onBack={goBack}
+                  onForward={goForward}
+                  onActivate={activate}
+                  onClose={closeTab}
+                  onNewTab={newTab}
+                  onSettingsChange={setSettings}
+                />
+                <div className="tab-host">
+                  {tabs.tabs.map((tab) => (
+                    <TabView
+                      key={tab.id}
+                      tab={tab}
+                      active={tab.id === tabs.activeId}
+                      layout={layout}
+                      feedInfo={feedInfo}
+                      forumNames={names}
+                      forumName={forumName}
+                      onSelectThread={selectThread}
+                      onShowPane={showPane}
+                      onOpenNav={navOverlay ? navPopover.toggle : null}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          {navOverlay && navPopover.open && (
+            <>
+              <div className="nav-overlay-layer" aria-hidden="true" />
+              <Navigation
+                state={directory.state}
+                selected={selectedFeed}
+                onSelect={selectFeed}
+                onRetry={directory.retry}
+                variant="overlay"
+                progress={0}
+                panelRef={navPanelRef}
+                id="nav-overlay"
+              />
+            </>
           )}
         </div>
-
-        <main className="reader-column-wrap">
-          {thread === null ? (
-            <div className="pane-empty">
-              <p className="pane-empty-title">选择一个串开始阅读</p>
-              <p className="pane-empty-text">主帖与回复会显示在这里，接近底部时自动读取下一页。</p>
-            </div>
-          ) : (
-            <ThreadPane key={thread.id} threadId={thread.id} initialHead={thread.head} forumName={forumName} />
-          )}
-        </main>
-      </div>
+      </ContentRegistryContext.Provider>
     </div>
   )
 }

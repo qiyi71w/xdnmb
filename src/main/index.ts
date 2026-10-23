@@ -1,6 +1,7 @@
-import { app, BrowserWindow, session, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, Menu, session, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import type { AppPlatform } from '../shared/api'
 import { createForumClient } from './forum/client'
 import { createForumTransport } from './forum/transport'
 import { registerIpc } from './ipc'
@@ -47,12 +48,32 @@ app.on('web-contents-created', (_event, contents) => {
   })
 })
 
+const platform: AppPlatform = process.platform === 'darwin' || process.platform === 'win32' ? process.platform : 'linux'
+
+/**
+ * Application menu without the default Reload / Force Reload / Close Window accelerators:
+ * Ctrl/Cmd+R refreshes the current content and Ctrl/Cmd+W closes the current tab inside the app.
+ * Edit roles keep native copy/paste (required on macOS); zoom roles keep interface zoom.
+ */
+function installMenu(): void {
+  const view: MenuItemConstructorOptions[] = [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }]
+  if (rendererDevUrl) view.push({ type: 'separator' }, { role: 'toggleDevTools' })
+  const template: MenuItemConstructorOptions[] = [
+    ...(platform === 'darwin' ? [{ role: 'appMenu' } satisfies MenuItemConstructorOptions] : []),
+    { role: 'editMenu' },
+    { label: '视图', submenu: view },
+    ...(platform === 'darwin' ? [{ role: 'windowMenu' } satisfies MenuItemConstructorOptions] : [])
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1320,
     height: 860,
-    minWidth: 960,
-    minHeight: 600,
+    // Narrow windows fall back to compact navigation, an overlay and a single pane.
+    minWidth: 480,
+    minHeight: 480,
     show: false,
     title: '汐岛',
     webPreferences: {
@@ -66,6 +87,8 @@ function createWindow(): BrowserWindow {
       navigateOnDragDrop: false
     }
   })
+  // Windows/Linux keep the menu's accelerators but show no menu bar.
+  if (platform !== 'darwin') window.setMenuBarVisibility(false)
   window.once('ready-to-show', () => window.show())
   if (rendererDevUrl) void window.loadURL(rendererDevUrl)
   else void window.loadFile(rendererFile)
@@ -90,9 +113,11 @@ async function start(): Promise<void> {
     scheduler: createRequestScheduler()
   })
 
+  installMenu()
   const ipc = registerIpc({
     reading,
-    getStatus: () => ({ storage: openedStore.status }),
+    store: openedStore,
+    getStatus: () => ({ storage: openedStore.status, platform }),
     isTrustedSender: (event: IpcMainInvokeEvent) =>
       mainWindow !== null &&
       event.sender === mainWindow.webContents &&

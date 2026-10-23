@@ -7,6 +7,12 @@ export type ThreadId = string
 export type ForumId = string
 export type TimelineId = string
 
+/** Orders decimal-string post IDs numerically without losing precision. */
+export function comparePostIds(a: PostId, b: PostId): number {
+  if (a.length !== b.length) return a.length - b.length
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
 /**
  * Safe, structured post body. Produced only by the main-process content parser.
  * There is no node that carries raw HTML, styles, event attributes or scripts.

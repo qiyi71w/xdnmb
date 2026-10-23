@@ -1,13 +1,17 @@
 import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { IpcChannel, type AppStatus, type DirectoryStrategy, type ReadOutcome } from '../shared/api'
-import type { FeedRef } from '../shared/forum'
+import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy, type ReadOutcome } from '../shared/api'
+import type { FeedRef, PostId, ReadingMode } from '../shared/forum'
+import { DEFAULT_SETTINGS, type AppSettings, type ReadingAnchor } from '../shared/reading'
 import type { ReadingService } from './reading/service'
+import type { ReadingStore } from './storage/contract'
+import { emptyReadingState } from './storage/reading-state'
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
 const STRATEGIES: readonly DirectoryStrategy[] = ['cache-first', 'background-refresh', 'refresh']
 const MAX_PAGE = 100_000
 const MAX_URL_LENGTH = 2048
+const MAX_VIEWPORT_OFFSET = 100_000
 
 class InvalidRequestError extends Error {
   override readonly name = 'InvalidRequestError'
@@ -18,6 +22,7 @@ class InvalidRequestError extends Error {
 
 interface IpcDeps {
   reading: ReadingService
+  store: ReadingStore
   getStatus: () => AppStatus
   /** True only for the app's own renderer document in its main frame. */
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
@@ -50,6 +55,48 @@ function feedRef(value: unknown): FeedRef {
   return { kind: feed.kind, id: forumId(feed.id) }
 }
 
+function readingMode(value: unknown): ReadingMode {
+  if (value !== 'all' && value !== 'po') throw new InvalidRequestError()
+  return value
+}
+
+function anchor(value: unknown): ReadingAnchor {
+  const input = record(value)
+  const { offsetRatio, viewportOffset } = input
+  if (typeof offsetRatio !== 'number' || !Number.isFinite(offsetRatio) || offsetRatio < 0 || offsetRatio > 1) {
+    throw new InvalidRequestError()
+  }
+  if (typeof viewportOffset !== 'number' || !Number.isFinite(viewportOffset) || Math.abs(viewportOffset) > MAX_VIEWPORT_OFFSET) {
+    throw new InvalidRequestError()
+  }
+  return { postId: forumId(input.postId), page: page(input.page), offsetRatio, viewportOffset }
+}
+
+function postIds(value: unknown): PostId[] {
+  if (!Array.isArray(value) || value.length > MAX_MARK_READ_IDS) throw new InvalidRequestError()
+  return value.map(forumId)
+}
+
+function settingsPatch(value: unknown): Partial<AppSettings> {
+  const input = record(value)
+  const patch: Partial<AppSettings> = {}
+  for (const [key, item] of Object.entries(input)) {
+    if (key !== 'newTabSplitDefault' || typeof item !== 'boolean') throw new InvalidRequestError()
+    patch.newTabSplitDefault = item
+  }
+  return patch
+}
+
+/** Local writes report refusal/failure as `saved: false`; they never fail the renderer's call. */
+async function attempt(write: () => Promise<unknown>): Promise<boolean> {
+  try {
+    await write()
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Tracks cancellable operations per renderer. A repeated ID supersedes (cancels) the earlier one.
  * Keys are scoped by WebContents so one page can never cancel another's work.
@@ -79,7 +126,7 @@ class OperationRegistry {
   }
 }
 
-export function registerIpc({ reading, getStatus, isTrustedSender }: IpcDeps): { cancelAllFor: (sender: WebContents) => void } {
+export function registerIpc({ reading, store, getStatus, isTrustedSender }: IpcDeps): { cancelAllFor: (sender: WebContents) => void } {
   const operations = new OperationRegistry()
 
   function handle(channel: string, handler: (event: IpcMainInvokeEvent, input: unknown) => Promise<unknown>): void {
@@ -106,18 +153,74 @@ export function registerIpc({ reading, getStatus, isTrustedSender }: IpcDeps): {
   handle(IpcChannel.readThreadPage, async (event, raw) => {
     const input = record(raw)
     const threadId = forumId(input.threadId)
+    const mode = readingMode(input.mode)
     const pageNumber = page(input.page)
-    return operations.run(event.sender, operationId(input), (signal) => reading.readThreadPage(threadId, pageNumber, signal))
+    return operations.run(event.sender, operationId(input), (signal) => reading.readThreadPage(threadId, mode, pageNumber, signal))
   })
 
   handle(IpcChannel.locateThreadEnd, async (event, raw) => {
     const input = record(raw)
     const threadId = forumId(input.threadId)
-    return operations.run(event.sender, operationId(input), (signal) => reading.locateThreadEnd(threadId, signal))
+    const mode = readingMode(input.mode)
+    return operations.run(event.sender, operationId(input), (signal) => reading.locateThreadEnd(threadId, mode, signal))
   })
 
   handle(IpcChannel.cancel, async (event, raw) => {
     operations.cancel(event.sender, operationId(record(raw)))
+  })
+
+  handle(IpcChannel.getReadingState, async (_event, raw) => {
+    const threadId = forumId(record(raw).threadId)
+    try {
+      return await store.getReadingState(threadId)
+    } catch {
+      console.error('[reading-state] load failed')
+      return emptyReadingState(threadId)
+    }
+  })
+
+  handle(IpcChannel.setReadingMode, async (_event, raw) => {
+    const input = record(raw)
+    const threadId = forumId(input.threadId)
+    const mode = readingMode(input.mode)
+    return { saved: await attempt(() => store.setReadingMode(threadId, mode, new Date().toISOString())) }
+  })
+
+  handle(IpcChannel.saveReadingPosition, async (_event, raw) => {
+    const input = record(raw)
+    const threadId = forumId(input.threadId)
+    const mode = readingMode(input.mode)
+    const position = anchor(input.anchor)
+    return { saved: await attempt(() => store.saveReadingPosition(threadId, mode, position, new Date().toISOString())) }
+  })
+
+  handle(IpcChannel.markRead, async (_event, raw) => {
+    const input = record(raw)
+    const threadId = forumId(input.threadId)
+    const ids = postIds(input.postIds)
+    try {
+      return { saved: true, marked: await store.markPostsRead(threadId, ids, new Date().toISOString()) }
+    } catch {
+      return { saved: false, marked: [] }
+    }
+  })
+
+  handle(IpcChannel.recordVisit, async (_event, raw) => {
+    const threadId = forumId(record(raw).threadId)
+    return { saved: await attempt(() => store.recordVisit(threadId, new Date().toISOString())) }
+  })
+
+  /** A settings row that cannot be read leaves the defaults in effect rather than failing the UI. */
+  const loadSettings = () => store.loadSettings().catch((): AppSettings => ({ ...DEFAULT_SETTINGS }))
+
+  handle(IpcChannel.getSettings, async () => loadSettings())
+
+  handle(IpcChannel.updateSettings, async (_event, raw) => {
+    const patch = settingsPatch(raw)
+    const current = await loadSettings()
+    const next: AppSettings = { ...current, ...patch }
+    const saved = await attempt(() => store.saveSettings(next))
+    return { saved, settings: saved ? next : current }
   })
 
   handle(IpcChannel.openExternal, async (_event, raw) => {

@@ -38,6 +38,14 @@ port.on('message', (request: StorageRequest) => {
       case 'saveThreadPage': value = db.saveThreadPage(...request.args); break
       case 'loadThreadPage': value = db.loadThreadPage(...request.args); break
       case 'getThreadCoverage': value = db.getThreadCoverage(...request.args); break
+      case 'getReadingState': value = db.getReadingState(...request.args); break
+      case 'setReadingMode': value = db.setReadingMode(...request.args); break
+      case 'saveReadingPosition': value = db.saveReadingPosition(...request.args); break
+      case 'markPostsRead': value = db.markPostsRead(...request.args); break
+      case 'recordVisit': value = db.recordVisit(...request.args); break
+      case 'establishAttention': value = db.establishAttention(...request.args); break
+      case 'loadSettings': value = db.loadSettings(...request.args); break
+      case 'saveSettings': value = db.saveSettings(...request.args); break
       case 'close': value = db.close(...request.args); break
       default: throw new Error('unknown storage method')
     }

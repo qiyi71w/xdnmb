@@ -1,6 +1,5 @@
 import type { ReadError } from '../../../../shared/api'
-import type { Post, ThreadCoverage, ThreadPage } from '../../../../shared/forum'
-import { comparePostIds } from '../../lib/format'
+import { comparePostIds, type Post, type ThreadCoverage, type ThreadPage } from '../../../../shared/forum'
 import type { Failure, Source } from '../../lib/operations'
 
 /** One observed page inside the loaded range. */
@@ -14,7 +13,8 @@ export interface LoadedPage {
 }
 
 export type ThreadTask =
-  | { type: 'initial' }
+  /** First range of a reader: page 1 unless resuming or targeting another page. */
+  | { type: 'initial'; page?: number }
   | { type: 'append'; page: number }
   | { type: 'prepend'; page: number }
   | { type: 'refresh'; page: number }
@@ -36,7 +36,10 @@ export interface ThreadState {
   error: { task: ThreadTask; failure: Failure } | null
   /** Result of the last 末尾 probe. */
   endProbe: EndProbe | null
-  /** Bumped whenever the loaded range is replaced, so the reader returns to its top. */
+  /**
+   * Bumped whenever the loaded range is replaced (first load, jump, located end), so the reader
+   * positions its reading line for the new range.
+   */
   rangeVersion: number
 }
 
@@ -114,7 +117,7 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
         pages: placePage(state.pages, action.task, toLoaded(action.page, action.source)),
         task: null,
         error: null,
-        rangeVersion: replaces && state.pages.length > 0 ? state.rangeVersion + 1 : state.rangeVersion
+        rangeVersion: replaces ? state.rangeVersion + 1 : state.rangeVersion
       }
     }
     case 'end-located': {

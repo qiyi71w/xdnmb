@@ -36,6 +36,28 @@ const PATHS = {
   ),
   arrowUp: <path d="M12 19V5M6.5 10.5 12 5l5.5 5.5" />,
   arrowRight: <path d="M5 12h14M13.5 6.5 19 12l-5.5 5.5" />,
+  arrowLeft: <path d="M19 12H5M10.5 6.5 5 12l5.5 5.5" />,
+  plus: <path d="M12 5.5v13M5.5 12h13" />,
+  sidebar: (
+    <>
+      <rect x="3.5" y="5" width="17" height="14" rx="2.5" />
+      <path d="M9.5 5v14M5.8 9h1.6M5.8 12h1.6" />
+    </>
+  ),
+  split: (
+    <>
+      <rect x="3.5" y="5" width="17" height="14" rx="2.5" />
+      <path d="M11 5v14" />
+    </>
+  ),
+  settings: (
+    <>
+      <path d="M4 8h8.5M17.5 8H20M4 16h2.5M11.5 16H20" />
+      <circle cx="15" cy="8" r="2.2" />
+      <circle cx="9" cy="16" r="2.2" />
+    </>
+  ),
+  check: <path d="m5 12.5 4.5 4.5L19 7.5" />,
   alert: (
     <>
       <circle cx="12" cy="12" r="8.5" />

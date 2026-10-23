@@ -1,0 +1,172 @@
+import { useEffect, useRef, type KeyboardEvent, type RefObject } from 'react'
+import type { AppPlatform } from '../../../shared/api'
+import type { AppSettings } from '../../../shared/reading'
+import { Icon } from '../components/Icon'
+import type { Tab } from '../features/tabs/tabsState'
+import { SettingsMenu } from './SettingsMenu'
+import { shortcutLabel } from './shortcuts'
+
+function withShortcut(label: string, shortcut: string): string {
+  return shortcut === '' ? label : `${label}（${shortcut}）`
+}
+
+/**
+ * D layout top bar: back / forward of the current tab, the tab strip, the tab's 分栏 toggle
+ * (list entries only), 新标签 and settings. While the navigation is an overlay its trigger sits first.
+ */
+export function TopBar({
+  tabs,
+  activeId,
+  titleOf,
+  platform,
+  canBack,
+  canForward,
+  splitToggle,
+  navTrigger,
+  settings,
+  onBack,
+  onForward,
+  onActivate,
+  onClose,
+  onNewTab,
+  onSettingsChange
+}: {
+  tabs: readonly Tab[]
+  activeId: number
+  titleOf: (tab: Tab) => string
+  platform: AppPlatform | null
+  canBack: boolean
+  canForward: boolean
+  /** Shown only for list entries. */
+  splitToggle: { pressed: boolean; onToggle: () => void } | null
+  navTrigger: { ref: RefObject<HTMLButtonElement | null>; expanded: boolean; onToggle: () => void } | null
+  settings: AppSettings
+  onBack: () => void
+  onForward: () => void
+  onActivate: (tabId: number) => void
+  onClose: (tabId: number) => void
+  onNewTab: () => void
+  onSettingsChange: (settings: AppSettings) => void
+}) {
+  const stripRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    stripRef.current?.querySelector(`#tab-${activeId}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeId, tabs.length])
+
+  const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return
+    let next: number
+    if (event.key === 'ArrowRight') next = (index + 1) % tabs.length
+    else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length
+    else if (event.key === 'Home') next = 0
+    else if (event.key === 'End') next = tabs.length - 1
+    else return
+    event.preventDefault()
+    const target = tabs[next]
+    if (target === undefined) return
+    onActivate(target.id)
+    document.getElementById(`tab-${target.id}`)?.focus()
+  }
+
+  return (
+    <header className="topbar">
+      {navTrigger !== null && (
+        <button
+          ref={navTrigger.ref}
+          type="button"
+          className="icon-btn"
+          aria-label="打开导航"
+          title="时间线与版面"
+          aria-haspopup="true"
+          aria-expanded={navTrigger.expanded}
+          aria-controls="nav-overlay"
+          onClick={navTrigger.onToggle}
+        >
+          <Icon name="sidebar" />
+        </button>
+      )}
+      <div className="history-buttons" role="group" aria-label="当前标签历史">
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="后退"
+          title={withShortcut('后退', shortcutLabel('back', platform))}
+          disabled={!canBack}
+          onClick={onBack}
+        >
+          <Icon name="arrowLeft" />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="前进"
+          title={withShortcut('前进', shortcutLabel('forward', platform))}
+          disabled={!canForward}
+          onClick={onForward}
+        >
+          <Icon name="arrowRight" />
+        </button>
+      </div>
+
+      <div className="tab-strip" role="tablist" aria-label="标签" ref={stripRef}>
+        {tabs.map((tab, index) => {
+          const selected = tab.id === activeId
+          const title = titleOf(tab)
+          return (
+            <div key={tab.id} className={selected ? 'tab is-active' : 'tab'} role="presentation">
+              <button
+                type="button"
+                role="tab"
+                id={`tab-${tab.id}`}
+                className="tab-button"
+                aria-selected={selected}
+                aria-controls={`tabpanel-${tab.id}`}
+                tabIndex={selected ? 0 : -1}
+                title={title}
+                onClick={() => onActivate(tab.id)}
+                onKeyDown={(event) => onTabKeyDown(event, index)}
+              >
+                {tab.split && <Icon name="split" size={14} className="tab-icon" />}
+                <span className="tab-title">{title}</span>
+              </button>
+              <button
+                type="button"
+                className="tab-close"
+                aria-label={`关闭标签：${title}`}
+                title={withShortcut('关闭标签', selected ? shortcutLabel('close-tab', platform) : '')}
+                tabIndex={selected ? 0 : -1}
+                onClick={() => onClose(tab.id)}
+              >
+                <Icon name="close" size={13} />
+              </button>
+            </div>
+          )
+        })}
+      </div>
+
+      {splitToggle !== null && (
+        <button
+          type="button"
+          className="btn btn-toggle"
+          aria-pressed={splitToggle.pressed}
+          title="只改变当前标签的分栏"
+          onClick={splitToggle.onToggle}
+        >
+          <Icon name="split" />
+          分栏
+        </button>
+      )}
+      <button
+        type="button"
+        className="icon-btn"
+        aria-label="新标签"
+        title={withShortcut('新标签', shortcutLabel('new-tab', platform))}
+        onClick={onNewTab}
+      >
+        <Icon name="plus" />
+      </button>
+      <SettingsMenu settings={settings} onChange={onSettingsChange} />
+    </header>
+  )
+}

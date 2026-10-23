@@ -7,14 +7,18 @@ import type {
   FeedPage,
   FeedRef,
   Post,
+  PostId,
   ReadingMode,
   ThreadCoverage,
   ThreadId,
   ThreadPage
 } from '../../shared/forum'
+import { DEFAULT_SETTINGS } from '../../shared/reading'
+import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, SavedPosition, ThreadReadingState } from '../../shared/reading'
 import { StorageWriteRefusedError } from './contract'
 import type { ReadingStore, Stored } from './contract'
 import { computeCoverage } from './coverage'
+import { boundaryFromCoverage, buildReadingState, emptyReadingState, type AttentionRecord } from './reading-state'
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
 
@@ -267,7 +271,9 @@ class SqliteReadingDatabase implements ReadingDatabase {
           WHERE julianday(excluded.fetched_at) >= julianday(thread_reply_counts.fetched_at)
         `).run(page.threadId, page.mode, page.replyCount, fetchedAt)
       }
-      return this.getThreadCoverage(page.threadId, page.mode)
+      const coverage = this.getThreadCoverage(page.threadId, page.mode)
+      if (page.mode === 'all') this.fixAttentionBoundary(db, page.threadId, coverage)
+      return coverage
     })()
   }
 
@@ -313,6 +319,152 @@ class SqliteReadingDatabase implements ReadingDatabase {
       skippedItems: row.skipped_items
     }))
     return computeCoverage(threadId, mode, pages, latestCount?.reply_count ?? null)
+  }
+
+  getReadingState(threadId: ThreadId): ThreadReadingState {
+    if (!this.db) return emptyReadingState(threadId)
+    const db = this.db
+    return db.transaction(() => {
+      const modeRow = db.prepare<[string], { mode: ReadingMode }>('SELECT mode FROM thread_reading WHERE thread_id = ?').get(threadId)
+      const positions: Record<ReadingMode, SavedPosition | null> = { all: null, po: null }
+      const positionRows = db.prepare<[string], {
+        mode: ReadingMode
+        post_id: string
+        page: number
+        offset_ratio: number
+        viewport_offset: number
+        saved_at: string
+      }>('SELECT * FROM reading_positions WHERE thread_id = ?').all(threadId)
+      for (const row of positionRows) {
+        positions[row.mode] = {
+          anchor: { postId: row.post_id, page: row.page, offsetRatio: row.offset_ratio, viewportOffset: row.viewport_offset },
+          savedAt: row.saved_at
+        }
+      }
+      const readPostIds = db.prepare<[string], { post_id: string }>('SELECT post_id FROM post_reads WHERE thread_id = ?')
+        .all(threadId)
+        .map((row) => row.post_id)
+      const attentionRow = db.prepare<[string], {
+        started_at: string
+        source: AttentionSource
+        watermark_post_id: string | null
+        boundary_post_id: string | null
+      }>('SELECT started_at, source, watermark_post_id, boundary_post_id FROM thread_attention WHERE thread_id = ?').get(threadId)
+      const attention: AttentionRecord | null = attentionRow
+        ? {
+            startedAt: attentionRow.started_at,
+            source: attentionRow.source,
+            watermarkPostId: attentionRow.watermark_post_id,
+            boundaryPostId: attentionRow.boundary_post_id
+          }
+        : null
+      return buildReadingState({
+        threadId,
+        mode: modeRow?.mode ?? 'all',
+        positions,
+        readPostIds,
+        attention,
+        coverage: { all: this.getThreadCoverage(threadId, 'all'), po: this.getThreadCoverage(threadId, 'po') }
+      })
+    })()
+  }
+
+  setReadingMode(threadId: ThreadId, mode: ReadingMode, at: string): void {
+    const db = this.writable()
+    db.prepare(`
+      INSERT INTO thread_reading (thread_id, mode, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET mode = excluded.mode, updated_at = excluded.updated_at
+    `).run(threadId, mode, at)
+  }
+
+  saveReadingPosition(threadId: ThreadId, mode: ReadingMode, anchor: ReadingAnchor, at: string): void {
+    const db = this.writable()
+    db.prepare(`
+      INSERT INTO reading_positions (thread_id, mode, post_id, page, offset_ratio, viewport_offset, saved_at)
+      VALUES (@threadId, @mode, @postId, @page, @offsetRatio, @viewportOffset, @at)
+      ON CONFLICT(thread_id, mode) DO UPDATE SET
+        post_id = excluded.post_id, page = excluded.page, offset_ratio = excluded.offset_ratio,
+        viewport_offset = excluded.viewport_offset, saved_at = excluded.saved_at
+    `).run({ threadId, mode, ...anchor, at })
+  }
+
+  markPostsRead(threadId: ThreadId, postIds: PostId[], at: string): PostId[] {
+    const db = this.writable()
+    return db.transaction(() => {
+      // Only posts actually observed as part of this thread can be read in it.
+      const belongs = db.prepare<[string, string], { found: number }>(
+        'SELECT 1 AS found FROM post_threads WHERE post_id = ? AND thread_id = ?'
+      )
+      const insert = db.prepare(`
+        INSERT INTO post_reads (post_id, thread_id, read_at) VALUES (?, ?, ?)
+        ON CONFLICT(post_id) DO NOTHING
+      `)
+      const marked: PostId[] = []
+      for (const postId of new Set(postIds)) {
+        if (!belongs.get(postId, threadId)) continue
+        if (insert.run(postId, threadId, at).changes === 1) marked.push(postId)
+      }
+      return marked
+    })()
+  }
+
+  recordVisit(threadId: ThreadId, at: string): void {
+    const db = this.writable()
+    db.prepare(`
+      INSERT INTO thread_visits (thread_id, first_visited_at, last_visited_at, visit_count) VALUES (?, ?, ?, 1)
+      ON CONFLICT(thread_id) DO UPDATE SET
+        last_visited_at = excluded.last_visited_at, visit_count = thread_visits.visit_count + 1
+    `).run(threadId, at, at)
+  }
+
+  establishAttention(threadId: ThreadId, source: AttentionSource, at: string): AttentionState {
+    const db = this.writable()
+    return db.transaction(() => {
+      // The highest post ID observed anywhere so far: every post at or below it existed before now.
+      const watermark = db.prepare<[], { id: string }>('SELECT id FROM posts ORDER BY length(id) DESC, id DESC LIMIT 1').get()
+      db.prepare(`
+        INSERT INTO thread_attention (thread_id, started_at, source, watermark_post_id) VALUES (?, ?, ?, ?)
+        ON CONFLICT(thread_id) DO NOTHING
+      `).run(threadId, at, source, watermark?.id ?? null)
+      return this.getReadingState(threadId).attention as AttentionState
+    })()
+  }
+
+  /**
+   * Fixes the attention boundary the first time the thread's end has been observed after the start.
+   * Kept once set: later end observations would only raise it and hide genuinely new replies.
+   */
+  private fixAttentionBoundary(db: Database.Database, threadId: ThreadId, coverage: ThreadCoverage): void {
+    const row = db.prepare<[string], { started_at: string; boundary_post_id: string | null }>(
+      'SELECT started_at, boundary_post_id FROM thread_attention WHERE thread_id = ?'
+    ).get(threadId)
+    if (row === undefined || row.boundary_post_id !== null) return
+    const boundary = boundaryFromCoverage(threadId, coverage, row.started_at)
+    if (boundary !== null) {
+      db.prepare('UPDATE thread_attention SET boundary_post_id = ? WHERE thread_id = ? AND boundary_post_id IS NULL').run(boundary, threadId)
+    }
+  }
+
+  loadSettings(): AppSettings {
+    if (!this.db) return { ...DEFAULT_SETTINGS }
+    const rows = this.db.prepare<[], { key: string; value_json: string }>('SELECT key, value_json FROM settings').all()
+    const settings: AppSettings = { ...DEFAULT_SETTINGS }
+    for (const row of rows) {
+      const value: unknown = JSON.parse(row.value_json)
+      if (row.key === 'newTabSplitDefault' && typeof value === 'boolean') settings.newTabSplitDefault = value
+    }
+    return settings
+  }
+
+  saveSettings(settings: AppSettings): void {
+    const db = this.writable()
+    db.transaction(() => {
+      const statement = db.prepare(`
+        INSERT INTO settings (key, value_json) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json
+      `)
+      for (const [key, value] of Object.entries(settings)) statement.run(key, JSON.stringify(value))
+    })()
   }
 
   close(): void {
