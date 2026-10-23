@@ -6,25 +6,32 @@ export interface AttentionRecord {
   startedAt: string
   source: AttentionSource
   watermarkPostId: PostId | null
-  boundaryPostId: PostId | null
+  firstProvenNewPostId: PostId | null
+}
+
+export interface EndObservation {
+  /** Earlier fetch time of the two pages that show the end. */
+  observedAt: string
+  /** Highest reply ID then (the main post ID when page 1 was empty). */
+  boundPostId: PostId
 }
 
 /**
- * Boundary for replies provably posted after `startedAt`: the thread's highest reply ID when its
- * end was first seen after the start. Needs the lowest end-candidate page and the page before it
- * (or page 1 itself being empty) to be observed no earlier than the start; every reply existing at
- * that time sat on those pages, so anything above the returned ID came later. `null` otherwise.
+ * The thread's end as shown by stored all-mode pages: the lowest end-candidate page and the page
+ * before it (or page 1 itself being empty). Whichever of the two was fetched first, every reply
+ * existing at that time sat on those pages, so its ID is at most the returned bound. `null` when the
+ * pages do not show an end.
  */
-export function boundaryFromCoverage(threadId: ThreadId, coverage: ThreadCoverage, startedAt: string): PostId | null {
+export function endObservation(threadId: ThreadId, coverage: ThreadCoverage): EndObservation | null {
   const end = coverage.endCandidatePage
   if (end === null) return null
-  const after = (fetchedAt: string) => Date.parse(fetchedAt) >= Date.parse(startedAt)
   const endPage = coverage.pages.find((page) => page.page === end)
-  if (endPage === undefined || !after(endPage.fetchedAt)) return null
-  if (end === 1) return threadId
+  if (endPage === undefined) return null
+  if (end === 1) return { observedAt: endPage.fetchedAt, boundPostId: threadId }
   const last = coverage.pages.find((page) => page.page === end - 1)
-  if (last === undefined || !after(last.fetchedAt) || last.skippedItems > 0 || last.replyIds.length === 0) return null
-  return [...last.replyIds].sort(comparePostIds).at(-1) ?? null
+  if (last === undefined || last.skippedItems > 0 || last.replyIds.length === 0) return null
+  const observedAt = Date.parse(last.fetchedAt) <= Date.parse(endPage.fetchedAt) ? last.fetchedAt : endPage.fetchedAt
+  return { observedAt, boundPostId: [...last.replyIds].sort(comparePostIds).at(-1) as PostId }
 }
 
 const MODES: readonly ReadingMode[] = ['all', 'po']
@@ -71,12 +78,12 @@ export function buildReadingState(input: {
     .sort((a, b) => comparePostIds(a.postId, b.postId))
   let attentionState: ThreadReadingState['attention'] = null
   if (attention !== null) {
-    const { watermarkPostId: watermark, boundaryPostId: boundary } = attention
+    const { watermarkPostId: watermark, firstProvenNewPostId: provenNew } = attention
     const newUnreadIds: PostId[] = []
     const uncertainUnreadIds: PostId[] = []
     for (const { postId } of unread) {
       if (postId === threadId || (watermark !== null && comparePostIds(postId, watermark) <= 0)) continue
-      if (boundary !== null && comparePostIds(postId, boundary) > 0) newUnreadIds.push(postId)
+      if (provenNew !== null && comparePostIds(postId, provenNew) >= 0) newUnreadIds.push(postId)
       else uncertainUnreadIds.push(postId)
     }
     attentionState = { ...attention, newUnreadIds, uncertainUnreadIds }

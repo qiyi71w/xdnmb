@@ -18,7 +18,7 @@ import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, Saved
 import { StorageWriteRefusedError } from './contract'
 import type { ReadingStore, Stored } from './contract'
 import { computeCoverage } from './coverage'
-import { boundaryFromCoverage, buildReadingState, emptyReadingState, type AttentionRecord } from './reading-state'
+import { buildReadingState, emptyReadingState, endObservation, type AttentionRecord } from './reading-state'
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
 
@@ -272,7 +272,13 @@ class SqliteReadingDatabase implements ReadingDatabase {
         `).run(page.threadId, page.mode, page.replyCount, fetchedAt)
       }
       const coverage = this.getThreadCoverage(page.threadId, page.mode)
-      if (page.mode === 'all') this.fixAttentionBoundary(db, page.threadId, coverage)
+      if (page.mode === 'all') {
+        const end = endObservation(page.threadId, coverage)
+        if (end !== null) {
+          db.prepare('INSERT INTO end_observations (thread_id, observed_at, bound_post_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING')
+            .run(page.threadId, end.observedAt, end.boundPostId)
+        }
+      }
       return coverage
     })()
   }
@@ -344,18 +350,15 @@ class SqliteReadingDatabase implements ReadingDatabase {
       const readPostIds = db.prepare<[string], { post_id: string }>('SELECT post_id FROM post_reads WHERE thread_id = ?')
         .all(threadId)
         .map((row) => row.post_id)
-      const attentionRow = db.prepare<[string], {
-        started_at: string
-        source: AttentionSource
-        watermark_post_id: string | null
-        boundary_post_id: string | null
-      }>('SELECT started_at, source, watermark_post_id, boundary_post_id FROM thread_attention WHERE thread_id = ?').get(threadId)
+      const attentionRow = db.prepare<[string], { started_at: string; source: AttentionSource; watermark_post_id: string | null }>(
+        'SELECT started_at, source, watermark_post_id FROM thread_attention WHERE thread_id = ?'
+      ).get(threadId)
       const attention: AttentionRecord | null = attentionRow
         ? {
             startedAt: attentionRow.started_at,
             source: attentionRow.source,
             watermarkPostId: attentionRow.watermark_post_id,
-            boundaryPostId: attentionRow.boundary_post_id
+            firstProvenNewPostId: this.firstProvenNewPost(db, attentionRow.started_at)
           }
         : null
       return buildReadingState({
@@ -431,18 +434,25 @@ class SqliteReadingDatabase implements ReadingDatabase {
   }
 
   /**
-   * Fixes the attention boundary the first time the thread's end has been observed after the start.
-   * Kept once set: later end observations would only raise it and hide genuinely new replies.
+   * Lowest observed post ID proven to be posted after `since`: a reply of any thread that was first
+   * seen after an end observation made at or after `since` and lies above that observation's bound.
+   * A reply seen before the observation existed then and only fell outside the bound because it
+   * was removed, so it proves nothing. Post IDs increase with time, so every post with an ID at or
+   * above the result was posted after `since` too. Uses only observations already stored.
    */
-  private fixAttentionBoundary(db: Database.Database, threadId: ThreadId, coverage: ThreadCoverage): void {
-    const row = db.prepare<[string], { started_at: string; boundary_post_id: string | null }>(
-      'SELECT started_at, boundary_post_id FROM thread_attention WHERE thread_id = ?'
-    ).get(threadId)
-    if (row === undefined || row.boundary_post_id !== null) return
-    const boundary = boundaryFromCoverage(threadId, coverage, row.started_at)
-    if (boundary !== null) {
-      db.prepare('UPDATE thread_attention SET boundary_post_id = ? WHERE thread_id = ? AND boundary_post_id IS NULL').run(boundary, threadId)
-    }
+  private firstProvenNewPost(db: Database.Database, since: string): PostId | null {
+    const row = db.prepare<[string], { post_id: string }>(`
+      SELECT relation.post_id FROM end_observations AS observation
+      JOIN post_threads AS relation
+        ON relation.thread_id = observation.thread_id AND relation.post_id <> observation.thread_id
+      WHERE julianday(observation.observed_at) >= julianday(?)
+        AND julianday(relation.fetched_at) > julianday(observation.observed_at)
+        AND (length(relation.post_id) > length(observation.bound_post_id)
+          OR (length(relation.post_id) = length(observation.bound_post_id) AND relation.post_id > observation.bound_post_id))
+      ORDER BY length(relation.post_id), relation.post_id
+      LIMIT 1
+    `).get(since)
+    return row?.post_id ?? null
   }
 
   loadSettings(): AppSettings {

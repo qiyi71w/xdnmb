@@ -397,13 +397,13 @@ describe('reading context', () => {
     expect(db.getReadingState(threadId).unread.map((item) => item.postId)).toEqual(['1003'])
   })
 
-  it('never claims replies of unknown age as new; replies after an end observed since the start are new', () => {
+  it('keeps the subscription time as the start; replies first seen later are new only once proven', () => {
     const db = open(databasePath())
     const thread = '50000000'
     const t = (minute: number) => `2026-10-23T09:${String(minute).padStart(2, '0')}:00.000Z`
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002']), t(0))
     expect(db.establishAttention(thread, 'subscription', t(1))).toEqual({
-      startedAt: t(1), source: 'subscription', watermarkPostId: '50000002', boundaryPostId: null,
+      startedAt: t(1), source: 'subscription', watermarkPostId: '50000002', firstProvenNewPostId: null,
       newUnreadIds: [], uncertainUnreadIds: []
     })
     expect(db.getReadingState(thread).readPostIds).toEqual([])
@@ -412,11 +412,11 @@ describe('reading context', () => {
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002', '50000003']), t(2))
     expect(db.getReadingState(thread).attention).toMatchObject({ newUnreadIds: [], uncertainUnreadIds: ['50000003'] })
 
-    // Page 1 then an empty page 2, both observed after the start: everything existing then is ≤ 50000003.
+    // Page 1 then an empty page 2, both after the start: nothing above 50000003 existed at t(2).
     db.saveThreadPage(pageOf(thread, 'all', 2, []), t(3))
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002', '50000003', '50000004']), t(4))
     expect(db.establishAttention(thread, 'reminder', t(5))).toEqual({
-      startedAt: t(1), source: 'subscription', watermarkPostId: '50000002', boundaryPostId: '50000003',
+      startedAt: t(1), source: 'subscription', watermarkPostId: '50000002', firstProvenNewPostId: '50000004',
       newUnreadIds: ['50000004'], uncertainUnreadIds: ['50000003']
     })
     db.markPostsRead(thread, ['50000004'], t(5))
@@ -424,14 +424,49 @@ describe('reading context', () => {
     expect(db.getReadingState(thread).unread.map((item) => item.postId)).toEqual([thread, '50000001', '50000002', '50000003'])
   })
 
-  it('ignores end observations made before the start when fixing the boundary', () => {
+  it('does not use end observations made before the start as proof', () => {
     const db = open(databasePath())
     const thread = '50000000'
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001']), fetchedAt)
     db.saveThreadPage(pageOf(thread, 'all', 2, []), fetchedAt)
     db.establishAttention(thread, 'favorite', later)
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002']), latest)
-    expect(db.getReadingState(thread).attention).toMatchObject({ boundaryPostId: null, newUnreadIds: [], uncertainUnreadIds: ['50000002'] })
+    expect(db.getReadingState(thread).attention).toMatchObject({
+      firstProvenNewPostId: null, newUnreadIds: [], uncertainUnreadIds: ['50000002']
+    })
+  })
+
+  it('confirms new replies from another thread’s evidence before this thread has its own', () => {
+    const db = open(databasePath())
+    const t = (minute: number) => `2026-10-23T10:${String(minute).padStart(2, '0')}:00.000Z`
+    db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001']), t(0))
+    db.establishAttention('60000000', 'subscription', t(1))
+    // Another thread's end is seen after the start; a later reply there was posted after the start.
+    db.saveThreadPage(pageOf('60000002', 'all', 1, ['60000003']), t(2))
+    db.saveThreadPage(pageOf('60000002', 'all', 2, []), t(2))
+    db.saveThreadPage(pageOf('60000002', 'all', 1, ['60000003', '60000005']), t(4))
+    // This thread's end has never been observed.
+    db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001', '60000004', '60000006']), t(5))
+    expect(db.getReadingState('60000000').attention).toMatchObject({
+      watermarkPostId: '60000001', firstProvenNewPostId: '60000005',
+      newUnreadIds: ['60000006'], uncertainUnreadIds: ['60000004']
+    })
+  })
+
+  it('does not take a reply that vanished before the end observation as proof of a new one', () => {
+    const db = open(databasePath())
+    const t = (minute: number) => `2026-10-23T11:${String(minute).padStart(2, '0')}:00.000Z`
+    db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001', '60000003']), t(0))
+    db.establishAttention('50000000', 'subscription', t(1))
+    // 60000003 was removed from the other thread; its end is then observed without it.
+    db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001']), t(2))
+    db.saveThreadPage(pageOf('60000000', 'all', 2, []), t(3))
+    // 60000004 existed before the start but is only fetched now.
+    db.saveThreadPage(pageOf('50000000', 'all', 1, ['60000004']), t(4))
+    expect(db.getReadingState('50000000').attention).toMatchObject({
+      watermarkPostId: '60000003', firstProvenNewPostId: null, newUnreadIds: [], uncertainUnreadIds: ['60000004']
+    })
+    expect(db.getReadingState('50000000').readPostIds).toEqual([])
   })
 
   it('an import before anything was observed starts from the first local observation', () => {
@@ -441,7 +476,7 @@ describe('reading context', () => {
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001']), later)
     db.saveThreadPage(pageOf(thread, 'all', 2, []), later)
     expect(db.getReadingState(thread).attention).toMatchObject({
-      source: 'import', boundaryPostId: '50000001', newUnreadIds: [], uncertainUnreadIds: ['50000001']
+      source: 'import', firstProvenNewPostId: null, newUnreadIds: [], uncertainUnreadIds: ['50000001']
     })
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002']), latest)
     expect(db.getReadingState(thread).attention).toMatchObject({ newUnreadIds: ['50000002'] })
@@ -456,7 +491,7 @@ describe('reading context', () => {
     const raw = new Database(path)
     raw.exec(`
       DROP TABLE thread_reading; DROP TABLE reading_positions; DROP TABLE post_reads;
-      DROP TABLE thread_attention; DROP TABLE thread_visits; DROP TABLE settings;
+      DROP TABLE thread_attention; DROP TABLE end_observations; DROP TABLE thread_visits; DROP TABLE settings;
     `)
     raw.pragma('user_version = 1')
     raw.close()

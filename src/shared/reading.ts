@@ -27,11 +27,12 @@ export interface SavedPosition {
 export type AttentionSource = 'subscription' | 'favorite' | 'reminder' | 'import'
 
 /**
- * Local attention start and the classification of observed unread replies against it. Forum post
- * times are not a verified clock, so the time boundary is established from local observations:
- * - history: at or below `watermarkPostId` (provably existed before the start);
- * - new: above `boundaryPostId` (provably posted after the start);
- * - uncertain: neither proven — never counted as new and never treated as read.
+ * Local attention start and the classification of observed unread replies against it. `startedAt`
+ * is the time boundary. Forum post times are not a verified clock, so which side of it a reply falls
+ * on is proven only from local observations and the increasing order of forum post IDs:
+ * - history: at or below `watermarkPostId` (existed before the start);
+ * - new: at or above `firstProvenNewPostId` (posted after the start);
+ * - uncertain: neither proven yet — never counted as new and never treated as read.
  */
 export interface AttentionState {
   /** ISO-8601 local time attention first began on this machine. Never reset by source changes. */
@@ -39,16 +40,16 @@ export interface AttentionState {
   source: AttentionSource
   /**
    * Highest post ID this machine had observed anywhere when attention began, or `null` when nothing
-   * had been observed. Forum IDs are assigned in increasing order, so posts at or below it existed
-   * before the start.
+   * had been observed. Posts at or below it existed before the start.
    */
   watermarkPostId: PostId | null
   /**
-   * Highest reply ID of the thread when its end was first observed after the start (a page and the
-   * following empty end-candidate page, both fetched after the start); the main post ID when page 1
-   * was then empty. Replies above it were posted after the start. `null` until such an observation.
+   * Lowest observed post ID proven to be posted after the start, or `null` while there is no such
+   * evidence. Proof: the end of some thread (any thread, this one included) was observed at or after
+   * the start, and this reply of that thread appeared above the highest reply ID seen then. Recomputed
+   * from stored observations, so it can only move down as evidence accumulates.
    */
-  boundaryPostId: PostId | null
+  firstProvenNewPostId: PostId | null
   /** Observed, unread replies provably posted after the start. */
   newUnreadIds: PostId[]
   /** Observed, unread replies that are neither provably history nor provably new. */

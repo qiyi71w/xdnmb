@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from 
 import type { PostId } from '../../../../shared/forum'
 import type { ReadingAnchor } from '../../../../shared/reading'
 import { useDocumentVisible } from '../../lib/useDocumentVisible'
+import { useWindowFocused } from '../../lib/useWindowFocused'
 import { captureAnchor, scrollTopForAnchor, type PostBox } from '../reading/anchor'
 import { ReadJudge, type PostVisibility } from '../reading/readJudge'
 import type { ReaderPosition } from './readingStart'
@@ -53,6 +54,7 @@ export function useReadingViewport(options: ReadingViewportOptions) {
     opts.current = options
   })
   const visible = useDocumentVisible()
+  const focused = useWindowFocused()
 
   const anchorRef = useRef<ReadingAnchor | null>(null)
   const savedRef = useRef<ReadingAnchor | null>(null)
@@ -329,10 +331,12 @@ export function useReadingViewport(options: ReadingViewportOptions) {
   useEffect(() => {
     const judge = judgeRef.current
     if (judge === null) return
-    const active = displayed && visible
+    // Foreground reading: window focused and visible, tab active, reader pane displayed. Losing any
+    // of these cancels unfinished dwells (setActive(false)); regaining them starts them afresh.
+    const active = displayed && visible && focused
     judge.setActive(active)
     if (active) schedule(false)
-  }, [displayed, visible, schedule])
+  }, [displayed, visible, focused, schedule])
 
   // Leaving the screen (tab hidden, single pane shows the list) saves the position now.
   useEffect(() => {

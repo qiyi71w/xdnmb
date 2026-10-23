@@ -112,9 +112,18 @@ export const MIGRATIONS: readonly Migration[] = [
           thread_id TEXT PRIMARY KEY NOT NULL,
           started_at TEXT NOT NULL,
           source TEXT NOT NULL CHECK (source IN ('subscription', 'favorite', 'reminder', 'import')),
-          watermark_post_id TEXT,
-          boundary_post_id TEXT
+          watermark_post_id TEXT
         );
+
+        -- A thread's end seen at observed_at: every reply existing then had an ID <= bound_post_id,
+        -- so a reply observed later above the bound was posted after observed_at.
+        CREATE TABLE end_observations (
+          thread_id TEXT NOT NULL,
+          observed_at TEXT NOT NULL,
+          bound_post_id TEXT NOT NULL,
+          PRIMARY KEY (thread_id, observed_at)
+        );
+        CREATE INDEX end_observations_observed_at ON end_observations(observed_at);
 
         CREATE TABLE thread_visits (
           thread_id TEXT PRIMARY KEY NOT NULL,
