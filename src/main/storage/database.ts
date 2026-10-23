@@ -8,6 +8,7 @@ import type {
   FeedRef,
   Post,
   PostId,
+  PostImage,
   ReadingMode,
   ThreadCoverage,
   ThreadId,
@@ -15,8 +16,9 @@ import type {
 } from '../../shared/forum'
 import { DEFAULT_SETTINGS } from '../../shared/reading'
 import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, SavedPosition, ThreadReadingState } from '../../shared/reading'
+import type { ImageKind } from '../../shared/images'
 import { StorageWriteRefusedError } from './contract'
-import type { ReadingStore, Stored } from './contract'
+import type { ImageHolder, ImageResourceRecord, NewImageResource, ReadingStore, Stored } from './contract'
 import { computeCoverage } from './coverage'
 import { buildReadingState, emptyReadingState, endObservation, type AttentionRecord } from './reading-state'
 import { MIGRATIONS } from './migrations'
@@ -67,6 +69,32 @@ interface RelationSource {
   feedId: string | null
   mode: ReadingMode | null
   page: number
+}
+
+interface ImageResourceRow {
+  id: number
+  kind: ImageKind
+  source_url: string
+  file_name: string
+  format: ImageResourceRecord['format']
+  bytes: number
+  width: number
+  height: number
+  fetched_at: string
+}
+
+function imageResource(row: ImageResourceRow): ImageResourceRecord {
+  return {
+    id: row.id,
+    kind: row.kind,
+    sourceUrl: row.source_url,
+    fileName: row.file_name,
+    format: row.format,
+    bytes: row.bytes,
+    width: row.width,
+    height: row.height,
+    fetchedAt: row.fetched_at
+  }
 }
 
 const UPSERT_POST = `
@@ -475,6 +503,88 @@ class SqliteReadingDatabase implements ReadingDatabase {
       `)
       for (const [key, value] of Object.entries(settings)) statement.run(key, JSON.stringify(value))
     })()
+  }
+
+  getPostImage(postId: PostId): PostImage | null {
+    if (!this.db) return null
+    const row = this.db.prepare<[string], { image_path: string | null; image_ext: string | null }>(
+      'SELECT image_path, image_ext FROM posts WHERE id = ?'
+    ).get(postId)
+    return row?.image_path == null || row.image_ext === null ? null : { path: row.image_path, ext: row.image_ext }
+  }
+
+  private holdImage(db: Database.Database, resourceId: number, holders: ImageHolder[]): void {
+    const statement = db.prepare(`
+      INSERT INTO image_holders (resource_id, holder_kind, holder_id, held_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT DO NOTHING
+    `)
+    const at = new Date().toISOString()
+    for (const holder of holders) statement.run(resourceId, holder.kind, holder.id, at)
+  }
+
+  findImageResource(kind: ImageKind, sourceUrl: string, holder: ImageHolder | null): ImageResourceRecord | null {
+    if (!this.db) return null
+    const db = this.db
+    const find = () => {
+      const row = db.prepare<[string, string], ImageResourceRow>(
+        'SELECT * FROM image_resources WHERE kind = ? AND source_url = ?'
+      ).get(kind, sourceUrl)
+      if (!row) return null
+      if (holder !== null) this.holdImage(this.writable(), row.id, [holder])
+      return imageResource(row)
+    }
+    return holder === null ? find() : db.transaction(find)()
+  }
+
+  commitImageResource(
+    resource: NewImageResource,
+    holders: ImageHolder[]
+  ): { resource: ImageResourceRecord; replacedFileName: string | null } {
+    const db = this.writable()
+    return db.transaction(() => {
+      const previous = db.prepare<[string, string], { file_name: string }>(
+        'SELECT file_name FROM image_resources WHERE kind = ? AND source_url = ?'
+      ).get(resource.kind, resource.sourceUrl)
+      const row = db.prepare<NewImageResource, ImageResourceRow>(`
+        INSERT INTO image_resources (kind, source_url, file_name, format, bytes, width, height, fetched_at)
+        VALUES (@kind, @sourceUrl, @fileName, @format, @bytes, @width, @height, @fetchedAt)
+        ON CONFLICT(kind, source_url) DO UPDATE SET
+          file_name = excluded.file_name, format = excluded.format, bytes = excluded.bytes,
+          width = excluded.width, height = excluded.height, fetched_at = excluded.fetched_at
+        RETURNING *
+      `).get(resource) as ImageResourceRow
+      this.holdImage(db, row.id, holders)
+      const replaced = previous !== undefined && previous.file_name !== row.file_name ? previous.file_name : null
+      return { resource: imageResource(row), replacedFileName: replaced }
+    })()
+  }
+
+  releaseImageHolders(kind: ImageHolder['kind'], idPrefix: string): void {
+    const db = this.writable()
+    db.prepare('DELETE FROM image_holders WHERE holder_kind = ? AND substr(holder_id, 1, length(?)) = ?')
+      .run(kind, idPrefix, idPrefix)
+  }
+
+  deleteUnheldImages(resourceIds: number[]): string[] {
+    const db = this.writable()
+    return db.transaction(() => {
+      const remove = db.prepare<[number], { file_name: string }>(`
+        DELETE FROM image_resources
+        WHERE id = ? AND NOT EXISTS (SELECT 1 FROM image_holders WHERE resource_id = image_resources.id)
+        RETURNING file_name
+      `)
+      const removed: string[] = []
+      for (const id of new Set(resourceIds)) {
+        const row = remove.get(id)
+        if (row) removed.push(row.file_name)
+      }
+      return removed
+    })()
+  }
+
+  listImageFileNames(): string[] {
+    if (!this.db) return []
+    return this.db.prepare<[], { file_name: string }>('SELECT file_name FROM image_resources').all().map((row) => row.file_name)
   }
 
   close(): void {

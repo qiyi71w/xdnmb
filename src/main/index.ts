@@ -1,9 +1,16 @@
-import { app, BrowserWindow, Menu, session, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, dialog, Menu, protocol, session, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron'
+import { createReadStream } from 'node:fs'
+import { lstat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import type { AppPlatform } from '../shared/api'
+import { IMAGE_FORMAT_EXTENSION, IMAGE_SCHEME } from '../shared/images'
 import { createForumClient } from './forum/client'
 import { createForumTransport } from './forum/transport'
+import { IMAGE_MEDIA_TYPE, openManagedImageFiles, type ManagedImageFiles } from './images/files'
+import { createImageService } from './images/service'
+import { createImageDownloader } from './images/transport'
 import { registerIpc } from './ipc'
 import { createReadingService } from './reading/service'
 import { createRequestScheduler } from './reading/scheduler'
@@ -13,6 +20,8 @@ import createStorageWorker from './storage/worker?nodeWorker'
 
 /** The only forum origin this ticket reads from (verified public JSON API). */
 const FORUM_API_ORIGIN = 'https://api.nmb.best'
+/** Image server announced by `getCDNPath` (both entries); thumbnails under `thumb/`, originals under `image/`. */
+const IMAGE_ORIGIN = 'https://image.nmb.best'
 
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL
 const rendererFile = join(import.meta.dirname, '../renderer/index.html')
@@ -30,6 +39,8 @@ let storeClosed = false
 // Every renderer runs sandboxed; one main process owns the database worker.
 app.enableSandbox()
 if (!app.requestSingleInstanceLock()) app.quit()
+// Managed image files are shown through the app's own scheme, never by file path or remote URL.
+protocol.registerSchemesAsPrivileged([{ scheme: IMAGE_SCHEME, privileges: { standard: true, secure: true } }])
 
 app.on('second-instance', () => {
   if (!mainWindow) return
@@ -95,6 +106,32 @@ function createWindow(): BrowserWindow {
   return window
 }
 
+/** Serves `xidao-image://file/<managed name>` from the image directory; anything else is 404. */
+function serveManagedImages(files: ManagedImageFiles): void {
+  const notFound = () => new Response(null, { status: 404 })
+  protocol.handle(IMAGE_SCHEME, async (request) => {
+    const url = new URL(request.url)
+    const name = url.hostname === 'file' ? url.pathname.slice(1) : ''
+    const path = files.pathOf(name)
+    if (path === null) return notFound()
+    try {
+      const stat = await lstat(path)
+      if (!stat.isFile()) return notFound()
+      const body = Readable.toWeb(createReadStream(path)) as ReadableStream<Uint8Array>
+      return new Response(body, {
+        headers: {
+          'Content-Type': IMAGE_MEDIA_TYPE[name.slice(name.lastIndexOf('.') + 1)] ?? 'application/octet-stream',
+          'Content-Length': String(stat.size),
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store'
+        }
+      })
+    } catch {
+      return notFound()
+    }
+  })
+}
+
 async function start(): Promise<void> {
   const denyAll = session.defaultSession
   denyAll.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
@@ -113,11 +150,35 @@ async function start(): Promise<void> {
     scheduler: createRequestScheduler()
   })
 
+  const imageFiles = await openManagedImageFiles(join(app.getPath('userData'), 'images'))
+  const images = createImageService({
+    store: openedStore,
+    files: imageFiles,
+    download: createImageDownloader({ allowedOrigins: [IMAGE_ORIGIN] }),
+    origin: IMAGE_ORIGIN
+  })
+  // Before any view can load images: drop last run's reading holders and leftover files.
+  await images.recover().catch(() => console.error('[images] recovery failed'))
+  serveManagedImages(imageFiles)
+
   installMenu()
   const ipc = registerIpc({
     reading,
+    images,
     store: openedStore,
     getStatus: () => ({ storage: openedStore.status, platform }),
+    async chooseSavePath(sender, suggestedName, format) {
+      const window = BrowserWindow.fromWebContents(sender)
+      const extension = IMAGE_FORMAT_EXTENSION[format]
+      const options: Electron.SaveDialogOptions = {
+        title: '保存原图',
+        defaultPath: join(app.getPath('downloads'), suggestedName),
+        filters: [{ name: `${format.toUpperCase()} 图片`, extensions: [extension] }],
+        properties: ['createDirectory', 'showOverwriteConfirmation']
+      }
+      const result = window === null ? await dialog.showSaveDialog(options) : await dialog.showSaveDialog(window, options)
+      return result.canceled || !result.filePath ? null : result.filePath
+    },
     isTrustedSender: (event: IpcMainInvokeEvent) =>
       mainWindow !== null &&
       event.sender === mainWindow.webContents &&

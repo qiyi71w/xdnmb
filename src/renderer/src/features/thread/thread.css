@@ -1,4 +1,6 @@
+/* Positioned: the image viewer covers exactly this reader. */
 .reader {
+  position: relative;
   height: 100%;
 }
 

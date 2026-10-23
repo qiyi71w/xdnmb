@@ -18,6 +18,8 @@ export interface ReadingViewportOptions {
   toolbarRef: RefObject<HTMLDivElement | null>
   /** The reader's tab is active and its pane is actually displayed. */
   displayed: boolean
+  /** Something covers the body (the image viewer): nothing is judged read meanwhile. */
+  covered: boolean
   /** Positions may be saved for this mode (false while a target is shown in a temporary mode). */
   canSave: boolean
   /** Posts already read according to storage. */
@@ -44,11 +46,12 @@ function sameAnchor(a: ReadingAnchor, b: ReadingAnchor | null): boolean {
  *   images, a prepended page, reflow after a width change, the toolbar growing — so the reading
  *   line stays on the same spot of the same post. Content appended below never moves the view.
  * - Nothing is captured, judged or saved until the first position has been applied.
- * - The read judge is active only while the reader is displayed and the window is visible; it is
- *   fed full geometry snapshots of the rendered posts inside the viewport below the toolbar.
+ * - The read judge is active only while the reader is displayed and uncovered and the window is
+ *   visible and focused; it is fed full geometry snapshots of the rendered posts inside the
+ *   viewport below the toolbar.
  */
 export function useReadingViewport(options: ReadingViewportOptions) {
-  const { scrollRef, contentRef, toolbarRef, displayed, knownRead } = options
+  const { scrollRef, contentRef, toolbarRef, displayed, covered, knownRead } = options
   const opts = useRef(options)
   useLayoutEffect(() => {
     opts.current = options
@@ -331,12 +334,13 @@ export function useReadingViewport(options: ReadingViewportOptions) {
   useEffect(() => {
     const judge = judgeRef.current
     if (judge === null) return
-    // Foreground reading: window focused and visible, tab active, reader pane displayed. Losing any
-    // of these cancels unfinished dwells (setActive(false)); regaining them starts them afresh.
-    const active = displayed && visible && focused
+    // Foreground reading: window focused and visible, tab active, reader pane displayed and not
+    // covered by the image viewer. Losing any of these cancels unfinished dwells
+    // (setActive(false)); regaining them starts them afresh.
+    const active = displayed && !covered && visible && focused
     judge.setActive(active)
     if (active) schedule(false)
-  }, [displayed, visible, focused, schedule])
+  }, [displayed, covered, visible, focused, schedule])
 
   // Leaving the screen (tab hidden, single pane shows the list) saves the position now.
   useEffect(() => {

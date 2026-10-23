@@ -1,4 +1,5 @@
 import type { BoardDirectory, FeedPage, FeedRef, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
+import type { ImageLoadOutcome, ImageLoadRequest, ImageSaveOutcome, ImageViewId } from './images'
 import type { AppSettings, MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
 
 /**
@@ -128,6 +129,26 @@ export interface XidaoApi {
     get(): Promise<AppSettings>
     update(input: Partial<AppSettings>): Promise<WriteResult & { settings: AppSettings }>
   }
+  /**
+   * Post images. The caller names a stored post, never a URL or path; requests go only to the
+   * forum image server, without cookies or credentials, and never follow redirects.
+   */
+  images: {
+    /**
+     * Fetches (or reuses) the post's thumbnail or original as a managed file, judged by its actual
+     * bytes, and protects it from cleanup while `viewId` is held. Originals are queued before thumbnails.
+     */
+    load(input: ImageLoadRequest): Promise<ImageLoadOutcome>
+    /** Cancels a queued or running `load` of this caller. Unknown IDs are ignored. */
+    cancel(input: { operationId: OperationId }): Promise<void>
+    /** The view closed: its images are no longer protected by reading. */
+    releaseView(input: { viewId: ImageViewId }): Promise<void>
+    /**
+     * Asks where to save with the system dialog and writes a copy of the post's stored original,
+     * named by its detected format. Never saves a thumbnail instead.
+     */
+    saveOriginal(input: { postId: PostId }): Promise<ImageSaveOutcome>
+  }
   links: {
     /** Opens an absolute http(s) URL in the system browser; anything else is refused. */
     openExternal(input: { url: string }): Promise<{ opened: boolean }>
@@ -152,5 +173,9 @@ export const IpcChannel = {
   getSettings: 'settings:get',
   updateSettings: 'settings:update',
   openExternal: 'links:open-external',
+  loadImage: 'images:load',
+  cancelImage: 'images:cancel',
+  releaseImageView: 'images:release-view',
+  saveOriginalImage: 'images:save-original',
   getStatus: 'app:get-status'
 } as const

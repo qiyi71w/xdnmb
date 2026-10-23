@@ -67,7 +67,10 @@ export async function openReadingStore(options: {
       case 'loadSettings': value = { ...DEFAULT_SETTINGS }; break
       case 'loadDirectory':
       case 'loadFeedPage':
-      case 'loadThreadPage': value = null; break
+      case 'loadThreadPage':
+      case 'getPostImage':
+      case 'findImageResource': value = null; break
+      case 'listImageFileNames': value = []; break
       case 'close': value = undefined; break
       default: throw new StorageWriteRefusedError(status)
     }
@@ -124,6 +127,12 @@ export async function openReadingStore(options: {
     establishAttention: (threadId, source, at) => request('establishAttention', threadId, source, at),
     loadSettings: () => request('loadSettings'),
     saveSettings: (settings) => request('saveSettings', settings),
+    getPostImage: (postId) => request('getPostImage', postId),
+    findImageResource: (kind, sourceUrl, holder) => request('findImageResource', kind, sourceUrl, holder),
+    commitImageResource: (resource, holders) => request('commitImageResource', resource, holders),
+    releaseImageHolders: (kind, idPrefix) => request('releaseImageHolders', kind, idPrefix),
+    deleteUnheldImages: (resourceIds) => request('deleteUnheldImages', resourceIds),
+    listImageFileNames: () => request('listImageFileNames'),
     close() {
       if (!closePromise) {
         closing = true

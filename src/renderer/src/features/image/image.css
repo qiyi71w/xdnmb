@@ -1,0 +1,258 @@
+/* ---------- Post thumbnail ----------
+   A fixed-size row: loading, showing and failing never change the post's height, so the reading
+   anchor is not disturbed. The failure text sits beside the slot, inside the same row. */
+.post-image {
+  --thumb-w: 176px;
+  --thumb-h: 132px;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  height: var(--thumb-h);
+  margin: 4px 0 10px;
+}
+
+.post-image-open {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--thumb-w);
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  background: var(--pane);
+  cursor: zoom-in;
+  transition: border-color 0.15s var(--ease-out), box-shadow 0.15s var(--ease-out);
+}
+
+.post-image-open:hover {
+  border-color: var(--line);
+  box-shadow: 0 6px 16px -12px oklch(0.25 0.03 240 / 0.5);
+}
+
+.post-image-open img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 0.2s var(--ease-out);
+}
+
+.post-image-open img.is-shown {
+  opacity: 1;
+}
+
+.post-image-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+}
+
+.post-image[data-state='loading'] .post-image-open {
+  background: var(--skeleton);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+.post-image-status {
+  display: grid;
+  justify-items: start;
+  align-content: end;
+  gap: 6px;
+  min-width: 0;
+  max-height: 100%;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--danger-ink);
+}
+
+.post-image-status p {
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Image viewer ----------
+   Covers the reader that opened it (not the navigation or other panes). Frosted like the reader
+   toolbar; the image itself sits on the stage unblurred. */
+
+.image-viewer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: color-mix(in oklch, var(--window) 70%, transparent);
+  backdrop-filter: blur(22px) saturate(1.3);
+  animation: image-viewer-in 0.16s var(--ease-out);
+}
+
+@keyframes image-viewer-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.image-viewer-bar,
+.image-viewer-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px var(--gutter-min);
+  background: color-mix(in oklch, var(--paper) 72%, transparent);
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.image-viewer-bar {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-bar);
+}
+
+.image-viewer-footer {
+  justify-content: space-between;
+  min-height: 42px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.image-viewer-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.image-viewer-tools,
+.image-viewer-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.image-viewer-tools {
+  gap: 6px 14px;
+}
+
+.image-viewer-group .icon-btn {
+  width: 28px;
+  height: 28px;
+}
+
+/* Busy (saving) but still focused: looks unavailable without dropping focus. */
+.image-viewer-group .btn[aria-disabled='true'] {
+  color: var(--ink-3);
+  cursor: progress;
+}
+
+.image-viewer-group .icon-btn:disabled {
+  color: var(--ink-3);
+  opacity: 0.6;
+  cursor: default;
+  background: transparent;
+}
+
+.image-viewer-zoom {
+  min-width: 3.6em;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-viewer-stage {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  user-select: none;
+}
+
+.image-viewer-stage:focus {
+  outline: none;
+}
+
+.image-viewer-stage:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -4px;
+  border-radius: var(--radius-m);
+}
+
+.image-viewer-stage.is-pannable {
+  cursor: grab;
+}
+
+.image-viewer-stage.is-dragging {
+  cursor: grabbing;
+}
+
+.image-viewer-original {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  box-shadow: 0 18px 40px -24px oklch(0.2 0.03 240 / 0.45);
+  image-rendering: auto;
+}
+
+/* Shown until the original is decoded, or kept when it failed: the stage tells which one it is. */
+.image-viewer-thumb {
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 32px);
+  border-radius: var(--radius-s);
+  box-shadow: 0 18px 40px -24px oklch(0.2 0.03 240 / 0.45);
+}
+
+/* Loaded but not shown yet: decoding happens off the visible stage. */
+.image-viewer-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.image-viewer-placeholder {
+  color: var(--ink-3);
+}
+
+.image-viewer-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.image-viewer-status .loading {
+  padding: 0;
+}
+
+.image-viewer-error {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--danger-ink);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.image-viewer-error .icon {
+  flex: none;
+  margin-top: 3px;
+}
+
+.image-viewer-info {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.image-viewer-save {
+  font-weight: 600;
+  color: var(--ink);
+}

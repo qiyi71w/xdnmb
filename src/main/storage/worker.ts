@@ -46,6 +46,12 @@ port.on('message', (request: StorageRequest) => {
       case 'establishAttention': value = db.establishAttention(...request.args); break
       case 'loadSettings': value = db.loadSettings(...request.args); break
       case 'saveSettings': value = db.saveSettings(...request.args); break
+      case 'getPostImage': value = db.getPostImage(...request.args); break
+      case 'findImageResource': value = db.findImageResource(...request.args); break
+      case 'commitImageResource': value = db.commitImageResource(...request.args); break
+      case 'releaseImageHolders': value = db.releaseImageHolders(...request.args); break
+      case 'deleteUnheldImages': value = db.deleteUnheldImages(...request.args); break
+      case 'listImageFileNames': value = db.listImageFileNames(...request.args); break
       case 'close': value = db.close(...request.args); break
       default: throw new Error('unknown storage method')
     }

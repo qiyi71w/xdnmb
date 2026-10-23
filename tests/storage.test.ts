@@ -19,6 +19,7 @@ const later = '2026-10-23T08:01:00.000Z'
 const latest = '2026-10-23T08:02:00.000Z'
 const threadId = '900719925474099312345'
 const folders: string[] = []
+const SUPPORTED_VERSION = Math.max(...MIGRATIONS.map((migration) => migration.version))
 const databases: ReadingDatabase[] = []
 
 function databasePath() {
@@ -101,7 +102,7 @@ describe('reading database', () => {
     })], { replyCount: 2 })
     const second = threadPage(2, [post('900719925474099312347')], { replyCount: null })
     const db = open(path)
-    expect(db.status).toEqual({ state: 'ready', schemaVersion: 2 })
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: SUPPORTED_VERSION })
     db.saveThreadPage(first, fetchedAt)
     db.saveThreadPage(second, later)
     db.close()
@@ -255,8 +256,8 @@ describe('reading database', () => {
     const beforeSchema = schema(path)
     const failed = openReadingDatabase(path, [
       ...MIGRATIONS,
-      { version: 3, up(connection) { connection.exec('CREATE TABLE migration_three (id TEXT)') } },
-      { version: 4, up(connection) {
+      { version: SUPPORTED_VERSION + 1, up(connection) { connection.exec('CREATE TABLE migration_three (id TEXT)') } },
+      { version: SUPPORTED_VERSION + 2, up(connection) {
         connection.exec('CREATE TABLE migration_four (id TEXT)')
         throw new Error('injected migration failure')
       } }
@@ -277,7 +278,7 @@ describe('reading database', () => {
     db.close()
     const before = readFileSync(path)
     const failed = openReadingDatabase(path, [...MIGRATIONS, {
-      version: 3,
+      version: SUPPORTED_VERSION + 1,
       up(connection) {
         connection.exec('CREATE TABLE must_not_survive (id TEXT)')
         throw new Error('injected failure')
@@ -286,7 +287,7 @@ describe('reading database', () => {
     databases.push(failed)
     expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
     expect(readFileSync(path)).toEqual(before)
-    expect(schema(path).version).toBe(2)
+    expect(schema(path).version).toBe(SUPPORTED_VERSION)
   })
 
   it('opens newer schemas read-only, permits compatible loads, refuses every save and leaves bytes untouched', () => {
@@ -300,7 +301,7 @@ describe('reading database', () => {
     raw.close()
     const before = readFileSync(path)
     const newer = open(path)
-    expect(newer.status).toEqual({ state: 'read-only', reason: 'newer-schema', schemaVersion: 999, supportedVersion: 2 })
+    expect(newer.status).toEqual({ state: 'read-only', reason: 'newer-schema', schemaVersion: 999, supportedVersion: SUPPORTED_VERSION })
     expect(newer.loadThreadPage(threadId, 'all', 1)).toEqual({ value: original, fetchedAt })
     expect(() => newer.saveThreadPage(original, later)).toThrow(StorageWriteRefusedError)
     expect(() => newer.saveDirectory({ groups: [], timelines: [], skippedItems: 0 }, later)).toThrow(StorageWriteRefusedError)
@@ -487,17 +488,18 @@ describe('reading context', () => {
     const writer = open(path)
     writer.saveThreadPage(threadPage(1, [post('1001')]), fetchedAt)
     writer.close()
-    // Turn the file into what a version 1 build left behind: no reading-context tables.
+    // Turn the file into what a version 1 build left behind: no reading-context or image tables.
     const raw = new Database(path)
     raw.exec(`
       DROP TABLE thread_reading; DROP TABLE reading_positions; DROP TABLE post_reads;
       DROP TABLE thread_attention; DROP TABLE end_observations; DROP TABLE thread_visits; DROP TABLE settings;
+      DROP TABLE image_holders; DROP TABLE image_resources;
     `)
     raw.pragma('user_version = 1')
     raw.close()
     expect(schema(path).version).toBe(1)
     const upgraded = open(path)
-    expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: 2 })
+    expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: SUPPORTED_VERSION })
     expect(upgraded.loadThreadPage(threadId, 'all', 1)?.value.replies.map((reply) => reply.id)).toEqual(['1001'])
     expect(upgraded.getReadingState(threadId)).toMatchObject({ mode: 'all', readPostIds: [], attention: null })
     expect(upgraded.markPostsRead(threadId, ['1001'], later)).toEqual(['1001'])

@@ -24,6 +24,12 @@ const api: XidaoApi = {
   links: {
     openExternal: (input) => ipcRenderer.invoke(IpcChannel.openExternal, input)
   },
+  images: {
+    load: (input) => ipcRenderer.invoke(IpcChannel.loadImage, input),
+    cancel: (input) => ipcRenderer.invoke(IpcChannel.cancelImage, input),
+    releaseView: (input) => ipcRenderer.invoke(IpcChannel.releaseImageView, input),
+    saveOriginal: (input) => ipcRenderer.invoke(IpcChannel.saveOriginalImage, input)
+  },
   app: {
     getStatus: () => ipcRenderer.invoke(IpcChannel.getStatus)
   }

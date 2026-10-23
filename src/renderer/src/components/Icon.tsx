@@ -38,6 +38,14 @@ const PATHS = {
   arrowRight: <path d="M5 12h14M13.5 6.5 19 12l-5.5 5.5" />,
   arrowLeft: <path d="M19 12H5M10.5 6.5 5 12l5.5 5.5" />,
   plus: <path d="M12 5.5v13M5.5 12h13" />,
+  minus: <path d="M5.5 12h13" />,
+  fit: <path d="M4.5 9V4.5H9M15 4.5h4.5V9M19.5 15v4.5H15M9 19.5H4.5V15" />,
+  download: (
+    <>
+      <path d="M12 4.5v10.5M7.5 10.5 12 15l4.5-4.5" />
+      <path d="M5 19.5h14" />
+    </>
+  ),
   sidebar: (
     <>
       <rect x="3.5" y="5" width="17" height="14" rx="2.5" />

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ThreadEndResult } from '../src/shared/api'
 import type { Post, ThreadPage } from '../src/shared/forum'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../src/main/forum/contract'
-import type { ReadingStore } from '../src/main/storage/contract'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
+import { asStore } from './helpers/store'
 import { createReadingService } from '../src/main/reading/service'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 
@@ -51,30 +51,6 @@ function forum(sizes: number[], replyCount: number | null) {
     requested,
     fail: (error: ForumReadError | null) => (failWith = error),
     onRequest: (hook: (page: number) => void) => (onRequest = hook)
-  }
-}
-
-function asStore(db: ReadingDatabase): ReadingStore {
-  return {
-    get status() {
-      return db.status
-    },
-    saveDirectory: async (...args) => db.saveDirectory(...args),
-    loadDirectory: async () => db.loadDirectory(),
-    saveFeedPage: async (...args) => db.saveFeedPage(...args),
-    loadFeedPage: async (...args) => db.loadFeedPage(...args),
-    saveThreadPage: async (...args) => db.saveThreadPage(...args),
-    loadThreadPage: async (...args) => db.loadThreadPage(...args),
-    getThreadCoverage: async (...args) => db.getThreadCoverage(...args),
-    getReadingState: async (...args) => db.getReadingState(...args),
-    setReadingMode: async (...args) => db.setReadingMode(...args),
-    saveReadingPosition: async (...args) => db.saveReadingPosition(...args),
-    markPostsRead: async (...args) => db.markPostsRead(...args),
-    recordVisit: async (...args) => db.recordVisit(...args),
-    establishAttention: async (...args) => db.establishAttention(...args),
-    loadSettings: async () => db.loadSettings(),
-    saveSettings: async (...args) => db.saveSettings(...args),
-    close: async () => db.close()
   }
 }
 

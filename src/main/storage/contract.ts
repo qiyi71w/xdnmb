@@ -4,11 +4,13 @@ import type {
   FeedPage,
   FeedRef,
   PostId,
+  PostImage,
   ReadingMode,
   ThreadCoverage,
   ThreadId,
   ThreadPage
 } from '../../shared/forum'
+import type { ImageFormat, ImageKind } from '../../shared/images'
 import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, ThreadReadingState } from '../../shared/reading'
 
 /** A write was refused because the database is read-only (newer schema) or unavailable. */
@@ -24,6 +26,32 @@ export interface Stored<T> {
   /** ISO-8601 time the content was fetched from the forum. */
   fetchedAt: string
 }
+
+/**
+ * Who keeps a managed image from cleanup. `reading`: a reader view of the running app (cleared at
+ * startup). Drafts and offline copies add their own kinds when they start holding images.
+ */
+export interface ImageHolder {
+  kind: 'reading'
+  id: string
+}
+
+/** One stored image file: what it is, where it came from, when it was fetched. */
+export interface ImageResourceRecord {
+  id: number
+  kind: ImageKind
+  /** Absolute URL the bytes were fetched from. */
+  sourceUrl: string
+  /** Managed file name inside the app's image directory. */
+  fileName: string
+  format: ImageFormat
+  bytes: number
+  width: number
+  height: number
+  fetchedAt: string
+}
+
+export type NewImageResource = Omit<ImageResourceRecord, 'id'>
 
 /**
  * Persistence used by reading. Implemented by a single database worker owned by the main process;
@@ -55,5 +83,28 @@ export interface ReadingStore {
   establishAttention(threadId: ThreadId, source: AttentionSource, at: string): Promise<AttentionState>
   loadSettings(): Promise<AppSettings>
   saveSettings(settings: AppSettings): Promise<void>
+
+  /** Image location of a stored post; null when the post is not stored or has no image. */
+  getPostImage(postId: PostId): Promise<PostImage | null>
+  /** The stored resource for `kind` + `sourceUrl`; when found and `holder` is given, it is held too. */
+  findImageResource(kind: ImageKind, sourceUrl: string, holder: ImageHolder | null): Promise<ImageResourceRecord | null>
+  /**
+   * Records a file already renamed into the image directory and holds it for `holders`, in one
+   * transaction. An existing resource for the same kind + source keeps its ID and holders and now
+   * points at the new file; `replacedFileName` is its previous file, which nothing references any more.
+   */
+  commitImageResource(
+    resource: NewImageResource,
+    holders: ImageHolder[]
+  ): Promise<{ resource: ImageResourceRecord; replacedFileName: string | null }>
+  /** Drops holders of `kind` whose ID starts with `idPrefix` (`''`: all of that kind). */
+  releaseImageHolders(kind: ImageHolder['kind'], idPrefix: string): Promise<void>
+  /**
+   * Deletes the records of those `resourceIds` that no holder references, in one transaction, and
+   * returns their file names for removal. Held resources are left untouched.
+   */
+  deleteUnheldImages(resourceIds: number[]): Promise<string[]>
+  /** Every managed file name that a resource record points at. */
+  listImageFileNames(): Promise<string[]>
   close(): Promise<void>
 }

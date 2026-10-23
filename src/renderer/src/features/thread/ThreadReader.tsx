@@ -1,10 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import type { Post, PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
 import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
 import { describeReadError, formatPageList, meaningfulTitle } from '../../lib/format'
 import { useNearEnd } from '../../lib/useNearEnd'
+import { NearViewport, type ImageView, type ViewerRequest } from '../image/imageView'
+import { ImageViewer } from '../image/ImageViewer'
 import { useRegisterContent } from '../tabs/contentRegistry'
 import { CoverageLine, pageLabel } from './CoverageLine'
 import { PostView } from './PostView'
@@ -114,11 +116,41 @@ export function ThreadReader({
   const [nearby, setNearby] = useState(false)
   const temporary = temporaryOf !== null
 
+  // Images of this reader: one view ID protecting what it loaded, released on unmount.
+  const [viewId] = useState(() => crypto.randomUUID())
+  const [near] = useState(() => new NearViewport(() => scrollRef.current))
+  const [viewer, setViewer] = useState<ViewerRequest | null>(null)
+  const imageView = useMemo<ImageView>(() => ({ viewId, near, openViewer: setViewer }), [viewId, near])
+  const closeViewer = useCallback(() => setViewer(null), [])
+  useEffect(
+    () => () => {
+      near.disconnect()
+      window.xidao.images.releaseView({ viewId }).catch(() => undefined)
+    },
+    [near, viewId]
+  )
+
+  // Closing the viewer returns focus to the thumbnail that opened it, without moving the reader
+  // (the body is no longer inert by then).
+  const viewerTrigger = useRef<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    if (viewer !== null) {
+      viewerTrigger.current = viewer.trigger
+      return
+    }
+    const trigger = viewerTrigger.current
+    if (trigger === null) return
+    viewerTrigger.current = null
+    if (trigger.isConnected) trigger.focus({ preventScroll: true })
+    else scrollRef.current?.focus({ preventScroll: true })
+  }, [viewer])
+
   const { position, onScroll, currentAnchor, hasPost } = useReadingViewport({
     scrollRef,
     contentRef,
     toolbarRef,
     displayed,
+    covered: viewer !== null,
     canSave: !temporary,
     knownRead: readingState?.readPostIds ?? NO_POSTS,
     onRead,
@@ -207,7 +239,14 @@ export function ThreadReader({
 
   return (
     <section className="reader" aria-label={title === null ? `串 No.${threadId}` : `串：${title}`}>
-      <div className="reader-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1} data-pane-focus="">
+      <div
+        className="reader-scroll"
+        ref={scrollRef}
+        onScroll={onScroll}
+        tabIndex={-1}
+        data-pane-focus=""
+        inert={viewer !== null}
+      >
         <div className="reader-toolbar" ref={toolbarRef}>
           <div className="reader-toolbar-inner">
             <div className="toolbar-row">
@@ -354,7 +393,7 @@ export function ThreadReader({
             <h1 className="thread-title">{title ?? `No.${threadId}`}</h1>
           </header>
 
-          {head !== null && <PostView post={head} isHead poHash={null} unread={unreadIds.has(head.id)} />}
+          {head !== null && <PostView post={head} isHead poHash={null} unread={unreadIds.has(head.id)} images={imageView} />}
 
           {firstPage !== undefined && firstPage.page > 1 && (
             <div className="load-previous">
@@ -385,7 +424,14 @@ export function ThreadReader({
                 <SourceNotice source={page.source} subject={label} />
                 <PartialNotice skipped={page.skippedItems} subject={label} />
                 {replies.map((reply) => (
-                  <PostView key={reply.id} post={reply} isHead={false} poHash={head?.userHash ?? null} unread={unreadIds.has(reply.id)} />
+                  <PostView
+                    key={reply.id}
+                    post={reply}
+                    isHead={false}
+                    poHash={head?.userHash ?? null}
+                    unread={unreadIds.has(reply.id)}
+                    images={imageView}
+                  />
                 ))}
                 {page.endCandidate && (
                   <div className="end-candidate" role="status">
@@ -429,6 +475,16 @@ export function ThreadReader({
           </div>
         </div>
       </div>
+      {viewer !== null && (
+        <ImageViewer
+          key={viewer.postId}
+          viewId={viewId}
+          postId={viewer.postId}
+          initialThumb={viewer.thumb}
+          displayed={displayed}
+          onClose={closeViewer}
+        />
+      )}
     </section>
   )
 }

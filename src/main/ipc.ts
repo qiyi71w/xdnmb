@@ -1,7 +1,9 @@
 import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy, type ReadOutcome } from '../shared/api'
+import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy } from '../shared/api'
 import type { FeedRef, PostId, ReadingMode } from '../shared/forum'
+import type { ImageFormat, ImageKind } from '../shared/images'
 import { DEFAULT_SETTINGS, type AppSettings, type ReadingAnchor } from '../shared/reading'
+import type { ImageService } from './images/service'
 import type { ReadingService } from './reading/service'
 import type { ReadingStore } from './storage/contract'
 import { emptyReadingState } from './storage/reading-state'
@@ -22,10 +24,13 @@ class InvalidRequestError extends Error {
 
 interface IpcDeps {
   reading: ReadingService
+  images: ImageService
   store: ReadingStore
   getStatus: () => AppStatus
   /** True only for the app's own renderer document in its main frame. */
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
+  /** System save dialog for the sender's window; null when dismissed. */
+  chooseSavePath: (sender: WebContents, suggestedName: string, format: ImageFormat) => Promise<string | null>
 }
 
 function record(input: unknown): Record<string, unknown> {
@@ -36,6 +41,17 @@ function record(input: unknown): Record<string, unknown> {
 function operationId(input: Record<string, unknown>): string {
   const value = input.operationId
   if (typeof value !== 'string' || !OPERATION_ID.test(value)) throw new InvalidRequestError()
+  return value
+}
+
+/** Reader view IDs share the operation ID format. */
+function viewId(value: unknown): string {
+  if (typeof value !== 'string' || !OPERATION_ID.test(value)) throw new InvalidRequestError()
+  return value
+}
+
+function imageKind(value: unknown): ImageKind {
+  if (value !== 'thumb' && value !== 'original') throw new InvalidRequestError()
   return value
 }
 
@@ -104,7 +120,7 @@ async function attempt(write: () => Promise<unknown>): Promise<boolean> {
 class OperationRegistry {
   private readonly active = new Map<string, AbortController>()
 
-  async run<T>(sender: WebContents, id: string, work: (signal: AbortSignal) => Promise<ReadOutcome<T>>): Promise<ReadOutcome<T>> {
+  async run<R>(sender: WebContents, id: string, work: (signal: AbortSignal) => Promise<R>): Promise<R> {
     const key = `${sender.id}:${id}`
     this.active.get(key)?.abort()
     const controller = new AbortController()
@@ -126,7 +142,9 @@ class OperationRegistry {
   }
 }
 
-export function registerIpc({ reading, store, getStatus, isTrustedSender }: IpcDeps): { cancelAllFor: (sender: WebContents) => void } {
+export function registerIpc({ reading, images, store, getStatus, isTrustedSender, chooseSavePath }: IpcDeps): {
+  cancelAllFor: (sender: WebContents) => void
+} {
   const operations = new OperationRegistry()
 
   function handle(channel: string, handler: (event: IpcMainInvokeEvent, input: unknown) => Promise<unknown>): void {
@@ -233,7 +251,37 @@ export function registerIpc({ reading, store, getStatus, isTrustedSender }: IpcD
     return { opened: true }
   })
 
+  handle(IpcChannel.loadImage, async (event, raw) => {
+    const input = record(raw)
+    if (input.refresh !== undefined && typeof input.refresh !== 'boolean') throw new InvalidRequestError()
+    const load = {
+      viewId: viewId(input.viewId),
+      postId: forumId(input.postId),
+      kind: imageKind(input.kind),
+      refresh: input.refresh === true
+    }
+    return operations.run(event.sender, operationId(input), (signal) => images.load(String(event.sender.id), load, signal))
+  })
+
+  handle(IpcChannel.cancelImage, async (event, raw) => {
+    operations.cancel(event.sender, operationId(record(raw)))
+  })
+
+  handle(IpcChannel.releaseImageView, async (event, raw) => {
+    await images.releaseView(String(event.sender.id), viewId(record(raw).viewId))
+  })
+
+  handle(IpcChannel.saveOriginalImage, async (event, raw) => {
+    const postId = forumId(record(raw).postId)
+    return images.saveOriginal(postId, (suggestedName, format) => chooseSavePath(event.sender, suggestedName, format))
+  })
+
   handle(IpcChannel.getStatus, async () => getStatus())
 
-  return { cancelAllFor: (sender) => operations.cancelAllFor(sender) }
+  return {
+    cancelAllFor: (sender) => {
+      operations.cancelAllFor(sender)
+      void images.releaseOwner(String(sender.id))
+    }
+  }
 }

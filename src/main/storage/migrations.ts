@@ -138,5 +138,36 @@ export const MIGRATIONS: readonly Migration[] = [
         );
       `)
     }
+  },
+  {
+    // Managed image files. A resource is one fetched forum image (thumbnail or original) stored as
+    // a file in the app's image directory; holders (reading views now, drafts and offline copies
+    // later) protect it from cleanup. A file is renamed into place before its row is committed.
+    version: 3,
+    up(db) {
+      db.exec(`
+        CREATE TABLE image_resources (
+          id INTEGER PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('thumb', 'original')),
+          source_url TEXT NOT NULL,
+          file_name TEXT NOT NULL UNIQUE,
+          format TEXT NOT NULL CHECK (format IN ('jpeg', 'png', 'gif', 'webp')),
+          bytes INTEGER NOT NULL CHECK (bytes > 0),
+          width INTEGER NOT NULL CHECK (width > 0),
+          height INTEGER NOT NULL CHECK (height > 0),
+          fetched_at TEXT NOT NULL,
+          UNIQUE (kind, source_url)
+        );
+
+        CREATE TABLE image_holders (
+          resource_id INTEGER NOT NULL REFERENCES image_resources(id),
+          holder_kind TEXT NOT NULL,
+          holder_id TEXT NOT NULL,
+          held_at TEXT NOT NULL,
+          PRIMARY KEY (resource_id, holder_kind, holder_id)
+        );
+        CREATE INDEX image_holders_holder ON image_holders(holder_kind, holder_id);
+      `)
+    }
   }
 ]
