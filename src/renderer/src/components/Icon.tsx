@@ -1,0 +1,97 @@
+// Small authored line icons: 24px grid, 1.7 stroke, round caps. Always decorative (aria-hidden).
+
+const PATHS = {
+  timeline: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 7.5V12l3 2" />
+    </>
+  ),
+  forum: <path d="M9.5 4 7.5 20M16.5 4l-2 16M4.5 9h16M3.5 15h16" />,
+  image: (
+    <>
+      <rect x="3.5" y="5" width="17" height="14" rx="2.5" />
+      <circle cx="9" cy="10" r="1.6" />
+      <path d="m20.5 16-4.5-4.5L7 19" />
+    </>
+  ),
+  reply: <path d="M5 5.5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8.5L6 20v-3.5H5a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z" />,
+  refresh: (
+    <>
+      <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" />
+      <path d="M19.5 4.5v4h-4" />
+    </>
+  ),
+  toTop: (
+    <>
+      <path d="M5 4.5h14" />
+      <path d="M12 20V9M7 13.5l5-5 5 5" />
+    </>
+  ),
+  toEnd: (
+    <>
+      <path d="M5 19.5h14" />
+      <path d="M12 4v11M7 10.5l5 5 5-5" />
+    </>
+  ),
+  arrowUp: <path d="M12 19V5M6.5 10.5 12 5l5.5 5.5" />,
+  arrowRight: <path d="M5 12h14M13.5 6.5 19 12l-5.5 5.5" />,
+  alert: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V13M12 16.4v.1" />
+    </>
+  ),
+  archive: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="4" rx="1" />
+      <path d="M5 8.5v9.5a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5V8.5M10 12.5h4" />
+    </>
+  ),
+  close: <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />,
+  info: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 11v5.5M12 7.6v.1" />
+    </>
+  ),
+  external: (
+    <>
+      <path d="M13.5 5H19v5.5M19 5l-8 8" />
+      <path d="M17 13.5V18a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4.5" />
+    </>
+  ),
+  chevron: <path d="m9 6 6 6-6 6" />
+} as const
+
+export type IconName = keyof typeof PATHS
+
+export function Icon({ name, size = 16, className }: { name: IconName; size?: number; className?: string }) {
+  return (
+    <svg
+      className={className === undefined ? 'icon' : `icon ${className}`}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {PATHS[name]}
+    </svg>
+  )
+}
+
+/** Spinner that stays a static ring under reduced motion; always paired with visible text. */
+export function Spinner() {
+  return (
+    <svg className="spinner" width={14} height={14} viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.22" strokeWidth="2.5" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+    </svg>
+  )
+}

@@ -1,0 +1,72 @@
+/* Fixed D layout: frosted navigation | thread list | reading pane.
+   Below the minimum width (e.g. at 200% zoom) the page scrolls horizontally instead of clipping. */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 840px;
+  background:
+    radial-gradient(55% 60% at 0% 0%, var(--window-tint-a), transparent 70%),
+    radial-gradient(45% 55% at 0% 100%, var(--window-tint-b), transparent 70%),
+    var(--window);
+}
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: clamp(180px, 18vw, 236px) clamp(260px, 26vw, 340px) minmax(380px, 1fr);
+}
+
+.list-column {
+  min-width: 0;
+  min-height: 0;
+  margin-left: 8px;
+  background: var(--pane);
+  border-left: 1px solid var(--line-soft);
+  border-right: 1px solid var(--line-soft);
+}
+
+.reader-column-wrap {
+  min-width: 0;
+  min-height: 0;
+  background: var(--paper);
+}
+
+.storage-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--warn-ink);
+  background: var(--warn-bg);
+  border-bottom: 1px solid color-mix(in oklch, var(--warn-ink) 22%, transparent);
+}
+
+.storage-banner .icon {
+  flex: none;
+}
+
+.pane-empty {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  padding: 24px;
+  text-align: center;
+}
+
+.pane-empty-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.pane-empty-text {
+  max-width: 28em;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}

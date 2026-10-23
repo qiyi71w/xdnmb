@@ -1,0 +1,81 @@
+import type Database from 'better-sqlite3'
+
+export interface Migration {
+  version: number
+  up(db: Database.Database): void
+}
+
+export const MIGRATIONS: readonly Migration[] = [
+  {
+    version: 1,
+    up(db) {
+      db.exec(`
+        CREATE TABLE directory_snapshot (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          directory_json TEXT NOT NULL,
+          fetched_at TEXT NOT NULL
+        );
+
+        CREATE TABLE posts (
+          id TEXT PRIMARY KEY NOT NULL,
+          forum_id TEXT,
+          created_at TEXT,
+          user_hash TEXT,
+          name TEXT,
+          title TEXT,
+          is_admin INTEGER CHECK (is_admin IN (0, 1)),
+          is_sage INTEGER CHECK (is_sage IN (0, 1)),
+          content_json TEXT NOT NULL,
+          plain_text TEXT NOT NULL,
+          image_path TEXT,
+          image_ext TEXT,
+          fetched_at TEXT NOT NULL,
+          CHECK ((image_path IS NULL) = (image_ext IS NULL))
+        );
+
+        CREATE TABLE post_threads (
+          post_id TEXT PRIMARY KEY NOT NULL REFERENCES posts(id),
+          thread_id TEXT NOT NULL REFERENCES posts(id),
+          observed_as TEXT NOT NULL CHECK (observed_as IN ('head', 'thread-reply', 'feed-recent-reply')),
+          feed_kind TEXT CHECK (feed_kind IN ('forum', 'timeline')),
+          feed_id TEXT,
+          mode TEXT CHECK (mode IN ('all', 'po')),
+          page INTEGER NOT NULL CHECK (page >= 1),
+          fetched_at TEXT NOT NULL
+        );
+        CREATE INDEX post_threads_thread_id ON post_threads(thread_id);
+
+        CREATE TABLE feed_pages (
+          feed_kind TEXT NOT NULL CHECK (feed_kind IN ('forum', 'timeline')),
+          feed_id TEXT NOT NULL,
+          page INTEGER NOT NULL CHECK (page >= 1),
+          fetched_at TEXT NOT NULL,
+          summaries_json TEXT NOT NULL,
+          skipped_items INTEGER NOT NULL CHECK (skipped_items >= 0),
+          PRIMARY KEY (feed_kind, feed_id, page)
+        );
+
+        CREATE TABLE thread_pages (
+          thread_id TEXT NOT NULL REFERENCES posts(id),
+          mode TEXT NOT NULL CHECK (mode IN ('all', 'po')),
+          page INTEGER NOT NULL CHECK (page >= 1),
+          head_id TEXT NOT NULL REFERENCES posts(id),
+          fetched_at TEXT NOT NULL,
+          reply_ids_json TEXT NOT NULL,
+          reply_count INTEGER CHECK (reply_count >= 0),
+          skipped_items INTEGER NOT NULL CHECK (skipped_items >= 0),
+          end_candidate INTEGER NOT NULL CHECK (end_candidate IN (0, 1)),
+          PRIMARY KEY (thread_id, mode, page)
+        );
+
+        CREATE TABLE thread_reply_counts (
+          thread_id TEXT NOT NULL REFERENCES posts(id),
+          mode TEXT NOT NULL CHECK (mode IN ('all', 'po')),
+          reply_count INTEGER NOT NULL CHECK (reply_count >= 0),
+          fetched_at TEXT NOT NULL,
+          PRIMARY KEY (thread_id, mode)
+        );
+      `)
+    }
+  }
+]

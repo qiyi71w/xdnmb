@@ -1,0 +1,43 @@
+import type { ReadError } from '../../shared/api'
+import type { BoardDirectory, FeedPage, FeedRef, ThreadId, ThreadPage } from '../../shared/forum'
+
+/** A classified forum read failure. Never carries raw bodies, URLs with secrets or full server pages. */
+export class ForumReadError extends Error {
+  override readonly name = 'ForumReadError'
+  constructor(readonly error: ReadError) {
+    super(`forum read failed: ${error.kind}/${error.detail}`)
+  }
+}
+
+/** The caller's AbortSignal fired. Distinct from timeout, which is a ForumReadError(network/timeout). */
+export class ReadCancelledError extends Error {
+  override readonly name = 'ReadCancelledError'
+  constructor() {
+    super('read cancelled')
+  }
+}
+
+export interface TransportResponse {
+  /** Lower-cased media type without parameters, e.g. `application/json`; `null` if absent. */
+  mediaType: string | null
+  /** Body decoded per Content-Encoding and charset. */
+  text: string
+}
+
+/**
+ * Credential-free GET to an allow-listed origin. Resolves only for HTTP 200; every other outcome
+ * throws ForumReadError (or ReadCancelledError when `signal` aborts). No retries, no redirects followed.
+ */
+export interface ForumTransport {
+  get(url: URL, signal: AbortSignal): Promise<TransportResponse>
+}
+
+/** Public JSON read API of the forum, returning normalized content only. */
+export interface ForumClient {
+  /** getForumList + getTimelineList. */
+  getDirectory(signal: AbortSignal): Promise<BoardDirectory>
+  /** showf (forum) or timeline list page. */
+  getFeedPage(feed: FeedRef, page: number, signal: AbortSignal): Promise<FeedPage>
+  /** One `all`-mode thread page. */
+  getThreadPage(threadId: ThreadId, page: number, signal: AbortSignal): Promise<ThreadPage>
+}

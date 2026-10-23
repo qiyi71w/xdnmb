@@ -1,0 +1,103 @@
+/* Soft, airy desktop palette (Apple Notes / Mail direction): low saturation, thin lines, soft depth.
+   Frost is reserved for navigation and toolbars; reading text always sits on a solid surface.
+   Ordinary text colors keep at least 4.5:1 against the surfaces they are used on. */
+
+:root {
+  color-scheme: light dark;
+
+  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Segoe UI Variable Text',
+    'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.875rem;
+  --text-body: 1rem;
+  --text-title: 1.375rem;
+
+  --radius-s: 6px;
+  --radius-m: 9px;
+  --radius-l: 14px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --window: oklch(0.952 0.009 228);
+  --window-tint-a: oklch(0.93 0.03 215);
+  --window-tint-b: oklch(0.95 0.025 85);
+  --glass: oklch(0.985 0.005 225 / 0.6);
+  --glass-strong: oklch(0.99 0.004 225 / 0.82);
+  --glass-edge: oklch(1 0 0 / 0.7);
+  --pane: oklch(0.985 0.003 230);
+  --paper: oklch(1 0 0);
+
+  --ink: oklch(0.25 0.012 240);
+  --ink-2: oklch(0.41 0.012 240);
+  --ink-3: oklch(0.49 0.01 240);
+
+  --line: oklch(0.89 0.006 240);
+  --line-soft: oklch(0.94 0.004 240);
+  --hover: oklch(0.45 0.02 240 / 0.07);
+  --selected: oklch(0.56 0.095 215 / 0.14);
+  --nav-current: oklch(0.45 0.03 230 / 0.12);
+
+  --accent: oklch(0.55 0.095 215);
+  --accent-ink: oklch(0.44 0.1 222);
+  --accent-soft: oklch(0.55 0.095 215 / 0.12);
+
+  --greentext: oklch(0.46 0.11 145);
+  --quote-ref-ink: oklch(0.42 0.06 260);
+  --quote-ref-bg: oklch(0.55 0.06 260 / 0.1);
+
+  --warn-ink: oklch(0.44 0.1 65);
+  --warn-bg: oklch(0.965 0.035 85);
+  --danger-ink: oklch(0.47 0.15 27);
+  --danger-bg: oklch(0.97 0.018 27);
+  --info-bg: oklch(0.965 0.015 225);
+
+  --skeleton: oklch(0.45 0.02 240 / 0.08);
+
+  --shadow-nav: 0 18px 40px -22px oklch(0.3 0.05 230 / 0.35), 0 1px 2px oklch(0.3 0.03 230 / 0.06);
+  --shadow-bar: 0 8px 20px -16px oklch(0.25 0.03 240 / 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --window: oklch(0.17 0.008 240);
+    --window-tint-a: oklch(0.24 0.035 235);
+    --window-tint-b: oklch(0.22 0.025 200);
+    --glass: oklch(0.27 0.01 240 / 0.55);
+    --glass-strong: oklch(0.24 0.01 240 / 0.85);
+    --glass-edge: oklch(1 0 0 / 0.08);
+    --pane: oklch(0.205 0.007 240);
+    --paper: oklch(0.185 0.006 240);
+
+    --ink: oklch(0.93 0.006 240);
+    --ink-2: oklch(0.81 0.008 240);
+    --ink-3: oklch(0.71 0.008 240);
+
+    --line: oklch(0.33 0.008 240);
+    --line-soft: oklch(0.27 0.006 240);
+    --hover: oklch(0.9 0.01 240 / 0.07);
+    --selected: oklch(0.74 0.09 210 / 0.18);
+    --nav-current: oklch(0.9 0.02 230 / 0.12);
+
+    --accent: oklch(0.74 0.09 210);
+    --accent-ink: oklch(0.81 0.08 210);
+    --accent-soft: oklch(0.74 0.09 210 / 0.16);
+
+    --greentext: oklch(0.79 0.12 145);
+    --quote-ref-ink: oklch(0.82 0.06 260);
+    --quote-ref-bg: oklch(0.75 0.06 260 / 0.14);
+
+    --warn-ink: oklch(0.84 0.1 80);
+    --warn-bg: oklch(0.27 0.035 80);
+    --danger-ink: oklch(0.82 0.1 27);
+    --danger-bg: oklch(0.27 0.04 27);
+    --info-bg: oklch(0.25 0.02 225);
+
+    --skeleton: oklch(0.9 0.01 240 / 0.08);
+
+    --shadow-nav: 0 18px 40px -20px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.05);
+    --shadow-bar: 0 8px 20px -14px oklch(0 0 0 / 0.6);
+  }
+}

@@ -1,0 +1,52 @@
+.content-body,
+.content-excerpt {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.content-body {
+  font-size: var(--text-body);
+  line-height: 1.8;
+  letter-spacing: 0.01em;
+}
+
+.greentext {
+  color: var(--greentext);
+}
+
+/* Quote references are styled only; preview and navigation belong to quote navigation. */
+.quote-ref {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--quote-ref-bg);
+  color: var(--quote-ref-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.content-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  text-align: inherit;
+  white-space: inherit;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.content-link:hover {
+  text-decoration-thickness: 2px;
+}
+
+.content-link:focus-visible {
+  border-radius: 3px;
+}
+
+.content-link.is-static {
+  cursor: inherit;
+}
