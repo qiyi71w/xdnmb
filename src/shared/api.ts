@@ -10,6 +10,7 @@ import type {
 } from './drafts'
 import type { AppSettings, MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
 import type { SubscriptionsApi } from './subscriptions'
+import type { SearchApi } from './search'
 
 /**
  * Classified read failure. Server/body text is never included except a short
@@ -152,6 +153,7 @@ export const MAX_MARK_READ_IDS = 2000
 export interface XidaoApi {
   content: ContentApi
   subscriptions: SubscriptionsApi
+  search: SearchApi
   reading: {
     loadDirectory(input: { operationId: OperationId; strategy: DirectoryStrategy }): Promise<ReadOutcome<BoardDirectory>>
     /** Foreground read; falls back to the stored page when the network read fails. */
@@ -268,6 +270,13 @@ export interface XidaoApi {
 
 /** IPC channel names. Each maps 1:1 to an XidaoApi method; there is no generic channel. */
 export const IpcChannel = {
+  searchStart: 'search:start',
+  searchNext: 'search:next',
+  searchCancel: 'search:cancel',
+  searchFetchThread: 'search:fetch-thread',
+  searchFetchStatus: 'search:fetch-status',
+  searchRebuild: 'search:rebuild',
+  searchThreadMetadata: 'search:thread-metadata',
   listRetained: 'content:list',
   favorite: 'content:favorite',
   isFavorite: 'content:is-favorite',

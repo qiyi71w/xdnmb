@@ -86,6 +86,8 @@ export class RetainedContentDatabase {
       const limitBytes = limit ? Number(JSON.parse(limit.value_json)) : DEFAULT_CACHE_LIMIT
       const cachePosts = scalar('SELECT coalesce(sum(bytes), 0) AS bytes FROM content_post_bytes WHERE NOT protected')
       const protectedTextBytes = scalar('SELECT coalesce(sum(bytes), 0) AS bytes FROM content_post_bytes WHERE protected')
+        + scalar(`SELECT coalesce(sum(length(CAST(title AS BLOB))+length(CAST(body AS BLOB))),0) AS bytes FROM search_sources WHERE owner<>'cache'`)
+        + scalar(`SELECT coalesce(sum(2*(length(CAST(title AS BLOB))+length(CAST(body AS BLOB)))),0) AS bytes FROM search_documents WHERE owner<>'cache'`)
       const metadata = scalar('SELECT coalesce(sum(bytes), 0) AS bytes FROM content_metadata_bytes WHERE NOT protected')
       const heldMetadata = scalar('SELECT coalesce(sum(bytes), 0) AS bytes FROM content_metadata_bytes WHERE protected')
       const cacheImageBytes = scalar('SELECT coalesce(sum(bytes), 0) AS bytes FROM image_resources r WHERE NOT EXISTS(SELECT 1 FROM image_holders h WHERE h.resource_id = r.id) AND NOT EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)')

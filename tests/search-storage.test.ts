@@ -1,0 +1,220 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import Database from 'better-sqlite3'
+import { afterEach, describe, expect, it } from 'vitest'
+import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
+import { normalizeSearchText } from '../src/main/storage/search'
+import type { ContentFilters, SearchHit, SearchScope } from '../src/shared/search'
+import type { Post, ThreadPage } from '../src/shared/forum'
+import type { SubscriptionObservation, SubscriptionOperation } from '../src/shared/subscriptions'
+import { matchContentFilters } from '../src/shared/search-filters'
+import { MIGRATIONS } from '../src/main/storage/migrations'
+
+const at = '2026-10-24T00:00:00.000Z'
+const later = '2026-10-24T01:00:00.000Z'
+const filters: ContentFilters = { forumId: null, fromDate: null, toDate: null, image: 'any' }
+const resources: Array<{ folder: string; db: ReadingDatabase }> = []
+function fixture() {
+  const folder = mkdtempSync(join(tmpdir(), 'xidao-search-'))
+  const path = join(folder, 'app.sqlite')
+  const db = openReadingDatabase(path)
+  resources.push({ folder, db })
+  rebuild(db)
+  return { db, path }
+}
+function rebuild(db: ReadingDatabase) {
+  db.beginSearchRebuild()
+  for (let batch = 0; batch < 1000; batch++) if (db.rebuildSearchBatch()) return
+  throw new Error('rebuild did not finish')
+}
+function post(id: string, body = '正文', extra: Partial<Post> = {}): Post {
+  return { id, forumId: '4', createdAt: '2026-10-24(六)12:00:00', userHash: 'public', name: null, title: null,
+    isAdmin: null, isSage: null, image: null, imageKnown: true, content: [{ type: 'text', text: body }], plainText: body, ...extra }
+}
+function page(head: Post, replies: Post[], number = 1): ThreadPage {
+  return { threadId: head.id, mode: 'all', page: number, head, replies, replyCount: null, skippedItems: 0, endCandidate: replies.length === 0 }
+}
+function search(db: ReadingDatabase, query: string, scope: SearchScope = { kind: 'local' }, applied = filters): SearchHit[] {
+  const input = { query: normalizeSearchText(query), scope, filters: applied, after: 0, upper: db.searchBoundary() }
+  const hits: SearchHit[] = []
+  for (let batch = 0; batch < 1000; batch++) {
+    const result = db.searchBatch(input)
+    hits.push(...result.batch.hits)
+    input.after = result.cursor
+    if (result.batch.done) return hits
+  }
+  throw new Error('search did not finish')
+}
+function clear(db: ReadingDatabase) {
+  for (let batch = 0; batch < 1000; batch++) if (!db.evictContentBatch(true).more) return
+  throw new Error('eviction did not finish')
+}
+function observation(head: Post): SubscriptionObservation {
+  return { id: 'observed', source: 'app', context: { generation: 0, appCredentialId: null, webCredentialId: null },
+    startedAt: at, pages: [{ page: 1, fetchedAt: at, endCandidate: false,
+      threads: [{ head, recentReplies: [], replyCount: null, remainReplies: null }] }], ids: [head.id], nextPage: 2, error: null, cancelled: false }
+}
+afterEach(() => {
+  for (const { folder, db } of resources.splice(0)) { db.close(); rmSync(folder, { force: true, recursive: true }) }
+})
+
+describe('real SQLite retained search', () => {
+  it('retains PO proof from subscription content after eviction and restart without retaining public identities in indexed text', () => {
+    const { db, path } = fixture()
+    const evidence = observation(post('100', 'head needle', { userHash: 'po-id' }))
+    evidence.pages[0]!.threads[0]!.recentReplies = [post('101', 'reply needle', { userHash: 'po-id' }), post('102', 'other needle', { userHash: 'other-id' })]
+    db.saveSubscriptionObservation(evidence, 'subscription')
+    clear(db)
+    expect(search(db, 'needle', { kind: 'thread', threadId: '100', mode: 'po' }).map((hit) => hit.postId)).toEqual(['100', '101'])
+    db.close()
+    const reopened = openReadingDatabase(path)
+    try {
+      rebuild(reopened)
+      expect(search(reopened, 'needle', { kind: 'thread', threadId: '100', mode: 'po' }).map((hit) => hit.postId)).toEqual(['100', '101'])
+      expect(search(reopened, 'po-id')).toEqual([])
+      expect(reopened.loadPost('101')).toBeNull()
+    } finally { reopened.close() }
+  })
+
+  it.each(['中', '中文', '中文长子串', 'CAFÉ', 'cafe\u0301', '😀😃😄', '"', '%', '_*', '" OR *', 'a.b[c]'])('matches normalized literal %j through the selected driver', (query) => {
+    const { db } = fixture()
+    db.savePost(post('100', `前缀 中文长子串 Cafe\u0301 😀😃😄 引号" 百分号% 通配_* " OR * a.b[c] 后缀`), at)
+    db.savePost(post('200', 'unrelated'), at)
+    expect(search(db, query).map((hit) => hit.postId)).toEqual(['100'])
+  })
+
+  it('keeps title and body separate, bounds excerpts, and never indexes drafts or public identity fields', () => {
+    const { db } = fixture()
+    db.savePost(post('100', 'cdef', { title: 'ab', userHash: 'identity-only', name: 'name-only' }), at)
+    db.savePost(post('101', '开头'.repeat(1000) + 'needle' + '结尾'.repeat(1000)), at)
+    db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: null,
+      fields: { content: 'draft-only', title: 'draft-title', name: '', email: '', watermark: false }, attachmentId: null }, at)
+    expect(search(db, 'bc')).toEqual([])
+    expect(search(db, 'identity-only')).toEqual([])
+    expect(search(db, 'name-only')).toEqual([])
+    expect(search(db, 'draft-only')).toEqual([])
+    expect(search(db, 'needle')[0]?.excerpt).toContain('needle')
+    expect(search(db, 'needle')[0]!.excerpt.length).toBeLessThanOrEqual(240)
+    expect(search(db, 'ab')[0]?.threadId).toBeNull()
+  })
+
+  it('uses a fixed upper cursor and bounded batches without repeats, including empty short-query batches', () => {
+    const { db } = fixture()
+    for (let index = 1; index <= 150; index++) db.savePost(post(String(index), index < 70 ? '无' : '中'), at)
+    const input = { query: '中', scope: { kind: 'local' as const }, filters, after: 0, upper: db.searchBoundary() }
+    const first = db.searchBatch(input)
+    expect(first.batch.hits).toEqual([])
+    expect(first.batch.done).toBe(false)
+    input.after = first.cursor
+    db.savePost(post('999', '中'), at)
+    const ids: string[] = []
+    for (;;) {
+      const result = db.searchBatch(input)
+      expect(result.batch.hits.length).toBeLessThanOrEqual(64)
+      ids.push(...result.batch.hits.map((hit) => hit.postId))
+      input.after = result.cursor
+      if (result.batch.done) break
+    }
+    expect(ids).toHaveLength(81)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids).not.toContain('999')
+  })
+
+  it('filters each matching post, preserves unknown evidence and follows PO scope without changing reading preference', () => {
+    const { db } = fixture()
+    const head = post('100', 'matching', { forumId: '1', userHash: 'po', title: 'head' })
+    db.saveThreadPage(page(head, [post('101', 'matching', { forumId: '2', userHash: 'other', createdAt: null, imageKnown: undefined }),
+      post('102', 'matching', { forumId: '2', userHash: 'po', image: { path: 'img', ext: '.png' } })]), at)
+    expect(search(db, 'matching', { kind: 'thread', threadId: '100', mode: 'po' }).map((hit) => hit.postId)).toEqual(['100', '102'])
+    const hits = search(db, 'matching', { kind: 'local' }, { forumId: '2', fromDate: '2026-10-24', toDate: '2026-10-24', image: 'with' })
+    expect(hits.map((hit) => [hit.postId, hit.uncertainFilters])).toEqual([['101', true], ['102', false]])
+    expect(db.getReadingState('100').mode).toBe('all')
+    expect(db.getReadingState('100').readPostIds).toEqual([])
+    expect(db.searchMetadata(['100', '999'])).toMatchObject([{ forumId: '1', hasImage: false }, { forumId: null, hasImage: null, unreadCount: null, coverageUnknown: true }])
+  })
+
+  it('updates transactionally, refuses stale observations, and removes cache-only hits but preserves offline and journal ownership', () => {
+    const { db, path } = fixture()
+    db.saveThreadPage(page(post('100', 'cache-only'), []), at)
+    db.beginOfflineCopy('200', false, at)
+    db.saveOfflinePage(page(post('200', 'offline-needle'), []), at)
+    db.saveSubscriptionObservation(observation(post('300', 'journal-needle')), 'subscription')
+    const operation: SubscriptionOperation = { id: 'op', source: 'app', threadId: '400', action: 'add',
+      context: { generation: 0, appCredentialId: null, webCredentialId: null }, createdAt: at, objectLabel: 'not-searched-label',
+      state: 'settled', report: 'success', reportError: null, before: observation(post('400', 'operation-needle')), after: null, verification: 'present' }
+    db.saveSubscriptionOperation(operation)
+    db.savePost(post('500', 'new-needle'), later)
+    db.savePost(post('500', 'stale-needle'), at)
+    expect(search(db, 'stale-needle')).toEqual([])
+    const raw = new Database(path)
+    try {
+      raw.exec("CREATE TRIGGER fail_projection BEFORE UPDATE ON search_sources BEGIN SELECT RAISE(ABORT,'injected'); END")
+      expect(() => db.savePost(post('500', 'failed-needle'), later)).toThrow()
+      expect(db.loadPost('500')?.value.plainText).toBe('new-needle')
+      expect(search(db, 'failed-needle')).toEqual([])
+      raw.exec('DROP TRIGGER fail_projection')
+    } finally { raw.close() }
+    clear(db)
+    expect(search(db, 'cache-only')).toEqual([])
+    expect(search(db, 'offline-needle')[0]?.retention).toBe('offline')
+    expect(search(db, 'journal-needle')[0]?.retention).toBe('subscription')
+    expect(search(db, 'operation-needle')[0]).toMatchObject({ retention: 'subscription', threadId: '400' })
+    expect(search(db, 'not-searched-label')).toEqual([])
+    expect(db.loadPost('300')).toBeNull()
+    expect(db.getContentUsage()).toMatchObject({ cacheTextBytes: 0 })
+    expect(db.getContentUsage().protectedTextBytes).toBeGreaterThan(0)
+    rebuild(db)
+    expect(search(db, 'journal-needle')[0]?.retention).toBe('subscription')
+    expect(search(db, 'operation-needle')[0]?.retention).toBe('subscription')
+    expect(db.loadPost('300')).toBeNull()
+  })
+
+  it('replaces an observation projection while retaining its separately saved valid evidence', () => {
+    const { db } = fixture()
+    db.saveSubscriptionObservation(observation(post('100', 'old-retained')), 'subscription')
+    db.saveSubscriptionObservation({ ...observation(post('200', 'new-retained')), error: { page: 2, detail: { kind: 'network', detail: 'connection' } } }, 'subscription')
+    clear(db)
+    expect(search(db, 'old-retained')[0]?.postId).toBe('100')
+    expect(search(db, 'new-retained')[0]?.postId).toBe('200')
+    db.saveSubscriptionObservation(observation(post('300', 'replacement')), 'subscription')
+    clear(db)
+    expect(search(db, 'old-retained')).toEqual([])
+    expect(search(db, 'new-retained')).toEqual([])
+    expect(search(db, 'replacement')[0]?.postId).toBe('300')
+  })
+
+  it('reports an unavailable index instead of empty results and rebuilds retained legacy text in bounded batches', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'xidao-search-v7-'))
+    const path = join(folder, 'app.sqlite')
+    const old = new Database(path)
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 7)) migration.up(old)
+    for (let index = 1; index <= 70; index++) old.prepare('INSERT INTO posts(id,title,content_json,plain_text,fetched_at) VALUES(?,?,?,?,?)')
+      .run(String(index), null, '[]', 'legacy-needle', at)
+    old.pragma('user_version=7'); old.close()
+    const db = openReadingDatabase(path)
+    resources.push({ folder, db })
+    expect(() => db.searchBoundary()).toThrow()
+    db.beginSearchRebuild()
+    expect(db.rebuildSearchBatch()).toBe(false)
+    expect(() => db.searchBoundary()).toThrow()
+    for (let batch = 0; batch < 100; batch++) if (db.rebuildSearchBatch()) break
+    expect(search(db, 'legacy-needle')).toHaveLength(70)
+    expect(db.searchMetadata(['1'])[0]?.hasImage).toBeNull()
+    const raw = new Database(path)
+    raw.exec('DROP TABLE search_fts'); raw.close()
+    expect(() => db.searchBoundary()).toThrow()
+    rebuild(db)
+    expect(search(db, 'legacy-needle')).toHaveLength(70)
+  })
+})
+
+describe('shared evidence-aware content filters', () => {
+  it('compares real server calendar dates without inventing a timezone or treating unknown fields as negatives', () => {
+    expect(matchContentFilters({ forumId: null, createdAt: '2026-02-30', hasImage: null },
+      { forumId: '4', fromDate: '2026-01-01', toDate: '2026-12-31', image: 'without' })).toEqual({ matches: true, uncertain: true })
+    expect(matchContentFilters({ forumId: '5', createdAt: null, hasImage: null }, { ...filters, forumId: '4' })).toEqual({ matches: false, uncertain: false })
+    expect(matchContentFilters({ forumId: null, createdAt: '2026-10-24(六)23:59:00', hasImage: false },
+      { ...filters, fromDate: '2026-10-24', toDate: '2026-10-24', image: 'without' })).toEqual({ matches: true, uncertain: false })
+  })
+})

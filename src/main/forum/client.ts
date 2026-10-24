@@ -53,8 +53,10 @@ function normalizePost(value: unknown): Post | null {
     isSage: flag(value.sage),
     content: content.nodes,
     plainText: content.plainText,
-    image: typeof value.img === 'string' && value.img.length > 0
-      ? { path: value.img, ext: text(value.ext) ?? '' } : null
+    image: typeof value.img === 'string' && value.img.length > 0 && typeof value.ext === 'string' && value.ext.length > 0
+      ? { path: value.img, ext: value.ext } : null,
+    imageKnown: typeof value.img === 'string' && typeof value.ext === 'string' &&
+      ((value.img === '' && value.ext === '') || (value.img !== '' && value.ext !== ''))
   }
 }
 

@@ -22,6 +22,7 @@ import type { AppStore } from './storage/contract'
 import { openReadingStore } from './storage/store'
 import createStorageWorker from './storage/worker?nodeWorker'
 import { createSubscriptionService } from './subscriptions/service'
+import { createSearchService, type SearchService } from './search/service'
 
 /** Verified JSON API origin; the only destination for the selected browse credential. */
 const FORUM_API_ORIGIN = 'https://api.nmb.best'
@@ -43,6 +44,7 @@ let mainWindow: BrowserWindow | null = null
 let store: AppStore | null = null
 let storeClosed = false
 let content: ContentService | null = null
+let search: SearchService | null = null
 
 // Every renderer runs sandboxed; one main process owns the database worker.
 app.enableSandbox()
@@ -208,6 +210,10 @@ async function start(): Promise<void> {
   content = retained
   await retained.recover().catch(() => console.error('[content] recovery failed'))
   await retained.enforceQuota().catch(() => console.error('[content] cleanup failed'))
+  const searchService = createSearchService({ store: openedStore, client, scheduler, enforceQuota: () => retained.enforceQuota() })
+  search = searchService
+  // Batched worker backfill runs alongside the window; search stays unavailable until complete.
+  void searchService.recover().catch(() => console.error('[search] index unavailable'))
 
   installMenu()
   const ipc = registerIpc({
@@ -217,6 +223,7 @@ async function start(): Promise<void> {
     drafts,
     content: retained,
     subscriptions,
+    search: searchService,
     store: openedStore,
     getStatus: () => ({ storage: openedStore.status, platform }),
     async chooseSavePath(sender, suggestedName, format) {
@@ -273,6 +280,7 @@ app.on('will-quit', (event) => {
   event.preventDefault()
   storeClosed = true
   void (async () => {
+    await search?.stop()
     await content?.stop()
     await store?.close()
   })().finally(() => app.quit())

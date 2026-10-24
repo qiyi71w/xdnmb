@@ -8,6 +8,7 @@ import { useNearEnd } from '../../lib/useNearEnd'
 import { NearViewport, type ImageView, type ViewerRequest } from '../image/imageView'
 import { ImageViewer } from '../image/ImageViewer'
 import { QuoteEntryContext } from '../quote/QuoteContext'
+import { useSearchOpener } from '../search/SearchContext'
 import { useRegisterContent } from '../tabs/contentRegistry'
 import type { SourceFocus } from '../tabs/tabsState'
 import { CoverageLine, pageLabel } from './CoverageLine'
@@ -277,8 +278,10 @@ export function ThreadReader({
       if (targetThread !== threadId || target.mode !== mode || !isVisible(target.postId)) return false
       highlight(target.postId)
       return true
-    }
+    },
+    shown: () => ({ threadId, mode, title: state.head === null ? null : meaningfulTitle(state.head.title) })
   })
+  const openSearch = useSearchOpener()
 
   /** Explicit entry: place directly when the range already holds it, otherwise load and place. */
   const goTo = (position: ReaderPosition, load: () => void) => {
@@ -371,6 +374,18 @@ export function ThreadReader({
                 </div>
               </div>
               <div className="toolbar-group">
+                {openSearch !== null && (
+                  <button
+                    type="button"
+                    className="btn"
+                    aria-haspopup="dialog"
+                    title="在这个串已取得的内容中搜索"
+                    onClick={() => openSearch({ view: 'thread', entryKey, threadId, mode, title })}
+                  >
+                    <Icon name="search" />
+                    串内搜索
+                  </button>
+                )}
                 <FavoriteButton threadId={threadId} />
                 <OfflineButton threadId={threadId} title={title ?? `No.${threadId}`} />
                 <button type="button" className="btn" onClick={thread.refresh} title="重新读取已加载的最后一页并合并">

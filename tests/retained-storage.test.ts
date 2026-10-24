@@ -138,10 +138,10 @@ describe('retained content storage', () => {
     db.saveThreadPage(observed, t0)
     const asciiBytes = db.getContentUsage().cacheTextBytes
     db.saveThreadPage({ ...observed, head: post('100', false, '中'), replies: [post('101', false, '中')] }, t0)
-    // Each of two posts stores body and searchable text: four one-byte → three-byte changes.
-    expect(db.getContentUsage().cacheTextBytes).toBe(asciiBytes + 8)
+    // Two source fields plus normalized source, projection and indexed logical representation.
+    expect(db.getContentUsage().cacheTextBytes).toBe(asciiBytes + 20)
     db.saveThreadPage({ ...observed, head: post('100', false, '中'), replies: [post('101', false, '中')] }, t0)
-    expect(db.getContentUsage().cacheTextBytes).toBe(asciiBytes + 8)
+    expect(db.getContentUsage().cacheTextBytes).toBe(asciiBytes + 20)
     db.setCacheLimit(250)
     db.saveSettings({ newTabSplitDefault: false })
     expect(db.getContentUsage().limitBytes).toBe(250)
@@ -183,13 +183,12 @@ describe('retained content storage', () => {
     expect(db.getContentUsage().cacheTextBytes).toBe(0)
   })
 
-  it('updates quoted content through offline ownership without losing original image metadata or derived byte accounting', () => {
-    const { db, path, folder } = fixture()
+  it('updates quoted content through offline ownership without losing original image metadata', () => {
+    const { db, folder } = fixture()
     db.beginOfflineCopy('100', true, t0)
     db.saveOfflinePage(page('100', [post('101', true)]), t0)
     const original = image(db, folder, 'quote-original.jpg')
     db.holdOfflineImage('100', '101')
-    raw(path).prepare('UPDATE posts SET derived_bytes = 17 WHERE id = ?').run('101')
     db.savePost(post('101', false, 'new quoted text'), t1)
     db.savePost(post('999'), t1)
     clear(db)
@@ -197,7 +196,6 @@ describe('retained content storage', () => {
     expect(db.loadPost('999')).toBeNull()
     expect(db.loadPost('101')?.value).toEqual({ ...post('101', false, 'new quoted text'), image: post('101', true).image })
     expect(db.findPostThread('101')).toMatchObject({ threadId: '100', pages: { all: 1, po: null } })
-    expect(raw(path).prepare('SELECT derived_bytes FROM posts WHERE id = ?').get('101')).toEqual({ derived_bytes: 17 })
     expect(db.getOfflineCopy('100')).toMatchObject({ postCount: 2, imageCount: 1, savedImages: 1 })
     expect(db.getContentUsage().protectedImageBytes).toBe(original.bytes)
     expect(db.getReadingState('100').readPostIds).toEqual([])

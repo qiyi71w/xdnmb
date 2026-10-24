@@ -1,8 +1,10 @@
 import { createContext, useContext, useEffect, useRef } from 'react'
-import type { ThreadId } from '../../../../shared/forum'
+import type { RetainedList } from '../../../../shared/content'
+import type { ReadingMode, ThreadId } from '../../../../shared/forum'
 import { createFavoriteWrites, type FavoriteWrites } from '../content/favoriteWrites'
 import { createReadingResets, type ReadingResets } from '../content/readingResets'
 import type { FeedState } from '../feed/feedState'
+import type { ListFilters } from '../search/listFilters'
 import type { SubscriptionListState } from '../subscriptions/subscriptionListState'
 import type { ThreadSnapshot, ThreadTarget } from './tabsState'
 
@@ -16,6 +18,8 @@ export interface ReaderHandle {
    * post is visible in its viewport, highlights it and returns true (no navigation needed).
    */
   showInPlace(threadId: ThreadId, target: ThreadTarget): boolean
+  /** Thread and mode on screen now (a temporary target mode included), for 串内搜索. */
+  shown(): { threadId: ThreadId; mode: ReadingMode; title: string | null }
 }
 
 export interface ListHandle {
@@ -23,19 +27,20 @@ export interface ListHandle {
 }
 
 /**
- * What a list entry had when its list was last unmounted: its view state and scroll position.
- * An entry's list kind never changes, so `kind` only tells the two list views apart.
+ * What a list entry had when its list was last unmounted: its view state, scroll position and
+ * filters. An entry's list kind never changes, so `kind` only tells the two list views apart.
  */
 export type ListMemory =
-  | { kind: 'feed'; state: FeedState; scrollTop: number }
-  | { kind: 'subscriptions'; state: SubscriptionListState; scrollTop: number }
+  | { kind: 'feed'; state: FeedState; scrollTop: number; filters: ListFilters }
+  | { kind: 'subscriptions'; state: SubscriptionListState; scrollTop: number; filters: ListFilters }
 
 /**
  * Mounted readers and lists, keyed by the history entry key that shows them, plus the runtime
  * memory of lists that are not mounted (split toggled, single pane, back/forward). Memory lives
  * only while the app runs; the shell drops it when its entry leaves every tab's history.
  * `readingResets` tells open readers that their thread's reading data was cleared; `favorites`
- * keeps every mounted 收藏 entry point on the last successfully written state.
+ * keeps every mounted 收藏 entry point on the last successfully written state; `retainedFilters`
+ * keeps the filters of each 收藏／历史／离线 list while the app runs.
  */
 export interface ContentRegistry {
   readers: Map<number, { current: ReaderHandle }>
@@ -43,10 +48,18 @@ export interface ContentRegistry {
   listMemory: Map<number, ListMemory>
   readingResets: ReadingResets
   favorites: FavoriteWrites
+  retainedFilters: Map<RetainedList, ListFilters>
 }
 
 export function createContentRegistry(): ContentRegistry {
-  return { readers: new Map(), lists: new Map(), listMemory: new Map(), readingResets: createReadingResets(), favorites: createFavoriteWrites() }
+  return {
+    readers: new Map(),
+    lists: new Map(),
+    listMemory: new Map(),
+    readingResets: createReadingResets(),
+    favorites: createFavoriteWrites(),
+    retainedFilters: new Map()
+  }
 }
 
 export const ContentRegistryContext = createContext<ContentRegistry | null>(null)

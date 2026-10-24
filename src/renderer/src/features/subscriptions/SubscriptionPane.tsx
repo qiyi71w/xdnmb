@@ -26,6 +26,9 @@ import { formatLocalTime, meaningfulTitle } from '../../lib/format'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
+import { ListFilterBar } from '../search/FilterFields'
+import { filterList, headMeta, listFilterCount, NO_LIST_FILTERS, type ListFilters } from '../search/listFilters'
+import { useThreadMetadata } from '../search/useThreadMetadata'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import { OperationJournal, WriteStatus } from './SubscriptionActivity'
 import {
@@ -103,6 +106,9 @@ export function SubscriptionPane({
     remembered?.state ?? initialSubscriptionListState,
     (start: SubscriptionListState): SubscriptionListState => ({ ...start, activity: 'idle', stopRequested: false })
   )
+  /** This view's filters; kept across source switches, never resetting the thread being read. */
+  const [filters, setFilters] = useState<ListFilters>(() => remembered?.filters ?? NO_LIST_FILTERS)
+  const filtersRef = useRef(filters)
 
   const selection = overview === null ? null : selectionKey(overview)
   const overviewRef = useRef(overview)
@@ -224,7 +230,8 @@ export function SubscriptionPane({
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollTop = useRef(remembered?.scrollTop ?? 0)
   useLayoutEffect(() => {
-    registry?.listMemory.set(entryKey, { kind: 'subscriptions', state, scrollTop: scrollTop.current })
+    filtersRef.current = filters
+    registry?.listMemory.set(entryKey, { kind: 'subscriptions', state, scrollTop: scrollTop.current, filters })
   })
   // The scroller exists only once the overview is known (the loading view has none).
   const overviewKnown = overview !== null
@@ -244,7 +251,7 @@ export function SubscriptionPane({
     const scroller = scrollRef.current
     if (scroller === null || scroller.clientHeight === 0) return
     scrollTop.current = scroller.scrollTop
-    registry?.listMemory.set(entryKey, { kind: 'subscriptions', state: stateRef.current, scrollTop: scrollTop.current })
+    registry?.listMemory.set(entryKey, { kind: 'subscriptions', state: stateRef.current, scrollTop: scrollTop.current, filters: filtersRef.current })
   }
 
   // ---------- Displayed list ----------
@@ -254,7 +261,23 @@ export function SubscriptionPane({
     for (const page of displayed?.pages ?? []) for (const thread of page.threads) if (!seen.has(thread.head.id)) seen.set(thread.head.id, thread)
     return [...seen.values()]
   }, [displayed])
-  const ids = useMemo(() => threads.map((thread) => thread.head.id), [threads])
+  const allIds = useMemo(() => threads.map((thread) => thread.head.id), [threads])
+  // Unread counts are local records; read again when another thread was chosen (it may have been read).
+  const metadata = useThreadMetadata(allIds, filters.unreadOnly, selectedThreadId)
+  const filtered = useMemo(() => {
+    const byId = metadata.status === 'ready' ? metadata.byId : null
+    return filterList(
+      threads,
+      (thread) => {
+        const local = byId?.get(thread.head.id)
+        return { ...headMeta(thread.head), unreadCount: local?.unreadCount ?? null, coverageUnknown: local?.coverageUnknown ?? false }
+      },
+      filters
+    )
+  }, [threads, metadata, filters])
+  const filtering = listFilterCount(filters) > 0
+  const uncertainById = useMemo(() => new Map(filtered.shown.map(({ item, uncertain }) => [item.head.id, uncertain])), [filtered])
+  const ids = useMemo(() => filtered.shown.map(({ item }) => item.head.id), [filtered])
   const roving = useRovingFocus(ids, selectedThreadId)
 
   // ---------- Explicit writes ----------
@@ -506,8 +529,22 @@ export function SubscriptionPane({
         )}
 
         {threads.length > 0 && (
-          <ul className="thread-list sub-thread-list" aria-label="订阅的串" onKeyDown={roving.onKeyDown}>
-            {threads.map((thread) => {
+          <ListFilterBar
+            filters={filters}
+            onChange={setFilters}
+            forums={forumNames}
+            unreadOffered
+            noun="订阅的串"
+            total={threads.length}
+            result={filtered}
+            metadata={filters.unreadOnly ? metadata : null}
+            coverage={displayed === null ? '已读取的订阅页' : `已读取的订阅页（${coverageText(displayed)}）`}
+          />
+        )}
+
+        {threads.length > 0 && (
+          <ul className="thread-list sub-thread-list" aria-label={filtering ? '订阅的串（已筛选）' : '订阅的串'} onKeyDown={roving.onKeyDown}>
+            {filtered.shown.map(({ item: thread }) => {
               const itemProps = roving.itemProps(thread.head.id)
               return (
                 <li key={thread.head.id} className="sub-row">
@@ -515,6 +552,7 @@ export function SubscriptionPane({
                     thread={thread}
                     forumName={thread.head.forumId !== null ? (forumNames.get(thread.head.forumId) ?? null) : null}
                     selected={thread.head.id === selectedThreadId}
+                    uncertain={uncertainById.get(thread.head.id) === true}
                     onOpen={() => onOpenThread(thread)}
                     itemProps={itemProps}
                   />
@@ -532,6 +570,11 @@ export function SubscriptionPane({
               )
             })}
           </ul>
+        )}
+        {filtering && threads.length > 0 && filtered.shown.length === 0 && (
+          <p className="list-filters-empty" role="status">
+            已读取的订阅都不符合筛选。可以读取下一页，或清除筛选。
+          </p>
         )}
 
         <div className="list-footer">

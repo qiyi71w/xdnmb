@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from 'react'
 import { EditorDock } from '../features/editor/EditorDock'
 import type { FeedRef, ForumId, ThreadSummary } from '../../../shared/forum'
 import { feedKey, type FeedInfo } from '../features/directory/feeds'
+import { useSearchOpener } from '../features/search/SearchContext'
 import { SubscriptionPane } from '../features/subscriptions/SubscriptionPane'
 import { FeedPane } from '../features/feed/FeedPane'
 import type { LayoutResult } from '../features/layout/layout'
@@ -43,6 +44,7 @@ export function TabView({
   const listRef = useRef<HTMLDivElement>(null)
   const readerRef = useRef<HTMLElement>(null)
   const lastRegion = useRef<Region | null>(null)
+  const openSearch = useSearchOpener()
 
   const splitShown = entry.kind === 'list' && entry.feed !== null && tab.split
   const single = splitShown && layout.singlePane
@@ -88,11 +90,17 @@ export function TabView({
     body = (
       <div className="pane-empty">
         <p className="pane-empty-title">选择订阅、时间线或版面</p>
-        <p className="pane-empty-text">从导航中选择后，串列表会显示在这个标签里。</p>
+        <p className="pane-empty-text">从导航中选择后，串列表会显示在这个标签里；也可以搜索本机保有的内容。</p>
         {onOpenNav !== null && (
           <button type="button" className="btn pane-empty-action" onClick={onOpenNav}>
             <Icon name="sidebar" />
             打开导航
+          </button>
+        )}
+        {openSearch !== null && (
+          <button type="button" className="btn pane-empty-action" aria-haspopup="dialog" onClick={() => openSearch({ view: 'local' })}>
+            <Icon name="search" />
+            搜索本机内容
           </button>
         )}
       </div>

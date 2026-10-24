@@ -1,0 +1,475 @@
+/* Search sheet and list filters. Same frosted sheet as other dialogs; results sit on solid paper so
+   excerpts read as text. Everything wraps: at 200% zoom rows stack instead of clipping. */
+
+/* ---------- Sheet ---------- */
+
+.search-sheet {
+  width: min(760px, calc(100vw - 32px));
+  height: min(820px, calc(100dvh - 32px));
+}
+
+.search-header {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  row-gap: 8px;
+}
+
+.search-header .modal-title {
+  margin-right: 4px;
+}
+
+.search-close {
+  margin-left: auto;
+}
+
+.search-body {
+  gap: 12px;
+  align-content: start;
+}
+
+.search-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-field {
+  position: relative;
+  flex: 1 1 16em;
+  min-width: 0;
+}
+
+.search-field-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  translate: 0 -50%;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+
+.search-input {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px 6px 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-body);
+  caret-color: var(--accent);
+}
+
+.search-input::placeholder {
+  color: var(--ink-3);
+}
+
+.search-input:focus-visible {
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.search-form .btn {
+  min-height: 34px;
+}
+
+.search-hint {
+  margin-top: -4px;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.search-filters,
+.list-filters-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--hover);
+}
+
+.search-filters[hidden],
+.list-filters-panel[hidden] {
+  display: none;
+}
+
+.filter-toggle.is-active {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.filter-toggle.is-active .icon {
+  color: var(--accent-ink);
+}
+
+/* ---------- Filter fields ---------- */
+
+.filter-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 16px;
+}
+
+.filter-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.filter-field .select-input {
+  width: auto;
+  max-width: 100%;
+  min-width: 9em;
+}
+
+.filter-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.filter-dates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-dates .text-input {
+  width: auto;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.filter-dash {
+  color: var(--ink-3);
+}
+
+.filter-wide {
+  flex-basis: 100%;
+}
+
+.filter-rules {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.filter-unread {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.filter-unread input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.tag-uncertain {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+/* ---------- Thread scope and full fetch ---------- */
+
+.search-scope {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  background: var(--paper);
+}
+
+.search-scope-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.search-scope-name {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.search-scope-no {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.search-scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.search-scope-note,
+.search-fetch-note {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.search-coverage {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.search-coverage .icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent-ink);
+}
+
+.search-fetch {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.search-fetch-text {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.search-fetch-text.is-warning {
+  color: var(--warn-ink);
+}
+
+.search-fetch-coverage {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.search-fetch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.search-index .loading {
+  margin-top: 4px;
+}
+
+/* ---------- Status and results ---------- */
+
+.search-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-height: 28px;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.search-empty {
+  display: grid;
+  gap: 2px;
+  padding: 16px 0 8px;
+}
+
+.search-empty strong {
+  color: var(--ink);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.search-failure {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--danger-ink);
+}
+
+.search-hits {
+  display: grid;
+  gap: 6px;
+}
+
+.search-hit {
+  display: grid;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  box-shadow: 0 1px 2px oklch(0.25 0.03 240 / 0.08);
+}
+
+.search-hit.is-locating {
+  box-shadow: 0 0 0 1px var(--accent-soft), 0 1px 2px oklch(0.25 0.03 240 / 0.08);
+}
+
+.search-hit-main {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease-out);
+}
+
+.search-hit-main:hover {
+  background: var(--hover);
+}
+
+.search-hit-main:focus-visible {
+  outline-offset: -2px;
+}
+
+.search-hit-thread {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.search-hit-post {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.search-hit-kind {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent-ink);
+}
+
+.search-hit-no {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.search-hit-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.search-hit-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  font-size: var(--text-md);
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.search-hit mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: var(--warn-bg);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.search-hit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.search-hit-location {
+  font-variant-numeric: tabular-nums;
+}
+
+.search-locate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 0 12px 10px;
+  font-size: var(--text-sm);
+}
+
+.search-locate.is-failed {
+  color: var(--danger-ink);
+}
+
+.search-locate-icon {
+  flex: none;
+}
+
+.search-locate-text {
+  flex: 1 1 14em;
+  min-width: 0;
+}
+
+/* ---------- List filter bars ---------- */
+
+.list-filters {
+  display: grid;
+  gap: 6px;
+  padding: 4px 10px 6px;
+}
+
+.list-filters-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.list-filters-summary {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.list-filters-scope {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.list-filters-scope .icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.list-filters-empty {
+  padding: 24px 12px;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-hit-main {
+    transition: none;
+  }
+}

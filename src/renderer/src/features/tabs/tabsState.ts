@@ -2,7 +2,7 @@ import type { FeedRef, Post, PostId, ReadingMode, ThreadId } from '../../../../s
 import type { ReadingAnchor } from '../../../../shared/reading'
 
 /**
- * Explicit target inside a thread (首条未读, a located quote; search and notifications later). It
+ * Explicit target inside a thread (首条未读, a located quote or search hit; notifications later). It
  * takes priority over every remembered position. When `mode` differs from the thread's saved
  * preference the reader shows the target in `mode` temporarily and leaves the preference unchanged.
  */
@@ -55,9 +55,11 @@ export interface ThreadOpen {
 
 /**
  * `quote`: the entry was produced by a located quote or by 打开原串, so the back control reads
- * 返回引用处. Choosing another list item in the entry clears it; history is kept either way.
+ * 返回引用处. `search`: produced by a located search hit; back reads 返回搜索结果 and shows that
+ * tab's search results again. Choosing another list item in the entry clears either; history is
+ * kept either way.
  */
-export type EntryOrigin = 'quote' | null
+export type EntryOrigin = 'quote' | 'search' | null
 
 /**
  * What a list entry shows: a forum/timeline feed, or the remote subscription list of whichever
@@ -127,6 +129,11 @@ export type TabsAction =
    * Ignored when `entryKey` is no longer current (the reader navigated meanwhile).
    */
   | { type: 'quote-navigate'; tabId: number; entryKey: number; source: ThreadSnapshot | null; thread: ThreadOpen }
+  /**
+   * The same for a located search hit (or its 打开原串): a `search` step, whose back control reads
+   * 返回搜索结果. Works from any entry, an empty new tab included.
+   */
+  | { type: 'search-navigate'; tabId: number; entryKey: number; source: ThreadSnapshot | null; thread: ThreadOpen }
 
 function makeEntry(init: EntryInit, key: number, origin: EntryOrigin = null): TabEntry {
   return init.kind === 'list'
@@ -278,7 +285,8 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         const thread: ThreadOpen = { ...current.thread, target: null, snapshot: { ...action.snapshot, focus } }
         return replaceCurrent(tab, { ...current, thread } as TabEntry)
       })
-    case 'quote-navigate': {
+    case 'quote-navigate':
+    case 'search-navigate': {
       const tab = state.tabs.find((item) => item.id === action.tabId)
       if (tab === undefined) return state
       const current = currentEntry(tab)
@@ -288,7 +296,7 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         current.kind === 'list' && current.feed !== null && tab.split
           ? { kind: 'list', feed: current.feed, thread: action.thread }
           : { kind: 'thread', thread: action.thread }
-      return push(left, action.tabId, init, 'quote')
+      return push(left, action.tabId, init, action.type === 'quote-navigate' ? 'quote' : 'search')
     }
   }
 }

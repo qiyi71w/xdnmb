@@ -2,11 +2,13 @@ import type { ThreadSummary } from '../../../../shared/forum'
 import { Content } from '../../components/Content'
 import { Icon } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
+import { UncertainTag } from '../search/FilterFields'
 
 export function ThreadRow({
   thread,
   forumName,
   selected,
+  uncertain = false,
   onOpen,
   itemProps
 }: {
@@ -14,6 +16,8 @@ export function ThreadRow({
   /** Shown for timeline rows, which mix forums. */
   forumName: string | null
   selected: boolean
+  /** Kept by the list filters only because a field they judge by is unknown. */
+  uncertain?: boolean
   onOpen: () => void
   itemProps: { 'data-roving-item': string; tabIndex: number; onFocus: () => void }
 }) {
@@ -53,6 +57,7 @@ export function ThreadRow({
             附图
           </span>
         )}
+        {uncertain && <UncertainTag />}
       </span>
     </button>
   )

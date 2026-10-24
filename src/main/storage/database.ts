@@ -31,6 +31,7 @@ import { buildReadingState, emptyReadingState, endObservation, type AttentionRec
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
 import { RetainedContentDatabase, contentTick, touchThread } from './retained'
+import { SearchDatabase, projectSearchPost } from './search'
 
 /** The worker owns this synchronous core; callers outside the worker use AppStore. */
 export type ReadingDatabase = {
@@ -67,6 +68,7 @@ interface PostRow {
   plain_text: string
   image_path: string | null
   image_ext: string | null
+  image_known: number | null
   fetched_at: string
 }
 
@@ -82,6 +84,7 @@ function postFromRow(row: PostRow): Post {
     isSage: row.is_sage === null ? null : row.is_sage !== 0,
     content: JSON.parse(row.content_json) as ContentNode[],
     plainText: row.plain_text,
+    ...(row.image_known === 1 ? { imageKnown: true } : {}),
     image: row.image_path === null || row.image_ext === null
       ? null
       : { path: row.image_path, ext: row.image_ext }
@@ -195,10 +198,10 @@ function draftRecord(row: DraftRow, attachment: DraftAttachmentRecord | null): D
 const UPSERT_POST = `
   INSERT INTO posts (
     id, forum_id, created_at, user_hash, name, title, is_admin, is_sage,
-    content_json, plain_text, image_path, image_ext, fetched_at
+    content_json, plain_text, image_path, image_ext, fetched_at, image_known
   ) VALUES (
     @id, @forumId, @createdAt, @userHash, @name, @title, @isAdmin, @isSage,
-    @content, @plainText, @imagePath, @imageExt, @fetchedAt
+    @content, @plainText, @imagePath, @imageExt, @fetchedAt, @imageKnown
   ) ON CONFLICT(id) DO UPDATE SET
     forum_id = excluded.forum_id, created_at = excluded.created_at,
     user_hash = excluded.user_hash, name = excluded.name, title = excluded.title,
@@ -218,6 +221,7 @@ const UPSERT_POST = `
       ) THEN posts.image_ext
       ELSE excluded.image_ext
     END,
+    image_known = excluded.image_known,
     fetched_at = excluded.fetched_at
   WHERE julianday(excluded.fetched_at) >= julianday(posts.fetched_at)
 `
@@ -251,6 +255,17 @@ class SqliteReadingDatabase implements ReadingDatabase {
   listOfflineImagePosts: ReadingDatabase['listOfflineImagePosts'] = (threadId, after, limit) => this.content.listOfflineImagePosts(threadId, after, limit)
   recoverContent: ReadingDatabase['recoverContent'] = () => this.content.recoverContent()
 
+  private readonly search = new SearchDatabase(() => this.writable(), (id, mode) => this.getThreadCoverage(id, mode))
+  searchBoundary: ReadingDatabase['searchBoundary'] = () => this.search.boundary()
+  searchBatch: ReadingDatabase['searchBatch'] = (input) => this.search.batch(input)
+  beginSearchRebuild: ReadingDatabase['beginSearchRebuild'] = () => this.search.begin()
+  rebuildSearchBatch: ReadingDatabase['rebuildSearchBatch'] = () => this.search.step()
+  searchMetadata: ReadingDatabase['searchMetadata'] = (ids) => this.search.metadata(ids).map((metadata) => {
+    const reading = this.getReadingState(metadata.threadId)
+    return { ...metadata, unreadCount: reading.attention === null ? null : reading.attention.newUnreadIds.length,
+      coverageUnknown: metadata.coverageUnknown || (reading.attention?.uncertainUnreadIds.length ?? 0) > 0 }
+  })
+
   get status(): StorageStatus {
     return this.currentStatus
   }
@@ -278,8 +293,14 @@ class SqliteReadingDatabase implements ReadingDatabase {
         plainText: post.plainText,
         imagePath: post.image?.path ?? null,
         imageExt: post.image?.ext ?? null,
+        imageKnown: post.imageKnown === true ? 1 : null,
         fetchedAt
       })
+      const retained = db.prepare<[string], PostRow>('SELECT id,title,plain_text,forum_id,created_at,image_path,image_ext,image_known,fetched_at FROM posts WHERE id=?').get(post.id)!
+      const relation = db.prepare<[string], { thread_id: string }>('SELECT thread_id FROM post_threads WHERE post_id=?').get(post.id)
+      projectSearchPost(db, { id: retained.id, title: retained.title, plainText: retained.plain_text,
+        forumId: retained.forum_id, createdAt: retained.created_at, imageKnown: retained.image_known === 1,
+        image: retained.image_path === null ? null : { path: retained.image_path, ext: retained.image_ext ?? '' } }, retained.fetched_at, relation?.thread_id ?? null)
     }
   }
 
@@ -294,6 +315,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     return (post: Post, threadId: ThreadId, source: RelationSource): void => {
       upsert(post)
       relationStatement.run({ postId: post.id, threadId, ...source, fetchedAt })
+      db.prepare("UPDATE search_sources SET thread_id=? WHERE owner='cache' AND post_id=? AND thread_id IS NULL").run(threadId, post.id)
       db.prepare('UPDATE posts SET last_used = ? WHERE id = ?').run(contentTick(db), post.id)
       if (source.observedAs === 'head') {
         db.prepare(`INSERT INTO retained_titles VALUES (?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET
@@ -1047,6 +1069,8 @@ class SqliteReadingDatabase implements ReadingDatabase {
           valid_observation_json = COALESCE(excluded.valid_observation_json, subscription_observations.valid_observation_json)
       `).run(observation.id, observation.source, observation.context.generation, observation.context.appCredentialId,
         observation.context.webCredentialId, serialized, valid)
+      this.projectSubscriptionEvidence(db, observation, 'observation:' + observation.id)
+      if (valid !== null) this.projectSubscriptionEvidence(db, observation, 'valid:' + observation.id)
       for (const page of observation.pages) {
         const writePost = this.postWriter(db, page.fetchedAt)
         for (const thread of page.threads) {
@@ -1061,9 +1085,33 @@ class SqliteReadingDatabase implements ReadingDatabase {
     })()
   }
 
+  private projectSubscriptionEvidence(db: Database.Database, observation: SubscriptionObservation, owner: string): void {
+    db.exec('CREATE TEMP TABLE IF NOT EXISTS search_observed_ids(id TEXT PRIMARY KEY); DELETE FROM search_observed_ids')
+    const remember = db.prepare('INSERT OR IGNORE INTO search_observed_ids VALUES(?)')
+    for (const page of observation.pages) for (const thread of page.threads) {
+      remember.run(thread.head.id)
+      projectSearchPost(db, thread.head, page.fetchedAt, thread.head.id, owner)
+      for (const reply of thread.recentReplies) {
+        remember.run(reply.id)
+        projectSearchPost(db, reply, page.fetchedAt, thread.head.id, owner,
+          reply.userHash === null || thread.head.userHash === null ? null : reply.userHash === thread.head.userHash)
+      }
+    }
+    db.prepare('DELETE FROM search_sources WHERE owner=? AND post_id NOT IN (SELECT id FROM search_observed_ids)').run(owner)
+  }
+
   saveSubscriptionOperation(operation: SubscriptionOperation): void {
-    this.writable().prepare(`INSERT INTO subscription_operations (id, operation_json) VALUES (?, ?)
-      ON CONFLICT(id) DO UPDATE SET operation_json = excluded.operation_json`).run(operation.id, JSON.stringify(operation))
+    const db = this.writable()
+    db.transaction(() => {
+      db.prepare(`INSERT INTO subscription_operations (id, operation_json) VALUES (?, ?)
+        ON CONFLICT(id) DO UPDATE SET operation_json = excluded.operation_json`).run(operation.id, JSON.stringify(operation))
+      for (const key of ['before', 'after'] as const) {
+        const owner = key + ':' + operation.id
+        const observation = operation[key]
+        if (observation !== null) this.projectSubscriptionEvidence(db, observation, owner)
+        else db.prepare('DELETE FROM search_sources WHERE owner=?').run(owner)
+      }
+    })()
   }
 
   loadSubscriptionOperations(): SubscriptionOperation[] {

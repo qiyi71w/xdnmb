@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { openLayer } from '../lib/layers'
+import { coverReaders } from '../lib/modalCover'
 import { Icon } from './Icon'
 import './modal.css'
 
@@ -39,9 +40,12 @@ export function Modal({
     const opener = active instanceof HTMLElement && active !== document.body ? active : null
     // A closable layer above anything opened before it (a pinned quote card): Esc is the dialog's.
     const layer = openLayer()
+    // The dialog covers the readers below it: nothing there is judged read meanwhile.
+    const uncover = coverReaders()
     dialog.showModal()
     return () => {
       layer.release()
+      uncover()
       dialog.close()
       if (opener?.isConnected) opener.focus()
       else fallback.current?.()?.focus()

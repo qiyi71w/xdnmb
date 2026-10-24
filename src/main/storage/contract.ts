@@ -17,6 +17,7 @@ import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, R
 import type { AttachmentId, DraftId, DraftSaveInput, PostFields, PostTarget } from '../../shared/drafts'
 import type { ContentStore } from './content-contract'
 import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionSource } from '../../shared/subscriptions'
+import type { SearchStore } from './search-contract'
 
 /** A write was refused because the database is read-only (newer schema) or unavailable. */
 export class StorageWriteRefusedError extends Error {
@@ -220,4 +221,4 @@ export interface SubscriptionStore {
   recoverSubscriptionOperations(): Promise<void>
 }
 
-export type AppStore = ReadingStore & IdentityStore & DraftStore & ContentStore & SubscriptionStore
+export type AppStore = ReadingStore & IdentityStore & DraftStore & ContentStore & SubscriptionStore & SearchStore

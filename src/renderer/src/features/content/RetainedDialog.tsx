@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { RetainedEntry, RetainedList } from '../../../../shared/content'
-import type { ThreadId } from '../../../../shared/forum'
+import type { ForumId, ThreadId } from '../../../../shared/forum'
 import { Icon, type IconName } from '../../components/Icon'
 import { Modal, ModalHeader } from '../../components/Modal'
 import { Loading } from '../../components/Notices'
@@ -9,6 +9,9 @@ import { attempt, contentFailureText, type Refused } from './contentText'
 import type { FavoriteWrites } from './favoriteWrites'
 import type { ReadingResets } from './readingResets'
 import { OfflineSummary } from './ThreadRetention'
+import { ListFilterBar, UncertainTag } from '../search/FilterFields'
+import { filterList, listFilterCount, NO_LIST_FILTERS, type ListFilters } from '../search/listFilters'
+import { useThreadMetadata } from '../search/useThreadMetadata'
 import './content.css'
 
 const LISTS: { kind: RetainedList; label: string; icon: IconName; at: string; empty: string; emptyHelp: string }[] = [
@@ -57,6 +60,8 @@ export function RetainedDialog({
   initial,
   resets,
   favorites,
+  filters: filterMemory,
+  forumNames,
   onOpenThread,
   onClose,
   fallbackFocus
@@ -66,6 +71,9 @@ export function RetainedDialog({
   resets: ReadingResets
   /** Shell's favorite store: 收藏 buttons of open readers follow what this list writes. */
   favorites: FavoriteWrites
+  /** Filters of each list, kept by the shell while the app runs. */
+  filters: Map<RetainedList, ListFilters>
+  forumNames: ReadonlyMap<ForumId, string>
   onOpenThread: (threadId: ThreadId) => void
   onClose: () => void
   fallbackFocus?: () => HTMLElement | null
@@ -196,6 +204,27 @@ export function RetainedDialog({
   const entries = list.status === 'ready' ? list.entries : []
   const confirmingAll = confirming !== null && confirming.threadId === null
 
+  // Filters choose among the entries listed; the fields come from local records of each thread's
+  // main post (and its unread count for 收藏). Nothing is downloaded and nothing is marked read.
+  const [, setFilterVersion] = useState(0)
+  const listFilters = filterMemory.get(kind) ?? NO_LIST_FILTERS
+  const changeFilters = (next: ListFilters) => {
+    filterMemory.set(kind, next)
+    setFilterVersion((version) => version + 1)
+  }
+  const filtering = listFilterCount(listFilters) > 0
+  const entryIds = useMemo(() => entries.map((entry) => entry.threadId), [entries])
+  const metadata = useThreadMetadata(entryIds, filtering)
+  const filtered = useMemo(
+    () =>
+      filterList(
+        entries,
+        (entry) => (metadata.status === 'ready' ? (metadata.byId.get(entry.threadId) ?? null) : null),
+        listFilters
+      ),
+    [entries, metadata, listFilters]
+  )
+
   return (
     <Modal className="retained-dialog" labelledBy={titleId} onClose={busy ? () => undefined : onClose} fallbackFocus={fallbackFocus}>
       <ModalHeader title={info.label === '离线' ? '离线副本' : info.label} titleId={titleId} closeLabel="关闭" onClose={onClose} closeDisabled={busy} />
@@ -270,8 +299,27 @@ export function RetainedDialog({
           </div>
         )}
         {entries.length > 0 && (
-          <ul className="retained-list" ref={listRef} aria-label={`${info.label}，共 ${entries.length} 项`}>
-            {entries.map((entry) => {
+          <ListFilterBar
+            key={kind}
+            filters={listFilters}
+            onChange={changeFilters}
+            forums={forumNames}
+            unreadOffered={kind === 'favorites'}
+            noun="串"
+            total={entries.length}
+            result={filtered}
+            metadata={filtering ? metadata : null}
+            coverage={`本机的${info.label}列表`}
+          />
+        )}
+        {filtering && entries.length > 0 && filtered.shown.length === 0 && (
+          <p className="list-filters-empty" role="status">
+            {info.label}中没有符合筛选的串。
+          </p>
+        )}
+        {filtered.shown.length > 0 && (
+          <ul className="retained-list" ref={listRef} aria-label={`${info.label}，显示 ${filtered.shown.length} / ${entries.length} 项`}>
+            {filtered.shown.map(({ item: entry, uncertain }) => {
               const rowId = `retained-${kind}-${entry.threadId}`
               const title = entryTitle(entry)
               const rowConfirming = confirming !== null && confirming.threadId === entry.threadId
@@ -292,6 +340,7 @@ export function RetainedDialog({
                           有离线副本
                         </span>
                       )}
+                      {uncertain && <UncertainTag />}
                     </p>
                     {kind === 'offline' && entry.offline !== null && <OfflineSummary copy={entry.offline} compact />}
                     {failure !== null && failure.threadId === entry.threadId && !rowConfirming && (
