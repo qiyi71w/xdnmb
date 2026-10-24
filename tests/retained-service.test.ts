@@ -65,7 +65,12 @@ async function setup(read: ForumClient['getThreadPage'], overrides: Partial<Cont
     writeFileSync(destination, png)
     return { bytes: png.length }
   } })
-  const client: ForumClient = { getThreadPage: read, getDirectory: async () => { throw new Error('not used') }, getFeedPage: async () => { throw new Error('not used') } }
+  const client: ForumClient = {
+    getThreadPage: read,
+    getDirectory: async () => { throw new Error('not used') },
+    getFeedPage: async () => { throw new Error('not used') },
+    getRef: async () => { throw new Error('not used') }
+  }
   const service = createContentService({ store, files, images, client, scheduler: createRequestScheduler(), databasePath })
   resources.push({ dir, db, service })
   return { dir, db, store, files, images, service, downloads }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { openLayer } from './layers'
 
 /**
  * Open state of a popover or overlay owned by a trigger button. While open: Escape or a pointer
@@ -39,8 +40,10 @@ export function usePopover(triggerRef: RefObject<HTMLElement | null>, panelRef: 
 
   useEffect(() => {
     if (!open) return
+    const layer = openLayer()
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing) return
+      // Only the most recently opened layer answers Esc; the next Esc reaches the one below.
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || !layer.isTop()) return
       event.preventDefault()
       event.stopPropagation()
       close()
@@ -53,6 +56,7 @@ export function usePopover(triggerRef: RefObject<HTMLElement | null>, panelRef: 
     document.addEventListener('keydown', onKeyDown, true)
     document.addEventListener('pointerdown', onPointerDown, true)
     return () => {
+      layer.release()
       document.removeEventListener('keydown', onKeyDown, true)
       document.removeEventListener('pointerdown', onPointerDown, true)
     }

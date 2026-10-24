@@ -100,15 +100,16 @@ export function createForumClient(options: {
     throw new Error('Invalid forum API base URL')
   }
 
-  async function read(path: string, signal: AbortSignal, params?: { id: string; page: number }): Promise<unknown> {
+  /** `page` is omitted only by reads that address a single post (`ref`). */
+  async function read(path: string, signal: AbortSignal, params?: { id: string; page?: number }): Promise<unknown> {
     const url = new URL(path, baseUrl)
     if (params) {
       if (typeof params.id !== 'string' || !idPattern.test(params.id) ||
-          !Number.isSafeInteger(params.page) || params.page < 1) {
+          (params.page !== undefined && (!Number.isSafeInteger(params.page) || params.page < 1))) {
         throw new Error('Invalid forum read identifier or page')
       }
       url.searchParams.set('id', params.id)
-      url.searchParams.set('page', String(params.page))
+      if (params.page !== undefined) url.searchParams.set('page', String(params.page))
     }
     const userhash = options.browseIdentity ? await options.browseIdentity() : null
     const response = await options.transport.get(url, signal, userhash === null ? undefined : { userhash })
@@ -240,6 +241,12 @@ export function createForumClient(options: {
         skippedItems,
         endCandidate: replies.length === 0 && skippedItems === 0
       }
+    },
+    async getRef(postId, signal): Promise<Post> {
+      const value = await read('/api/ref', signal, { id: postId })
+      const post = normalizePost(value)
+      if (post === null || post.id !== postId) throw shapeError()
+      return post
     }
   }
 }

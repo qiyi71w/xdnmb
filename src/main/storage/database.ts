@@ -22,7 +22,7 @@ import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, R
 import type { AttachmentId, DraftId, DraftSaveInput, PostTarget } from '../../shared/drafts'
 import { StorageWriteRefusedError } from './contract'
 import type {
-  AppStore, DraftAttachmentRecord, DraftRecord, DraftWriteOutcome, ImageHolder, ImageResourceRecord, NewImageResource, Stored
+  AppStore, DraftAttachmentRecord, DraftRecord, DraftWriteOutcome, ImageHolder, ImageResourceRecord, NewImageResource, PostThreadRelation, Stored
 } from './contract'
 import { computeCoverage } from './coverage'
 import { buildReadingState, emptyReadingState, endObservation, type AttentionRecord } from './reading-state'
@@ -65,6 +65,25 @@ interface PostRow {
   plain_text: string
   image_path: string | null
   image_ext: string | null
+  fetched_at: string
+}
+
+function postFromRow(row: PostRow): Post {
+  return {
+    id: row.id,
+    forumId: row.forum_id,
+    createdAt: row.created_at,
+    userHash: row.user_hash,
+    name: row.name,
+    title: row.title,
+    isAdmin: row.is_admin === null ? null : row.is_admin !== 0,
+    isSage: row.is_sage === null ? null : row.is_sage !== 0,
+    content: JSON.parse(row.content_json) as ContentNode[],
+    plainText: row.plain_text,
+    image: row.image_path === null || row.image_ext === null
+      ? null
+      : { path: row.image_path, ext: row.image_ext }
+  }
 }
 
 interface FeedSummaryRow {
@@ -241,16 +260,10 @@ class SqliteReadingDatabase implements ReadingDatabase {
     return this.db
   }
 
-  private postWriter(db: Database.Database, fetchedAt: string) {
-    const postStatement = db.prepare(UPSERT_POST)
-    const relationStatement = db.prepare(`
-      INSERT INTO post_threads (
-        post_id, thread_id, observed_as, feed_kind, feed_id, mode, page, fetched_at
-      ) VALUES (@postId, @threadId, @observedAs, @feedKind, @feedId, @mode, @page, @fetchedAt)
-      ON CONFLICT(post_id) DO NOTHING
-    `)
-    return (post: Post, threadId: ThreadId, source: RelationSource): void => {
-      postStatement.run({
+  private postUpserter(db: Database.Database, fetchedAt: string) {
+    const statement = db.prepare(UPSERT_POST)
+    return (post: Post): void => {
+      statement.run({
         id: post.id,
         forumId: post.forumId,
         createdAt: post.createdAt,
@@ -265,6 +278,19 @@ class SqliteReadingDatabase implements ReadingDatabase {
         imageExt: post.image?.ext ?? null,
         fetchedAt
       })
+    }
+  }
+
+  private postWriter(db: Database.Database, fetchedAt: string) {
+    const upsert = this.postUpserter(db, fetchedAt)
+    const relationStatement = db.prepare(`
+      INSERT INTO post_threads (
+        post_id, thread_id, observed_as, feed_kind, feed_id, mode, page, fetched_at
+      ) VALUES (@postId, @threadId, @observedAs, @feedKind, @feedId, @mode, @page, @fetchedAt)
+      ON CONFLICT(post_id) DO NOTHING
+    `)
+    return (post: Post, threadId: ThreadId, source: RelationSource): void => {
+      upsert(post)
       relationStatement.run({ postId: post.id, threadId, ...source, fetchedAt })
       db.prepare('UPDATE posts SET last_used = ? WHERE id = ?').run(contentTick(db), post.id)
       if (source.observedAs === 'head') {
@@ -280,21 +306,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     return (id: string): Post => {
       const row = statement.get(id)
       if (!row) throw new Error('cached page references a missing post')
-      return {
-        id: row.id,
-        forumId: row.forum_id,
-        createdAt: row.created_at,
-        userHash: row.user_hash,
-        name: row.name,
-        title: row.title,
-        isAdmin: row.is_admin === null ? null : row.is_admin !== 0,
-        isSage: row.is_sage === null ? null : row.is_sage !== 0,
-        content: JSON.parse(row.content_json) as ContentNode[],
-        plainText: row.plain_text,
-        image: row.image_path === null || row.image_ext === null
-          ? null
-          : { path: row.image_path, ext: row.image_ext }
-      }
+      return postFromRow(row)
     }
   }
 
@@ -501,6 +513,50 @@ class SqliteReadingDatabase implements ReadingDatabase {
       pages.sort((a, b) => a.page - b.page)
     }
     return computeCoverage(threadId, mode, pages, latestCount?.reply_count ?? null)
+  }
+
+  savePost(post: Post, fetchedAt: string): void {
+    const db = this.writable()
+    db.transaction(() => {
+      this.postUpserter(db, fetchedAt)(post)
+      db.prepare('UPDATE posts SET last_used = ? WHERE id = ?').run(contentTick(db), post.id)
+    })()
+  }
+
+  loadPost(postId: PostId): Stored<Post> | null {
+    if (!this.db) return null
+    const row = this.db.prepare<[string], PostRow>('SELECT * FROM posts WHERE id = ?').get(postId)
+    if (row && this.currentStatus.state === 'ready') {
+      this.db.prepare('UPDATE posts SET last_used = ? WHERE id = ?').run(contentTick(this.db), postId)
+    }
+    return row ? { value: postFromRow(row), fetchedAt: row.fetched_at } : null
+  }
+
+  findPostThread(postId: PostId): PostThreadRelation | null {
+    if (!this.db) return null
+    const db = this.db
+    return db.transaction(() => {
+      const relation = db.prepare<[string], { thread_id: string }>('SELECT thread_id FROM post_threads WHERE post_id = ?').get(postId)
+      if (!relation) return null
+      const threadId = relation.thread_id
+      const preference = db.prepare<[string], { mode: ReadingMode }>('SELECT mode FROM thread_reading WHERE thread_id = ?').get(threadId)
+      const pages: Record<ReadingMode, number | null> = { all: null, po: null }
+      if (threadId !== postId) {
+        const rows = db.prepare<[string, string, string, string], { mode: ReadingMode; page: number }>(`
+          SELECT mode, page FROM (
+            SELECT thread_pages.mode, thread_pages.page, thread_pages.fetched_at
+            FROM thread_pages, json_each(thread_pages.reply_ids_json) AS reply
+            WHERE thread_pages.thread_id = ? AND reply.value = ?
+            UNION ALL
+            SELECT 'all', offline_pages.page, offline_pages.fetched_at
+            FROM offline_pages JOIN offline_page_posts USING (thread_id, page)
+            WHERE offline_pages.thread_id = ? AND offline_page_posts.post_id = ?
+          ) ORDER BY julianday(fetched_at) DESC, page DESC
+        `).all(threadId, postId, threadId, postId)
+        for (const row of rows) pages[row.mode] ??= row.page
+      }
+      return { threadId, isHead: threadId === postId, preferredMode: preference?.mode ?? 'all', pages }
+    })()
   }
 
   getReadingState(threadId: ThreadId): ThreadReadingState {

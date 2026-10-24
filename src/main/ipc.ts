@@ -1,5 +1,5 @@
 import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy, type ReadOutcome } from '../shared/api'
+import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy } from '../shared/api'
 import type { FeedRef, PostId, ReadingMode } from '../shared/forum'
 import type { ImageFormat, ImageKind } from '../shared/images'
 import { IDENTITY_ROLES, type CredentialId, type IdentityRole } from '../shared/identity'
@@ -309,6 +309,25 @@ export function registerIpc({
       const held = { viewId: `request-${id}`, threadId }
       await content.holdReader(String(event.sender.id), held).catch(() => undefined)
       try { return await reading.locateThreadEnd(threadId, mode, signal) }
+      finally { await content.releaseReader(String(event.sender.id), held).catch(() => undefined) }
+    })
+  })
+
+  handle(IpcChannel.previewQuote, async (event, raw) => {
+    const input = record(raw)
+    const postId = forumId(input.postId)
+    return operations.run(event.sender, operationId(input), (signal) => reading.previewQuote(postId, signal)).finally(enforceQuota)
+  })
+
+  handle(IpcChannel.locateQuote, async (event, raw) => {
+    const input = record(raw)
+    const postId = forumId(input.postId)
+    const id = operationId(input)
+    return operations.run(event.sender, id, async (signal) => {
+      const relation = await store.findPostThread(postId).catch(() => null)
+      const held = { viewId: `request-${id}`, threadId: relation?.threadId ?? postId }
+      await content.holdReader(String(event.sender.id), held).catch(() => undefined)
+      try { return await reading.locateQuote(postId, signal) }
       finally { await content.releaseReader(String(event.sender.id), held).catch(() => undefined) }
     })
   })

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { openLayer } from '../lib/layers'
 import { Icon } from './Icon'
 import './modal.css'
 
@@ -36,8 +37,11 @@ export function Modal({
     if (dialog === null) return
     const active = document.activeElement
     const opener = active instanceof HTMLElement && active !== document.body ? active : null
+    // A closable layer above anything opened before it (a pinned quote card): Esc is the dialog's.
+    const layer = openLayer()
     dialog.showModal()
     return () => {
+      layer.release()
       dialog.close()
       if (opener?.isConnected) opener.focus()
       else fallback.current?.()?.focus()

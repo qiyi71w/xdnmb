@@ -16,6 +16,9 @@ import { focusKey, useEditorsStore } from '../features/editor/useEditorsStore'
 import { EditorWorkspaceContext, type EditorWorkspace } from '../features/editor/workspace'
 import { useIdentities } from '../features/identity/useIdentities'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
+import { QuoteCard } from '../features/quote/QuoteCard'
+import { QuoteActiveContext, QuoteControllerContext } from '../features/quote/QuoteContext'
+import { useQuoteNavigation } from '../features/quote/useQuoteNavigation'
 import { ContentRegistryContext, createContentRegistry } from '../features/tabs/contentRegistry'
 import {
   activeTab,
@@ -93,7 +96,7 @@ function shownTargets(tab: Tab, singlePane: boolean): PostTarget[] {
 /** History entry that shows a target's editor: the thread as a page, or the forum list. */
 function entryFor(target: PostTarget): EntryInit {
   return target.kind === 'reply'
-    ? { kind: 'thread', thread: { threadId: target.threadId, head: null, target: null, snapshot: null } }
+    ? { kind: 'thread', thread: { threadId: target.threadId, head: null, target: null, snapshot: null, unlocatedPostId: null } }
     : { kind: 'list', feed: { kind: 'forum', id: target.forumId } }
 }
 
@@ -235,6 +238,16 @@ export function App() {
   })
   const pendingTabFocus = useRef(false)
 
+  // ---------- Quote cards (preview, locate, quote navigation) ----------
+  const quote = useQuoteNavigation({
+    tabs,
+    getTabs: () => stateRef.current.tabs,
+    getSettings: () => stateRef.current.settings,
+    dispatch,
+    registry,
+    platform
+  })
+
   /** Before leaving an entry that shows a thread, remember its mode and anchor in the entry. */
   const leave = useCallback(
     (tab: Tab) => {
@@ -270,7 +283,7 @@ export function App() {
       if (tab === undefined) return
       const entry = currentEntry(tab)
       if (!(entry.kind === 'list' && tab.split)) leave(tab)
-      const thread: ThreadOpen = { threadId: summary.head.id, head: summary.head, target: null, snapshot: null }
+      const thread: ThreadOpen = { threadId: summary.head.id, head: summary.head, target: null, snapshot: null, unlocatedPostId: null }
       dispatch({ type: 'select-thread', tabId, thread })
     },
     [leave]
@@ -426,7 +439,11 @@ export function App() {
         const entry = currentEntry(tab)
         if (entry.thread?.threadId === threadId && readerShown(tab, entry, stateRef.current.singlePane)) return
         leave(tab)
-        dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'thread', thread: { threadId, head: null, target: null, snapshot: null } } })
+        dispatch({
+          type: 'navigate',
+          tabId: tab.id,
+          entry: { kind: 'thread', thread: { threadId, head: null, target: null, snapshot: null, unlocatedPostId: null } }
+        })
       })
     },
     [withActive, leave]
@@ -553,6 +570,8 @@ export function App() {
           <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
           <NavMeasure directory={dirData} onMeasure={setNavCompactMin} />
           <ContentRegistryContext.Provider value={registry}>
+            <QuoteControllerContext.Provider value={quote.controller}>
+            <QuoteActiveContext.Provider value={quote.activeKey}>
             <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
               {!navOverlay && (
                 <div
@@ -587,6 +606,7 @@ export function App() {
                       titleOf={titleOf}
                       platform={platform}
                       canBack={current.index > 0}
+                      backToQuote={entry.origin === 'quote' && current.index > 0}
                       canForward={current.index < current.entries.length - 1}
                       splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
                       navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
@@ -637,7 +657,11 @@ export function App() {
                 </>
               )}
             </div>
+            </QuoteActiveContext.Provider>
+            </QuoteControllerContext.Provider>
           </ContentRegistryContext.Provider>
+          {/* Outside every reader's content: showing a quote card never counts as reading. */}
+          {quote.cardProps !== null && <QuoteCard {...quote.cardProps} />}
           {settingsOpen && (
             <SettingsDialog
               identities={identities}

@@ -1,5 +1,5 @@
 import type { ReadError } from '../../shared/api'
-import type { BoardDirectory, FeedPage, FeedRef, ReadingMode, ThreadId, ThreadPage } from '../../shared/forum'
+import type { BoardDirectory, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadId, ThreadPage } from '../../shared/forum'
 
 /** A classified forum read failure. Never carries raw bodies, URLs with secrets or full server pages. */
 export class ForumReadError extends Error {
@@ -42,4 +42,9 @@ export interface ForumClient {
   getFeedPage(feed: FeedRef, page: number, signal: AbortSignal): Promise<FeedPage>
   /** One thread page: `all` reads `thread`, `po` reads the PO-only `po` pages (own page numbering). */
   getThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal): Promise<ThreadPage>
+  /**
+   * One quoted post (`ref`). The response carries no owning thread or page; a missing post is the
+   * forum's business error `该串不存在`, classified `not-found`.
+   */
+  getRef(postId: PostId, signal: AbortSignal): Promise<Post>
 }

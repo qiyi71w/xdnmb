@@ -231,6 +231,18 @@
   margin-left: auto;
 }
 
+/* Quote jump target: a brief static tint (no blinking) that fades out; with reduced motion it
+   simply disappears. Background only, so the text never moves and nothing counts as read. */
+.post {
+  transition: background-color 0.6s var(--ease-out), box-shadow 0.6s var(--ease-out);
+}
+
+.post.is-highlighted {
+  background: var(--accent-soft);
+  box-shadow: -10px 0 0 var(--accent-soft), 10px 0 0 var(--accent-soft);
+  transition: none;
+}
+
 .unread-mark {
   display: inline-flex;
   align-items: center;

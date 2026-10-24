@@ -7,7 +7,9 @@ import { describeReadError, formatPageList, meaningfulTitle } from '../../lib/fo
 import { useNearEnd } from '../../lib/useNearEnd'
 import { NearViewport, type ImageView, type ViewerRequest } from '../image/imageView'
 import { ImageViewer } from '../image/ImageViewer'
+import { QuoteEntryContext } from '../quote/QuoteContext'
 import { useRegisterContent } from '../tabs/contentRegistry'
+import type { SourceFocus } from '../tabs/tabsState'
 import { CoverageLine, pageLabel } from './CoverageLine'
 import { PostView } from './PostView'
 import { startPage, unreadInMode, type ReaderPosition } from './readingStart'
@@ -17,6 +19,10 @@ import { useThread } from './useThread'
 import { FavoriteButton, OfflineButton } from '../content/ThreadRetention'
 
 const MODE_NAMES: Record<ReadingMode, string> = { all: '全部回复', po: '只看 PO' }
+/** How long a quote target stays marked after the jump. */
+const HIGHLIGHT_MS = 2400
+/** How long a settled reader waits for an automatic next page that may bring the quote to refocus. */
+const FOCUS_WAIT_MS = 1500
 const NO_POSTS: readonly PostId[] = []
 
 function taskText(task: ThreadTask, mode: ReadingMode): string {
@@ -86,6 +92,12 @@ export interface ThreadReaderProps {
   onBackToList: (() => void) | null
   /** Shown below the scroller (the reply editor); covered with the reader by the image viewer. */
   footer: ReactNode
+  /** Opened through 打开原串: this quoted post was not located; the note stays while the entry shows. */
+  unlocatedPostId: PostId | null
+  /** Coming back through history: the quote that left this entry gets focus once placed. */
+  restoreFocus: SourceFocus | null
+  /** Quote target of the opening: briefly marked once placed and displayed. */
+  highlightPostId: PostId | null
 }
 
 export function ThreadReader({
@@ -108,7 +120,10 @@ export function ThreadReader({
   onObserved,
   onMarkAllRead,
   onBackToList,
-  footer
+  footer,
+  unlocatedPostId,
+  restoreFocus,
+  highlightPostId
 }: ThreadReaderProps) {
   const startRef = useRef(start)
   // One view ID per mounted reader: it protects the images it loaded and, through the content
@@ -129,7 +144,7 @@ export function ThreadReader({
   /** Where the reading line goes when the next replaced range arrives. */
   const nextPosition = useRef<ReaderPosition | null>(startRef.current)
   const [pageInput, setPageInput] = useState('')
-  const [nearby, setNearby] = useState(false)
+  const [nearby, setNearby] = useState<'anchor' | 'post' | null>(null)
   const temporary = temporaryOf !== null
 
   const [near] = useState(() => new NearViewport(() => scrollRef.current))
@@ -161,7 +176,7 @@ export function ThreadReader({
     else scrollRef.current?.focus({ preventScroll: true })
   }, [viewer])
 
-  const { position, onScroll, currentAnchor, hasPost } = useReadingViewport({
+  const { position, onScroll, currentAnchor, hasPost, isVisible } = useReadingViewport({
     scrollRef,
     contentRef,
     toolbarRef,
@@ -171,7 +186,7 @@ export function ThreadReader({
     knownRead: readingState?.readPostIds ?? NO_POSTS,
     onRead,
     onSave: (anchor) => onSavePosition(mode, anchor),
-    onNearby: () => setNearby(true)
+    onNearby: setNearby
   })
 
   useNearEnd(scrollRef, sentinelRef, thread.canAppend, `${state.pages.length}:${lastPage?.page ?? 0}`, thread.appendNext)
@@ -189,24 +204,92 @@ export function ThreadReader({
     if (state.coverage !== null) onObserved()
   }, [state.coverage, onObserved])
 
+  const [highlighted, setHighlighted] = useState<PostId | null>(null)
+  const highlightTimer = useRef<number | undefined>(undefined)
+  const highlight = useCallback((postId: PostId) => {
+    window.clearTimeout(highlightTimer.current)
+    setHighlighted(postId)
+    highlightTimer.current = window.setTimeout(() => setHighlighted(null), HIGHLIGHT_MS)
+  }, [])
+  useEffect(() => () => window.clearTimeout(highlightTimer.current), [])
+
+  /** Quote target of the opening: marked once the first position is placed on screen. */
+  const pendingHighlight = useRef(highlightPostId)
+  useLayoutEffect(() => {
+    const postId = pendingHighlight.current
+    if (postId === null || !displayed || state.rangeVersion === 0 || currentAnchor() === null) return
+    pendingHighlight.current = null
+    if (hasPost(postId)) highlight(postId)
+  }, [displayed, state.rangeVersion, currentAnchor, hasPost, highlight])
+
+  /**
+   * Quote to give focus back to. Kept until it is rendered in this reader (a page appended after the
+   * restore may bring it), and dropped when the user scrolls the reader, clicks, types or moves focus
+   * anywhere, when the reader is hidden, or when it has settled without it. Never scrolls and never
+   * loads anything by itself.
+   */
+  const pendingFocus = useRef(restoreFocus)
+  const focusWait = useRef<number | undefined>(undefined)
+  const dropFocus = useCallback(() => {
+    pendingFocus.current = null
+    window.clearTimeout(focusWait.current)
+  }, [])
+  useLayoutEffect(() => {
+    const focus = pendingFocus.current
+    if (focus === null || state.rangeVersion === 0 || currentAnchor() === null) return
+    if (!displayed) {
+      dropFocus()
+      return
+    }
+    window.clearTimeout(focusWait.current)
+    const element = contentRef.current?.querySelector<HTMLElement>(
+      `[data-quote-host="${CSS.escape(focus.postId)}"][data-quote-index="${focus.quoteIndex}"]`
+    )
+    if (element != null) {
+      dropFocus()
+      element.focus({ preventScroll: true })
+      return
+    }
+    // Placed and nothing loading: give an automatic next-page read a moment to start, then give up.
+    if (state.task === null) focusWait.current = window.setTimeout(dropFocus, FOCUS_WAIT_MS)
+  }, [displayed, state.rangeVersion, state.pages, state.task, currentAnchor, dropFocus])
+  useEffect(() => {
+    const scroller = scrollRef.current
+    if (scroller === null) return
+    const inReader = ['wheel', 'touchstart'] as const
+    const anywhere = ['pointerdown', 'keydown', 'focusin'] as const
+    for (const type of inReader) scroller.addEventListener(type, dropFocus, { passive: true })
+    for (const type of anywhere) document.addEventListener(type, dropFocus, true)
+    return () => {
+      for (const type of inReader) scroller.removeEventListener(type, dropFocus)
+      for (const type of anywhere) document.removeEventListener(type, dropFocus, true)
+      window.clearTimeout(focusWait.current)
+    }
+  }, [dropFocus])
+
   useRegisterContent('readers', entryKey, {
     capture: () => {
       const anchor = currentAnchor()
-      return anchor === null ? null : { mode, anchor, generation }
+      return anchor === null ? null : { mode, anchor, generation, temporaryOf, focus: null }
     },
-    refresh: thread.refresh
+    refresh: thread.refresh,
+    showInPlace: (targetThread, target) => {
+      if (targetThread !== threadId || target.mode !== mode || !isVisible(target.postId)) return false
+      highlight(target.postId)
+      return true
+    }
   })
 
   /** Explicit entry: place directly when the range already holds it, otherwise load and place. */
   const goTo = (position: ReaderPosition, load: () => void) => {
-    setNearby(false)
+    setNearby(null)
     nextPosition.current = position
     load()
   }
 
   const toStart = () => {
     if (firstPage?.page === 1) {
-      setNearby(false)
+      setNearby(null)
       position({ kind: 'top' })
     } else goTo({ kind: 'top' }, () => thread.jump(1))
   }
@@ -218,7 +301,7 @@ export function ThreadReader({
     const page = firstUnread.pages[mode] ?? 1
     const target: ReaderPosition = { kind: 'post', postId: firstUnread.postId, page }
     if (hasPost(firstUnread.postId)) {
-      setNearby(false)
+      setNearby(null)
       position(target)
     } else goTo(target, () => thread.jump(page))
   }
@@ -348,6 +431,13 @@ export function ThreadReader({
               </button>
             </div>
 
+            {unlocatedPostId !== null && (
+              <div className="toolbar-note" role="status">
+                <Icon name="info" size={14} />
+                <span>未定位到引用的 No.{unlocatedPostId}：已按正常续读位置打开原串，没有跳到这条回复</span>
+              </div>
+            )}
+
             {temporaryOf !== null && (
               <div className="toolbar-note" role="status">
                 <Icon name="info" size={14} />
@@ -363,7 +453,8 @@ export function ThreadReader({
             <div className="toolbar-status">
               <div role="status" className="toolbar-status-text">
                 {toolbarTask !== null && <Loading live={false}>{taskText(toolbarTask, mode)}</Loading>}
-                {nearby && task === null && <span>原位置的发言不在读取到的页面中，已显示附近位置</span>}
+                {nearby === 'anchor' && task === null && <span>原位置已变化，已返回附近</span>}
+                {nearby === 'post' && task === null && <span>原位置的发言不在读取到的页面中，已显示附近位置</span>}
                 {notice !== null && <span className="toolbar-warning">{notice}</span>}
                 {task === null && state.endProbe?.status === 'insufficient' && (
                   <span className="toolbar-warning">
@@ -404,6 +495,7 @@ export function ThreadReader({
           </div>
         </div>
 
+        <QuoteEntryContext.Provider value={entryKey}>
         <div className="reader-column" ref={contentRef}>
           <header className="thread-header">
             <p className="thread-crumb">
@@ -414,7 +506,16 @@ export function ThreadReader({
             <h1 className="thread-title">{title ?? `No.${threadId}`}</h1>
           </header>
 
-          {head !== null && <PostView post={head} isHead poHash={null} unread={unreadIds.has(head.id)} images={imageView} />}
+          {head !== null && (
+            <PostView
+              post={head}
+              isHead
+              poHash={null}
+              unread={unreadIds.has(head.id)}
+              images={imageView}
+              highlighted={highlighted === head.id}
+            />
+          )}
 
           {firstPage !== undefined && firstPage.page > 1 && (
             <div className="load-previous">
@@ -452,6 +553,7 @@ export function ThreadReader({
                     poHash={head?.userHash ?? null}
                     unread={unreadIds.has(reply.id)}
                     images={imageView}
+                    highlighted={highlighted === reply.id}
                   />
                 ))}
                 {page.endCandidate && (
@@ -495,6 +597,7 @@ export function ThreadReader({
             )}
           </div>
         </div>
+        </QuoteEntryContext.Provider>
       </div>
       <div className="reader-dock" inert={viewer !== null}>
         {footer}

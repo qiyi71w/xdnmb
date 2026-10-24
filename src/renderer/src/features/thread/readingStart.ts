@@ -55,6 +55,25 @@ export function decideStart(open: ThreadOpen, state: ThreadReadingState | null, 
   return savedStart(state, state?.mode ?? 'all')
 }
 
+/**
+ * Start plus temporary state of a newly mounted reader. A display is temporary (`temporaryOf` names
+ * the saved preference it stands in for) when an explicit target opens in a mode other than the
+ * preference, or when coming back to an entry that was left during such a display while the
+ * preference still differs. A plain snapshot, a snapshot voided by a later history clear, or another
+ * tab changing the preference meanwhile, never makes a display temporary.
+ */
+export function decideView(
+  open: ThreadOpen,
+  state: ThreadReadingState | null,
+  generation: number
+): { start: ReaderStart; temporaryOf: ReadingMode | null } {
+  const start = decideStart(open, state, generation)
+  const preference = state?.mode ?? 'all'
+  const snapshot = open.snapshot !== null && open.snapshot.generation === generation ? open.snapshot : null
+  const wasTemporary = open.target !== null || (snapshot !== null && snapshot.temporaryOf !== null)
+  return { start, temporaryOf: wasTemporary && start.mode !== preference ? preference : null }
+}
+
 /** Confirmed unread posts known to sit on a page of `mode`, excluding posts read since the last fetch. */
 export function unreadInMode(state: ThreadReadingState | null, mode: ReadingMode, readNow: ReadonlySet<PostId>): UnreadPost[] {
   if (state === null) return []

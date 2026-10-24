@@ -1,14 +1,20 @@
 import { createContext, useContext, useEffect, useRef } from 'react'
+import type { ThreadId } from '../../../../shared/forum'
 import { createFavoriteWrites, type FavoriteWrites } from '../content/favoriteWrites'
 import { createReadingResets, type ReadingResets } from '../content/readingResets'
 import type { FeedState } from '../feed/feedState'
-import type { ThreadSnapshot } from './tabsState'
+import type { ThreadSnapshot, ThreadTarget } from './tabsState'
 
 /** What the shell can ask of the reader mounted for a history entry. */
 export interface ReaderHandle {
   /** Mode and anchor to come back to; null before the reader has placed its first position. */
   capture(): ThreadSnapshot | null
   refresh(): void
+  /**
+   * A located quote target: when this reader shows the same thread in the same mode and the target
+   * post is visible in its viewport, highlights it and returns true (no navigation needed).
+   */
+  showInPlace(threadId: ThreadId, target: ThreadTarget): boolean
 }
 
 export interface ListHandle {

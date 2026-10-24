@@ -3,13 +3,15 @@ import { Content } from '../../components/Content'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
 import type { ImageView } from '../image/imageView'
 import { PostThumbnail } from '../image/PostThumbnail'
+import { QuoteRef } from '../quote/QuoteRef'
 
 export function PostView({
   post,
   isHead,
   poHash,
   unread,
-  images
+  images,
+  highlighted = false
 }: {
   post: Post
   isHead: boolean
@@ -18,12 +20,15 @@ export function PostView({
   unread: boolean
   /** Images of the reader showing this post. */
   images: ImageView
+  /** Target of a quote jump, briefly marked. Purely visual: never a read. */
+  highlighted?: boolean
 }) {
   const name = meaningfulName(post.name)
   const title = isHead ? null : meaningfulTitle(post.title)
   const isPo = !isHead && poHash !== null && post.userHash === poHash
+  const classes = `${isHead ? 'post is-head' : 'post'}${highlighted ? ' is-highlighted' : ''}`
   return (
-    <article className={isHead ? 'post is-head' : 'post'} data-post-id={post.id} aria-label={`${isHead ? '主帖' : '回复'} No.${post.id}`}>
+    <article className={classes} data-post-id={post.id} aria-label={`${isHead ? '主帖' : '回复'} No.${post.id}`}>
       <header className="post-meta">
         {unread && (
           <span className="unread-mark" title="未读">
@@ -41,7 +46,11 @@ export function PostView({
       </header>
       {title !== null && <p className="post-title">{title}</p>}
       {post.image !== null && <PostThumbnail postId={post.id} images={images} />}
-      <Content nodes={post.content} className="post-body" />
+      <Content
+        nodes={post.content}
+        className="post-body"
+        renderQuote={(node, quoteIndex) => <QuoteRef hostPostId={post.id} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} />}
+      />
     </article>
   )
 }

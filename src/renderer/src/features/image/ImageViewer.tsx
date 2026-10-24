@@ -13,6 +13,7 @@ import type { PostId } from '../../../../shared/forum'
 import type { ImageViewId, LoadedImage } from '../../../../shared/images'
 import { Icon } from '../../components/Icon'
 import { Loading } from '../../components/Notices'
+import { openLayer } from '../../lib/layers'
 import { describeImageError, formatBytes, SAVE_TEXT, UNDECODABLE_TEXT } from './imageView'
 import { useImageLoad } from './useImageLoad'
 import './image.css'
@@ -127,6 +128,10 @@ export function ImageViewer({
       mounted.current = false
     }
   }, [loadOriginal, loadThumb, initialThumb])
+
+  // One closable layer above the quote card that may still be pinned beside the covered reader:
+  // Esc closes the viewer first, the card with the next Esc.
+  useEffect(() => openLayer().release, [])
 
   const thumb =
     initialThumb ?? (thumbLoad.state.status === 'ready' && thumbLoad.state.decoded ? thumbLoad.state.image : null)

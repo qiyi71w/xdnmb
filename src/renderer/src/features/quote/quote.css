@@ -1,0 +1,129 @@
+/* Quote card: a soft floating sheet over the reading surface. Fixed positioning, so opening,
+   locating or failing never moves the reading text underneath. */
+.quote-card {
+  position: fixed;
+  z-index: 30;
+  top: 0;
+  left: 0;
+  display: grid;
+  gap: 8px;
+  width: min(420px, calc(100vw - 16px));
+  max-height: min(60vh, 520px);
+  padding: 10px 12px 12px;
+  border-radius: var(--radius-l);
+  background: var(--glass-strong);
+  backdrop-filter: blur(28px) saturate(1.6);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+}
+
+.quote-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quote-card-no {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.quote-card-close {
+  width: 26px;
+  height: 26px;
+}
+
+.quote-card-scroll {
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.quote-card-scroll .notice,
+.quote-card-scroll .quote-card-status {
+  margin: 0 0 8px;
+}
+
+.quote-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-bottom: 4px;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reading text sits on a solid surface, also inside the frosted card. */
+.quote-card-content {
+  padding: 8px 10px;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+}
+
+.quote-card-content .content-body {
+  font-size: var(--text-md);
+  line-height: 1.7;
+}
+
+.quote-card-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-m);
+  font-size: var(--text-sm);
+}
+
+.quote-card-status.is-info {
+  background: var(--info-bg);
+  color: var(--ink-2);
+}
+
+.quote-card-status.is-error {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+
+.quote-card-status-icon {
+  flex: none;
+  margin-top: 3px;
+}
+
+.quote-card-status.is-info .quote-card-status-icon {
+  color: var(--accent-ink);
+}
+
+.quote-card-status-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.quote-card-title {
+  font-weight: 600;
+}
+
+.quote-card-detail {
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.quote-card .loading {
+  padding: 2px 0;
+}
+
+.quote-card-result {
+  display: grid;
+  gap: 6px;
+}
+
+.quote-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

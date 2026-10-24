@@ -7,7 +7,7 @@ import { decideStart, markAllInChunks } from '../../src/renderer/src/features/th
 
 const anchor = { postId: '160', page: 3, offsetRatio: 0.65, viewportOffset: 40 }
 const opened = (threadId: string, generation: number): ThreadOpen => ({
-  threadId, head: null, target: null, snapshot: { mode: 'all', anchor, generation }
+  threadId, head: null, target: null, snapshot: { mode: 'all', anchor, generation, temporaryOf: null, focus: null }, unlocatedPostId: null
 })
 
 describe('reading resets after a history clear', () => {

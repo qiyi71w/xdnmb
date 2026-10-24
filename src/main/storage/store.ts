@@ -71,6 +71,8 @@ export async function openReadingStore(options: {
       case 'loadDirectory':
       case 'loadFeedPage':
       case 'loadThreadPage':
+      case 'loadPost':
+      case 'findPostThread':
       case 'getPostImage':
       case 'findImageResource':
       case 'getDraftAttachment':
@@ -129,6 +131,9 @@ export async function openReadingStore(options: {
     saveThreadPage: (page, fetchedAt) => request('saveThreadPage', page, fetchedAt),
     loadThreadPage: (threadId, mode, page) => request('loadThreadPage', threadId, mode, page),
     getThreadCoverage: (threadId, mode) => request('getThreadCoverage', threadId, mode),
+    savePost: (post, fetchedAt) => request('savePost', post, fetchedAt),
+    loadPost: (postId) => request('loadPost', postId),
+    findPostThread: (postId) => request('findPostThread', postId),
     getReadingState: (threadId) => request('getReadingState', threadId),
     setReadingMode: (threadId, mode, at) => request('setReadingMode', threadId, mode, at),
     saveReadingPosition: (threadId, mode, anchor, at) => request('saveReadingPosition', threadId, mode, anchor, at),

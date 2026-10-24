@@ -14,13 +14,38 @@
   color: var(--greentext);
 }
 
-/* Quote references are styled only; preview and navigation belong to quote navigation. */
+/* Static in excerpts and previews; interactive (preview / locate) in reader post bodies. */
 .quote-ref {
   padding: 0 3px;
   border-radius: 4px;
   background: var(--quote-ref-bg);
   color: var(--quote-ref-ink);
   font-variant-numeric: tabular-nums;
+}
+
+/* Same box as the static span: becoming interactive or active never reflows the text. */
+.quote-ref.is-interactive {
+  display: inline;
+  margin: 0;
+  border: 0;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  white-space: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.quote-ref.is-interactive:hover,
+.quote-ref.is-active {
+  background: color-mix(in oklch, var(--quote-ref-bg), var(--quote-ref-ink) 12%);
+  text-decoration-style: solid;
+}
+
+.quote-ref.is-interactive:focus-visible {
+  outline-offset: 1px;
 }
 
 .content-link {

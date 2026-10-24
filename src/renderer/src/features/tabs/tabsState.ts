@@ -2,9 +2,9 @@ import type { FeedRef, Post, PostId, ReadingMode, ThreadId } from '../../../../s
 import type { ReadingAnchor } from '../../../../shared/reading'
 
 /**
- * Explicit target inside a thread (首条未读 now; quotes, search and notifications later). It takes
- * priority over every remembered position. When `mode` differs from the thread's saved preference
- * the reader shows the target in `mode` temporarily and leaves the preference unchanged.
+ * Explicit target inside a thread (首条未读, a located quote; search and notifications later). It
+ * takes priority over every remembered position. When `mode` differs from the thread's saved
+ * preference the reader shows the target in `mode` temporarily and leaves the preference unchanged.
  */
 export interface ThreadTarget {
   postId: PostId
@@ -13,12 +13,31 @@ export interface ThreadTarget {
   mode: ReadingMode
 }
 
+/**
+ * The quote that started a quote navigation: the `quoteIndex`-th quote reference (document order,
+ * from 0) in the body of post `postId`. Focus goes back to it when the entry is shown again.
+ */
+export interface SourceFocus {
+  postId: PostId
+  quoteIndex: number
+}
+
 /** Where a history entry was left: restored when the reader comes back to this entry. */
 export interface ThreadSnapshot {
   mode: ReadingMode
   anchor: ReadingAnchor
   /** Reading-data generation of the reader that captured it; a later history clear voids it. */
   generation: number
+  /**
+   * The preference a temporary target display stood in for when the entry was left, else `null`.
+   * Coming back keeps the display temporary only while the preference still differs from `mode`.
+   */
+  temporaryOf: ReadingMode | null
+  /**
+   * Focus to give back on return: the quote the entry was left through. A later leave without a
+   * quote (back / forward) keeps it, so walking the history again still returns focus there.
+   */
+  focus: SourceFocus | null
 }
 
 export interface ThreadOpen {
@@ -27,7 +46,18 @@ export interface ThreadOpen {
   head: Post | null
   target: ThreadTarget | null
   snapshot: ThreadSnapshot | null
+  /**
+   * Set when the thread was opened through 打开原串 for a quote that could not be located: the
+   * reader opens normally (resume rules) and keeps saying this post was not located.
+   */
+  unlocatedPostId: PostId | null
 }
+
+/**
+ * `quote`: the entry was produced by a located quote or by 打开原串, so the back control reads
+ * 返回引用处. Choosing another list item in the entry clears it; history is kept either way.
+ */
+export type EntryOrigin = 'quote' | null
 
 /**
  * One step of a tab's navigation history.
@@ -36,8 +66,8 @@ export interface ThreadOpen {
  * - `thread`: a thread opened as a whole page (split off).
  */
 export type TabEntry =
-  | { kind: 'list'; key: number; feed: FeedRef | null; thread: ThreadOpen | null; pane: 'list' | 'reader' }
-  | { kind: 'thread'; key: number; thread: ThreadOpen }
+  | { kind: 'list'; key: number; feed: FeedRef | null; thread: ThreadOpen | null; pane: 'list' | 'reader'; origin: EntryOrigin }
+  | { kind: 'thread'; key: number; thread: ThreadOpen; origin: EntryOrigin }
 
 export type EntryInit =
   | { kind: 'list'; feed: FeedRef | null; thread?: ThreadOpen | null }
@@ -79,11 +109,29 @@ export type TabsAction =
    * leaving the entry, so coming back restores it.
    */
   | { type: 'snapshot'; tabId: number; entryKey: number; snapshot: ThreadSnapshot }
+  /**
+   * A quote was located (or 打开原串 succeeded) while entry `entryKey` was current: remembers where
+   * that entry was left (`source`, including the triggering quote) and pushes the target as a new
+   * `quote` step, dropping the forward branch. A split list entry keeps its list beside the target.
+   * Ignored when `entryKey` is no longer current (the reader navigated meanwhile).
+   */
+  | { type: 'quote-navigate'; tabId: number; entryKey: number; source: ThreadSnapshot | null; thread: ThreadOpen }
 
-function makeEntry(init: EntryInit, key: number): TabEntry {
+function makeEntry(init: EntryInit, key: number, origin: EntryOrigin = null): TabEntry {
   return init.kind === 'list'
-    ? { kind: 'list', key, feed: init.feed, thread: init.thread ?? null, pane: init.thread ? 'reader' : 'list' }
-    : { kind: 'thread', key, thread: init.thread }
+    ? { kind: 'list', key, feed: init.feed, thread: init.thread ?? null, pane: init.thread ? 'reader' : 'list', origin }
+    : { kind: 'thread', key, thread: init.thread, origin }
+}
+
+/**
+ * First entry of a background tab opened for a located quote. The tab gets the global split default
+ * and no copy of the source history: with split on and a list shown in the source, the target opens
+ * beside that list (fresh, not the source's loaded pages); otherwise as a whole-page thread.
+ */
+export function backgroundTabEntry(source: TabEntry, splitDefault: boolean, thread: ThreadOpen): EntryInit {
+  return splitDefault && source.kind === 'list' && source.feed !== null
+    ? { kind: 'list', feed: source.feed, thread }
+    : { kind: 'thread', thread }
 }
 
 export function initialTabsState(split: boolean): TabsState {
@@ -118,11 +166,11 @@ function updateTab(state: TabsState, tabId: number, update: (tab: Tab) => Tab): 
   return changed ? { ...state, tabs } : state
 }
 
-function push(state: TabsState, tabId: number, init: EntryInit): TabsState {
+function push(state: TabsState, tabId: number, init: EntryInit, origin: EntryOrigin = null): TabsState {
   const key = state.nextKey
   const next = updateTab(state, tabId, (tab) => ({
     ...tab,
-    entries: [...tab.entries.slice(0, tab.index + 1), makeEntry(init, key)],
+    entries: [...tab.entries.slice(0, tab.index + 1), makeEntry(init, key, origin)],
     index: tab.index + 1
   }))
   return next === state ? state : { ...next, nextKey: key + 1 }
@@ -190,8 +238,13 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       const current = currentEntry(tab)
       if (current.kind === 'list' && tab.split) {
         if (current.thread?.threadId === action.thread.threadId && current.pane === 'reader') return state
-        const thread = current.thread?.threadId === action.thread.threadId ? current.thread : action.thread
-        return updateTab(state, action.tabId, (item) => replaceCurrent(item, { ...current, thread, pane: 'reader' }))
+        if (current.thread?.threadId === action.thread.threadId) {
+          return updateTab(state, action.tabId, (item) => replaceCurrent(item, { ...current, pane: 'reader' }))
+        }
+        // Choosing another item ends this entry's quote step: the back control reads 后退 again.
+        return updateTab(state, action.tabId, (item) =>
+          replaceCurrent(item, { ...current, thread: action.thread, pane: 'reader', origin: null })
+        )
       }
       return push(state, action.tabId, { kind: 'thread', thread: action.thread })
     }
@@ -210,8 +263,21 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       return updateTab(state, action.tabId, (tab) => {
         const current = currentEntry(tab)
         if (current.key !== action.entryKey || current.thread === null) return tab
-        const thread: ThreadOpen = { ...current.thread, target: null, snapshot: action.snapshot }
+        const focus = action.snapshot.focus ?? current.thread.snapshot?.focus ?? null
+        const thread: ThreadOpen = { ...current.thread, target: null, snapshot: { ...action.snapshot, focus } }
         return replaceCurrent(tab, { ...current, thread } as TabEntry)
       })
+    case 'quote-navigate': {
+      const tab = state.tabs.find((item) => item.id === action.tabId)
+      if (tab === undefined) return state
+      const current = currentEntry(tab)
+      if (current.key !== action.entryKey) return state
+      const left = action.source === null ? state : tabsReducer(state, { type: 'snapshot', tabId: action.tabId, entryKey: action.entryKey, snapshot: action.source })
+      const init: EntryInit =
+        current.kind === 'list' && current.feed !== null && tab.split
+          ? { kind: 'list', feed: current.feed, thread: action.thread }
+          : { kind: 'thread', thread: action.thread }
+      return push(left, action.tabId, init, 'quote')
+    }
   }
 }

@@ -165,6 +165,45 @@ describe('retained content storage', () => {
     expect(db.getContentUsage().cacheTextBytes).toBe(0)
   })
 
+  it('accounts for standalone quote previews, refreshes their LRU use and clears them without inventing ownership', () => {
+    const { db } = fixture()
+    db.savePost(post('101'), t0)
+    const onePostBytes = db.getContentUsage().cacheTextBytes
+    expect(onePostBytes).toBeGreaterThan(0)
+    db.savePost(post('102'), t0)
+    expect(db.getContentUsage().cacheTextBytes).toBe(onePostBytes * 2)
+    expect(db.findPostThread('101')).toBeNull()
+    expect(db.loadPost('101')?.value).toEqual(post('101'))
+    db.setCacheLimit(onePostBytes)
+    expect(db.evictContentBatch(false).more).toBe(false)
+    expect(db.loadPost('102')).toBeNull()
+    expect(db.loadPost('101')?.value).toEqual(post('101'))
+    clear(db)
+    expect(db.loadPost('101')).toBeNull()
+    expect(db.getContentUsage().cacheTextBytes).toBe(0)
+  })
+
+  it('updates quoted content through offline ownership without losing original image metadata or derived byte accounting', () => {
+    const { db, path, folder } = fixture()
+    db.beginOfflineCopy('100', true, t0)
+    db.saveOfflinePage(page('100', [post('101', true)]), t0)
+    const original = image(db, folder, 'quote-original.jpg')
+    db.holdOfflineImage('100', '101')
+    raw(path).prepare('UPDATE posts SET derived_bytes = 17 WHERE id = ?').run('101')
+    db.savePost(post('101', false, 'new quoted text'), t1)
+    db.savePost(post('999'), t1)
+    clear(db)
+
+    expect(db.loadPost('999')).toBeNull()
+    expect(db.loadPost('101')?.value).toEqual({ ...post('101', false, 'new quoted text'), image: post('101', true).image })
+    expect(db.findPostThread('101')).toMatchObject({ threadId: '100', pages: { all: 1, po: null } })
+    expect(raw(path).prepare('SELECT derived_bytes FROM posts WHERE id = ?').get('101')).toEqual({ derived_bytes: 17 })
+    expect(db.getOfflineCopy('100')).toMatchObject({ postCount: 2, imageCount: 1, savedImages: 1 })
+    expect(db.getContentUsage().protectedImageBytes).toBe(original.bytes)
+    expect(db.getReadingState('100').readPostIds).toEqual([])
+    expect(readFileSync(join(folder, original.fileName)).byteLength).toBe(original.bytes)
+  })
+
   it('treats a cache image find as recent use and returns only managed unheld filenames', () => {
     const { db, folder } = fixture()
     const first = image(db, folder, 'first.jpg')
