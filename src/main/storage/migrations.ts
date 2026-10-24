@@ -233,5 +233,57 @@ export const MIGRATIONS: readonly Migration[] = [
         );
       `)
     }
+  },
+  {
+    // Frozen publication intents outlive both editors and saved drafts. The attachment column
+    // holds a managed copy only while the result still needs it; payload_json remains history.
+    version: 6,
+    up(db) {
+      db.exec(`
+        CREATE TABLE publication_attempts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          request_id TEXT NOT NULL UNIQUE,
+          editor_id TEXT NOT NULL,
+          draft_id INTEGER,
+          payload_json TEXT NOT NULL,
+          credential_id INTEGER NOT NULL CHECK (credential_id >= 1),
+          forum_id TEXT NOT NULL,
+          attachment_id INTEGER REFERENCES draft_attachments(id),
+          state TEXT NOT NULL CHECK (state IN ('sending', 'confirmed', 'failed', 'unknown', 'unconfirmed')),
+          problem TEXT CHECK (problem IS NULL OR problem IN (
+            'storage', 'identity', 'attachment', 'target', 'empty', 'busy', 'interval',
+            'rejected', 'rate-limited', 'captcha', 'network', 'response'
+          )),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          post_id TEXT,
+          thread_id TEXT,
+          saved_draft_id INTEGER,
+          CHECK (state != 'confirmed' OR (post_id IS NOT NULL AND thread_id IS NOT NULL))
+        );
+        CREATE UNIQUE INDEX publication_locked_draft ON publication_attempts(draft_id)
+          WHERE draft_id IS NOT NULL AND state IN ('sending', 'unknown', 'unconfirmed');
+        CREATE INDEX publication_attachment_id ON publication_attempts(attachment_id);
+        CREATE INDEX publication_identity_forum ON publication_attempts(credential_id, forum_id, created_at);
+
+        CREATE TABLE own_posts (
+          post_id TEXT PRIMARY KEY NOT NULL,
+          thread_id TEXT NOT NULL,
+          is_thread INTEGER NOT NULL CHECK (is_thread IN (0, 1)),
+          credential_id INTEGER CHECK (credential_id IS NULL OR credential_id >= 1),
+          evidence TEXT NOT NULL CHECK (evidence IN ('submission-readback', 'manual')),
+          confirmed_at TEXT NOT NULL,
+          CHECK (is_thread = 0 OR post_id = thread_id),
+          CHECK (evidence != 'submission-readback' OR credential_id IS NOT NULL)
+        );
+
+        -- Kept separate from reading settings so saving an older settings shape cannot reset it.
+        CREATE TABLE publication_settings (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          po_warning_enabled INTEGER NOT NULL CHECK (po_warning_enabled IN (0, 1))
+        );
+        INSERT INTO publication_settings (id, po_warning_enabled) VALUES (1, 1);
+      `)
+    }
   }
 ]

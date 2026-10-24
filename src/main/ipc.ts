@@ -13,6 +13,7 @@ import type { ImageService } from './images/service'
 import type { ReadingService } from './reading/service'
 import type { ReadingStore } from './storage/contract'
 import { emptyReadingState } from './storage/reading-state'
+import type { PublicationService } from './publication/service'
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
@@ -39,6 +40,7 @@ interface IpcDeps {
   store: ReadingStore
   identities: IdentityService
   drafts: DraftService
+  publication: PublicationService
   getStatus: () => AppStatus
   /** True only for the app's own renderer document in its main frame. */
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
@@ -217,7 +219,7 @@ class OperationRegistry {
 }
 
 export function registerIpc({
-  reading, images, identities, drafts, store, getStatus, isTrustedSender, chooseSavePath, chooseImageFile
+  reading, images, identities, drafts, publication, store, getStatus, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): {
   cancelAllFor: (sender: WebContents) => void
 } {
@@ -406,11 +408,36 @@ export function registerIpc({
     return drafts.selectThreadIdentity(forumId(input.threadId), credentialId(input.credentialId))
   })
 
+  handle(IpcChannel.submitPublication, async (_event, raw) => {
+    const input = record(raw)
+    return publication.submit({ requestId: viewId(input.requestId), editorId: viewId(input.editorId), payload: draftSaveInput(input.payload) })
+  })
+  handle(IpcChannel.resolvePoPrompt, async (_event, raw) => {
+    const input = record(raw)
+    if (!['switch', 'current', 'cancel'].includes(String(input.choice)) || typeof input.suppress !== 'boolean') throw new InvalidRequestError()
+    return publication.resolvePrompt({ token: viewId(input.token), choice: input.choice as 'switch' | 'current' | 'cancel', suppress: input.suppress })
+  })
+  handle(IpcChannel.listPublications, async () => publication.listAttempts())
+  handle(IpcChannel.getPublication, async (_event, raw) => publication.getAttempt({ attemptId: localId(record(raw).attemptId) }))
+  handle(IpcChannel.listOwnPosts, async () => publication.listOwnPosts())
+  handle(IpcChannel.addOwnPost, async (_event, raw) => {
+    const input = record(raw)
+    if (typeof input.isThread !== 'boolean') throw new InvalidRequestError()
+    return publication.addOwnPost({ postId: forumId(input.postId), threadId: forumId(input.threadId), isThread: input.isThread })
+  })
+  handle(IpcChannel.getPoWarning, async () => publication.getPoWarning())
+  handle(IpcChannel.setPoWarning, async (_event, raw) => {
+    const input = record(raw)
+    if (typeof input.enabled !== 'boolean') throw new InvalidRequestError()
+    return publication.setPoWarning({ enabled: input.enabled })
+  })
+
   handle(IpcChannel.getStatus, async () => getStatus())
 
   return {
     cancelAllFor: (sender) => {
       operations.cancelAllFor(sender)
+      publication.releasePrompts()
       void images.releaseOwner(String(sender.id))
       void drafts.releaseOwner(String(sender.id))
     }

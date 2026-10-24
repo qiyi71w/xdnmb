@@ -20,6 +20,8 @@ import { createRequestScheduler } from './reading/scheduler'
 import type { AppStore } from './storage/contract'
 import { openReadingStore } from './storage/store'
 import createStorageWorker from './storage/worker?nodeWorker'
+import { createPublicationAdapter } from './publication/adapter'
+import { createPublicationService } from './publication/service'
 
 /**
  * The only forum origin this app reads from (verified public JSON API). It is also the only origin
@@ -182,6 +184,15 @@ async function start(): Promise<void> {
 
   const draftFiles = await openManagedImageFiles(join(app.getPath('userData'), 'draft-images'))
   const drafts = createDraftService({ store: openedStore, files: draftFiles })
+  const publication = createPublicationService({
+    store: openedStore, drafts, files: draftFiles, protector: createSafeStorageProtector(),
+    clientFor: (userhash) => createForumClient({
+      transport: createForumTransport({ allowedOrigins: [FORUM_API_ORIGIN], credentialOrigins: [FORUM_API_ORIGIN] }),
+      baseUrl: FORUM_API_ORIGIN, browseIdentity: async () => userhash
+    }),
+    adapter: createPublicationAdapter()
+  })
+  await publication.recover().catch(() => console.error('[publication] recovery failed'))
   // No editor exists yet: copies no saved draft references, and leftover files, are removed.
   await drafts.recover().catch(() => console.error('[drafts] recovery failed'))
   serveManagedImages({ file: imageFiles, draft: draftFiles })
@@ -192,6 +203,7 @@ async function start(): Promise<void> {
     images,
     identities,
     drafts,
+    publication,
     store: openedStore,
     getStatus: () => ({ storage: openedStore.status, platform }),
     async chooseSavePath(sender, suggestedName, format) {

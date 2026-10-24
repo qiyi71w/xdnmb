@@ -8,6 +8,7 @@ import type {
   IdentityChoice, PostTarget
 } from './drafts'
 import type { AppSettings, MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
+import type { PublicationApi } from './publication'
 
 /**
  * Classified read failure. Server/body text is never included except a short
@@ -209,6 +210,7 @@ export interface XidaoApi {
     /** Remembers an explicit selection made in a reply editor for that thread only. */
     selectThreadIdentity(input: { threadId: ThreadId; credentialId: CredentialId }): Promise<IdentityMutationResult>
   }
+  publication: PublicationApi
   app: {
     getStatus(): Promise<AppStatus>
   }
@@ -247,5 +249,13 @@ export const IpcChannel = {
   releaseEditor: 'drafts:release-editor',
   postingIdentityFor: 'posting:identity-for',
   selectThreadIdentity: 'posting:select-thread-identity',
+  submitPublication: 'publication:submit',
+  resolvePoPrompt: 'publication:resolve-prompt',
+  listPublications: 'publication:list',
+  getPublication: 'publication:get',
+  listOwnPosts: 'publication:own-posts',
+  addOwnPost: 'publication:add-own-post',
+  getPoWarning: 'publication:get-po-warning',
+  setPoWarning: 'publication:set-po-warning',
   getStatus: 'app:get-status'
 } as const

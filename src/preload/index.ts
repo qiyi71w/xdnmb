@@ -50,6 +50,16 @@ const api: XidaoApi = {
     identityFor: (input) => ipcRenderer.invoke(IpcChannel.postingIdentityFor, input),
     selectThreadIdentity: (input) => ipcRenderer.invoke(IpcChannel.selectThreadIdentity, input)
   },
+  publication: {
+    submit: (input) => ipcRenderer.invoke(IpcChannel.submitPublication, input),
+    resolvePrompt: (input) => ipcRenderer.invoke(IpcChannel.resolvePoPrompt, input),
+    listAttempts: () => ipcRenderer.invoke(IpcChannel.listPublications),
+    getAttempt: (input) => ipcRenderer.invoke(IpcChannel.getPublication, input),
+    listOwnPosts: () => ipcRenderer.invoke(IpcChannel.listOwnPosts),
+    addOwnPost: (input) => ipcRenderer.invoke(IpcChannel.addOwnPost, input),
+    getPoWarning: () => ipcRenderer.invoke(IpcChannel.getPoWarning),
+    setPoWarning: (input) => ipcRenderer.invoke(IpcChannel.setPoWarning, input)
+  },
   app: {
     getStatus: () => ipcRenderer.invoke(IpcChannel.getStatus)
   }

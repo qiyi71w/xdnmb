@@ -14,6 +14,7 @@ import type { ImageFormat, ImageKind } from '../../shared/images'
 import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, ThreadReadingState } from '../../shared/reading'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
 import type { AttachmentId, DraftId, DraftSaveInput, PostFields, PostTarget } from '../../shared/drafts'
+import type { PublicationStore } from '../publication/contract'
 
 /** A write was refused because the database is read-only (newer schema) or unavailable. */
 export class StorageWriteRefusedError extends Error {
@@ -154,7 +155,7 @@ export interface DraftRecord {
 
 export type DraftWriteOutcome =
   | { ok: true; draft: DraftRecord }
-  | { ok: false; reason: 'not-found' | 'attachment-missing' }
+  | { ok: false; reason: 'not-found' | 'attachment-missing' | 'locked' }
 
 /**
  * Saved drafts, their attachment records and per-thread 发言饼干 selections. A draft has exactly
@@ -166,7 +167,7 @@ export interface DraftStore {
   /** Creates (`draftId: null`) or replaces a draft's saved version in one transaction. */
   saveDraft(input: DraftSaveInput, at: string): Promise<DraftWriteOutcome>
   /** False when it did not exist. Its attachment record stays until unreferenced records are deleted. */
-  deleteDraft(id: DraftId): Promise<boolean>
+  deleteDraft(id: DraftId): Promise<boolean | 'locked'>
   insertDraftAttachment(input: Omit<DraftAttachmentRecord, 'id'>): Promise<DraftAttachmentRecord>
   getDraftAttachment(id: AttachmentId): Promise<DraftAttachmentRecord | null>
   /**
@@ -181,4 +182,4 @@ export interface DraftStore {
   setThreadPostIdentity(threadId: ThreadId, id: CredentialId, at: string): Promise<boolean>
 }
 
-export type AppStore = ReadingStore & IdentityStore & DraftStore
+export type AppStore = ReadingStore & IdentityStore & DraftStore & PublicationStore

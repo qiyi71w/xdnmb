@@ -6,6 +6,7 @@ import { describeFailure, formatLocalTime } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { browseStatus } from '../identity/identityText'
 import type { IdentitiesState } from '../identity/useIdentities'
+import type { PendingAttempts } from '../publication/usePendingAttempts'
 import { feedKey } from './feeds'
 import type { DirectoryState } from './useDirectory'
 import './navigation.css'
@@ -57,7 +58,10 @@ export function Navigation({
   id,
   identities,
   onOpenSettings,
-  onOpenDrafts
+  onOpenDrafts,
+  onOpenAttempts,
+  onOpenOwnPosts,
+  pendingAttempts
 }: {
   state: DirectoryState
   selected: FeedRef | null
@@ -71,6 +75,11 @@ export function Navigation({
   onOpenSettings: () => void
   /** Opens the 草稿 library. */
   onOpenDrafts: () => void
+  /** Opens 发送记录. */
+  onOpenAttempts: () => void
+  /** Opens 我的发言. */
+  onOpenOwnPosts: () => void
+  pendingAttempts: PendingAttempts
 }) {
   const { directory } = state
   const sections = useMemo(() => navSections(directory), [directory])
@@ -146,6 +155,32 @@ export function Navigation({
         <button type="button" className="nav-item" aria-haspopup="dialog" onClick={onOpenDrafts}>
           <Icon name="draft" className="nav-item-icon" />
           <span className="nav-item-label">草稿</span>
+        </button>
+        <button
+          type="button"
+          className="nav-item"
+          aria-haspopup="dialog"
+          aria-label={
+            pendingAttempts.count !== null && pendingAttempts.count > 0
+              ? `发送记录，${pendingAttempts.count} 项需要留意`
+              : pendingAttempts.failed
+                ? '发送记录，状态读取失败'
+                : undefined
+          }
+          onClick={onOpenAttempts}
+        >
+          <Icon name="history" className="nav-item-icon" />
+          <span className="nav-item-label">发送记录</span>
+          {pendingAttempts.count !== null && pendingAttempts.count > 0 && (
+            <span className="nav-badge is-warning" aria-hidden="true">
+              {pendingAttempts.count} 待核对
+            </span>
+          )}
+          {pendingAttempts.failed && <Icon name="alert" size={14} className="nav-badge-icon" />}
+        </button>
+        <button type="button" className="nav-item" aria-haspopup="dialog" onClick={onOpenOwnPosts}>
+          <Icon name="person" className="nav-item-icon" />
+          <span className="nav-item-label">我的发言</span>
         </button>
       </div>
       <IdentityFooter identities={identities} onOpenSettings={onOpenSettings} />

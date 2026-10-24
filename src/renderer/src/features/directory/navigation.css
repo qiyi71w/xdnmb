@@ -172,10 +172,32 @@
 
 /* ---------- Browsing identity ---------- */
 
-/* App entries that are not feeds (草稿). Outside the roving feed list; ordinary Tab stops. */
+/* App entries that are not feeds (草稿, 发送记录, 我的发言). Outside the roving feed list; ordinary Tab stops. */
 .nav-tools {
+  display: grid;
+  gap: 1px;
   padding: 6px calc(8px - 4px * var(--nav-t));
   border-top: 1px solid var(--line-soft);
+}
+
+/* Sends still to be checked: text, not only color. */
+.nav-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.nav-badge.is-warning {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.nav-badge-icon {
+  flex: none;
+  color: var(--warn-ink);
 }
 
 .nav-account {

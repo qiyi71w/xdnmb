@@ -80,3 +80,26 @@ export function saveAriaShortcut(platform: AppPlatform | null): string | undefin
   if (platform === null) return undefined
   return platform === 'darwin' ? 'Meta+S' : 'Control+S'
 }
+
+/**
+ * 编辑器内发送: Cmd+Enter on macOS, Ctrl+Enter elsewhere, with no other modifier. Never while an
+ * input method is composing (including the keyCode 229 of IMEs that do not set `isComposing`)
+ * and never for auto-repeat, so a held key cannot send twice.
+ */
+export function isSendShortcut(event: KeyboardEvent, platform: AppPlatform): boolean {
+  if (event.key !== 'Enter' || event.repeat || event.isComposing || event.keyCode === 229) return false
+  if (event.altKey || event.shiftKey) return false
+  return platform === 'darwin' ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
+}
+
+/** 发送 shortcut shown on the button; empty until the platform is known. */
+export function sendShortcutLabel(platform: AppPlatform | null): string {
+  if (platform === null) return ''
+  return platform === 'darwin' ? '⌘↩' : 'Ctrl+Enter'
+}
+
+/** `aria-keyshortcuts` of 发送; undefined until the platform is known. */
+export function sendAriaShortcut(platform: AppPlatform | null): string | undefined {
+  if (platform === null) return undefined
+  return platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter'
+}

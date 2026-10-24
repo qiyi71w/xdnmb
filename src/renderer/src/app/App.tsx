@@ -9,9 +9,14 @@ import { Navigation, NavMeasure } from '../features/directory/Navigation'
 import { useDirectory } from '../features/directory/useDirectory'
 import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
 import { editorFor, editorForDraft, isUnsaved, unsavedInTab } from '../features/editor/editorsState'
+import { targetText } from '../features/editor/editorText'
 import { UnsavedEditorsDialog } from '../features/editor/UnsavedEditorsDialog'
 import { focusKey, useEditorsStore } from '../features/editor/useEditorsStore'
 import { EditorWorkspaceContext, type EditorWorkspace } from '../features/editor/workspace'
+import { AttemptsDialog } from '../features/publication/AttemptsDialog'
+import { OwnPostsDialog } from '../features/publication/OwnPostsDialog'
+import { PoPromptDialog } from '../features/publication/PoPromptDialog'
+import { usePendingAttempts } from '../features/publication/usePendingAttempts'
 import { useIdentities } from '../features/identity/useIdentities'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { ContentRegistryContext, createContentRegistry } from '../features/tabs/contentRegistry'
@@ -105,12 +110,17 @@ export function App() {
   const { start: startDirectory } = directory
   const identities = useIdentities()
   const editors = useEditorsStore()
-  const { current: currentEditors, dispatch: dispatchEditors, requestFocus, save: saveEditor } = editors
+  const { current: currentEditors, dispatch: dispatchEditors, requestFocus, save: saveEditor, resolvePrompt } = editors
+  const pendingAttempts = usePendingAttempts(editors.publicationRevision)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const openSettings = useCallback(() => setSettingsOpen(true), [])
   const closeSettings = useCallback(() => setSettingsOpen(false), [])
   const [draftsOpen, setDraftsOpen] = useState(false)
   const closeDrafts = useCallback(() => setDraftsOpen(false), [])
+  const [attemptsOpen, setAttemptsOpen] = useState(false)
+  const closeAttempts = useCallback(() => setAttemptsOpen(false), [])
+  const [ownPostsOpen, setOwnPostsOpen] = useState(false)
+  const closeOwnPosts = useCallback(() => setOwnPostsOpen(false), [])
   /** Tab whose close waits for its unsaved editors to be handled. */
   const [closing, setClosing] = useState<{ tabId: number; editorIds: EditorId[] } | null>(null)
 
@@ -381,6 +391,7 @@ export function App() {
    */
   const continueDraft = useCallback(
     (draft: SavedDraft) => {
+      setAttemptsOpen(false)
       setDraftsOpen(false)
       const existing = editorForDraft(currentEditors(), draft.id)
       if (existing !== null) {
@@ -405,6 +416,25 @@ export function App() {
     closeNav(false)
     setDraftsOpen(true)
   }, [closeNav])
+
+  /** 发送记录, also reachable from an editor and from a locked draft in the library. */
+  const openAttempts = useCallback(() => {
+    closeNav(false)
+    setDraftsOpen(false)
+    setAttemptsOpen(true)
+  }, [closeNav])
+
+  const openOwnPosts = useCallback(() => {
+    closeNav(false)
+    setOwnPostsOpen(true)
+  }, [closeNav])
+
+  /** Opens a target from 发送记录 / 我的发言 in a new tab (global split default), to read or check it. */
+  const openTargetInTab = useCallback((target: PostTarget) => {
+    setAttemptsOpen(false)
+    setOwnPostsOpen(false)
+    dispatch({ type: 'open-tab', entry: entryFor(target), split: stateRef.current.settings.newTabSplitDefault, background: false })
+  }, [])
 
   /**
    * Ctrl/Cmd+S: the editor holding focus, else the expanded editor the active tab shows (reader
@@ -462,7 +492,10 @@ export function App() {
   useLayoutEffect(() => {
     actions.current = {
       'new-tab': newTab,
-      'close-tab': () => withActive((tab) => closeTab(tab.id)),
+      // Not behind a modal dialog (e.g. the PO identity question holding a send).
+      'close-tab': () => {
+        if (document.querySelector('dialog[open]') === null) withActive((tab) => closeTab(tab.id))
+      },
       'next-tab': () => dispatch({ type: 'cycle', delta: 1 }),
       'previous-tab': () => dispatch({ type: 'cycle', delta: -1 }),
       refresh,
@@ -509,14 +542,17 @@ export function App() {
   } as CSSProperties
 
   const editorWorkspace = useMemo<EditorWorkspace>(
-    () => ({ store: editors, identities, platform, directory: dirData, forumName, retarget }),
-    [editors, identities, platform, dirData, forumName, retarget]
+    () => ({ store: editors, identities, platform, directory: dirData, forumName, retarget, openAttempts }),
+    [editors, identities, platform, dirData, forumName, retarget, openAttempts]
   )
 
   const tabTitle = (tabId: number) => {
     const tab = tabs?.tabs.find((item) => item.id === tabId)
     return tab === undefined ? '已关闭的标签' : titleOf(tab)
   }
+
+  /** A send waiting for the PO identity answer (one at a time: the dialog is modal). */
+  const promptEditor = editors.state.editors.find((editor) => editor.publication?.phase === 'prompt')
 
   return (
     <SettingsOpenerContext value={openSettings}>
@@ -547,6 +583,9 @@ export function App() {
                     identities={identities}
                     onOpenSettings={openSettings}
                     onOpenDrafts={openDrafts}
+                    onOpenAttempts={openAttempts}
+                    onOpenOwnPosts={openOwnPosts}
+                    pendingAttempts={pendingAttempts}
                   />
                 </div>
               )}
@@ -605,6 +644,9 @@ export function App() {
                     identities={identities}
                     onOpenSettings={openSettings}
                     onOpenDrafts={openDrafts}
+                    onOpenAttempts={openAttempts}
+                    onOpenOwnPosts={openOwnPosts}
+                    pendingAttempts={pendingAttempts}
                   />
                 </>
               )}
@@ -622,8 +664,34 @@ export function App() {
             <DraftLibraryDialog
               tabTitle={tabTitle}
               onContinue={continueDraft}
+              onOpenAttempts={openAttempts}
               onClose={closeDrafts}
               fallbackFocus={() => navTriggerRef.current}
+            />
+          )}
+          {attemptsOpen && (
+            <AttemptsDialog
+              tabTitle={tabTitle}
+              onContinue={continueDraft}
+              onOpenTarget={openTargetInTab}
+              onClose={closeAttempts}
+              fallbackFocus={() => navTriggerRef.current}
+            />
+          )}
+          {ownPostsOpen && (
+            <OwnPostsDialog
+              onOpenThread={(threadId) => openTargetInTab({ kind: 'reply', threadId })}
+              onClose={closeOwnPosts}
+              fallbackFocus={() => navTriggerRef.current}
+            />
+          )}
+          {promptEditor !== undefined && promptEditor.publication?.phase === 'prompt' && (
+            <PoPromptDialog
+              key={promptEditor.publication.prompt.token}
+              prompt={promptEditor.publication.prompt}
+              target={targetText(promptEditor.target, forumName)}
+              resolving={promptEditor.publication.resolving}
+              onChoose={(choice, suppress) => void resolvePrompt(promptEditor.id, choice, suppress)}
             />
           )}
           {closing !== null && (

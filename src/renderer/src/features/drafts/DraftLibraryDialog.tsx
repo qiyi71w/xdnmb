@@ -11,49 +11,68 @@ import './drafts.css'
 
 type ListState = { status: 'loading' } | { status: 'failed' } | { status: 'ready'; drafts: SavedDraft[] }
 
+/** Drafts that unresolved attempts hold (no edit, save or delete); `null`: could not be read. */
+type Locks = ReadonlySet<DraftId> | null
+
 /**
  * 草稿 library: every saved draft, most recently saved first; several may share a target.
  * 继续 hands the draft to the shell (focus its editor, or open it in a new tab); 删除 removes the
- * record after confirmation and is unavailable while the draft is being edited.
+ * record after confirmation and is unavailable while the draft is being edited. A draft whose send
+ * is still sending or unresolved is locked: it can only be looked up in 发送记录.
  */
 export function DraftLibraryDialog({
   tabTitle,
   onContinue,
+  onOpenAttempts,
   onClose,
   fallbackFocus
 }: {
   tabTitle: (tabId: number) => string
   onContinue: (draft: SavedDraft) => void
+  onOpenAttempts: () => void
   onClose: () => void
   fallbackFocus?: () => HTMLElement | null
 }) {
   const { store, identities, forumName } = useEditorWorkspace()
   const [list, setList] = useState<ListState>({ status: 'loading' })
+  const [locks, setLocks] = useState<Locks>(() => new Set())
   const [confirming, setConfirming] = useState<DraftId | null>(null)
   const [deleting, setDeleting] = useState<DraftId | null>(null)
-  const [deleteFailed, setDeleteFailed] = useState<DraftId | null>(null)
+  const [deleteFailed, setDeleteFailed] = useState<{ draftId: DraftId; locked: boolean } | null>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const closeRef = useRef<HTMLDivElement>(null)
   const alive = useRef(true)
   const focusAfterDelete = useRef<number | null>(null)
 
-  const load = useCallback(async () => {
-    setList({ status: 'loading' })
-    try {
-      const result = await window.xidao.drafts.list()
-      if (alive.current) setList(result.ok ? { status: 'ready', drafts: result.drafts } : { status: 'failed' })
-    } catch {
-      if (alive.current) setList({ status: 'failed' })
-    }
+  const load = useCallback(async (quiet: boolean) => {
+    if (!quiet) setList({ status: 'loading' })
+    const [drafts, attempts] = await Promise.allSettled([window.xidao.drafts.list(), window.xidao.publication.listAttempts()])
+    if (!alive.current) return
+    if (attempts.status === 'fulfilled' && attempts.value.ok) {
+      const held = attempts.value.attempts.filter(
+        (attempt) => attempt.state === 'sending' || attempt.state === 'unknown' || attempt.state === 'unconfirmed'
+      )
+      setLocks(new Set(held.flatMap((attempt) => (attempt.draftId === null ? [] : [attempt.draftId]))))
+    } else setLocks(null)
+    if (drafts.status === 'fulfilled' && drafts.value.ok) setList({ status: 'ready', drafts: drafts.value.drafts })
+    else setList((current) => (quiet && current.status === 'ready' ? current : { status: 'failed' }))
   }, [])
 
   useEffect(() => {
     alive.current = true
-    void load()
     return () => {
       alive.current = false
     }
-  }, [load])
+  }, [])
+
+  // Read again when a send changed drafts (failed → saved, confirmed → cleared) while open.
+  const revision = store.publicationRevision
+  const loaded = useRef(false)
+  useEffect(() => {
+    const quiet = loaded.current
+    loaded.current = true
+    void load(quiet)
+  }, [load, revision])
 
   // Confirming moves focus to 确认删除; leaving the confirmation returns it to that row's 删除.
   const confirmRef = useRef<HTMLButtonElement>(null)
@@ -84,17 +103,18 @@ export function DraftLibraryDialog({
     if (deleting !== null) return
     setDeleting(draft.id)
     setDeleteFailed(null)
-    let ok = false
+    let failure: { draftId: DraftId; locked: boolean } | null = null
     try {
-      ok = (await window.xidao.drafts.delete({ draftId: draft.id })).ok
+      const result = await window.xidao.drafts.delete({ draftId: draft.id })
+      if (!result.ok) failure = { draftId: draft.id, locked: result.reason === 'locked' }
     } catch {
-      ok = false
+      failure = { draftId: draft.id, locked: false }
     }
     if (!alive.current) return
     setDeleting(null)
     setConfirming(null)
-    if (!ok) {
-      setDeleteFailed(draft.id)
+    if (failure !== null) {
+      setDeleteFailed(failure)
       return
     }
     focusAfterDelete.current = index
@@ -114,10 +134,16 @@ export function DraftLibraryDialog({
             <div className="notice-text">
               <p className="notice-title">草稿读取失败：本地存储不可用</p>
             </div>
-            <button type="button" className="btn btn-small" onClick={() => void load()}>
+            <button type="button" className="btn btn-small" onClick={() => void load(false)}>
               重试
             </button>
           </div>
+        )}
+        {list.status === 'ready' && locks === null && list.drafts.length > 0 && (
+          <p className="notice-inline is-warning" role="status">
+            <Icon name="alert" size={14} />
+            发送记录读取失败，无法显示哪些草稿因发送待确认而锁定；锁定的草稿仍不能修改或删除。
+          </p>
         )}
         {list.status === 'ready' && list.drafts.length === 0 && (
           <div className="drafts-empty" role="status">
@@ -129,6 +155,7 @@ export function DraftLibraryDialog({
           <ul className="drafts-list" ref={listRef} aria-label={`草稿列表，共 ${list.drafts.length} 份`}>
             {list.drafts.map((draft, index) => {
               const editing = editorForDraft(store.state, draft.id)
+              const locked = locks?.has(draft.id) === true
               const identity = credentialLine(draft.credentialId, identities.overview)
               const target = targetText(draft.target, forumName)
               const rowId = `draft-${draft.id}`
@@ -164,10 +191,18 @@ export function DraftLibraryDialog({
                         正在「{tabTitle(editing.tabId)}」标签编辑
                       </p>
                     )}
-                    {deleteFailed === draft.id && (
+                    {locked && (
+                      <p className="draft-locked" id={`${rowId}-locked`}>
+                        <Icon name="alert" size={13} />
+                        有一次发送尚无结果，已锁定：不能继续编辑或删除，请在发送记录中核对
+                      </p>
+                    )}
+                    {deleteFailed?.draftId === draft.id && (
                       <p className="notice-inline is-warning" role="alert">
                         <Icon name="alert" size={14} />
-                        删除失败：本地存储不可用，草稿仍保留
+                        {deleteFailed.locked
+                          ? '删除失败：这份草稿有一次发送尚无结果，已锁定'
+                          : '删除失败：本地存储不可用，草稿仍保留'}
                       </p>
                     )}
                   </div>
@@ -188,21 +223,33 @@ export function DraftLibraryDialog({
                     </div>
                   ) : (
                     <div className="draft-actions">
-                      <button
-                        type="button"
-                        className="btn btn-small"
-                        aria-describedby={`${rowId}-target`}
-                        onClick={() => onContinue(draft)}
-                      >
-                        <Icon name="draft" size={14} />
-                        继续
-                      </button>
+                      {locked && editing === null ? (
+                        <button
+                          type="button"
+                          className="btn btn-small"
+                          aria-describedby={`${rowId}-locked`}
+                          onClick={onOpenAttempts}
+                        >
+                          <Icon name="history" size={14} />
+                          查看发送记录
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-small"
+                          aria-describedby={`${rowId}-target`}
+                          onClick={() => onContinue(draft)}
+                        >
+                          <Icon name="draft" size={14} />
+                          继续
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="btn btn-small btn-danger"
                         data-delete-id={draft.id}
-                        aria-describedby={editing !== null ? `${rowId}-editing` : `${rowId}-target`}
-                        disabled={editing !== null || deleting !== null}
+                        aria-describedby={locked ? `${rowId}-locked` : editing !== null ? `${rowId}-editing` : `${rowId}-target`}
+                        disabled={locked || editing !== null || deleting !== null}
                         onClick={() => {
                           setDeleteFailed(null)
                           setConfirming(draft.id)

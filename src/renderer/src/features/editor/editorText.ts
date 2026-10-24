@@ -1,6 +1,7 @@
 import type { AttachFailure, DraftAttachment, IdentityChoice, PostFields, PostTarget } from '../../../../shared/drafts'
 import type { CredentialId, IdentityOverview } from '../../../../shared/identity'
 import { formatLocalTime } from '../../lib/format'
+import { ATTEMPT_STATE_LABEL } from '../publication/publicationText'
 import { isUnsaved, type Editor, type IdentityStatus } from './editorsState'
 import type { SaveFailure } from './useEditorsStore'
 
@@ -58,8 +59,21 @@ export function credentialLine(credentialId: CredentialId | null, overview: Iden
   return credential === undefined ? { text: MISSING_IDENTITY_TEXT, warning: true } : { text: credential.name, warning: false }
 }
 
-/** 未保存 / 草稿·已保存 时间 / 草稿·有未保存修改. */
+/** 未保存 / 草稿·已保存 时间 / 草稿·有未保存修改; a locked editor shows its send instead. */
 export function editorStateText(editor: Editor): string {
+  const publication = editor.publication
+  if (publication !== null) {
+    switch (publication.phase) {
+      case 'submitting':
+        return '正在提交发送…'
+      case 'prompt':
+        return '等待确认发言饼干'
+      case 'uncertain':
+        return '提交情况待核对'
+      case 'attempt':
+        return ATTEMPT_STATE_LABEL[publication.attempt.state]
+    }
+  }
   if (editor.draft === null) return '未保存'
   return isUnsaved(editor) ? '草稿·有未保存修改' : `草稿·已保存 ${formatLocalTime(editor.draft.savedAt)}`
 }
@@ -68,6 +82,7 @@ export const SAVE_FAILURE_TEXT: Record<SaveFailure, string> = {
   storage: '未能保存：本地存储不可用或写入失败，内容仍保留在编辑中',
   'not-found': '未能保存：原草稿已不存在，内容仍保留在编辑中',
   'attachment-missing': '未能保存：附图的本地副本已丢失，请移除或重新添加图片后再保存',
+  locked: '未能保存：这份内容有一次发送尚无结果，已锁定，不能作为草稿修改',
   internal: '未能保存：应用内部请求失败，内容仍保留在编辑中'
 }
 

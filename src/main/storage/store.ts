@@ -55,7 +55,7 @@ export async function openReadingStore(options: {
     }
   }
 
-  /** Without a usable database: reads see nothing stored, every write is refused. */
+  /** Legacy reading fallbacks stay usable offline; publication reads and all writes must fail. */
   function unavailable<Method extends StorageMethod>(
     method: Method,
     args: Parameters<ReadingDatabase[Method]>
@@ -160,6 +160,16 @@ export async function openReadingStore(options: {
     listDraftAttachmentFileNames: () => request('listDraftAttachmentFileNames'),
     getThreadPostIdentity: (threadId) => request('getThreadPostIdentity', threadId),
     setThreadPostIdentity: (threadId, id, at) => request('setThreadPostIdentity', threadId, id, at),
+    createPublication: (input) => request('createPublication', input),
+    listPublications: () => request('listPublications'),
+    getPublication: (id) => request('getPublication', id),
+    finishPublication: (input) => request('finishPublication', input),
+    recoverPublications: (at) => request('recoverPublications', at),
+    listOwnPosts: () => request('listOwnPosts'),
+    addManualOwnPost: (input) => request('addManualOwnPost', input),
+    getPoWarningEnabled: () => request('getPoWarningEnabled'),
+    setPoWarningEnabled: (enabled) => request('setPoWarningEnabled', enabled),
+    lastPublicationAt: (credentialId, forumId) => request('lastPublicationAt', credentialId, forumId),
     close() {
       if (!closePromise) {
         closing = true

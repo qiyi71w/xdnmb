@@ -102,3 +102,17 @@
   gap: 6px;
   margin-left: auto;
 }
+
+.draft-locked {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--warn-ink);
+}
+
+.draft-locked .icon {
+  flex: none;
+  margin-top: 1px;
+}

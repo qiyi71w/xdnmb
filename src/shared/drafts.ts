@@ -79,13 +79,14 @@ export interface DraftSaveInput {
  * - `storage`: local storage is unavailable, read-only or the write failed.
  * - `not-found`: the draft no longer exists.
  * - `attachment-missing`: the attachment's managed copy is gone.
+ * - `locked`: a sending or unresolved publication owns the saved draft.
  * Every failure leaves the previously saved version untouched.
  */
 export type DraftSaveResult =
   | { ok: true; draft: SavedDraft }
-  | { ok: false; reason: 'storage' | 'not-found' | 'attachment-missing' }
+  | { ok: false; reason: 'storage' | 'not-found' | 'attachment-missing' | 'locked' }
 
-export type DraftDeleteResult = { ok: true } | { ok: false; reason: 'storage' }
+export type DraftDeleteResult = { ok: true } | { ok: false; reason: 'storage' | 'locked' }
 
 export type DraftListResult = { ok: true; drafts: SavedDraft[] } | { ok: false; reason: 'storage' }
 
