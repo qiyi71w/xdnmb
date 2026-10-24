@@ -135,6 +135,35 @@ describe('quote navigation in the tab history', () => {
       )
     }
   })
+
+  it('walks subscriptions → reader → quote → back → a retained (offline) open through one history', () => {
+    const subscriptions = { kind: 'subscriptions' } as const
+    let state = initialTabsState(true)
+    const id = state.activeId
+    state = run(
+      state,
+      { type: 'navigate', tabId: id, entry: { kind: 'list', feed: subscriptions } },
+      { type: 'select-thread', tabId: id, thread: open('100') }
+    )
+    state = quote(state, left('101', 1), open('200', '250'))
+    // The subscription list stays beside the located target, as any split list does.
+    expect(currentEntry(activeTab(state))).toMatchObject({ kind: 'list', feed: subscriptions, origin: 'quote', pane: 'reader', thread: { threadId: '200' } })
+
+    state = run(state, { type: 'back', tabId: id })
+    expect(currentEntry(activeTab(state))).toMatchObject({
+      kind: 'list', feed: subscriptions, origin: null, thread: { threadId: '100', target: null, snapshot: left('101', 1) }
+    })
+
+    // 打开 from 离线 is a new step that replaces the forward (quote) branch.
+    state = run(state, { type: 'navigate', tabId: id, entry: { kind: 'thread', thread: open('300') } })
+    const tab = activeTab(state)
+    expect(tab.entries.map((entry) => [entry.kind, entry.thread?.threadId, entry.origin])).toEqual([
+      ['list', undefined, null],
+      ['list', '100', null],
+      ['thread', '300', null]
+    ])
+    expect(currentEntry(activeTab(run(state, { type: 'back', tabId: id })))).toMatchObject({ feed: subscriptions, thread: { threadId: '100' } })
+  })
 })
 
 describe('temporary display of a target hidden by 只看 PO', () => {

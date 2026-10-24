@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from 'react'
 import { EditorDock } from '../features/editor/EditorDock'
 import type { FeedRef, ForumId, ThreadSummary } from '../../../shared/forum'
 import { feedKey, type FeedInfo } from '../features/directory/feeds'
+import { SubscriptionPane } from '../features/subscriptions/SubscriptionPane'
 import { FeedPane } from '../features/feed/FeedPane'
 import type { LayoutResult } from '../features/layout/layout'
 import { currentEntry, type Tab } from '../features/tabs/tabsState'
@@ -86,7 +87,7 @@ export function TabView({
   } else if (entry.feed === null) {
     body = (
       <div className="pane-empty">
-        <p className="pane-empty-title">选择时间线或版面</p>
+        <p className="pane-empty-title">选择订阅、时间线或版面</p>
         <p className="pane-empty-text">从导航中选择后，串列表会显示在这个标签里。</p>
         {onOpenNav !== null && (
           <button type="button" className="btn pane-empty-action" onClick={onOpenNav}>
@@ -97,14 +98,24 @@ export function TabView({
       </div>
     )
   } else {
-    const info = feedInfo(entry.feed)
-    // New threads go to forums only; timelines have no post target.
+    const feed = entry.feed
+    const selectedThreadId = tab.split ? (entry.thread?.threadId ?? null) : null
+    const info = feed.kind === 'subscriptions' ? null : feedInfo(feed)
+    // New threads go to forums only; timelines and subscriptions have no post target.
     const listDock =
-      entry.feed.kind === 'forum' ? (
-        <EditorDock tabId={tab.id} target={{ kind: 'thread', forumId: entry.feed.id }} displayed={active && listVisible} />
+      feed.kind === 'forum' ? (
+        <EditorDock tabId={tab.id} target={{ kind: 'thread', forumId: feed.id }} displayed={active && listVisible} />
       ) : null
     const list =
-      info === null ? (
+      feed.kind === 'subscriptions' ? (
+        <SubscriptionPane
+          key={`${entry.key}:subscriptions`}
+          entryKey={entry.key}
+          forumNames={forumNames}
+          selectedThreadId={selectedThreadId}
+          onOpenThread={(summary) => onSelectThread(tab.id, summary)}
+        />
+      ) : info === null ? (
         <div className="list-pane">
           <div className="pane-empty list-pending">
             <Loading>正在读取版面目录…</Loading>
@@ -113,11 +124,11 @@ export function TabView({
         </div>
       ) : (
         <FeedPane
-          key={`${entry.key}:${feedKey(entry.feed)}`}
+          key={`${entry.key}:${feedKey(feed)}`}
           entryKey={entry.key}
           info={info}
           forumNames={forumNames}
-          selectedThreadId={tab.split ? (entry.thread?.threadId ?? null) : null}
+          selectedThreadId={selectedThreadId}
           onOpenThread={(summary) => onSelectThread(tab.id, summary)}
           footer={listDock}
         />

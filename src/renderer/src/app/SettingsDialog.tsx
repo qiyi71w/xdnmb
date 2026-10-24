@@ -5,6 +5,8 @@ import { Modal, ModalHeader } from '../components/Modal'
 import { CacheSection } from '../features/content/CacheSection'
 import { CookieSection } from '../features/identity/CookieSection'
 import type { IdentitiesState } from '../features/identity/useIdentities'
+import { SubscriptionSection } from '../features/subscriptions/SubscriptionSection'
+import type { SubscriptionsState } from '../features/subscriptions/useSubscriptions'
 import './settings.css'
 
 /**
@@ -13,22 +15,26 @@ import './settings.css'
  */
 export function SettingsDialog({
   identities,
+  subscriptions,
   settings,
   onSettingsChange,
   onClose
 }: {
   identities: IdentitiesState
+  subscriptions: SubscriptionsState
   settings: AppSettings
   onSettingsChange: (settings: AppSettings) => void
   onClose: () => void
 }) {
   const titleId = useId()
   const { refresh } = identities
+  const { refreshOverview: refreshSubscriptions } = subscriptions
 
   // Show the current state each time settings opens.
   useEffect(() => {
     void refresh()
-  }, [refresh])
+    void refreshSubscriptions()
+  }, [refresh, refreshSubscriptions])
 
   return (
     <Modal labelledBy={titleId} onClose={onClose}>
@@ -36,6 +42,7 @@ export function SettingsDialog({
       <div className="modal-body settings-body">
         <TabsSection settings={settings} onChange={onSettingsChange} />
         <CookieSection identities={identities} />
+        <SubscriptionSection subscriptions={subscriptions} />
         <CacheSection />
       </div>
     </Modal>

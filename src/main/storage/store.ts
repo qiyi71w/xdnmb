@@ -68,6 +68,12 @@ export async function openReadingStore(options: {
       case 'loadRoleSelections':
         value = { browse: { state: 'none' }, 'default-post': { state: 'none' }, 'web-sync': { state: 'none' } }
         break
+      case 'loadSubscriptionConfiguration':
+        value = { context: { generation: 0, appCredentialId: null, webCredentialId: null }, source: 'app' }; break
+      case 'loadSubscriptionObservation':
+      case 'loadSubscriptionObservationById':
+      case 'loadSubscriptionAppCiphertext': value = null; break
+      case 'loadSubscriptionOperations': value = []; break
       case 'loadDirectory':
       case 'loadFeedPage':
       case 'loadThreadPage':
@@ -181,6 +187,16 @@ export async function openReadingStore(options: {
     holdOfflineImage: (threadId, postId) => request('holdOfflineImage', threadId, postId),
     listOfflineImagePosts: (threadId, after, limit) => request('listOfflineImagePosts', threadId, after, limit),
     recoverContent: () => request('recoverContent'),
+    loadSubscriptionConfiguration: () => request('loadSubscriptionConfiguration'),
+    setSubscriptionAppCredential: (id, ciphertext) => request('setSubscriptionAppCredential', id, ciphertext),
+    loadSubscriptionAppCiphertext: (id) => request('loadSubscriptionAppCiphertext', id),
+    setSubscriptionSource: (source) => request('setSubscriptionSource', source),
+    loadSubscriptionObservation: (source, context, validOnly) => request('loadSubscriptionObservation', source, context, validOnly),
+    loadSubscriptionObservationById: (id) => request('loadSubscriptionObservationById', id),
+    saveSubscriptionObservation: (observation, attention) => request('saveSubscriptionObservation', observation, attention),
+    saveSubscriptionOperation: (operation) => request('saveSubscriptionOperation', operation),
+    loadSubscriptionOperations: () => request('loadSubscriptionOperations'),
+    recoverSubscriptionOperations: () => request('recoverSubscriptionOperations'),
     close() {
       if (!closePromise) {
         closing = true

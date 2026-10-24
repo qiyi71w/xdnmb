@@ -3,6 +3,7 @@ import {
   activeTab,
   currentEntry,
   initialTabsState,
+  listKey,
   tabsReducer,
   type TabsAction,
   type TabsState,
@@ -36,7 +37,11 @@ describe('tabs and per-tab history', () => {
     )
     const tab = activeTab(after)
     expect(tab.split).toBe(true)
-    expect(tab.entries.map((entry) => (entry.kind === 'list' ? entry.feed?.id ?? null : entry.thread.threadId))).toEqual([null, '4', '5'])
+    expect(tab.entries.map((entry) => (entry.kind === 'list' ? (entry.feed === null ? null : listKey(entry.feed)) : entry.thread.threadId))).toEqual([
+      null,
+      'forum:4',
+      'forum:5'
+    ])
     const back = currentEntry(activeTab(run(after, { type: 'back', tabId: id })))
     expect(back).toMatchObject({ kind: 'list', feed: forum4, thread: { threadId: '200' }, pane: 'reader' })
   })
@@ -107,5 +112,21 @@ describe('tabs and per-tab history', () => {
     expect(state.tabs).toHaveLength(1)
     expect(activeTab(state)).toMatchObject({ split: false, index: 0 })
     expect(currentEntry(activeTab(state))).toMatchObject({ kind: 'list', feed: null })
+  })
+
+  it('treats the subscription list as one list step whose split reader behaves like any feed', () => {
+    const state = initialTabsState(true)
+    const id = state.activeId
+    const after = run(
+      state,
+      { type: 'navigate', tabId: id, entry: { kind: 'list', feed: forum4 } },
+      { type: 'navigate', tabId: id, entry: { kind: 'list', feed: { kind: 'subscriptions' } } },
+      { type: 'navigate', tabId: id, entry: { kind: 'list', feed: { kind: 'subscriptions' } } },
+      { type: 'select-thread', tabId: id, thread: thread('300') }
+    )
+    const tab = activeTab(after)
+    expect(tab.entries).toHaveLength(3)
+    expect(currentEntry(tab)).toMatchObject({ kind: 'list', feed: { kind: 'subscriptions' }, thread: { threadId: '300' }, pane: 'reader' })
+    expect(currentEntry(activeTab(run(after, { type: 'back', tabId: id })))).toMatchObject({ kind: 'list', feed: forum4 })
   })
 })

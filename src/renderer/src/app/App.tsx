@@ -15,6 +15,7 @@ import { UnsavedEditorsDialog } from '../features/editor/UnsavedEditorsDialog'
 import { focusKey, useEditorsStore } from '../features/editor/useEditorsStore'
 import { EditorWorkspaceContext, type EditorWorkspace } from '../features/editor/workspace'
 import { useIdentities } from '../features/identity/useIdentities'
+import { SubscriptionsContext, useSubscriptions } from '../features/subscriptions/useSubscriptions'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { QuoteCard } from '../features/quote/QuoteCard'
 import { QuoteActiveContext, QuoteControllerContext } from '../features/quote/QuoteContext'
@@ -24,8 +25,10 @@ import {
   activeTab,
   currentEntry,
   initialTabsState,
+  listKey,
   tabsReducer,
   type EntryInit,
+  type ListRef,
   type Tab,
   type TabEntry,
   type TabsAction,
@@ -111,15 +114,28 @@ export function App() {
   const identities = useIdentities()
   const editors = useEditorsStore()
   const { current: currentEditors, dispatch: dispatchEditors, requestFocus, save: saveEditor } = editors
+  const subscriptions = useSubscriptions()
+  const { refreshOverview: refreshSubscriptions, refreshOperations: refreshSubscriptionJournal } = subscriptions
   const [settingsOpen, setSettingsOpen] = useState(false)
   const openSettings = useCallback(() => setSettingsOpen(true), [])
-  const closeSettings = useCallback(() => setSettingsOpen(false), [])
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false)
+    // UUID, binding or source may have changed inside settings.
+    void refreshSubscriptions()
+    void refreshSubscriptionJournal()
+  }, [refreshSubscriptions, refreshSubscriptionJournal])
   const [draftsOpen, setDraftsOpen] = useState(false)
   const closeDrafts = useCallback(() => setDraftsOpen(false), [])
   const [retained, setRetained] = useState<RetainedList | null>(null)
   const closeRetained = useCallback(() => setRetained(null), [])
   /** Tab whose close waits for its unsaved editors to be handled. */
   const [closing, setClosing] = useState<{ tabId: number; editorIds: EditorId[] } | null>(null)
+
+  // A web-sync selection (or a removed/renamed credential) changes the subscription overview too.
+  const identityOverview = identities.overview
+  useEffect(() => {
+    if (identityOverview !== null) void refreshSubscriptions()
+  }, [identityOverview, refreshSubscriptions])
 
   useEffect(() => {
     let alive = true
@@ -265,11 +281,11 @@ export function App() {
   }, [])
 
   const selectFeed = useCallback(
-    (ref: FeedRef) => {
+    (ref: ListRef) => {
       closeNav()
       withActive((tab) => {
         const entry = currentEntry(tab)
-        if (entry.kind === 'list' && entry.feed !== null && feedKey(entry.feed) === feedKey(ref)) return
+        if (entry.kind === 'list' && entry.feed !== null && listKey(entry.feed) === listKey(ref)) return
         leave(tab)
         dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'list', feed: ref } })
       })
@@ -536,7 +552,10 @@ export function App() {
       const entry = currentEntry(tab)
       if (entry.kind === 'thread') return threadTitle(entry.thread)
       if (entry.feed === null) return '新标签'
-      const name = feedInfo(entry.feed)?.name ?? (entry.feed.kind === 'timeline' ? '时间线' : '版面')
+      const name =
+        entry.feed.kind === 'subscriptions'
+          ? '订阅'
+          : (feedInfo(entry.feed)?.name ?? (entry.feed.kind === 'timeline' ? '时间线' : '版面'))
       return entry.thread !== null && tab.split ? `${name} › ${threadTitle(entry.thread)}` : name
     },
     [feedInfo]
@@ -564,6 +583,7 @@ export function App() {
   return (
     <SettingsOpenerContext value={openSettings}>
       <EditorWorkspaceContext value={editorWorkspace}>
+      <SubscriptionsContext value={subscriptions}>
         <div className="app" ref={appRef}>
           <StorageBanner storage={storage} />
           <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
@@ -665,6 +685,7 @@ export function App() {
           {settingsOpen && (
             <SettingsDialog
               identities={identities}
+              subscriptions={subscriptions}
               settings={settings}
               onSettingsChange={setSettings}
               onClose={closeSettings}
@@ -702,6 +723,7 @@ export function App() {
             />
           )}
         </div>
+      </SubscriptionsContext>
       </EditorWorkspaceContext>
     </SettingsOpenerContext>
   )

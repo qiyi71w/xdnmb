@@ -337,7 +337,7 @@ describe('retained content storage', () => {
     old.pragma('user_version = 5')
     old.prepare('INSERT INTO thread_visits VALUES (?, ?, ?, 1)').run('100', t0, t0)
     old.close()
-    const failed = openReadingDatabase(path, [...MIGRATIONS, { version: 7, up() { throw new Error('injected migration failure') } }])
+    const failed = openReadingDatabase(path, [...MIGRATIONS, { version: Math.max(...MIGRATIONS.map((migration) => migration.version)) + 1, up() { throw new Error('injected migration failure') } }])
     connections.push(failed)
     expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
     const preserved = raw(path)
@@ -346,7 +346,7 @@ describe('retained content storage', () => {
     preserved.close()
     const upgraded = openReadingDatabase(path)
     connections.push(upgraded)
-    expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: 6 })
+    expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((migration) => migration.version)) })
     expect(upgraded.listRetained('history').map((entry) => entry.threadId)).toEqual(['100'])
   })
 

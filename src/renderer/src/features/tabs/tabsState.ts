@@ -60,17 +60,28 @@ export interface ThreadOpen {
 export type EntryOrigin = 'quote' | null
 
 /**
+ * What a list entry shows: a forum/timeline feed, or the remote subscription list of whichever
+ * source (App / 网页) is currently selected. Renderer-only; forum reads still take a `FeedRef`.
+ */
+export type ListRef = FeedRef | { kind: 'subscriptions' }
+
+export function listKey(ref: ListRef): string {
+  return ref.kind === 'subscriptions' ? 'subscriptions' : `${ref.kind}:${ref.id}`
+}
+
+/**
  * One step of a tab's navigation history.
- * - `list`: a forum/timeline list (`feed` null = a new tab that has not chosen one yet). In split
- *   layout the open thread is shown beside the list; `pane` is what the single-pane fallback shows.
+ * - `list`: a forum/timeline/subscription list (`feed` null = a new tab that has not chosen one
+ *   yet). In split layout the open thread is shown beside the list; `pane` is what the
+ *   single-pane fallback shows.
  * - `thread`: a thread opened as a whole page (split off).
  */
 export type TabEntry =
-  | { kind: 'list'; key: number; feed: FeedRef | null; thread: ThreadOpen | null; pane: 'list' | 'reader'; origin: EntryOrigin }
+  | { kind: 'list'; key: number; feed: ListRef | null; thread: ThreadOpen | null; pane: 'list' | 'reader'; origin: EntryOrigin }
   | { kind: 'thread'; key: number; thread: ThreadOpen; origin: EntryOrigin }
 
 export type EntryInit =
-  | { kind: 'list'; feed: FeedRef | null; thread?: ThreadOpen | null }
+  | { kind: 'list'; feed: ListRef | null; thread?: ThreadOpen | null }
   | { kind: 'thread'; thread: ThreadOpen }
 
 export interface Tab {
@@ -151,8 +162,8 @@ export function activeTab(state: TabsState): Tab {
   return state.tabs.find((tab) => tab.id === state.activeId) ?? (state.tabs[0] as Tab)
 }
 
-function sameFeed(a: FeedRef | null, b: FeedRef | null): boolean {
-  return a === null || b === null ? a === b : a.kind === b.kind && a.id === b.id
+function sameList(a: ListRef | null, b: ListRef | null): boolean {
+  return a === null || b === null ? a === b : listKey(a) === listKey(b)
 }
 
 function updateTab(state: TabsState, tabId: number, update: (tab: Tab) => Tab): TabsState {
@@ -226,7 +237,7 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         action.entry.kind === 'list' &&
         current.kind === 'list' &&
         !action.entry.thread &&
-        sameFeed(current.feed, action.entry.feed)
+        sameList(current.feed, action.entry.feed)
       ) {
         return state
       }

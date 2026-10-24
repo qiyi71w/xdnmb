@@ -9,6 +9,7 @@ import type {
   IdentityChoice, PostTarget
 } from './drafts'
 import type { AppSettings, MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
+import type { SubscriptionsApi } from './subscriptions'
 
 /**
  * Classified read failure. Server/body text is never included except a short
@@ -150,6 +151,7 @@ export const MAX_MARK_READ_IDS = 2000
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
   content: ContentApi
+  subscriptions: SubscriptionsApi
   reading: {
     loadDirectory(input: { operationId: OperationId; strategy: DirectoryStrategy }): Promise<ReadOutcome<BoardDirectory>>
     /** Foreground read; falls back to the stored page when the network read fails. */
@@ -311,5 +313,14 @@ export const IpcChannel = {
   releaseEditor: 'drafts:release-editor',
   postingIdentityFor: 'posting:identity-for',
   selectThreadIdentity: 'posting:select-thread-identity',
+  subscriptionOverview: 'subscriptions:overview',
+  subscriptionConfigureApp: 'subscriptions:configure-app',
+  subscriptionSelectSource: 'subscriptions:select-source',
+  subscriptionObservation: 'subscriptions:observation',
+  subscriptionRead: 'subscriptions:read',
+  subscriptionChange: 'subscriptions:change',
+  subscriptionOperations: 'subscriptions:operations',
+  subscriptionReconcile: 'subscriptions:reconcile',
+  subscriptionCancel: 'subscriptions:cancel',
   getStatus: 'app:get-status'
 } as const

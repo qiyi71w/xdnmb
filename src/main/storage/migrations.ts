@@ -237,6 +237,14 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     version: 6,
     up(db) {
+      // The subscription predecessor also used v5, without the draft schema. Reconcile only
+      // that known layout before retention views start referencing drafts; never reset data.
+      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'drafts'").get()) {
+        if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subscription_configuration'").get()) {
+          throw new Error('unrecognized version 5 schema: missing drafts')
+        }
+        MIGRATIONS.find((migration) => migration.version === 5)!.up(db)
+      }
       db.exec(`
         -- Relations and observations are personal evidence, independent of cached payload lifetime.
         ALTER TABLE post_threads RENAME TO old_post_threads;
@@ -315,6 +323,40 @@ export const MIGRATIONS: readonly Migration[] = [
           (SELECT coalesce(sum(bytes), 0) FROM content_metadata_bytes WHERE NOT protected) +
           (SELECT coalesce(sum(bytes), 0) FROM image_resources r WHERE NOT EXISTS(SELECT 1 FROM image_holders h WHERE h.resource_id = r.id)
             AND NOT EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)) AS bytes;
+      `)
+    }
+  },
+  {
+    // v7 unifies the retained-v6 and subscription-v5 histories without replacing either's data.
+    version: 7,
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS subscription_app_credentials (
+          id TEXT PRIMARY KEY NOT NULL,
+          ciphertext BLOB NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS subscription_configuration (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          generation INTEGER NOT NULL,
+          app_credential_id TEXT,
+          source TEXT NOT NULL CHECK (source IN ('app', 'web'))
+        );
+        INSERT OR IGNORE INTO subscription_configuration VALUES (1, 0, NULL, 'app');
+        CREATE TABLE IF NOT EXISTS subscription_observations (
+          id TEXT PRIMARY KEY NOT NULL,
+          source TEXT NOT NULL,
+          generation INTEGER NOT NULL,
+          app_credential_id TEXT,
+          web_credential_id TEXT,
+          observation_json TEXT NOT NULL,
+          valid_observation_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS subscription_observations_context ON subscription_observations
+          (source, generation, app_credential_id, web_credential_id);
+        CREATE TABLE IF NOT EXISTS subscription_operations (
+          id TEXT PRIMARY KEY NOT NULL,
+          operation_json TEXT NOT NULL
+        );
       `)
     }
   }

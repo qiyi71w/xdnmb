@@ -17,6 +17,17 @@ const api: XidaoApi = {
     holdReader: (input) => ipcRenderer.invoke(IpcChannel.holdContentReader, input),
     releaseReader: (input) => ipcRenderer.invoke(IpcChannel.releaseContentReader, input)
   },
+  subscriptions: {
+    getOverview: () => ipcRenderer.invoke(IpcChannel.subscriptionOverview),
+    configureApp: (input) => ipcRenderer.invoke(IpcChannel.subscriptionConfigureApp, input),
+    selectSource: (input) => ipcRenderer.invoke(IpcChannel.subscriptionSelectSource, input),
+    getObservation: (input) => ipcRenderer.invoke(IpcChannel.subscriptionObservation, input),
+    read: (input) => ipcRenderer.invoke(IpcChannel.subscriptionRead, input),
+    change: (input) => ipcRenderer.invoke(IpcChannel.subscriptionChange, input),
+    getOperations: () => ipcRenderer.invoke(IpcChannel.subscriptionOperations),
+    reconcile: (input) => ipcRenderer.invoke(IpcChannel.subscriptionReconcile, input),
+    cancel: (input) => ipcRenderer.invoke(IpcChannel.subscriptionCancel, input)
+  },
   reading: {
     loadDirectory: (input) => ipcRenderer.invoke(IpcChannel.loadDirectory, input),
     readFeedPage: (input) => ipcRenderer.invoke(IpcChannel.readFeedPage, input),

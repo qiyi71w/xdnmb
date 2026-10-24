@@ -31,7 +31,10 @@ export function FeedPane({
 }) {
   const registry = useContext(ContentRegistryContext)
   // The same entry's list as it was when last unmounted (split toggled, single pane, back/forward).
-  const [remembered] = useState(() => registry?.listMemory.get(entryKey) ?? null)
+  const [remembered] = useState(() => {
+    const memory = registry?.listMemory.get(entryKey)
+    return memory?.kind === 'feed' ? memory : null
+  })
   const { state, hasMore, canAppend, loadMore, refresh, retry } = useFeed(info.ref, info.maxPage, remembered?.state ?? null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
@@ -46,7 +49,7 @@ export function FeedPane({
   // replaces this one renders (and reads the memory) before this one's cleanup would run.
   useLayoutEffect(() => {
     stateRef.current = state
-    registry?.listMemory.set(entryKey, { state, scrollTop: scrollTop.current })
+    registry?.listMemory.set(entryKey, { kind: 'feed', state, scrollTop: scrollTop.current })
   })
 
   // Put the remembered position back whenever the list becomes displayed: on mount, and after the
@@ -68,7 +71,7 @@ export function FeedPane({
     const scroller = scrollRef.current
     if (scroller === null || scroller.clientHeight === 0) return
     scrollTop.current = scroller.scrollTop
-    registry?.listMemory.set(entryKey, { state: stateRef.current, scrollTop: scrollTop.current })
+    registry?.listMemory.set(entryKey, { kind: 'feed', state: stateRef.current, scrollTop: scrollTop.current })
   }
 
   const ids = useMemo(() => state.threads.map((thread) => thread.head.id), [state.threads])

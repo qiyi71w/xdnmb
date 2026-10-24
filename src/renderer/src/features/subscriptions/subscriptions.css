@@ -1,0 +1,357 @@
+/* Remote subscriptions: the list pane reuses the forum list (feed.css) and adds the source switch,
+   explicit write tools, the operation journal and coverage lines. Field and confirm styles come
+   from identity.css. Everything wraps; nothing needs a fixed width at 200% zoom. */
+
+/* ---------- Header ---------- */
+
+.sub-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 8px;
+}
+
+.sub-identity {
+  flex: 1 1 14em;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.list-header .form-message {
+  margin-top: 6px;
+}
+
+.segmented-item:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+/* ---------- Tools above the list ---------- */
+
+.sub-tools {
+  display: grid;
+  gap: 8px;
+  padding: 10px 10px 4px;
+}
+
+.sub-tools > .notice {
+  margin: 0;
+}
+
+.sub-write-region:empty {
+  display: none;
+}
+
+.sub-write {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px 9px 12px;
+  border-radius: var(--radius-m);
+  font-size: var(--text-sm);
+  background: var(--info-bg);
+  color: var(--ink);
+}
+
+.sub-write > .spinner,
+.sub-write-icon {
+  flex: none;
+  margin-top: 3px;
+}
+
+.sub-write.is-done .sub-write-icon {
+  color: var(--accent-ink);
+}
+
+.sub-write.is-warn {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.sub-write.is-error {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+
+.sub-write-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.sub-write-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sub-write-detail {
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.sub-write.is-active .sub-write-detail,
+.sub-write.is-done .sub-write-detail {
+  color: var(--ink-2);
+}
+
+.sub-write > .btn {
+  flex: none;
+  align-self: center;
+}
+
+.sub-write > .icon-btn {
+  width: 24px;
+  height: 24px;
+  color: inherit;
+}
+
+/* Confirmation of one explicit write: the frozen object is stated before anything is sent. */
+.sub-confirm {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklch, var(--accent) 28%, transparent);
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  font-size: var(--text-sm);
+}
+
+.sub-confirm.is-remove {
+  border-color: color-mix(in oklch, var(--danger-ink) 30%, transparent);
+  background: var(--danger-bg);
+}
+
+.sub-confirm-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sub-confirm-text {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.sub-confirm.is-remove .sub-confirm-text {
+  color: var(--danger-ink);
+}
+
+.sub-add {
+  display: grid;
+  gap: 4px;
+}
+
+.sub-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sub-add-row .text-input {
+  flex: 1 1 8em;
+  width: auto;
+}
+
+/* ---------- Journal ---------- */
+
+.sub-journal {
+  border-radius: var(--radius-m);
+  background: var(--pane);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+  font-size: var(--text-sm);
+}
+
+.sub-journal > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: var(--radius-m);
+  list-style: none;
+  cursor: pointer;
+}
+
+.sub-journal > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sub-journal > summary:hover {
+  background: var(--hover);
+}
+
+.sub-journal[open] .disclosure-icon {
+  transform: rotate(90deg);
+}
+
+.sub-journal-label {
+  flex: 1;
+  font-weight: 600;
+}
+
+.sub-journal-body {
+  display: grid;
+  gap: 6px;
+  max-height: 50vh;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding: 0 10px 10px;
+}
+
+.sub-journal-body .notice {
+  margin: 0;
+}
+
+.sub-journal-empty {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.sub-journal-list {
+  display: grid;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+.sub-journal-item {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+}
+
+.sub-journal-item + .sub-journal-item {
+  border-top: 1px solid var(--line-soft);
+}
+
+.sub-journal-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.sub-journal-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sub-journal-meta {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* Report and readback are separate facts, so they get separate labelled lines. */
+.sub-facts {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 0;
+  font-size: var(--text-xs);
+}
+
+.sub-facts > div {
+  display: grid;
+  grid-template-columns: 5.5em minmax(0, 1fr);
+  gap: 8px;
+}
+
+.sub-facts dt {
+  color: var(--ink-3);
+}
+
+.sub-facts dd {
+  margin: 0;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.sub-journal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 2px;
+}
+
+/* ---------- Status and coverage ---------- */
+
+.sub-reading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.sub-coverage {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 4px;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.sub-coverage .icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.sub-coverage.is-partial {
+  color: var(--warn-ink);
+}
+
+.list-status .notice-inline {
+  margin: 6px 4px;
+}
+
+.sub-empty-action {
+  margin-top: 12px;
+}
+
+/* ---------- Rows: open the thread, or ask to cancel its subscription ---------- */
+
+.sub-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.sub-row-action {
+  margin: 8px 4px 0 2px;
+}
+
+.sub-row:has(> .thread-row.is-selected) .sub-row-action {
+  color: var(--accent-ink);
+}
+
+/* ---------- Settings ---------- */
+
+.sub-setting-value {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sub-uuid-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sub-uuid-actions .btn[aria-disabled='true'] {
+  color: var(--ink-3);
+  cursor: default;
+  opacity: 0.7;
+}
+
+.sub-confirm-inline {
+  margin-top: 6px;
+}

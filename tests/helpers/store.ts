@@ -1,8 +1,8 @@
-import type { ReadingStore } from '../../src/main/storage/contract'
+import type { AppStore } from '../../src/main/storage/contract'
 import type { ReadingDatabase } from '../../src/main/storage/database'
 
 /** The async store interface over a real SQLite database, without the worker thread. */
-export function asStore(db: ReadingDatabase): ReadingStore {
+export function asStore(db: ReadingDatabase): AppStore {
   return {
     get status() {
       return db.status
@@ -31,6 +31,49 @@ export function asStore(db: ReadingDatabase): ReadingStore {
     releaseImageHolders: async (...args) => db.releaseImageHolders(...args),
     deleteUnheldImages: async (...args) => db.deleteUnheldImages(...args),
     listImageFileNames: async () => db.listImageFileNames(),
+    listCredentials: async () => db.listCredentials(),
+    loadCredentialCiphertexts: async () => db.loadCredentialCiphertexts(),
+    loadCredentialCiphertext: async (...args) => db.loadCredentialCiphertext(...args),
+    insertCredential: async (...args) => db.insertCredential(...args),
+    renameCredential: async (...args) => db.renameCredential(...args),
+    deleteCredential: async (...args) => db.deleteCredential(...args),
+    loadRoleSelections: async () => db.loadRoleSelections(),
+    setRoleSelection: async (...args) => db.setRoleSelection(...args),
+    listDrafts: async () => db.listDrafts(),
+    saveDraft: async (...args) => db.saveDraft(...args),
+    deleteDraft: async (...args) => db.deleteDraft(...args),
+    insertDraftAttachment: async (...args) => db.insertDraftAttachment(...args),
+    getDraftAttachment: async (...args) => db.getDraftAttachment(...args),
+    deleteUnreferencedAttachments: async (...args) => db.deleteUnreferencedAttachments(...args),
+    listDraftAttachmentFileNames: async () => db.listDraftAttachmentFileNames(),
+    getThreadPostIdentity: async (...args) => db.getThreadPostIdentity(...args),
+    setThreadPostIdentity: async (...args) => db.setThreadPostIdentity(...args),
+    listRetained: async (...args) => db.listRetained(...args),
+    isFavorite: async (...args) => db.isFavorite(...args),
+    setFavorite: async (...args) => db.setFavorite(...args),
+    clearHistory: async (...args) => db.clearHistory(...args),
+    getContentUsage: async () => db.getContentUsage(),
+    setCacheLimit: async (...args) => db.setCacheLimit(...args),
+    evictContentBatch: async (...args) => db.evictContentBatch(...args),
+    holdContentReader: async (...args) => db.holdContentReader(...args),
+    releaseContentReaders: async (...args) => db.releaseContentReaders(...args),
+    getOfflineCopy: async (...args) => db.getOfflineCopy(...args),
+    beginOfflineCopy: async (...args) => db.beginOfflineCopy(...args),
+    saveOfflinePage: async (...args) => db.saveOfflinePage(...args),
+    updateOfflineCopy: async (...args) => db.updateOfflineCopy(...args),
+    holdOfflineImage: async (...args) => db.holdOfflineImage(...args),
+    listOfflineImagePosts: async (...args) => db.listOfflineImagePosts(...args),
+    recoverContent: async () => db.recoverContent(),
+    loadSubscriptionConfiguration: async () => db.loadSubscriptionConfiguration(),
+    setSubscriptionAppCredential: async (...args) => db.setSubscriptionAppCredential(...args),
+    loadSubscriptionAppCiphertext: async (...args) => db.loadSubscriptionAppCiphertext(...args),
+    setSubscriptionSource: async (...args) => db.setSubscriptionSource(...args),
+    loadSubscriptionObservation: async (...args) => db.loadSubscriptionObservation(...args),
+    loadSubscriptionObservationById: async (...args) => db.loadSubscriptionObservationById(...args),
+    saveSubscriptionObservation: async (...args) => db.saveSubscriptionObservation(...args),
+    saveSubscriptionOperation: async (...args) => db.saveSubscriptionOperation(...args),
+    loadSubscriptionOperations: async () => db.loadSubscriptionOperations(),
+    recoverSubscriptionOperations: async () => db.recoverSubscriptionOperations(),
     close: async () => db.close()
   }
 }
