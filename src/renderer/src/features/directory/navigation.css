@@ -85,6 +85,13 @@
   margin-top: 12px;
 }
 
+/* App-level entries (联网搜索) above the directory, set apart by a thin line. */
+.nav-tools {
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
 .nav-heading {
   margin: 4px calc(10px - 4px * var(--nav-t));
   font-size: var(--text-xs);

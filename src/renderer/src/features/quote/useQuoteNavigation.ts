@@ -5,8 +5,8 @@ import type { AppSettings } from '../../../../shared/reading'
 import { isEditableTarget } from '../../app/shortcuts'
 import { openLayer } from '../../lib/layers'
 import type { ContentRegistry } from '../tabs/contentRegistry'
-import { backgroundTabEntry, currentEntry, type Tab, type TabEntry, type TabsAction, type TabsState, type ThreadOpen, type ThreadSnapshot } from '../tabs/tabsState'
-import { savedStart, startPage } from '../thread/readingStart'
+import { backgroundTabEntry, currentEntry, entryThread, type Tab, type TabEntry, type TabsAction, type TabsState, type ThreadOpen, type ThreadSnapshot } from '../tabs/tabsState'
+import { readResumePage } from '../thread/readingStart'
 import { findQuoteElement, quoteKey, type QuoteController, type QuoteRefInfo } from './QuoteContext'
 import {
   initialQuoteState,
@@ -132,7 +132,7 @@ export function useQuoteNavigation(options: Options) {
     (card: QuoteCard): { tab: Tab; entry: TabEntry } | null => {
       const shown = shownEntry(card.source.entryKey)
       if (shown === null || shown.tab.id !== card.source.tabId) return null
-      return shown.entry.thread?.threadId === threadOf.current.get(card.id) ? shown : null
+      return entryThread(shown.entry)?.threadId === threadOf.current.get(card.id) ? shown : null
     },
     [shownEntry]
   )
@@ -233,7 +233,8 @@ export function useQuoteNavigation(options: Options) {
   const open = useCallback(
     (info: QuoteRefInfo, trigger: QuoteTrigger): QuoteCard | null => {
       const shown = shownEntry(info.entryKey)
-      if (shown === null || shown.entry.thread === null) return null
+      const shownThread = shown === null ? null : entryThread(shown.entry)
+      if (shown === null || shownThread === null) return null
       const source: QuoteSource = {
         tabId: shown.tab.id,
         entryKey: info.entryKey,
@@ -246,7 +247,7 @@ export function useQuoteNavigation(options: Options) {
         return null
       }
       if (card.id !== before?.id) {
-        threadOf.current.set(card.id, shown.entry.thread.threadId)
+        threadOf.current.set(card.id, shownThread.threadId)
         runPreview(card)
       }
       return card
@@ -474,17 +475,9 @@ export function useQuoteNavigation(options: Options) {
             markInternal(cardId, { locate: null })
             // Commit only once the page the thread resumes at was obtained (spec I6: 成功打开后才建可返回历史).
             const run = async () => {
-              const reading = await window.xidao.readingState.get({ threadId }).catch(() => null)
-              if (!isCurrentLocate(stateRef.current, cardId, seq)) return
-              const start = savedStart(reading, reading?.mode ?? 'all')
-              const outcome = await window.xidao.reading.readThreadPage({
-                operationId: locateOperation(cardId),
-                threadId,
-                mode: start.mode,
-                page: startPage(start.position)
-              })
+              const outcome = await readResumePage(threadId, locateOperation(cardId), () => isCurrentLocate(stateRef.current, cardId, seq))
               const latest = stateRef.current
-              if (!isCurrentLocate(latest, cardId, seq) || outcome.status === 'cancelled') return
+              if (outcome === null || !isCurrentLocate(latest, cardId, seq) || outcome.status === 'cancelled') return
               if (outcome.status === 'failed') {
                 apply({ type: 'locate-done', cardId, seq, result: { status: 'failed', threadId, error: outcome.error } })
                 return

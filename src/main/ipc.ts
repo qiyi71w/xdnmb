@@ -1,8 +1,10 @@
 import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy } from '../shared/api'
+import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy, type LocateHint } from '../shared/api'
 import type { FeedRef, PostId, ReadingMode } from '../shared/forum'
 import { DEFAULT_SETTINGS, type AppSettings, type ReadingAnchor } from '../shared/reading'
+import { MAX_SEARCH_QUERY_LENGTH, SEARCH_SITE_URL } from '../shared/search'
 import type { ReadingService } from './reading/service'
+import type { SearchService } from './search/service'
 import type { ReadingStore } from './storage/contract'
 import { emptyReadingState } from './storage/reading-state'
 
@@ -10,6 +12,8 @@ const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
 const STRATEGIES: readonly DirectoryStrategy[] = ['cache-first', 'background-refresh', 'refresh']
 const MAX_PAGE = 100_000
+/** Far beyond what anyone pages through by hand; a search page number is never a forum page. */
+const MAX_SEARCH_PAGE = 1000
 const MAX_URL_LENGTH = 2048
 const MAX_VIEWPORT_OFFSET = 100_000
 
@@ -22,6 +26,7 @@ class InvalidRequestError extends Error {
 
 interface IpcDeps {
   reading: ReadingService
+  search: SearchService
   store: ReadingStore
   getStatus: () => AppStatus
   /** True only for the app's own renderer document in its main frame. */
@@ -77,6 +82,26 @@ function postIds(value: unknown): PostId[] {
   return value.map(forumId)
 }
 
+/** Optional search-link clue: absent/undefined means none. */
+function locateHint(value: unknown): LocateHint | null {
+  if (value === undefined) return null
+  const input = record(value)
+  return { threadId: forumId(input.threadId), page: input.page === null ? null : page(input.page) }
+}
+
+function sessionId(input: Record<string, unknown>): string {
+  const value = input.sessionId
+  if (typeof value !== 'string' || !OPERATION_ID.test(value)) throw new InvalidRequestError()
+  return value
+}
+
+function searchQuery(value: unknown): string {
+  if (typeof value !== 'string') throw new InvalidRequestError()
+  const query = value.trim()
+  if (query.length === 0 || query.length > MAX_SEARCH_QUERY_LENGTH) throw new InvalidRequestError()
+  return query
+}
+
 function settingsPatch(value: unknown): Partial<AppSettings> {
   const input = record(value)
   const patch: Partial<AppSettings> = {}
@@ -126,8 +151,9 @@ class OperationRegistry {
   }
 }
 
-export function registerIpc({ reading, store, getStatus, isTrustedSender }: IpcDeps): { cancelAllFor: (sender: WebContents) => void } {
+export function registerIpc({ reading, search, store, getStatus, isTrustedSender }: IpcDeps): { cancelAllFor: (sender: WebContents) => void } {
   const operations = new OperationRegistry()
+  const owner = (sender: WebContents): string => String(sender.id)
 
   function handle(channel: string, handler: (event: IpcMainInvokeEvent, input: unknown) => Promise<unknown>): void {
     ipcMain.handle(channel, (event, input: unknown) => {
@@ -174,7 +200,37 @@ export function registerIpc({ reading, store, getStatus, isTrustedSender }: IpcD
   handle(IpcChannel.locateQuote, async (event, raw) => {
     const input = record(raw)
     const postId = forumId(input.postId)
-    return operations.run(event.sender, operationId(input), (signal) => reading.locateQuote(postId, signal))
+    const hint = locateHint(input.hint)
+    return operations.run(event.sender, operationId(input), (signal) => reading.locateQuote(postId, signal, hint))
+  })
+
+  handle(IpcChannel.runSearch, async (event, raw) => {
+    const input = record(raw)
+    const id = sessionId(input)
+    return search.run(owner(event.sender), id, searchQuery(input.query))
+  })
+
+  handle(IpcChannel.searchPage, async (event, raw) => {
+    const input = record(raw)
+    const id = sessionId(input)
+    const pageNumber = input.page
+    if (typeof pageNumber !== 'number' || !Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > MAX_SEARCH_PAGE) {
+      throw new InvalidRequestError()
+    }
+    return search.page(owner(event.sender), id, pageNumber)
+  })
+
+  handle(IpcChannel.cancelSearch, async (event, raw) => {
+    search.cancel(owner(event.sender), sessionId(record(raw)))
+  })
+
+  handle(IpcChannel.closeSearch, async (event, raw) => {
+    search.close(owner(event.sender), sessionId(record(raw)))
+  })
+
+  handle(IpcChannel.openSearchSite, async () => {
+    await shell.openExternal(SEARCH_SITE_URL)
+    return { opened: true }
   })
 
   handle(IpcChannel.cancel, async (event, raw) => {
@@ -247,5 +303,10 @@ export function registerIpc({ reading, store, getStatus, isTrustedSender }: IpcD
 
   handle(IpcChannel.getStatus, async () => getStatus())
 
-  return { cancelAllFor: (sender) => operations.cancelAllFor(sender) }
+  return {
+    cancelAllFor: (sender) => {
+      operations.cancelAllFor(sender)
+      search.closeAll(owner(sender))
+    }
+  }
 }

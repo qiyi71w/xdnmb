@@ -40,14 +40,20 @@ function navSections(directory: BoardDirectory | null): NavSection[] {
   return result
 }
 
+/** Roving-focus key of the 联网搜索 item (feed keys are `kind:id`). */
+const SEARCH_KEY = 'search'
+
 /**
  * Navigation panel. `inline` sits in the layout column and narrows continuously (`progress` 0 → 1
- * reduces its padding); `overlay` is the floating panel opened from the top bar.
+ * reduces its padding); `overlay` is the floating panel opened from the top bar. 联网搜索 sits above
+ * the directory and is available whether or not the directory loaded.
  */
 export function Navigation({
   state,
   selected,
   onSelect,
+  searchCurrent,
+  onSearch,
   onRetry,
   variant,
   progress = 0,
@@ -57,6 +63,9 @@ export function Navigation({
   state: DirectoryState
   selected: FeedRef | null
   onSelect: (ref: FeedRef) => void
+  /** The active tab shows a search page. */
+  searchCurrent: boolean
+  onSearch: () => void
   onRetry: () => void
   variant: 'inline' | 'overlay'
   progress?: number
@@ -66,8 +75,8 @@ export function Navigation({
   const { directory } = state
   const sections = useMemo(() => navSections(directory), [directory])
 
-  const ids = useMemo(() => sections.flatMap((section) => section.items.map((item) => feedKey(item.ref))), [sections])
-  const selectedKey = selected === null ? null : feedKey(selected)
+  const ids = useMemo(() => [SEARCH_KEY, ...sections.flatMap((section) => section.items.map((item) => feedKey(item.ref)))], [sections])
+  const selectedKey = searchCurrent ? SEARCH_KEY : selected === null ? null : feedKey(selected)
   const roving = useRovingFocus(ids, selectedKey)
 
   return (
@@ -84,6 +93,21 @@ export function Navigation({
       </div>
 
       <div className="nav-scroll" onKeyDown={roving.onKeyDown}>
+        <ul className="nav-list nav-tools">
+          <li>
+            <button
+              type="button"
+              className={searchCurrent ? 'nav-item is-current' : 'nav-item'}
+              aria-current={searchCurrent ? 'page' : undefined}
+              onClick={onSearch}
+              {...roving.itemProps(SEARCH_KEY)}
+            >
+              <Icon name="search" className="nav-item-icon" />
+              <span className="nav-item-label">联网搜索</span>
+            </button>
+          </li>
+        </ul>
+
         {directory === null && state.loading && (
           <div className="nav-placeholder">
             <Loading>正在读取版面目录…</Loading>
@@ -173,6 +197,12 @@ export function NavMeasure({ directory, onMeasure }: { directory: BoardDirectory
         <span>汐岛</span>
       </div>
       <div className="nav-scroll">
+        <div className="nav-tools">
+          <span className="nav-item">
+            <Icon name="search" className="nav-item-icon" />
+            <span className="nav-item-label">联网搜索</span>
+          </span>
+        </div>
         {sections.map((section) => (
           <div key={section.id} className="nav-section">
             <p className="nav-heading">{section.title}</p>

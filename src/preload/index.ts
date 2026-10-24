@@ -14,6 +14,13 @@ const api: XidaoApi = {
     preview: (input) => ipcRenderer.invoke(IpcChannel.previewQuote, input),
     locate: (input) => ipcRenderer.invoke(IpcChannel.locateQuote, input)
   },
+  search: {
+    run: (input) => ipcRenderer.invoke(IpcChannel.runSearch, input),
+    page: (input) => ipcRenderer.invoke(IpcChannel.searchPage, input),
+    cancel: (input) => ipcRenderer.invoke(IpcChannel.cancelSearch, input),
+    close: (input) => ipcRenderer.invoke(IpcChannel.closeSearch, input),
+    openSite: () => ipcRenderer.invoke(IpcChannel.openSearchSite)
+  },
   readingState: {
     get: (input) => ipcRenderer.invoke(IpcChannel.getReadingState, input),
     setMode: (input) => ipcRenderer.invoke(IpcChannel.setReadingMode, input),

@@ -1,9 +1,10 @@
 import { useLayoutEffect, useRef } from 'react'
-import type { FeedRef, ForumId, ThreadSummary } from '../../../shared/forum'
+import type { BoardDirectory, FeedRef, ForumId, ThreadSummary } from '../../../shared/forum'
 import { feedKey, type FeedInfo } from '../features/directory/feeds'
 import { FeedPane } from '../features/feed/FeedPane'
 import type { LayoutResult } from '../features/layout/layout'
-import { currentEntry, type Tab } from '../features/tabs/tabsState'
+import { SearchPane } from '../features/search/SearchPane'
+import { currentEntry, type EntryInit, type Tab } from '../features/tabs/tabsState'
 import { ThreadPane } from '../features/thread/ThreadPane'
 import { Loading } from '../components/Notices'
 import { Icon } from '../components/Icon'
@@ -22,9 +23,11 @@ export function TabView({
   feedInfo,
   forumNames,
   forumName,
+  directory,
   onSelectThread,
   onShowPane,
-  onOpenNav
+  onOpenNav,
+  onOpenFromSearch
 }: {
   tab: Tab
   active: boolean
@@ -32,10 +35,14 @@ export function TabView({
   feedInfo: (ref: FeedRef) => FeedInfo | null
   forumNames: ReadonlyMap<ForumId, string>
   forumName: (forumId: string | null) => string | null
+  /** Board directory, used to recognize board results of a search page. */
+  directory: BoardDirectory | null
   onSelectThread: (tabId: number, thread: ThreadSummary) => void
   onShowPane: (tabId: number, pane: Region) => void
   /** Opens the navigation overlay; null while the navigation is a column. */
   onOpenNav: (() => void) | null
+  /** A search result opened from entry `entryKey`; false when that entry is no longer current. */
+  onOpenFromSearch: (entryKey: number, init: EntryInit) => boolean
 }) {
   const entry = currentEntry(tab)
   const listRef = useRef<HTMLDivElement>(null)
@@ -81,6 +88,8 @@ export function TabView({
         />
       </main>
     )
+  } else if (entry.kind === 'search') {
+    body = <SearchPane key={entry.key} entryKey={entry.key} displayed={active} directory={directory} onOpen={onOpenFromSearch} />
   } else if (entry.feed === null) {
     body = (
       <div className="pane-empty">

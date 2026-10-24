@@ -1,4 +1,4 @@
-import type { DirectoryStrategy, QuoteLocation, QuotePreview, ReadError, ReadOutcome, ThreadEndResult, ThreadPageResult } from '../../shared/api'
+import type { DirectoryStrategy, LocateHint, QuoteLocation, QuotePreview, ReadError, ReadOutcome, ThreadEndResult, ThreadPageResult } from '../../shared/api'
 import type { BoardDirectory, CoveragePage, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from '../../shared/forum'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
 import type { ReadingStore, Stored } from '../storage/contract'
@@ -16,7 +16,8 @@ export interface ReadingService {
   readThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal): Promise<ReadOutcome<ThreadPageResult>>
   locateThreadEnd(threadId: ThreadId, mode: ReadingMode, signal: AbortSignal): Promise<ReadOutcome<ThreadEndResult>>
   previewQuote(postId: PostId, signal: AbortSignal): Promise<ReadOutcome<QuotePreview>>
-  locateQuote(postId: PostId, signal: AbortSignal): Promise<QuoteLocation>
+  /** `hint`: a search result link's thread and page, read once only when local records do not locate the post. */
+  locateQuote(postId: PostId, signal: AbortSignal, hint?: LocateHint | null): Promise<QuoteLocation>
 }
 
 interface ReadingServiceDeps {
@@ -120,6 +121,34 @@ export function createReadingService({ client, store, scheduler, now = () => new
     return (await store.findPostThread(postId).catch(() => null))?.threadId ?? null
   }
 
+  /**
+   * Reads the one page a search link points at (full listing) and checks the post is on it. A readable
+   * thread without the post is reported as `readable` with its head; nothing else is read.
+   */
+  async function readHinted(
+    postId: PostId,
+    hint: LocateHint,
+    signal: AbortSignal
+  ): Promise<{ kind: 'outcome'; outcome: QuoteLocation } | { kind: 'readable'; head: Post }> {
+    const page = hint.page ?? 1
+    const outcome = await readThreadPage(hint.threadId, 'all', page, signal)
+    if (outcome.status === 'cancelled') return { kind: 'outcome', outcome }
+    if (outcome.status === 'failed') return { kind: 'outcome', outcome: { status: 'failed', threadId: hint.threadId, error: outcome.error } }
+    const shown = outcome.data.page
+    if (shown.head.id !== postId && !shown.replies.some((reply) => reply.id === postId)) return { kind: 'readable', head: shown.head }
+    return {
+      kind: 'outcome',
+      outcome: {
+        status: 'located',
+        threadId: hint.threadId,
+        head: shown.head,
+        target: { postId, page: shown.head.id === postId ? 1 : page, mode: 'all' },
+        source: outcome.status,
+        networkError: outcome.status === 'cached' ? outcome.networkError : null
+      }
+    }
+  }
+
   return {
     async loadDirectory(strategy, signal) {
       if (strategy === 'cache-first') {
@@ -159,9 +188,15 @@ export function createReadingService({ client, store, scheduler, now = () => new
       return { ...outcome, data: { post: outcome.data, threadId: await ownerOf(postId) } }
     },
 
-    async locateQuote(postId, signal) {
+    async locateQuote(postId, signal, hint = null) {
       const relation = await store.findPostThread(postId).catch(() => null)
+      // Local records win over a link that names another thread.
+      const usableHint = hint !== null && (relation === null || relation.threadId === hint.threadId) ? hint : null
       if (relation === null) {
+        if (usableHint !== null) {
+          const hinted = await readHinted(postId, usableHint, signal)
+          return hinted.kind === 'outcome' ? hinted.outcome : { status: 'thread-known', threadId: usableHint.threadId, head: hinted.head }
+        }
         // Without any local record the only verifiable owner is the post itself as a main post:
         // its own thread's first page must come back with it as the head.
         const outcome = await readThreadPage(postId, 'all', 1, signal)
@@ -210,6 +245,13 @@ export function createReadingService({ client, store, scheduler, now = () => new
             networkError: outcome.status === 'cached' ? outcome.networkError : null
           }
         }
+      }
+      const hintPage = usableHint?.page ?? 1
+      if (usableHint !== null && !candidates.some((candidate) => candidate.mode === 'all' && candidate.page === hintPage)) {
+        const hinted = await readHinted(postId, usableHint, signal)
+        if (hinted.kind === 'readable') reached = hinted.head
+        else if (hinted.outcome.status === 'failed') failure ??= hinted.outcome.error
+        else return hinted.outcome
       }
       if (failure !== null) return { status: 'failed', threadId, error: failure }
       if (reached === null) {

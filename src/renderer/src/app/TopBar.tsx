@@ -21,6 +21,7 @@ export function TopBar({
   platform,
   canBack,
   backToQuote,
+  backToSearch,
   canForward,
   splitToggle,
   navTrigger,
@@ -39,6 +40,8 @@ export function TopBar({
   canBack: boolean
   /** The current entry came from a quote (or 打开原串) and back is possible: back reads 返回引用处. */
   backToQuote: boolean
+  /** The current entry was opened from an online search result and back is possible: back reads 返回搜索结果. */
+  backToSearch: boolean
   canForward: boolean
   /** Shown only for list entries. */
   splitToggle: { pressed: boolean; onToggle: () => void } | null
@@ -52,6 +55,7 @@ export function TopBar({
   onSettingsChange: (settings: AppSettings) => void
 }) {
   const stripRef = useRef<HTMLDivElement>(null)
+  const backLabel = backToQuote ? '返回引用处' : backToSearch ? '返回搜索结果' : null
 
   useEffect(() => {
     stripRef.current?.querySelector(`#tab-${activeId}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
@@ -92,14 +96,14 @@ export function TopBar({
       <div className="history-buttons" role="group" aria-label="当前标签历史">
         <button
           type="button"
-          className={backToQuote ? 'btn btn-back-quote' : 'icon-btn'}
-          aria-label={backToQuote ? '返回引用处' : '后退'}
-          title={withShortcut(backToQuote ? '返回引用处' : '后退', shortcutLabel('back', platform))}
+          className={backLabel !== null ? 'btn btn-back-quote' : 'icon-btn'}
+          aria-label={backLabel ?? '后退'}
+          title={withShortcut(backLabel ?? '后退', shortcutLabel('back', platform))}
           disabled={!canBack}
           onClick={onBack}
         >
           <Icon name="arrowLeft" />
-          {backToQuote && <span aria-hidden="true">返回引用处</span>}
+          {backLabel !== null && <span aria-hidden="true">{backLabel}</span>}
         </button>
         <button
           type="button"

@@ -94,8 +94,8 @@
   background: transparent;
 }
 
-/* The same back control, expanded while the current entry came from a quote. The short label
-   stays in narrow windows; the tab strip shrinks instead. */
+/* The same back control, expanded while the current entry came from a quote (返回引用处) or a
+   search result (返回搜索结果). The short label stays in narrow windows; the tab strip shrinks instead. */
 .btn-back-quote {
   flex: none;
   min-height: 30px;

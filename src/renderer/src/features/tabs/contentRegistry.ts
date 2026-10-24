@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef } from 'react'
 import type { ThreadId } from '../../../../shared/forum'
 import type { FeedState } from '../feed/feedState'
+import { SearchSessions } from '../search/searchSession'
 import type { ThreadSnapshot, ThreadTarget } from './tabsState'
 
 /** What the shell can ask of the reader mounted for a history entry. */
@@ -19,6 +20,12 @@ export interface ListHandle {
   refresh(): void
 }
 
+/** What the shell can ask of a mounted search page. */
+export interface SearchPaneHandle {
+  /** Moves keyboard focus to the search box (choosing 联网搜索 while already on the page). */
+  focusInput(): void
+}
+
 /** What a list entry had when its list was last unmounted: loaded pages and scroll position. */
 export interface ListMemory {
   state: FeedState
@@ -26,24 +33,27 @@ export interface ListMemory {
 }
 
 /**
- * Mounted readers and lists, keyed by the history entry key that shows them, plus the runtime
- * memory of lists that are not mounted (split toggled, single pane, back/forward). Memory lives
- * only while the app runs; the shell drops it when its entry leaves every tab's history.
+ * Mounted readers, lists and search pages, keyed by the history entry key that shows them, plus the
+ * runtime memory of lists that are not mounted (split toggled, single pane, back/forward) and of
+ * search entries (query, obtained pages, view). Memory lives only while the app runs; the shell
+ * drops it when its entry leaves every tab's history.
  */
 export interface ContentRegistry {
   readers: Map<number, { current: ReaderHandle }>
   lists: Map<number, { current: ListHandle }>
+  searchPanes: Map<number, { current: SearchPaneHandle }>
   listMemory: Map<number, ListMemory>
+  searches: SearchSessions
 }
 
 export function createContentRegistry(): ContentRegistry {
-  return { readers: new Map(), lists: new Map(), listMemory: new Map() }
+  return { readers: new Map(), lists: new Map(), searchPanes: new Map(), listMemory: new Map(), searches: new SearchSessions() }
 }
 
 export const ContentRegistryContext = createContext<ContentRegistry | null>(null)
 
 /** Registers the latest `handle` under `entryKey` for as long as the component is mounted. */
-export function useRegisterContent<K extends 'readers' | 'lists'>(
+export function useRegisterContent<K extends 'readers' | 'lists' | 'searchPanes'>(
   kind: K,
   entryKey: number,
   handle: ContentRegistry[K] extends Map<number, { current: infer H }> ? H : never

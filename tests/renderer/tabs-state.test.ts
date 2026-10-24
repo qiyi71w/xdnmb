@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   activeTab,
   currentEntry,
+  entryThread,
   initialTabsState,
   tabsReducer,
   type TabsAction,
@@ -36,7 +37,7 @@ describe('tabs and per-tab history', () => {
     )
     const tab = activeTab(after)
     expect(tab.split).toBe(true)
-    expect(tab.entries.map((entry) => (entry.kind === 'list' ? entry.feed?.id ?? null : entry.thread.threadId))).toEqual([null, '4', '5'])
+    expect(tab.entries.map((entry) => (entry.kind === 'list' ? entry.feed?.id ?? null : entryThread(entry)?.threadId))).toEqual([null, '4', '5'])
     const back = currentEntry(activeTab(run(after, { type: 'back', tabId: id })))
     expect(back).toMatchObject({ kind: 'list', feed: forum4, thread: { threadId: '200' }, pane: 'reader' })
   })

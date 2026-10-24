@@ -7,6 +7,7 @@ import { createForumTransport } from './forum/transport'
 import { registerIpc } from './ipc'
 import { createReadingService } from './reading/service'
 import { createRequestScheduler } from './reading/scheduler'
+import { createSearchService, SEARCH_API_ORIGIN } from './search/service'
 import type { ReadingStore } from './storage/contract'
 import { openReadingStore } from './storage/store'
 import createStorageWorker from './storage/worker?nodeWorker'
@@ -113,9 +114,19 @@ async function start(): Promise<void> {
     scheduler: createRequestScheduler()
   })
 
+  // Online search has its own credential-free transport that can reach only the search service.
+  const search = createSearchService({
+    transport: createForumTransport({
+      allowedOrigins: [SEARCH_API_ORIGIN],
+      maxCompressedBytes: 2 * 1024 * 1024,
+      maxDecodedBytes: 4 * 1024 * 1024
+    })
+  })
+
   installMenu()
   const ipc = registerIpc({
     reading,
+    search,
     store: openedStore,
     getStatus: () => ({ storage: openedStore.status, platform }),
     isTrustedSender: (event: IpcMainInvokeEvent) =>

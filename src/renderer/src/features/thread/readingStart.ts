@@ -1,5 +1,5 @@
-import { MAX_MARK_READ_IDS } from '../../../../shared/api'
-import type { PostId, ReadingMode } from '../../../../shared/forum'
+import { MAX_MARK_READ_IDS, type OperationId, type ReadOutcome, type ThreadPageResult } from '../../../../shared/api'
+import type { PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
 import type { ReadingAnchor, ThreadReadingState, UnreadPost } from '../../../../shared/reading'
 import type { ThreadOpen } from '../tabs/tabsState'
 
@@ -38,6 +38,22 @@ export function startPage(position: ReaderPosition): number {
 export function savedStart(state: ThreadReadingState | null, mode: ReadingMode): ReaderStart {
   const saved = state?.positions[mode] ?? null
   return { mode, position: saved === null ? { kind: 'top' } : { kind: 'anchor', anchor: saved.anchor } }
+}
+
+/**
+ * 打开原串 (from a quote card or a search result): reads the page the thread resumes at — its saved
+ * mode preference and that mode's saved position — so the navigation is committed only once that
+ * page was obtained (spec I6). `current` is checked before the page read; `null` = no longer wanted.
+ */
+export async function readResumePage(
+  threadId: ThreadId,
+  operationId: OperationId,
+  current: () => boolean
+): Promise<ReadOutcome<ThreadPageResult> | null> {
+  const reading = await window.xidao.readingState.get({ threadId }).catch(() => null)
+  if (!current()) return null
+  const start = savedStart(reading, reading?.mode ?? 'all')
+  return window.xidao.reading.readThreadPage({ operationId, threadId, mode: start.mode, page: startPage(start.position) })
 }
 
 /**

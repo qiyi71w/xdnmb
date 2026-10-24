@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import type { AppPlatform, StorageStatus } from '../../../shared/api'
 import type { FeedRef, ThreadSummary } from '../../../shared/forum'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/reading'
@@ -14,8 +14,10 @@ import { ContentRegistryContext, createContentRegistry } from '../features/tabs/
 import {
   activeTab,
   currentEntry,
+  entryThread,
   initialTabsState,
   tabsReducer,
+  type EntryInit,
   type Tab,
   type TabEntry,
   type TabsAction,
@@ -59,12 +61,13 @@ function threadTitle(open: ThreadOpen): string {
 function viewOf(tab: Tab): LayoutView {
   const entry = currentEntry(tab)
   if (entry.kind === 'thread') return 'reader'
+  if (entry.kind === 'search') return 'list'
   return entry.feed !== null && tab.split ? 'split' : 'list'
 }
 
 /** Whether the entry's thread is on screen (refresh targets it instead of the list). */
 function readerShown(tab: Tab, entry: TabEntry, singlePane: boolean): boolean {
-  if (entry.kind === 'thread') return true
+  if (entry.kind !== 'list') return entry.kind === 'thread'
   return entry.thread !== null && entry.feed !== null && tab.split && (!singlePane || entry.pane === 'reader')
 }
 
@@ -208,7 +211,7 @@ export function App() {
   const leave = useCallback(
     (tab: Tab) => {
       const entry = currentEntry(tab)
-      if (entry.thread === null) return
+      if (entryThread(entry) === null) return
       const snapshot = registry.readers.get(entry.key)?.current.capture() ?? null
       if (snapshot !== null) dispatch({ type: 'snapshot', tabId: tab.id, entryKey: entry.key, snapshot })
     },
@@ -232,6 +235,28 @@ export function App() {
     },
     [closeNav, withActive, leave]
   )
+
+  /** 联网搜索: a search page in the current tab; on a search page already, focus its search box. */
+  const openSearch = useCallback(() => {
+    closeNav()
+    withActive((tab) => {
+      const entry = currentEntry(tab)
+      if (entry.kind === 'search') {
+        registry.searchPanes.get(entry.key)?.current.focusInput()
+        return
+      }
+      leave(tab)
+      dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'search' } })
+    })
+  }, [closeNav, withActive, leave, registry])
+
+  /** A search result opens as a new step of the tab still showing that search entry (back reads 返回搜索结果). */
+  const openFromSearch = useCallback((entryKey: number, init: EntryInit): boolean => {
+    const tab = stateRef.current.tabs?.tabs.find((item) => currentEntry(item).key === entryKey)
+    if (tab === undefined) return false
+    dispatch({ type: 'navigate', tabId: tab.id, entry: init, origin: 'search' })
+    return true
+  }, [])
 
   const selectThread = useCallback(
     (tabId: number, summary: ThreadSummary) => {
@@ -304,13 +329,14 @@ export function App() {
     [withActive, registry]
   )
 
-  // List memory lives only as long as its entry is in some tab's history (forward branch replaced,
-  // tab closed → dropped).
+  // List memory and search sessions live only as long as their entry is in some tab's history
+  // (forward branch replaced, tab closed → dropped; a dropped search session is closed).
   useEffect(() => {
     if (tabs === null) return
     const live = new Set<number>()
     for (const tab of tabs.tabs) for (const item of tab.entries) live.add(item.key)
     for (const key of registry.listMemory.keys()) if (!live.has(key)) registry.listMemory.delete(key)
+    registry.searches.retain(live)
   }, [tabs, registry])
 
   // A closed tab takes its focused controls with it: hand focus to the newly active tab.
@@ -354,19 +380,23 @@ export function App() {
   }, [platform])
 
   // ---------- Render ----------
+  // Re-render when a search page's submitted query (its tab title) changes.
+  useSyncExternalStore(registry.searches.subscribe, registry.searches.getVersion)
   const titleOf = useCallback(
     (tab: Tab) => {
       const entry = currentEntry(tab)
       if (entry.kind === 'thread') return threadTitle(entry.thread)
+      if (entry.kind === 'search') return registry.searches.title(entry.key)
       if (entry.feed === null) return '新标签'
       const name = feedInfo(entry.feed)?.name ?? (entry.feed.kind === 'timeline' ? '时间线' : '版面')
       return entry.thread !== null && tab.split ? `${name} › ${threadTitle(entry.thread)}` : name
     },
-    [feedInfo]
+    [feedInfo, registry]
   )
 
   const entry = current === null ? null : currentEntry(current)
   const selectedFeed = entry?.kind === 'list' ? entry.feed : null
+  const searchCurrent = entry?.kind === 'search'
 
   const workspaceStyle = {
     '--nav-width': `${layout.navWidth}px`,
@@ -396,6 +426,8 @@ export function App() {
                 state={directory.state}
                 selected={selectedFeed}
                 onSelect={selectFeed}
+                searchCurrent={searchCurrent}
+                onSearch={openSearch}
                 onRetry={directory.retry}
                 variant="inline"
                 progress={layout.navProgress}
@@ -414,6 +446,7 @@ export function App() {
                   platform={platform}
                   canBack={current.index > 0}
                   backToQuote={entry.origin === 'quote' && current.index > 0}
+                  backToSearch={entry.origin === 'search' && current.index > 0}
                   canForward={current.index < current.entries.length - 1}
                   splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
                   navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
@@ -435,9 +468,11 @@ export function App() {
                       feedInfo={feedInfo}
                       forumNames={names}
                       forumName={forumName}
+                      directory={dirData}
                       onSelectThread={selectThread}
                       onShowPane={showPane}
                       onOpenNav={navOverlay ? navPopover.toggle : null}
+                      onOpenFromSearch={openFromSearch}
                     />
                   ))}
                 </div>
@@ -452,6 +487,8 @@ export function App() {
                 state={directory.state}
                 selected={selectedFeed}
                 onSelect={selectFeed}
+                searchCurrent={searchCurrent}
+                onSearch={openSearch}
                 onRetry={directory.retry}
                 variant="overlay"
                 progress={0}

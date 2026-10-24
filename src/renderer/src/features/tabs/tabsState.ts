@@ -53,23 +53,28 @@ export interface ThreadOpen {
 
 /**
  * `quote`: the entry was produced by a located quote or by 打开原串, so the back control reads
- * 返回引用处. Choosing another list item in the entry clears it; history is kept either way.
+ * 返回引用处. `search`: the entry was opened from an online search result, so it reads 返回搜索结果.
+ * Choosing another list item in the entry clears it; history is kept either way.
  */
-export type EntryOrigin = 'quote' | null
+export type EntryOrigin = 'quote' | 'search' | null
 
 /**
  * One step of a tab's navigation history.
  * - `list`: a forum/timeline list (`feed` null = a new tab that has not chosen one yet). In split
  *   layout the open thread is shown beside the list; `pane` is what the single-pane fallback shows.
  * - `thread`: a thread opened as a whole page (split off).
+ * - `search`: an online search page. Its session (query chain, obtained pages) belongs to this entry
+ *   and is released when the entry leaves every tab's history.
  */
 export type TabEntry =
   | { kind: 'list'; key: number; feed: FeedRef | null; thread: ThreadOpen | null; pane: 'list' | 'reader'; origin: EntryOrigin }
   | { kind: 'thread'; key: number; thread: ThreadOpen; origin: EntryOrigin }
+  | { kind: 'search'; key: number; origin: EntryOrigin }
 
 export type EntryInit =
   | { kind: 'list'; feed: FeedRef | null; thread?: ThreadOpen | null }
   | { kind: 'thread'; thread: ThreadOpen }
+  | { kind: 'search' }
 
 export interface Tab {
   id: number
@@ -94,8 +99,11 @@ export type TabsAction =
   | { type: 'activate'; tabId: number }
   | { type: 'cycle'; delta: 1 | -1 }
   | { type: 'set-split'; tabId: number; split: boolean }
-  /** New navigation step; drops the forward branch. Ignored when it would repeat the current list. */
-  | { type: 'navigate'; tabId: number; entry: EntryInit }
+  /**
+   * New navigation step; drops the forward branch. Ignored when it would repeat the current list or
+   * open a search page from a search page. `origin` labels the new step (e.g. `search` for a result).
+   */
+  | { type: 'navigate'; tabId: number; entry: EntryInit; origin?: EntryOrigin }
   /** Opening a list item: split replaces the shown thread (no back step); otherwise a new step. */
   | { type: 'select-thread'; tabId: number; thread: ThreadOpen }
   /** Single-pane fallback switches between the list and the reader of the same entry. */
@@ -116,9 +124,14 @@ export type TabsAction =
   | { type: 'quote-navigate'; tabId: number; entryKey: number; source: ThreadSnapshot | null; thread: ThreadOpen }
 
 function makeEntry(init: EntryInit, key: number, origin: EntryOrigin = null): TabEntry {
-  return init.kind === 'list'
-    ? { kind: 'list', key, feed: init.feed, thread: init.thread ?? null, pane: init.thread ? 'reader' : 'list', origin }
-    : { kind: 'thread', key, thread: init.thread, origin }
+  switch (init.kind) {
+    case 'list':
+      return { kind: 'list', key, feed: init.feed, thread: init.thread ?? null, pane: init.thread ? 'reader' : 'list', origin }
+    case 'thread':
+      return { kind: 'thread', key, thread: init.thread, origin }
+    case 'search':
+      return { kind: 'search', key, origin }
+  }
 }
 
 /**
@@ -139,6 +152,11 @@ export function initialTabsState(split: boolean): TabsState {
     nextId: 2,
     nextKey: 2
   }
+}
+
+/** The thread an entry shows (whole page, or beside its list); search pages show none. */
+export function entryThread(entry: TabEntry): ThreadOpen | null {
+  return entry.kind === 'search' ? null : entry.thread
 }
 
 export function currentEntry(tab: Tab): TabEntry {
@@ -228,7 +246,8 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       ) {
         return state
       }
-      return push(state, action.tabId, action.entry)
+      if (action.entry.kind === 'search' && current.kind === 'search') return state
+      return push(state, action.tabId, action.entry, action.origin ?? null)
     }
     case 'select-thread': {
       const tab = state.tabs.find((item) => item.id === action.tabId)
@@ -260,7 +279,7 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
     case 'snapshot':
       return updateTab(state, action.tabId, (tab) => {
         const current = currentEntry(tab)
-        if (current.key !== action.entryKey || current.thread === null) return tab
+        if (current.key !== action.entryKey || current.kind === 'search' || current.thread === null) return tab
         const focus = action.snapshot.focus ?? current.thread.snapshot?.focus ?? null
         const thread: ThreadOpen = { ...current.thread, target: null, snapshot: { ...action.snapshot, focus } }
         return replaceCurrent(tab, { ...current, thread } as TabEntry)
