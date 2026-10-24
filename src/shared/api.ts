@@ -10,6 +10,8 @@ import type {
 } from './drafts'
 import type { AppSettings, MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
 import type { SubscriptionsApi } from './subscriptions'
+import type { PublicationApi } from './publication'
+import type { LifecycleApi } from './lifecycle'
 
 /**
  * Classified read failure. Server/body text is never included except a short
@@ -261,6 +263,9 @@ export interface XidaoApi {
     /** Remembers an explicit selection made in a reply editor for that thread only. */
     selectThreadIdentity(input: { threadId: ThreadId; credentialId: CredentialId }): Promise<IdentityMutationResult>
   }
+  publication: PublicationApi
+  /** Close choice, real quit, workspace restore and notices left by sends that finished without a window. */
+  lifecycle: LifecycleApi
   app: {
     getStatus(): Promise<AppStatus>
   }
@@ -327,5 +332,27 @@ export const IpcChannel = {
   subscriptionExecutePlan: 'subscriptions:execute-plan',
   subscriptionPlans: 'subscriptions:plans',
   subscriptionCancel: 'subscriptions:cancel',
+  submitPublication: 'publication:submit',
+  resolvePoPrompt: 'publication:resolve-prompt',
+  listPublications: 'publication:list',
+  getPublication: 'publication:get',
+  listOwnPosts: 'publication:own-posts',
+  addOwnPost: 'publication:add-own-post',
+  getPoWarning: 'publication:get-po-warning',
+  setPoWarning: 'publication:set-po-warning',
+  lifecycleReside: 'lifecycle:reside',
+  lifecycleRequestQuit: 'lifecycle:request-quit',
+  lifecyclePresentQuit: 'lifecycle:present-quit',
+  lifecycleCancelQuit: 'lifecycle:cancel-quit',
+  lifecycleCompleteQuit: 'lifecycle:complete-quit',
+  loadWorkspace: 'lifecycle:load-workspace',
+  saveWorkspace: 'lifecycle:save-workspace',
+  listLaunchNotices: 'lifecycle:list-launch-notices',
+  dismissLaunchNotices: 'lifecycle:dismiss-launch-notices',
+  listUnstoredResults: 'lifecycle:list-unstored-results',
+  retryUnstoredResults: 'lifecycle:retry-unstored-results',
   getStatus: 'app:get-status'
 } as const
+
+/** The one main → renderer event channel; carries a `LifecycleRequest`. */
+export const LIFECYCLE_REQUEST_CHANNEL = 'lifecycle:request'

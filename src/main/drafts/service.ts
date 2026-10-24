@@ -187,7 +187,7 @@ export function createDraftService(deps: {
       return serialized(async (): Promise<DraftDeleteResult> => {
         if (!writable()) return { ok: false, reason: 'storage' }
         try {
-          await store.deleteDraft(id)
+          if (await store.deleteDraft(id) === 'locked') return { ok: false, reason: 'locked' }
         } catch {
           return { ok: false, reason: 'storage' }
         }

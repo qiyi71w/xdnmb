@@ -13,6 +13,7 @@ import { openReadingDatabase } from '../src/main/storage/database'
 import type { ReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS } from '../src/main/storage/migrations'
 import { openReadingStore } from '../src/main/storage/store'
+import { MIGRATIONS as PUBLICATION_MIGRATIONS } from './fixtures/lifecycle-v7'
 
 const fetchedAt = '2026-10-23T08:00:00.000Z'
 const later = '2026-10-23T08:01:00.000Z'
@@ -508,13 +509,37 @@ describe('reading context', () => {
     expect(upgraded.markPostsRead(threadId, ['1001'], later)).toEqual(['1001'])
   })
 
-  it('defaults new tabs to split and persists the global setting', () => {
+  it('defaults new tabs to split and the close button to asking, and persists both settings', () => {
     const path = databasePath()
     const db = open(path)
-    expect(db.loadSettings()).toEqual({ newTabSplitDefault: true })
-    db.saveSettings({ newTabSplitDefault: false })
+    expect(db.loadSettings()).toEqual({ newTabSplitDefault: true, closeAction: 'ask' })
+    db.saveSettings({ newTabSplitDefault: false, closeAction: 'background' })
     db.close()
-    expect(open(path).loadSettings()).toEqual({ newTabSplitDefault: false })
+    expect(open(path).loadSettings()).toEqual({ newTabSplitDefault: false, closeAction: 'background' })
+  })
+})
+
+describe('window lifecycle storage', () => {
+  it('upgrades a version 6 database keeping its sends, without launch notices, and keeps only the latest saved workspace', () => {
+    const path = databasePath()
+    const v6 = openReadingDatabase(path, PUBLICATION_MIGRATIONS.filter((migration) => migration.version <= 6))
+    const credential = v6.insertCredential({ name: '甲', source: 'raw', importedAt: fetchedAt, ciphertext: Buffer.from('synthetic') })
+    const sent = v6.createPublication({
+      requestId: 'request-1', editorId: 'editor-1', forumId: '1', at: fetchedAt,
+      payload: { draftId: null, target: { kind: 'thread', forumId: '1' }, credentialId: credential.id,
+        fields: { content: '正文', title: '', name: '', email: '', watermark: false }, attachmentId: null }
+    })
+    v6.close()
+
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: SUPPORTED_VERSION })
+    expect(db.listPublications()).toEqual([sent])
+    expect(db.listLaunchNotices()).toEqual([])
+    expect(db.loadWorkspace()).toBeNull()
+    db.saveWorkspace('{"first":true}', later)
+    db.saveWorkspace('{"second":true}', latest)
+    db.close()
+    expect(open(path).loadWorkspace()).toBe('{"second":true}')
   })
 })
 

@@ -32,3 +32,18 @@
 .settings-section .notice-inline {
   margin: 0;
 }
+
+/* A choice control beside its text; moves below it when there is no room. */
+.setting-row.is-choice {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.setting-row.is-choice > .setting-text {
+  flex-basis: 16em;
+}
+
+.setting-row.is-choice > .segmented {
+  flex: none;
+}

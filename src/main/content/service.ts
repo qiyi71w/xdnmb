@@ -17,6 +17,8 @@ export interface ContentService extends Omit<ContentApi, 'holdReader' | 'release
   recover(): Promise<void>
   /** Abort background work before draining the database for exit. No later pages are queued. */
   stop(): Promise<void>
+  /** A reopened window can start new work after the previous stop has drained. */
+  resume(): void
 }
 
 interface SaveTask {
@@ -202,6 +204,7 @@ export function createContentService(deps: {
     },
     enforceQuota: () => enforce(false),
     recover: () => store.recoverContent(),
+    resume() { closing = false },
     async stop() {
       closing = true
       for (const task of tasks.values()) task.controller.abort()

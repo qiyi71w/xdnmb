@@ -4,7 +4,8 @@ import { createFavoriteWrites, type FavoriteWrites } from '../content/favoriteWr
 import { createReadingResets, type ReadingResets } from '../content/readingResets'
 import type { FeedState } from '../feed/feedState'
 import type { SubscriptionListState } from '../subscriptions/subscriptionListState'
-import type { ThreadSnapshot, ThreadTarget } from './tabsState'
+import type { TabsState, ThreadSnapshot, ThreadTarget } from './tabsState'
+import { MAX_LIST_PAGES, type WorkspaceList } from './workspaceSnapshot'
 
 /** What the shell can ask of the reader mounted for a history entry. */
 export interface ReaderHandle {
@@ -23,11 +24,10 @@ export interface ListHandle {
 }
 
 /**
- * What a list entry had when its list was last unmounted: its view state and scroll position.
- * An entry's list kind never changes, so `kind` only tells the two list views apart.
+ * What a list entry has while mounted or in navigation history, discriminated by its source.
  */
 export type ListMemory =
-  | { kind: 'feed'; state: FeedState; scrollTop: number }
+  | { kind: 'feed'; state: FeedState; scrollTop: number; anchor: WorkspaceList['anchor'] }
   | { kind: 'subscriptions'; state: SubscriptionListState; scrollTop: number; view: 'list' | 'reconcile' }
 
 /**
@@ -36,6 +36,8 @@ export type ListMemory =
  * only while the app runs; the shell drops it when its entry leaves every tab's history.
  * `readingResets` tells open readers that their thread's reading data was cleared; `favorites`
  * keeps every mounted 收藏 entry point on the last successfully written state.
+ * `savedLists` is list context restored from the last quit for lists not shown again yet: a list
+ * consumes its own once it has read its pages again and placed its position, or was refreshed.
  */
 export interface ContentRegistry {
   readers: Map<number, { current: ReaderHandle }>
@@ -43,10 +45,39 @@ export interface ContentRegistry {
   listMemory: Map<number, ListMemory>
   readingResets: ReadingResets
   favorites: FavoriteWrites
+  savedLists: Map<number, WorkspaceList>
 }
 
 export function createContentRegistry(): ContentRegistry {
-  return { readers: new Map(), lists: new Map(), listMemory: new Map(), readingResets: createReadingResets(), favorites: createFavoriteWrites() }
+  return { readers: new Map(), lists: new Map(), listMemory: new Map(), readingResets: createReadingResets(), favorites: createFavoriteWrites(), savedLists: new Map() }
+}
+
+/**
+ * List context to save at a quit for every list entry with a feed: this run's memory when the list
+ * has loaded pages, otherwise context restored from the last quit that no list has consumed yet.
+ */
+export function captureLists(tabs: TabsState, registry: ContentRegistry): WorkspaceList[] {
+  const lists: WorkspaceList[] = []
+  for (const tab of tabs.tabs) {
+    for (const entry of tab.entries) {
+      if (entry.kind !== 'list' || entry.feed === null) continue
+      const memory = registry.listMemory.get(entry.key)
+      const saved = registry.savedLists.get(entry.key)
+      if (memory?.kind === 'feed' && memory.state.pages.length > 0) {
+        lists.push({
+          entryKey: entry.key,
+          pages: Math.min(memory.state.pages.length, MAX_LIST_PAGES),
+          anchor: memory.anchor,
+          scrollTop: Math.max(0, memory.scrollTop)
+        })
+      } else if (memory?.kind === 'subscriptions') {
+        lists.push({ entryKey: entry.key, pages: 1, anchor: null, scrollTop: Math.max(0, memory.scrollTop), subscriptionView: memory.view })
+      } else if (saved !== undefined) {
+        lists.push(saved)
+      }
+    }
+  }
+  return lists
 }
 
 export const ContentRegistryContext = createContext<ContentRegistry | null>(null)

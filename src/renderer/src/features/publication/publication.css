@@ -1,0 +1,387 @@
+/* 发送记录, 我的发言 and the PO identity question, inside the shared modal. Records sit on solid
+   paper like drafts; states are named in text, color only reinforces them. */
+
+/* ---------- PO identity question ---------- */
+
+.po-dialog {
+  width: min(500px, calc(100vw - 32px));
+}
+
+.po-body {
+  gap: 12px;
+}
+
+.po-intro {
+  line-height: 1.6;
+}
+
+.po-names {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11em, 1fr));
+  gap: 8px;
+}
+
+.po-name {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+.po-name.is-po {
+  box-shadow: inset 0 0 0 1px var(--accent-soft), inset 3px 0 0 var(--accent);
+}
+
+.po-name dt {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.po-name dd {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.po-note {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.po-body .notice-inline {
+  margin: 0;
+}
+
+/* Checkbox at the bottom left, the three choices on the right; stacks when narrow or zoomed. */
+.po-actions {
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px 16px;
+}
+
+.po-suppress,
+.own-posts-check {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.po-suppress input,
+.own-posts-check input {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.po-suppress > span {
+  display: grid;
+}
+
+.po-suppress-help {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.po-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ---------- Shared list pieces ---------- */
+
+.attempts-dialog,
+.own-posts-dialog {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.attempts-body,
+.own-posts-body {
+  gap: 14px;
+}
+
+.attempts-intro,
+.own-posts-intro {
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.attempts-heading {
+  margin-bottom: 6px;
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+}
+
+.attempts-empty {
+  padding: 20px 8px;
+  text-align: center;
+}
+
+.attempts-empty-title {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.attempts-list,
+.own-posts-list {
+  display: grid;
+  gap: 6px;
+}
+
+/* ---------- 发送记录 ---------- */
+
+.attempt-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+.attempt-item.is-unknown,
+.attempt-item.is-unconfirmed {
+  box-shadow: inset 0 0 0 1px var(--line-soft), inset 3px 0 0 var(--warn-ink);
+}
+
+.attempt-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+}
+
+.attempt-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px 1px 6px;
+  border-radius: 999px;
+  background: var(--hover);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  color: var(--ink-2);
+}
+
+.attempt-badge .icon {
+  flex: none;
+}
+
+.attempt-badge.is-confirmed {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.attempt-badge.is-unknown,
+.attempt-badge.is-unconfirmed {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.attempt-badge.is-failed {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+
+.attempt-time {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.attempt-target {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.attempt-post {
+  font-weight: 500;
+  color: var(--accent-ink);
+}
+
+.attempt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.attempt-meta .is-warning {
+  color: var(--warn-ink);
+  font-weight: 600;
+}
+
+.attempt-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.attempt-excerpt {
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.attempt-detail {
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.attempt-item.is-unknown .attempt-detail,
+.attempt-item.is-unconfirmed .attempt-detail {
+  color: var(--warn-ink);
+}
+
+.attempt-editing {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent-ink);
+}
+
+.attempt-item .loading,
+.attempt-item .notice-inline {
+  margin: 0;
+}
+
+.attempt-content summary {
+  width: fit-content;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+
+.attempt-content dl {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  background: var(--pane);
+}
+
+.attempt-content dt {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.attempt-content dd {
+  overflow-wrap: anywhere;
+}
+
+/* The retained text exactly as sent: line breaks kept, selectable for checking. */
+.attempt-body {
+  white-space: pre-wrap;
+  line-height: 1.6;
+  user-select: text;
+}
+
+.attempt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.attempt-actions:empty {
+  display: none;
+}
+
+/* ---------- 我的发言 ---------- */
+
+.own-posts-form {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius-m);
+  background: var(--info-bg);
+}
+
+.own-posts-form .attempts-heading {
+  margin: 0;
+}
+
+.own-posts-help {
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.own-posts-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10em, 1fr));
+  gap: 6px 8px;
+}
+
+.own-posts-fields input:disabled {
+  color: var(--ink-3);
+  background: var(--pane);
+}
+
+.own-posts-submit {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.own-posts-message:empty {
+  display: none;
+}
+
+.own-posts-message .notice-inline {
+  margin: 0;
+}
+
+.own-post {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+.own-post-text {
+  flex: 1 1 14em;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.own-post-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  font-weight: 650;
+}
+
+.own-post-kind {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.own-post-evidence {
+  font-weight: 600;
+  color: var(--accent-ink);
+}
+
+.own-post-evidence.is-manual {
+  color: var(--ink-2);
+}

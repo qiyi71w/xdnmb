@@ -79,6 +79,20 @@ export function asStore(db: ReadingDatabase): AppStore {
     loadSubscriptionPlans: async () => db.loadSubscriptionPlans(),
     saveSubscriptionPlan: async (...args) => db.saveSubscriptionPlan(...args),
     recoverSubscriptionPlans: async (...args) => db.recoverSubscriptionPlans(...args),
+    loadWorkspace: async () => db.loadWorkspace(),
+    saveWorkspace: async (...args) => db.saveWorkspace(...args),
+    createPublication: async (...args) => db.createPublication(...args),
+    listPublications: async () => db.listPublications(),
+    getPublication: async (...args) => db.getPublication(...args),
+    finishPublication: async (...args) => db.finishPublication(...args),
+    recoverPublications: async (...args) => db.recoverPublications(...args),
+    listLaunchNotices: async () => db.listLaunchNotices(),
+    dismissLaunchNotices: async (...args) => db.dismissLaunchNotices(...args),
+    listOwnPosts: async () => db.listOwnPosts(),
+    addManualOwnPost: async (...args) => db.addManualOwnPost(...args),
+    getPoWarningEnabled: async () => db.getPoWarningEnabled(),
+    setPoWarningEnabled: async (...args) => db.setPoWarningEnabled(...args),
+    lastPublicationAt: async (...args) => db.lastPublicationAt(...args),
     close: async () => db.close()
   }
 }

@@ -312,11 +312,17 @@
   text-align: center;
 }
 
-/* Placeholder above a forum's editor while the directory has not described the forum. */
+/* State above a forum's editor while the directory has not described the feed: loading, directory
+   unreadable, or the feed no longer in the directory. */
 .pane-empty.list-pending {
   flex: 1;
   min-height: 0;
   height: auto;
+}
+
+.pane-empty.list-pending .notice {
+  max-width: 28em;
+  text-align: start;
 }
 
 .pane-empty-title {

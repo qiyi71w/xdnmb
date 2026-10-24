@@ -85,6 +85,31 @@ async function finished(service: ContentService, threadId: string): Promise<Offl
 }
 
 describe('retained content operations', () => {
+  it('drains background saves at quit and accepts new work when the window is reopened', async () => {
+    const reached = Promise.withResolvers<void>()
+    const requests: string[] = []
+    const { service, db } = await setup(async (id, _mode, n, signal) => {
+      requests.push(`${id}:${n}`)
+      if (id === '200') return page(id, n, [])
+      if (n === 1) return page(id, n, [post('101')])
+      const { promise, reject } = Promise.withResolvers<ThreadPage>()
+      signal.addEventListener('abort', () => reject(new ReadCancelledError()), { once: true })
+      reached.resolve()
+      return promise
+    })
+    await service.saveOffline({ threadId: '100', includeImages: false })
+    await reached.promise
+    await service.stop()
+    expect(requests).toEqual(['100:1', '100:2'])
+    expect(await service.saveOffline({ threadId: '200', includeImages: false })).toEqual({ ok: false, reason: 'busy' })
+    expect(db.getOfflineCopy('100')).toMatchObject({ pages: [1], state: 'interrupted' })
+    expect(db.getReadingState('100').readPostIds).toEqual([])
+    service.resume()
+    expect((await service.saveOffline({ threadId: '200', includeImages: false })).ok).toBe(true)
+    expect(await finished(service, '200')).toMatchObject({ pages: [1], state: 'stopped' })
+    expect(requests).toEqual(['100:1', '100:2', '200:1'])
+  })
+
   it('cancels queued pages, preserves completed text, and allows foreground persistence before exit', async () => {
     const reached = Promise.withResolvers<void>()
     const { service, db } = await setup(async (id, _mode, n, signal) => {

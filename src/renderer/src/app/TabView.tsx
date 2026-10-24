@@ -3,11 +3,13 @@ import { EditorDock } from '../features/editor/EditorDock'
 import type { FeedRef, ForumId, ThreadSummary } from '../../../shared/forum'
 import { feedKey, type FeedInfo } from '../features/directory/feeds'
 import { SubscriptionPane } from '../features/subscriptions/SubscriptionPane'
+import type { DirectoryState } from '../features/directory/useDirectory'
+import { forumLabel } from '../features/editor/editorText'
 import { FeedPane } from '../features/feed/FeedPane'
 import type { LayoutResult } from '../features/layout/layout'
 import { currentEntry, type Tab } from '../features/tabs/tabsState'
 import { ThreadPane } from '../features/thread/ThreadPane'
-import { Loading } from '../components/Notices'
+import { FailureNotice, Loading } from '../components/Notices'
 import { Icon } from '../components/Icon'
 
 type Region = 'list' | 'reader'
@@ -21,6 +23,8 @@ export function TabView({
   tab,
   active,
   layout,
+  directory,
+  onRetryDirectory,
   feedInfo,
   forumNames,
   forumName,
@@ -31,6 +35,9 @@ export function TabView({
   tab: Tab
   active: boolean
   layout: LayoutResult
+  /** Directory status; decides whether a feed without details is still loading or gone. */
+  directory: DirectoryState
+  onRetryDirectory: () => void
   feedInfo: (ref: FeedRef) => FeedInfo | null
   forumNames: ReadonlyMap<ForumId, string>
   forumName: (forumId: string | null) => string | null
@@ -107,8 +114,9 @@ export function TabView({
       feed.kind === 'forum' ? (
         <EditorDock tabId={tab.id} target={{ kind: 'thread', forumId: feed.id }} displayed={active && listVisible} />
       ) : null
-    const list =
-      feed.kind === 'subscriptions' ? (
+    let list
+    if (feed.kind === 'subscriptions') {
+      list = (
         <SubscriptionPane
           key={`${entry.key}:subscriptions`}
           entryKey={entry.key}
@@ -116,14 +124,9 @@ export function TabView({
           selectedThreadId={selectedThreadId}
           onOpenThread={(summary) => onSelectThread(tab.id, summary)}
         />
-      ) : info === null ? (
-        <div className="list-pane">
-          <div className="pane-empty list-pending">
-            <Loading>正在读取版面目录…</Loading>
-          </div>
-          {listDock}
-        </div>
-      ) : (
+      )
+    } else if (info !== null) {
+      list = (
         <FeedPane
           key={`${entry.key}:${feedKey(feed)}`}
           entryKey={entry.key}
@@ -134,6 +137,43 @@ export function TabView({
           footer={listDock}
         />
       )
+    } else {
+      // A feed without details is pending only until the directory settles; then the tab stays
+      // on it as missing (or unreadable) instead of moving elsewhere. The forum's editor remains.
+      const target = feed.kind === 'forum' ? `「${forumLabel(feed.id, forumName)}」` : `「时间线 ${feed.id}」`
+      let state
+      if (directory.directory === null && directory.failure !== null) {
+        state = (
+          <>
+            <FailureNotice title="版面目录读取失败" failure={directory.failure} onRetry={onRetryDirectory} compact />
+            <p className="pane-empty-text">读取目录后才能显示{target}，标签会停留在这里。</p>
+          </>
+        )
+      } else if (directory.directory === null) {
+        state = <Loading>正在读取版面目录…</Loading>
+      } else {
+        state = (
+          <>
+            <p className="pane-empty-title">{feed.kind === 'forum' ? '这个版面已不在目录中' : '这条时间线已不在目录中'}</p>
+            <p className="pane-empty-text">
+              {target}没有出现在当前版面目录里。标签会停留在这里，可以从导航中选择其他版面或时间线。
+            </p>
+            {onOpenNav !== null && (
+              <button type="button" className="btn pane-empty-action" onClick={onOpenNav}>
+                <Icon name="sidebar" />
+                打开导航
+              </button>
+            )}
+          </>
+        )
+      }
+      list = (
+        <div className="list-pane">
+          <div className="pane-empty list-pending">{state}</div>
+          {listDock}
+        </div>
+      )
+    }
     body = splitShown ? (
       <div className={single ? 'split is-single' : 'split'}>
         <div className="list-column" ref={listRef} hidden={!listVisible} onFocus={() => (lastRegion.current = 'list')}>

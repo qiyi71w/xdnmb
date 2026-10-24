@@ -1,0 +1,188 @@
+/* Close choice, quit questions (inside the shared modal) and the launch notice strip. */
+
+/* ---------- Close choice and quit questions ---------- */
+
+.lifecycle-dialog {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.lifecycle-dialog .modal-body {
+  gap: 12px;
+}
+
+.lifecycle-intro {
+  line-height: 1.6;
+}
+
+.lifecycle-note {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.lifecycle-dialog .modal-body > .notice-inline {
+  margin: 0;
+}
+
+/* Quit at work: the window is inert from the start, the dialog shows only once the wait is noticeable. */
+.modal.lifecycle-working:not(.is-shown) {
+  opacity: 0;
+  animation: none;
+}
+
+.modal.lifecycle-working:not(.is-shown)::backdrop {
+  background: transparent;
+}
+
+/* Sends listed in a quit question. */
+.lifecycle-list {
+  display: grid;
+  gap: 6px;
+}
+
+.lifecycle-list-item {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+  overflow-wrap: anywhere;
+}
+
+.lifecycle-list-target {
+  font-weight: 600;
+}
+
+.lifecycle-list-detail {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.close-choices {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.close-choice {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+.close-choice dt {
+  font-weight: 650;
+}
+
+.close-choice dd {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  margin: 0;
+}
+
+/* Checkbox at the bottom left, the choices on the right; stacks when narrow or zoomed. */
+.close-choice-actions {
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px 16px;
+}
+
+.close-choice-remember {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.close-choice-remember input {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.close-choice-remember > span {
+  display: grid;
+}
+
+.close-choice-remember-help {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.close-choice-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ---------- Launch notice (non-blocking strip under the storage banner) ---------- */
+
+.launch-notice {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 12px;
+  padding: 8px 16px;
+  font-size: var(--text-sm);
+  color: var(--warn-ink);
+  background: var(--warn-bg);
+  border-bottom: 1px solid color-mix(in oklch, var(--warn-ink) 22%, transparent);
+}
+
+.launch-notice > .icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.launch-notice-text {
+  flex: 1 1 20em;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.launch-notice-title {
+  font-size: inherit;
+  font-weight: 600;
+}
+
+/* Long lists scroll inside the strip instead of pushing the workspace away. */
+.launch-notice-list {
+  display: grid;
+  gap: 2px;
+  max-height: 7.5em;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.launch-notice-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  overflow-wrap: anywhere;
+}
+
+.launch-notice-target {
+  font-weight: 600;
+}
+
+.launch-notice-state {
+  color: var(--ink-2);
+}
+
+.launch-notice-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}

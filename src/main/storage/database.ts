@@ -15,6 +15,7 @@ import type {
   ThreadPage
 } from '../../shared/forum'
 import { DEFAULT_SETTINGS } from '../../shared/reading'
+import { CLOSE_ACTIONS, type CloseAction } from '../../shared/lifecycle'
 import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, SavedPosition, ThreadReadingState } from '../../shared/reading'
 import type { ImageFormat, ImageKind } from '../../shared/images'
 import { IDENTITY_ROLES } from '../../shared/identity'
@@ -22,6 +23,8 @@ import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, R
 import type { AttachmentId, DraftId, DraftSaveInput, PostTarget } from '../../shared/drafts'
 import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionPlan, SubscriptionSource } from '../../shared/subscriptions'
 import type { SubscriptionBaseline, SubscriptionConfiguration } from './contract'
+import type { OwnPost, PublicationAttempt } from '../../shared/publication'
+import type { PublicationStore } from '../publication/contract'
 import { StorageWriteRefusedError } from './contract'
 import type {
   AppStore, DraftAttachmentRecord, DraftRecord, DraftWriteOutcome, ImageHolder, ImageResourceRecord, NewImageResource, PostThreadRelation, Stored
@@ -189,6 +192,58 @@ function draftRecord(row: DraftRow, attachment: DraftAttachmentRecord | null): D
     version: row.version,
     createdAt: row.created_at,
     savedAt: row.saved_at
+  }
+}
+
+interface PublicationRow {
+  id: number
+  request_id: string
+  editor_id: string
+  draft_id: number | null
+  payload_json: string
+  state: PublicationAttempt['state']
+  problem: PublicationAttempt['problem']
+  created_at: string
+  updated_at: string
+  post_id: string | null
+  thread_id: string | null
+  saved_draft_id: number | null
+}
+
+function publicationAttempt(row: PublicationRow): PublicationAttempt {
+  return {
+    id: String(row.id),
+    requestId: row.request_id,
+    editorId: row.editor_id,
+    draftId: row.draft_id === null ? null : String(row.draft_id),
+    payload: JSON.parse(row.payload_json) as DraftSaveInput,
+    state: row.state,
+    problem: row.problem,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    postId: row.post_id,
+    threadId: row.thread_id,
+    savedDraftId: row.saved_draft_id === null ? null : String(row.saved_draft_id)
+  }
+}
+
+interface OwnPostRow {
+  post_id: string
+  thread_id: string
+  is_thread: number
+  credential_id: number | null
+  evidence: OwnPost['evidence']
+  confirmed_at: string
+}
+
+function ownPost(row: OwnPostRow): OwnPost {
+  return {
+    postId: row.post_id,
+    threadId: row.thread_id,
+    isThread: row.is_thread === 1,
+    credentialId: row.credential_id === null ? null : String(row.credential_id),
+    evidence: row.evidence,
+    confirmedAt: row.confirmed_at
   }
 }
 
@@ -703,6 +758,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     for (const row of rows) {
       const value: unknown = JSON.parse(row.value_json)
       if (row.key === 'newTabSplitDefault' && typeof value === 'boolean') settings.newTabSplitDefault = value
+      if (row.key === 'closeAction' && CLOSE_ACTIONS.includes(value as CloseAction)) settings.closeAction = value as CloseAction
     }
     return settings
   }
@@ -716,6 +772,19 @@ class SqliteReadingDatabase implements ReadingDatabase {
       `)
       for (const [key, value] of Object.entries(settings)) statement.run(key, JSON.stringify(value))
     })()
+  }
+
+  /** The workspace saved at the last real quit, as given; `null` when none was saved. */
+  loadWorkspace(): string | null {
+    if (!this.db) throw new StorageWriteRefusedError(this.currentStatus)
+    return this.db.prepare<[], { state_json: string }>('SELECT state_json FROM workspace WHERE id = 1').get()?.state_json ?? null
+  }
+
+  saveWorkspace(state: string, at: string): void {
+    this.writable().prepare(`
+      INSERT INTO workspace (id, state_json, saved_at) VALUES (1, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, saved_at = excluded.saved_at
+    `).run(state, at)
   }
 
   getPostImage(postId: PostId): PostImage | null {
@@ -888,9 +957,17 @@ class SqliteReadingDatabase implements ReadingDatabase {
     )()
   }
 
+  private draftLocked(db: Database.Database, id: DraftId): boolean {
+    return db.prepare(`
+      SELECT 1 FROM publication_attempts
+      WHERE draft_id = ? AND state IN ('sending', 'unknown', 'unconfirmed')
+    `).get(id) !== undefined
+  }
+
   saveDraft(input: DraftSaveInput, at: string): DraftWriteOutcome {
     const db = this.writable()
     return db.transaction((): DraftWriteOutcome => {
+      if (input.draftId !== null && this.draftLocked(db, input.draftId)) return { ok: false, reason: 'locked' }
       const attachment = input.attachmentId === null ? null : this.attachmentById(db, input.attachmentId)
       if (input.attachmentId !== null && attachment === null) return { ok: false, reason: 'attachment-missing' }
       const values = {
@@ -922,8 +999,194 @@ class SqliteReadingDatabase implements ReadingDatabase {
     }).immediate()
   }
 
-  deleteDraft(id: DraftId): boolean {
-    return this.writable().prepare('DELETE FROM drafts WHERE id = ?').run(id).changes === 1
+  private publicationDatabase(): Database.Database {
+    if (this.db === null) throw new StorageWriteRefusedError(this.currentStatus)
+    return this.db
+  }
+
+  createPublication(input: Parameters<PublicationStore['createPublication']>[0]): PublicationAttempt {
+    const db = this.writable()
+    return db.transaction(() => {
+      const existing = db.prepare<[string], PublicationRow>('SELECT * FROM publication_attempts WHERE request_id = ?').get(input.requestId)
+      if (existing) return publicationAttempt(existing)
+      const { payload } = input
+      if (payload.credentialId === null) throw new Error('publication requires a credential')
+      if (payload.draftId !== null) {
+        if (!db.prepare('SELECT 1 FROM drafts WHERE id = ?').get(payload.draftId)) throw new Error('source draft not found')
+        if (this.draftLocked(db, payload.draftId)) throw new Error('source draft locked')
+      }
+      if (payload.attachmentId !== null && this.attachmentById(db, payload.attachmentId) === null) {
+        throw new Error('publication attachment missing')
+      }
+      if (input.switchThreadIdentity && payload.target.kind === 'reply' &&
+          !this.setThreadPostIdentity(payload.target.threadId, payload.credentialId, input.at)) {
+        throw new Error('publication credential unavailable')
+      }
+      const row = db.prepare<{
+        requestId: string; editorId: string; draftId: string | null; payload: string;
+        credentialId: string; forumId: string; attachmentId: string | null; at: string
+      }, PublicationRow>(`
+        INSERT INTO publication_attempts (
+          request_id, editor_id, draft_id, payload_json, credential_id, forum_id,
+          attachment_id, state, created_at, updated_at
+        ) VALUES (@requestId, @editorId, @draftId, @payload, @credentialId, @forumId,
+          @attachmentId, 'sending', @at, @at)
+        RETURNING *
+      `).get({
+        requestId: input.requestId, editorId: input.editorId, draftId: payload.draftId,
+        payload: JSON.stringify(payload), credentialId: payload.credentialId, forumId: input.forumId,
+        attachmentId: payload.attachmentId, at: input.at
+      })
+      if (!row) throw new Error('publication insert returned no row')
+      return publicationAttempt(row)
+    }).immediate()
+  }
+
+  listPublications(): PublicationAttempt[] {
+    return this.publicationDatabase().prepare<[], PublicationRow>(
+      'SELECT * FROM publication_attempts ORDER BY created_at DESC, id DESC'
+    ).all().map(publicationAttempt)
+  }
+
+  getPublication(id: string): PublicationAttempt | null {
+    const row = this.publicationDatabase().prepare<[string], PublicationRow>('SELECT * FROM publication_attempts WHERE id = ?').get(id)
+    return row ? publicationAttempt(row) : null
+  }
+
+  finishPublication(input: Parameters<PublicationStore['finishPublication']>[0]): PublicationAttempt {
+    const db = this.writable()
+    return db.transaction(() => {
+      const attempt = this.getPublication(input.id)
+      if (!attempt) throw new Error('publication not found')
+      // A stale callback cannot undo known success or make an uncertain submission retryable.
+      // Positive evidence may still resolve an unknown result (including startup recovery).
+      if (attempt.state === 'confirmed' || attempt.state === 'failed' || attempt.state === input.state
+        || (attempt.state === 'unconfirmed' && input.state !== 'confirmed')
+        || (attempt.state === 'unknown' && input.state !== 'confirmed' && input.state !== 'unconfirmed')) return attempt
+
+      let savedDraftId: string | null = null
+      if (input.state === 'confirmed') {
+        const { payload } = attempt
+        const isThread = payload.target.kind === 'thread'
+        if (!input.postId || !input.threadId || payload.credentialId === null
+          || (isThread ? input.postId !== input.threadId : payload.target.kind === 'reply' && payload.target.threadId !== input.threadId)) {
+          throw new Error('publication confirmation target mismatch')
+        }
+        const previous = db.prepare<[string], OwnPostRow>('SELECT * FROM own_posts WHERE post_id = ?').get(input.postId)
+        if (previous && (previous.thread_id !== input.threadId || previous.is_thread !== Number(isThread)
+          || (previous.evidence === 'submission-readback' && String(previous.credential_id) !== payload.credentialId))) {
+          throw new Error('own post confirmation conflict')
+        }
+        db.prepare(`
+          INSERT INTO own_posts (post_id, thread_id, is_thread, credential_id, evidence, confirmed_at)
+          VALUES (?, ?, ?, ?, 'submission-readback', ?)
+          ON CONFLICT(post_id) DO UPDATE SET credential_id = excluded.credential_id,
+            evidence = excluded.evidence, confirmed_at = excluded.confirmed_at
+          WHERE own_posts.evidence = 'manual'
+        `).run(input.postId, input.threadId, Number(isThread), payload.credentialId, input.at)
+        if (isThread) {
+          db.prepare(`
+            INSERT OR IGNORE INTO thread_post_identities (thread_id, credential_id, updated_at) VALUES (?, ?, ?)
+          `).run(input.threadId, payload.credentialId, input.at)
+        }
+        if (attempt.draftId !== null) db.prepare('DELETE FROM drafts WHERE id = ?').run(attempt.draftId)
+      }
+
+      // A launch notice is kept only for a failed / unknown result reached without a window; any
+      // later result (e.g. positive evidence resolving an unknown one) replaces it.
+      const launchNotice = input.launchNotice === true && (input.state === 'failed' || input.state === 'unknown')
+      db.prepare(`
+        UPDATE publication_attempts SET state = ?, problem = ?, post_id = ?, thread_id = ?, updated_at = ?, launch_notice = ?
+        WHERE id = ?
+      `).run(input.state, input.state === 'confirmed' ? null : input.problem,
+        input.state === 'confirmed' ? input.postId : null, input.state === 'confirmed' ? input.threadId : null, input.at,
+        Number(launchNotice), input.id)
+
+      if (input.state === 'failed') {
+        // Changing the state above releases the source lock within this same transaction only.
+        // A failed save throws, rolling back both the result and all draft changes.
+        const saved = this.saveDraft(attempt.payload, input.at)
+        if (!saved.ok) throw new Error('failed publication draft could not be saved')
+        savedDraftId = saved.draft.id
+      }
+      if (input.state === 'confirmed' || input.state === 'failed') {
+        db.prepare('UPDATE publication_attempts SET attachment_id = NULL, saved_draft_id = ? WHERE id = ?')
+          .run(savedDraftId, input.id)
+      }
+      const finished = this.getPublication(input.id)
+      if (!finished) throw new Error('publication result returned no row')
+      return finished
+    }).immediate()
+  }
+
+  /** Startup only: an attempt left `sending` by the last run becomes unknown and leaves a launch notice. */
+  recoverPublications(at: string): void {
+    this.writable().prepare(`
+      UPDATE publication_attempts SET state = 'unknown', problem = 'network', updated_at = ?, launch_notice = 1 WHERE state = 'sending'
+    `).run(at)
+  }
+
+  listLaunchNotices(): PublicationAttempt[] {
+    return this.publicationDatabase().prepare<[], PublicationRow>(
+      'SELECT * FROM publication_attempts WHERE launch_notice = 1 ORDER BY created_at, id'
+    ).all().map(publicationAttempt)
+  }
+
+  dismissLaunchNotices(ids: string[]): void {
+    const db = this.writable()
+    db.transaction(() => {
+      const statement = db.prepare('UPDATE publication_attempts SET launch_notice = 0 WHERE id = ?')
+      for (const id of ids) statement.run(id)
+    })()
+  }
+
+  listOwnPosts(): OwnPost[] {
+    return this.publicationDatabase().prepare<[], OwnPostRow>(
+      'SELECT * FROM own_posts ORDER BY confirmed_at DESC, post_id DESC'
+    ).all().map(ownPost)
+  }
+
+  addManualOwnPost(input: Parameters<PublicationStore['addManualOwnPost']>[0]): void {
+    const db = this.writable()
+    db.transaction(() => {
+      if (input.isThread && input.postId !== input.threadId) throw new Error('manual own post target mismatch')
+      const previous = db.prepare<[string], OwnPostRow>('SELECT * FROM own_posts WHERE post_id = ?').get(input.postId)
+      if (previous && (previous.thread_id !== input.threadId || previous.is_thread !== Number(input.isThread))) {
+        throw new Error('manual own post conflict')
+      }
+      db.prepare(`
+        INSERT OR IGNORE INTO own_posts (post_id, thread_id, is_thread, credential_id, evidence, confirmed_at)
+        VALUES (?, ?, ?, NULL, 'manual', ?)
+      `).run(input.postId, input.threadId, Number(input.isThread), input.at)
+    }).immediate()
+  }
+
+  getPoWarningEnabled(): boolean {
+    const row = this.publicationDatabase().prepare<[], { po_warning_enabled: number }>(
+      'SELECT po_warning_enabled FROM publication_settings WHERE id = 1'
+    ).get()
+    if (!row) throw new Error('publication settings missing')
+    return row.po_warning_enabled === 1
+  }
+
+  setPoWarningEnabled(enabled: boolean): void {
+    this.writable().prepare('UPDATE publication_settings SET po_warning_enabled = ? WHERE id = 1').run(Number(enabled))
+  }
+
+  lastPublicationAt(credentialId: string, forumId: string): string | null {
+    const row = this.publicationDatabase().prepare<[string, string], { created_at: string }>(`
+      SELECT created_at FROM publication_attempts WHERE credential_id = ? AND forum_id = ?
+      ORDER BY julianday(created_at) DESC, id DESC LIMIT 1
+    `).get(credentialId, forumId)
+    return row?.created_at ?? null
+  }
+
+  deleteDraft(id: DraftId): boolean | 'locked' {
+    const db = this.writable()
+    return db.transaction(() => {
+      if (this.draftLocked(db, id)) return 'locked' as const
+      return db.prepare('DELETE FROM drafts WHERE id = ?').run(id).changes === 1
+    }).immediate()
   }
 
   insertDraftAttachment(input: Omit<DraftAttachmentRecord, 'id'>): DraftAttachmentRecord {
@@ -947,6 +1210,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
       const rows = db.prepare<[], { id: number; file_name: string }>(`
         SELECT id, file_name FROM draft_attachments
         WHERE NOT EXISTS (SELECT 1 FROM drafts WHERE drafts.attachment_id = draft_attachments.id)
+          AND NOT EXISTS (SELECT 1 FROM publication_attempts WHERE publication_attempts.attachment_id = draft_attachments.id)
       `).all().filter((row) => !kept.has(String(row.id)))
       const remove = db.prepare('DELETE FROM draft_attachments WHERE id = ?')
       for (const row of rows) remove.run(row.id)

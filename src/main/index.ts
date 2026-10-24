@@ -1,10 +1,13 @@
-import { app, BrowserWindow, dialog, Menu, protocol, session, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron'
+import {
+  app, BrowserWindow, dialog, Menu, nativeImage, Notification, protocol, session, Tray,
+  type IpcMainInvokeEvent, type MenuItemConstructorOptions
+} from 'electron'
 import { createReadStream } from 'node:fs'
 import { lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pathToFileURL } from 'node:url'
-import type { AppPlatform } from '../shared/api'
+import { LIFECYCLE_REQUEST_CHANNEL, type AppPlatform } from '../shared/api'
 import { IMAGE_FORMAT_EXTENSION, IMAGE_SCHEME } from '../shared/images'
 import { createContentService, type ContentService } from './content/service'
 import { createDraftService } from './drafts/service'
@@ -15,13 +18,17 @@ import { createImageService } from './images/service'
 import { createImageDownloader } from './images/transport'
 import { createSafeStorageProtector } from './identity/protection'
 import { createIdentityService } from './identity/service'
-import { registerIpc } from './ipc'
+import { registerIpc, type IpcRegistration } from './ipc'
+import { createLifecycle, type FinishingSummary, type Lifecycle, type MainWindowHost } from './lifecycle/controller'
 import { createReadingService } from './reading/service'
 import { createRequestScheduler } from './reading/scheduler'
 import type { AppStore } from './storage/contract'
 import { openReadingStore } from './storage/store'
 import createStorageWorker from './storage/worker?nodeWorker'
 import { createSubscriptionService } from './subscriptions/service'
+import { createPublicationAdapter } from './publication/adapter'
+import { createPublicationService } from './publication/service'
+import trayIconPath from '../../resources/tray-icon.png?asset'
 
 /** Verified JSON API origin; the only destination for the selected browse credential. */
 const FORUM_API_ORIGIN = 'https://api.nmb.best'
@@ -43,6 +50,9 @@ let mainWindow: BrowserWindow | null = null
 let store: AppStore | null = null
 let storeClosed = false
 let content: ContentService | null = null
+let lifecycle: Lifecycle | null = null
+/** Kept referenced for the app's lifetime (Windows/Linux). */
+let tray: Tray | null = null
 
 // Every renderer runs sandboxed; one main process owns the database worker.
 app.enableSandbox()
@@ -50,11 +60,10 @@ if (!app.requestSingleInstanceLock()) app.quit()
 // Managed image files are shown through the app's own scheme, never by file path or remote URL.
 protocol.registerSchemesAsPrivileged([{ scheme: IMAGE_SCHEME, privileges: { standard: true, secure: true } }])
 
-app.on('second-instance', () => {
-  if (!mainWindow) return
-  if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.focus()
-})
+// A second launch never opens a second writer: it is an explicit reopen of this process.
+app.on('second-instance', () => lifecycle?.reopen())
+// macOS Dock. Also fires during launch; the lifecycle ignores it until the first window is shown.
+app.on('activate', () => lifecycle?.reopen())
 
 app.on('web-contents-created', (_event, contents) => {
   contents.on('will-attach-webview', (event) => event.preventDefault())
@@ -108,10 +117,41 @@ function createWindow(): BrowserWindow {
   })
   // Windows/Linux keep the menu's accelerators but show no menu bar.
   if (platform !== 'darwin') window.setMenuBarVisibility(false)
-  window.once('ready-to-show', () => window.show())
+  // The close button asks / resides / quits; only the final exit lets a window close normally.
+  window.on('close', (event) => {
+    if (lifecycle === null || lifecycle.phase === 'exiting') return
+    event.preventDefault()
+    void lifecycle.closeRequested()
+  })
   if (rendererDevUrl) void window.loadURL(rendererDevUrl)
   else void window.loadFile(rendererFile)
   return window
+}
+
+/** 16 px tray icon with a 2× representation for high-DPI taskbars. */
+function trayImage(): Electron.NativeImage {
+  const source = nativeImage.createFromPath(trayIconPath)
+  const image = nativeImage.createEmpty()
+  if (source.isEmpty()) return image
+  for (const scaleFactor of [1, 2]) {
+    const size = 16 * scaleFactor
+    image.addRepresentation({ scaleFactor, buffer: source.resize({ width: size, height: size, quality: 'best' }).toPNG() })
+  }
+  return image
+}
+
+/** Best effort: the launch notices are already stored, so an unavailable notification loses nothing. */
+function notifyUnfinished({ failed, unknown }: FinishingSummary): void {
+  if (!Notification.isSupported()) return
+  const parts: string[] = []
+  if (failed.length > 0) parts.push(`${failed.length} 个发送失败`)
+  if (unknown.length > 0) parts.push(`${unknown.length} 个发送结果待确认`)
+  const notification = new Notification({
+    title: '汐岛退出时有发送没有完成',
+    body: `${parts.join('，')}。下次打开汐岛会再次提示，不会自动重发。`
+  })
+  notification.on('click', () => lifecycle?.reopen())
+  notification.show()
 }
 
 /**
@@ -197,6 +237,15 @@ async function start(): Promise<void> {
 
   const draftFiles = await openManagedImageFiles(join(app.getPath('userData'), 'draft-images'))
   const drafts = createDraftService({ store: openedStore, files: draftFiles })
+  const publication = createPublicationService({
+    store: openedStore, drafts, files: draftFiles, protector: createSafeStorageProtector(),
+    clientFor: (userhash) => createForumClient({
+      transport: createForumTransport({ allowedOrigins: [FORUM_API_ORIGIN], credentialOrigins: [FORUM_API_ORIGIN] }),
+      baseUrl: FORUM_API_ORIGIN, browseIdentity: async () => userhash
+    }),
+    adapter: createPublicationAdapter()
+  })
+  await publication.recover().catch(() => console.error('[publication] recovery failed'))
   // No editor exists yet: copies no saved draft references, and leftover files, are removed.
   await drafts.recover().catch(() => console.error('[drafts] recovery failed'))
   serveManagedImages({ file: imageFiles, draft: draftFiles })
@@ -210,13 +259,75 @@ async function start(): Promise<void> {
   await retained.enforceQuota().catch(() => console.error('[content] cleanup failed'))
 
   installMenu()
-  const ipc = registerIpc({
+  let ipc: IpcRegistration | null = null
+  let backgroundStopped = Promise.resolve()
+
+  /** Wires a new main window: its reads stop when it navigates away or closes. */
+  const attach = (window: BrowserWindow) => {
+    mainWindow = window
+    const contents = window.webContents
+    contents.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && !details.isSameDocument) ipc?.cancelAllFor(contents)
+    })
+    window.on('closed', () => {
+      ipc?.cancelAllFor(contents)
+      if (mainWindow === window) mainWindow = null
+    })
+  }
+  const host: MainWindowHost = {
+    state: () => (mainWindow === null ? 'none' : mainWindow.isVisible() ? 'shown' : 'hidden'),
+    open: async () => {
+      await backgroundStopped
+      retained.resume()
+      const { promise, resolve } = Promise.withResolvers<void>()
+      const window = createWindow()
+      attach(window)
+      window.once('ready-to-show', () => {
+        window.show()
+        resolve()
+      })
+      await promise
+    },
+    reveal() {
+      if (mainWindow === null) return
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    },
+    hide: () => mainWindow?.hide(),
+    destroy() {
+      const window = mainWindow
+      mainWindow = null
+      // Not inside the IPC call that asked for it; its renderer is untrusted from now on.
+      if (window !== null) setImmediate(() => window.destroy())
+    },
+    send: (request) => mainWindow?.webContents.send(LIFECYCLE_REQUEST_CHANNEL, request)
+  }
+  const controller = createLifecycle({
+    window: host,
+    closeAction: async () => (await openedStore.loadSettings()).closeAction,
+    publication,
+    stopBackgroundWork: () => {
+      ipc?.cancelAll()
+      backgroundStopped = retained.stop()
+    },
+    notify: notifyUnfinished,
+    exit: () => app.quit(),
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    onTrigger: (trigger) => console.info('[lifecycle]', trigger)
+  })
+  lifecycle = controller
+
+  ipc = registerIpc({
     reading,
     images,
     identities,
     drafts,
     content: retained,
     subscriptions,
+    publication,
+    lifecycle: controller,
     store: openedStore,
     getStatus: () => ({ storage: openedStore.status, platform }),
     async chooseSavePath(sender, suggestedName, format) {
@@ -249,16 +360,19 @@ async function start(): Promise<void> {
       isAppDocument(event.senderFrame.url)
   })
 
-  mainWindow = createWindow()
-  const contents = mainWindow.webContents
-  // Reads started by a page that navigated away or closed are cancelled, not left running.
-  contents.on('did-start-navigation', (details) => {
-    if (details.isMainFrame && !details.isSameDocument) ipc.cancelAllFor(contents)
-  })
-  mainWindow.on('closed', () => {
-    ipc.cancelAllFor(contents)
-    mainWindow = null
-  })
+  // Windows tray / Linux status icon; macOS reopens from the Dock.
+  if (platform !== 'darwin') {
+    tray = new Tray(trayImage())
+    tray.setToolTip('汐岛')
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: '打开汐岛', click: () => controller.reopen() },
+      { type: 'separator' },
+      { label: '退出汐岛', click: () => controller.requestQuit() }
+    ]))
+    tray.on('click', () => controller.reopen())
+  }
+
+  await controller.start()
 }
 
 app.whenReady().then(start, (error: unknown) => {
@@ -266,7 +380,15 @@ app.whenReady().then(start, (error: unknown) => {
   app.quit()
 })
 
-app.on('window-all-closed', () => app.quit())
+// The lifecycle decides when the app ends: closing or hiding the window never quits by itself.
+app.on('window-all-closed', () => undefined)
+
+// App menu / Cmd+Q / tray all quit through the lifecycle (unsaved editors, started sends).
+app.on('before-quit', (event) => {
+  if (lifecycle === null || lifecycle.phase === 'starting' || lifecycle.phase === 'exiting') return
+  event.preventDefault()
+  lifecycle.requestQuit()
+})
 
 app.on('will-quit', (event) => {
   if (!store || storeClosed) return

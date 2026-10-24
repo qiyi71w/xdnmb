@@ -143,9 +143,9 @@ describe('retained content storage', () => {
     db.saveThreadPage({ ...observed, head: post('100', false, '中'), replies: [post('101', false, '中')] }, t0)
     expect(db.getContentUsage().cacheTextBytes).toBe(asciiBytes + 8)
     db.setCacheLimit(250)
-    db.saveSettings({ newTabSplitDefault: false })
+    db.saveSettings({ newTabSplitDefault: false, closeAction: 'ask' })
     expect(db.getContentUsage().limitBytes).toBe(250)
-    expect(db.loadSettings()).toEqual({ newTabSplitDefault: false })
+    expect(db.loadSettings()).toEqual({ newTabSplitDefault: false, closeAction: 'ask' })
   })
 
   it('evicts the least recently loaded thread and counts shared feed/thread text only once', () => {

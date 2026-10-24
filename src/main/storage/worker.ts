@@ -103,6 +103,20 @@ port.on('message', (request: StorageRequest) => {
       case 'loadSubscriptionPlans': value = db.loadSubscriptionPlans(...request.args); break
       case 'saveSubscriptionPlan': value = db.saveSubscriptionPlan(...request.args); break
       case 'recoverSubscriptionPlans': value = db.recoverSubscriptionPlans(...request.args); break
+      case 'createPublication': value = db.createPublication(...request.args); break
+      case 'listPublications': value = db.listPublications(...request.args); break
+      case 'getPublication': value = db.getPublication(...request.args); break
+      case 'finishPublication': value = db.finishPublication(...request.args); break
+      case 'recoverPublications': value = db.recoverPublications(...request.args); break
+      case 'listLaunchNotices': value = db.listLaunchNotices(...request.args); break
+      case 'dismissLaunchNotices': value = db.dismissLaunchNotices(...request.args); break
+      case 'loadWorkspace': value = db.loadWorkspace(...request.args); break
+      case 'saveWorkspace': value = db.saveWorkspace(...request.args); break
+      case 'listOwnPosts': value = db.listOwnPosts(...request.args); break
+      case 'addManualOwnPost': value = db.addManualOwnPost(...request.args); break
+      case 'getPoWarningEnabled': value = db.getPoWarningEnabled(...request.args); break
+      case 'setPoWarningEnabled': value = db.setPoWarningEnabled(...request.args); break
+      case 'lastPublicationAt': value = db.lastPublicationAt(...request.args); break
       case 'close': value = db.close(...request.args); break
       default: throw new Error('unknown storage method')
     }

@@ -1,11 +1,12 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
 import { sameTarget, targetKey, type IdentityChoice, type PostFields, type PostTarget } from '../../../../shared/drafts'
 import type { CredentialId } from '../../../../shared/identity'
-import { saveAriaShortcut, shortcutLabel } from '../../app/shortcuts'
-import { Icon } from '../../components/Icon'
+import { isSendShortcut, saveAriaShortcut, sendAriaShortcut, sendShortcutLabel, shortcutLabel } from '../../app/shortcuts'
+import { Icon, Spinner } from '../../components/Icon'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { formatLocalTime } from '../../lib/format'
 import { formatBytes } from '../image/imageView'
+import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, ATTEMPT_STATE_LABEL, PROBLEM_TEXT } from '../publication/publicationText'
 import type { IdentitiesState } from '../identity/useIdentities'
 import {
   ATTACH_FAILURE_TEXT,
@@ -84,6 +85,9 @@ function CollapsedBar({
   })
   const key = targetKey(target)
   const hasEditor = editor !== null
+  const barKey = focusKey(tabId, target)
+  /** The last send from this tab to this target was confirmed: say so until a new editor opens. */
+  const sent = editor === null ? store.published.get(barKey) : undefined
 
   useLayoutEffect(() => {
     if (!focusBar.current) return
@@ -108,6 +112,7 @@ function CollapsedBar({
   }, [hasEditor, key, overview])
 
   const expand = async () => {
+    store.clearPublished(barKey)
     if (editor !== null) {
       store.dispatch({ type: 'set-expanded', editorId: editor.id, expanded: true })
       store.requestFocus(focusKey(tabId, target))
@@ -133,6 +138,14 @@ function CollapsedBar({
           {editor === null ? '将使用饼干：' : '饼干：'}
           <IdentityValue line={identity} />
           {editor !== null && <span className="editor-bar-state">{editorStateText(editor)}</span>}
+        </span>
+        <span className="editor-bar-sent" role="status">
+          {sent !== undefined && (
+            <>
+              <Icon name="check" size={13} />
+              {sent.isThread ? `新串已发出：No.${sent.postId}` : `已发送 No.${sent.postId}`}，已记为自己的发言
+            </>
+          )}
         </span>
       </div>
       <button
@@ -161,9 +174,10 @@ function EditorPanel({
   displayed: boolean
   focusBar: RefObject<boolean>
 }) {
-  const { store, identities, platform } = useEditorWorkspace()
+  const { store, identities, platform, openAttempts } = useEditorWorkspace()
   const { focusRequest, requestFocus } = store
   const ids = useId()
+  const panelRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const discardRef = useRef<HTMLButtonElement>(null)
   const confirmRef = useRef<HTMLButtonElement>(null)
@@ -175,6 +189,11 @@ function EditorPanel({
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [retargeting, setRetargeting] = useState(false)
   const [identityNotice, setIdentityNotice] = useState<string | null>(null)
+  const publication = editor.publication
+  /** A send holds this editor: its content, target and identity are fixed. */
+  const locked = publication !== null
+  const attemptState = publication?.phase === 'attempt' ? publication.attempt.state : null
+  const ended = attemptState === 'unknown' || attemptState === 'unconfirmed'
 
   // Focus the text once a requested panel is on screen (opened, continued, retargeted).
   const key = focusKey(editor.tabId, editor.target)
@@ -188,6 +207,14 @@ function EditorPanel({
     if (confirmDiscard) confirmRef.current?.focus()
   }, [confirmDiscard])
 
+  // The panel going away with focus inside (sent and confirmed, ended) hands focus to the bar.
+  useLayoutEffect(() => {
+    const panel = panelRef.current
+    return () => {
+      if (panel?.contains(document.activeElement)) focusBar.current = true
+    }
+  }, [focusBar])
+
   const edit = (patch: Partial<PostFields>) => store.dispatch({ type: 'edit', editorId, patch })
 
   const collapse = () => {
@@ -196,8 +223,21 @@ function EditorPanel({
   }
 
   const save = () => {
-    if (!unsaved || saving) return
+    if (!unsaved || saving || locked) return
     void store.save(editorId)
+  }
+
+  const send = () => {
+    if (!locked) void store.send(editorId)
+  }
+
+  // 编辑器内发送: the same handler as the button, from any of the editor's own controls. Plain
+  // Enter keeps inserting a newline; the retarget form and confirmations keep their own keys.
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (platform === null || !isSendShortcut(event.nativeEvent, platform)) return
+    if (event.target instanceof Element && event.target.closest('.editor-retarget, .editor-confirm') !== null) return
+    event.preventDefault()
+    send()
   }
 
   const discard = () => {
@@ -208,6 +248,7 @@ function EditorPanel({
   }
 
   const chooseIdentity = async (credentialId: CredentialId) => {
+    if (locked) return
     store.dispatch({ type: 'set-identity', editorId, credentialId })
     setIdentityNotice(null)
     if (editor.target.kind !== 'reply') return
@@ -221,12 +262,14 @@ function EditorPanel({
   }
 
   const identity = editorIdentity(editor, identities)
-  const canDiscard = !saving && (unsaved || editor.draft === null)
+  const canDiscard = !saving && !locked && (unsaved || editor.draft === null)
   const saveShortcut = shortcutLabel('save', platform)
+  const sendShortcut = sendShortcutLabel(platform)
   const statusText = saving ? '正在保存…' : editorStateText(editor)
+  const sendLabel = editor.target.kind === 'reply' ? '发送回复' : '发布新串'
 
   return (
-    <div className="editor-panel" data-editor-id={editorId}>
+    <div className="editor-panel" data-editor-id={editorId} ref={panelRef} onKeyDown={onKeyDown}>
       <header className="editor-head">
         <div className="editor-head-text">
           <p className="editor-target">
@@ -236,6 +279,7 @@ function EditorPanel({
           <p className="editor-meta">
             饼干：
             <IdentityValue line={identity} />
+            {locked && <span className="editor-fixed">· 已固定</span>}
           </p>
         </div>
         <div className="editor-head-actions">
@@ -243,7 +287,9 @@ function EditorPanel({
             ref={retargetRef}
             type="button"
             className="btn btn-small"
-            aria-expanded={retargeting}
+            aria-expanded={retargeting && !locked}
+            disabled={locked}
+            title={locked ? '发送进行中或结果待确认，目标已固定' : undefined}
             onClick={() => setRetargeting((open) => !open)}
           >
             更改目标
@@ -256,7 +302,7 @@ function EditorPanel({
       </header>
 
       <div className="editor-body">
-        {retargeting && (
+        {retargeting && !locked && (
           <RetargetForm
             editor={editor}
             onDone={() => {
@@ -276,16 +322,19 @@ function EditorPanel({
           rows={5}
           placeholder="正文"
           value={editor.fields.content}
+          readOnly={locked}
+          aria-keyshortcuts={sendAriaShortcut(platform)}
           onChange={(event) => edit({ content: event.target.value })}
         />
 
         <div className="editor-fields">
-          <FieldInput id={`${ids}-title`} label="标题" value={editor.fields.title} onChange={(title) => edit({ title })} />
-          <FieldInput id={`${ids}-name`} label="名称" value={editor.fields.name} onChange={(name) => edit({ name })} />
+          <FieldInput id={`${ids}-title`} label="标题" value={editor.fields.title} readOnly={locked} onChange={(title) => edit({ title })} />
+          <FieldInput id={`${ids}-name`} label="名称" value={editor.fields.name} readOnly={locked} onChange={(name) => edit({ name })} />
           <FieldInput
             id={`${ids}-email`}
             label="E-mail"
             value={editor.fields.email}
+            readOnly={locked}
             onChange={(email) => edit({ email })}
             type="email"
           />
@@ -297,7 +346,7 @@ function EditorPanel({
       </div>
 
       <footer className="editor-foot">
-        {confirmDiscard && (
+        {confirmDiscard && !locked && (
           <div className="editor-confirm" role="group" aria-labelledby={`${ids}-confirm`}>
             <p id={`${ids}-confirm`}>
               {editor.draft === null
@@ -323,61 +372,184 @@ function EditorPanel({
         )}
         <div className="editor-status" role="status">
           <span className="editor-state">{statusText}</span>
-          <span className="editor-note">发送尚未接入，可先保存为草稿</span>
+          <SendStatus editor={editor} />
         </div>
-        {saveError !== null && !saving && (
+        {saveError !== null && !saving && !locked && (
           <p className="notice-inline is-warning editor-error" role="alert">
             <Icon name="alert" size={14} />
             {SAVE_FAILURE_TEXT[saveError]}
           </p>
         )}
         <div className="editor-actions">
-          <button
-            ref={discardRef}
-            type="button"
-            className="btn"
-            disabled={!canDiscard}
-            onClick={() => (unsaved ? setConfirmDiscard(true) : discard())}
-          >
-            放弃修改
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            aria-label="保存草稿"
-            aria-keyshortcuts={saveAriaShortcut(platform)}
-            aria-disabled={!unsaved || saving}
-            aria-busy={saving || undefined}
-            title={unsaved ? undefined : '没有需要保存的内容'}
-            onClick={save}
-          >
-            <Icon name="download" />
-            保存草稿
-            {saveShortcut !== '' && <kbd className="editor-kbd">{saveShortcut}</kbd>}
-          </button>
+          {ended ? (
+            <>
+              <button type="button" className="btn" aria-haspopup="dialog" onClick={openAttempts}>
+                <Icon name="history" />
+                查看发送记录
+              </button>
+              <button
+                type="button"
+                className="btn"
+                title="内容与这次发送一起保留在发送记录中"
+                onClick={() => store.endPublication(editorId)}
+              >
+                结束编辑
+              </button>
+            </>
+          ) : publication?.phase === 'uncertain' ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              aria-busy={publication.checking || undefined}
+              aria-disabled={publication.checking || undefined}
+              onClick={() => void store.recheck(editorId)}
+            >
+              <Icon name="refresh" />
+              {publication.checking ? '正在核对…' : '重新核对'}
+            </button>
+          ) : (
+            <>
+              <button
+                ref={discardRef}
+                type="button"
+                className="btn"
+                disabled={!canDiscard}
+                onClick={() => (unsaved ? setConfirmDiscard(true) : discard())}
+              >
+                放弃修改
+              </button>
+              <button
+                type="button"
+                className="btn"
+                aria-label="保存草稿"
+                aria-keyshortcuts={saveAriaShortcut(platform)}
+                aria-disabled={!unsaved || saving || locked}
+                aria-busy={saving || undefined}
+                title={locked ? '发送进行中，不能另存' : unsaved ? undefined : '没有需要保存的内容'}
+                onClick={save}
+              >
+                <Icon name="download" />
+                保存草稿
+                {saveShortcut !== '' && <kbd className="editor-kbd">{saveShortcut}</kbd>}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                aria-keyshortcuts={sendAriaShortcut(platform)}
+                aria-disabled={locked || undefined}
+                aria-busy={locked || undefined}
+                onClick={send}
+              >
+                {locked ? <Spinner /> : <Icon name="send" />}
+                {publication === null
+                  ? sendLabel
+                  : publication.phase === 'prompt'
+                    ? '等待选择饼干…'
+                    : publication.phase === 'submitting'
+                      ? '正在提交…'
+                      : '正在发送…'}
+                {sendShortcut !== '' && !locked && <kbd className="editor-kbd">{sendShortcut}</kbd>}
+              </button>
+            </>
+          )}
         </div>
       </footer>
     </div>
   )
 }
 
+/** The send part of the editor's status line: progress, the unresolved state, or the last result. */
+function SendStatus({ editor }: { editor: Editor }) {
+  const publication = editor.publication
+  if (publication === null) {
+    const notice = editor.sendNotice
+    if (notice === null) return null
+    const text =
+      notice.kind === 'refused'
+        ? `没有发送：${PROBLEM_TEXT[notice.reason]}。`
+        : notice.kind === 'failed'
+          ? `发送失败${notice.problem === null ? '' : `：${ATTEMPT_PROBLEM_TEXT[notice.problem]}`}。${
+              notice.saved ? '内容已自动保存为草稿，确认后可再次发送。' : '自动保存草稿没有成功，内容仍在编辑中，请先保存。'
+            }`
+          : '核对结果：这次发送没有留下记录，没有发出。内容已解锁，可以再次发送。'
+    return (
+      <p className="notice-inline is-warning editor-send-notice">
+        <Icon name="alert" size={14} />
+        {text}
+      </p>
+    )
+  }
+  switch (publication.phase) {
+    case 'submitting':
+      return <span className="editor-note">内容已锁定，正在提交…</span>
+    case 'prompt':
+      return <span className="editor-note">请在对话框中选择发言饼干；内容保持不变。</span>
+    case 'uncertain':
+      return (
+        <p className="notice-inline is-warning editor-send-notice">
+          <Icon name="alert" size={14} />
+          {publication.checking
+            ? '正在按这次发送的编号核对本地记录…'
+            : '应用内部请求出错，暂时无法确认这次发送是否已经记录。内容已锁定，避免重复投递；请重新核对。'}
+        </p>
+      )
+    case 'attempt': {
+      const state = publication.attempt.state
+      if (state === 'sending') {
+        return (
+          <>
+            <span className="editor-note">{ATTEMPT_STATE_DETAIL.sending}</span>
+            {publication.readFailed && (
+              <p className="notice-inline is-warning editor-send-notice">
+                <Icon name="alert" size={14} />
+                暂时读不到本地发送状态，正在继续读取；不会重新发送。
+              </p>
+            )}
+          </>
+        )
+      }
+      if (state !== 'unknown' && state !== 'unconfirmed') return null
+      return (
+        <div className="editor-attempt-card">
+          <p className="editor-attempt-title">
+            <Icon name="alert" size={14} />
+            {ATTEMPT_STATE_LABEL[state]}
+            {publication.attempt.problem !== null && `：${ATTEMPT_PROBLEM_TEXT[publication.attempt.problem]}`}
+          </p>
+          <p>{ATTEMPT_STATE_DETAIL[state]}</p>
+          <p className="editor-note">开始于 {formatLocalTime(publication.attempt.createdAt)}；可以结束编辑，内容会留在发送记录中。</p>
+        </div>
+      )
+    }
+  }
+}
+
 function FieldInput({
   id,
   label,
   value,
+  readOnly,
   onChange,
   type = 'text'
 }: {
   id: string
   label: string
   value: string
+  readOnly: boolean
   onChange: (value: string) => void
   type?: 'text' | 'email'
 }) {
   return (
     <div className="editor-field">
       <label htmlFor={id}>{label}</label>
-      <input id={id} type={type} autoComplete="off" value={value} onChange={(event) => onChange(event.target.value)} />
+      <input
+        id={id}
+        type={type}
+        autoComplete="off"
+        value={value}
+        readOnly={readOnly}
+        onChange={(event) => onChange(event.target.value)}
+      />
     </div>
   )
 }
@@ -390,9 +562,10 @@ function AttachmentRow({ editor }: { editor: Editor }) {
   const [previewFailed, setPreviewFailed] = useState<string | null>(null)
   const attachment = editor.attachment
   const editorId = editor.id
+  const locked = editor.publication !== null
 
   const choose = async () => {
-    if (busy) return
+    if (busy || locked) return
     const replacing = attachment !== null
     setBusy(true)
     setError(null)
@@ -431,7 +604,13 @@ function AttachmentRow({ editor }: { editor: Editor }) {
           </>
         )}
         <div className="editor-attachment-actions">
-          <button type="button" className="btn btn-small" aria-busy={busy || undefined} disabled={busy} onClick={() => void choose()}>
+          <button
+            type="button"
+            className="btn btn-small"
+            aria-busy={busy || undefined}
+            disabled={busy || locked}
+            onClick={() => void choose()}
+          >
             <Icon name="image" size={14} />
             {busy ? '正在选择图片…' : attachment === null ? '添加图片' : '更换图片'}
           </button>
@@ -439,7 +618,7 @@ function AttachmentRow({ editor }: { editor: Editor }) {
             <button
               type="button"
               className="btn btn-small"
-              disabled={busy}
+              disabled={busy || locked}
               onClick={() => {
                 setError(null)
                 store.dispatch({ type: 'set-attachment', editorId, attachment: null })
@@ -474,7 +653,7 @@ function WatermarkSwitch({ editor, helpId }: { editor: Editor; helpId: string })
         className="switch"
         aria-checked={on}
         aria-describedby={hasImage ? undefined : helpId}
-        disabled={!hasImage}
+        disabled={!hasImage || editor.publication !== null}
         onClick={() => store.dispatch({ type: 'edit', editorId: editor.id, patch: { watermark: !on } })}
       >
         <span className="switch-thumb" aria-hidden="true" />
@@ -526,7 +705,7 @@ function IdentityRow({
       <select
         id={id}
         value={value}
-        disabled={overview === null || credentials.length === 0}
+        disabled={overview === null || credentials.length === 0 || editor.publication !== null}
         aria-invalid={status.state === 'missing' || status.state === 'unknown' ? true : undefined}
         onChange={(event) => {
           if (event.target.value !== '') onChoose(event.target.value)
@@ -548,7 +727,7 @@ function IdentityRow({
           导入饼干
         </button>
       )}
-      {editor.target.kind === 'reply' && <span className="editor-hint">会记住为该串的选择</span>}
+      {editor.target.kind === 'reply' && editor.publication === null && <span className="editor-hint">会记住为该串的选择</span>}
       {notice !== null && (
         <p className="notice-inline is-warning" role="alert">
           <Icon name="alert" size={14} />

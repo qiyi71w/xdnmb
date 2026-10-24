@@ -1,4 +1,4 @@
-import { Fragment, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ForumId, ThreadSummary } from '../../../../shared/forum'
 import { Content, contentText } from '../../components/Content'
 import { Icon } from '../../components/Icon'
@@ -7,10 +7,37 @@ import { useNearEnd } from '../../lib/useNearEnd'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import type { FeedInfo } from '../directory/feeds'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
+import type { WorkspaceList } from '../tabs/workspaceSnapshot'
 import type { FeedPageRecord } from './feedState'
 import { ThreadRow } from './ThreadRow'
 import { useFeed } from './useFeed'
 import './feed.css'
+
+/** The first thread row reaching below the scroller top, and its row top's offset from that top. */
+function firstVisible(scroller: HTMLElement): WorkspaceList['anchor'] {
+  const rows = scroller.querySelectorAll<HTMLElement>('li[data-thread-id]')
+  const top = scroller.getBoundingClientRect().top
+  let low = 0
+  let high = rows.length
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if (rows.item(middle).getBoundingClientRect().bottom > top) high = middle
+    else low = middle + 1
+  }
+  const threadId = rows[low]?.dataset.threadId
+  return threadId === undefined ? null : { threadId, offset: rows.item(low).getBoundingClientRect().top - top }
+}
+
+/** Puts the saved first visible thread back at its offset, else the saved scrollTop (clamped). */
+function placeSaved(scroller: HTMLElement, saved: WorkspaceList): void {
+  const { anchor } = saved
+  const row = anchor === null ? null : scroller.querySelector<HTMLElement>(`li[data-thread-id="${anchor.threadId}"]`)
+  if (anchor !== null && row !== null) {
+    scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - anchor.offset
+  } else {
+    scroller.scrollTop = Math.min(saved.scrollTop, Math.max(0, scroller.scrollHeight - scroller.clientHeight))
+  }
+}
 
 export function FeedPane({
   entryKey,
@@ -33,45 +60,85 @@ export function FeedPane({
   // The same entry's list as it was when last unmounted (split toggled, single pane, back/forward).
   const [remembered] = useState(() => {
     const memory = registry?.listMemory.get(entryKey)
-    return memory?.kind === 'feed' ? memory : null
+    return memory?.kind === 'feed' && memory.state.pages.length > 0 ? memory : null
   })
-  const { state, hasMore, canAppend, loadMore, refresh, retry } = useFeed(info.ref, info.maxPage, remembered?.state ?? null)
+  // Otherwise restore the last quit's loaded page count and reading position.
+  const [saved] = useState(() => (remembered === null ? (registry?.savedLists.get(entryKey) ?? null) : null))
+  const restorePages = saved === null ? null : Math.min(saved.pages, info.maxPage ?? saved.pages)
+  const { state, hasMore, canAppend, loadMore, refresh, retry } = useFeed(info.ref, info.maxPage, remembered?.state ?? null, restorePages)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
   useNearEnd(scrollRef, sentinelRef, canAppend, state.pages.length, loadMore)
-  useRegisterContent('lists', entryKey, { refresh })
 
   /** Last scroll position while the list was displayed (a hidden scroller reports 0). */
-  const scrollTop = useRef(remembered !== null && remembered.state.pages.length > 0 ? remembered.scrollTop : 0)
+  const scrollTop = useRef(remembered?.scrollTop ?? 0)
+  /** First visible thread at that position. */
+  const anchor = useRef(remembered?.anchor ?? null)
   const stateRef = useRef(state)
+  /** Saved position still to place; until then this list keeps no memory and the saved one is kept. */
+  const pendingRestore = useRef(saved)
+
+  const remember = useCallback(() => {
+    registry?.listMemory.set(entryKey, { kind: 'feed', state: stateRef.current, scrollTop: scrollTop.current, anchor: anchor.current })
+  }, [registry, entryKey])
+
+  /** Places the saved position once the restored pages are shown and the scroller can be measured. */
+  const settleRestore = useCallback(
+    (scroller: HTMLElement) => {
+      const target = pendingRestore.current
+      const current = stateRef.current
+      if (target === null || current.pages.length === 0 || current.activity !== 'idle' || scroller.clientHeight === 0) return false
+      placeSaved(scroller, target)
+      pendingRestore.current = null
+      registry?.savedLists.delete(entryKey)
+      scrollTop.current = scroller.scrollTop
+      anchor.current = firstVisible(scroller)
+      remember()
+      return true
+    },
+    [registry, entryKey, remember]
+  )
+
+  /** A refresh replaces the list as today: the saved position no longer applies. */
+  const refreshList = useCallback(() => {
+    pendingRestore.current = null
+    registry?.savedLists.delete(entryKey)
+    refresh()
+  }, [registry, entryKey, refresh])
+  useRegisterContent('lists', entryKey, { refresh: refreshList })
 
   // The memory is kept current, not written on unmount: when the split toggles, the list that
-  // replaces this one renders (and reads the memory) before this one's cleanup would run.
+  // replaces this one renders (and reads the memory) before this one's cleanup would run. A restored
+  // list is placed in the commit that shows its pages, before it paints.
   useLayoutEffect(() => {
     stateRef.current = state
-    registry?.listMemory.set(entryKey, { kind: 'feed', state, scrollTop: scrollTop.current })
+    const scroller = scrollRef.current
+    if (scroller !== null && settleRestore(scroller)) return
+    if (pendingRestore.current === null) remember()
   })
 
   // Put the remembered position back whenever the list becomes displayed: on mount, and after the
-  // pane was hidden (single pane, inactive tab), where the browser may drop scrollTop.
+  // pane was hidden (single pane, inactive tab), where the browser may drop scrollTop. A restored
+  // list that was hidden when its pages arrived is placed when it is first displayed.
   useLayoutEffect(() => {
     const scroller = scrollRef.current
     if (scroller === null) return
     let hidden = true
     const observer = new ResizeObserver(() => {
       const shown = scroller.clientHeight > 0
-      if (shown && hidden && scroller.scrollTop !== scrollTop.current) scroller.scrollTop = scrollTop.current
+      if (shown && hidden && !settleRestore(scroller) && scroller.scrollTop !== scrollTop.current) scroller.scrollTop = scrollTop.current
       hidden = !shown
     })
     observer.observe(scroller)
     return () => observer.disconnect()
-  }, [])
+  }, [settleRestore])
 
   const onScroll = () => {
     const scroller = scrollRef.current
-    if (scroller === null || scroller.clientHeight === 0) return
+    if (scroller === null || scroller.clientHeight === 0 || pendingRestore.current !== null) return
     scrollTop.current = scroller.scrollTop
-    registry?.listMemory.set(entryKey, { kind: 'feed', state: stateRef.current, scrollTop: scrollTop.current })
+    anchor.current = firstVisible(scroller)
+    remember()
   }
 
   const ids = useMemo(() => state.threads.map((thread) => thread.head.id), [state.threads])
@@ -111,7 +178,7 @@ export function FeedPane({
               <span className="list-kind">{kindLabel}</span>
               <span className="list-name">{info.name}</span>
             </h2>
-            <button type="button" className="icon-btn" onClick={refresh} aria-label="刷新列表（重新读取第 1 页）" title="刷新列表">
+            <button type="button" className="icon-btn" onClick={refreshList} aria-label="刷新列表（重新读取第 1 页）" title="刷新列表">
               <Icon name="refresh" />
             </button>
           </div>
@@ -137,7 +204,7 @@ export function FeedPane({
 
         {firstLoad && state.activity === 'initial' && (
           <div className="list-placeholder">
-            <Loading>正在读取第 1 页…</Loading>
+            <Loading>{restorePages !== null && restorePages > 1 ? `正在读取第 1–${restorePages} 页…` : '正在读取第 1 页…'}</Loading>
             <div aria-hidden="true">
               {Array.from({ length: 6 }, (_, index) => (
                 <div key={index} className="row-skeleton">
@@ -168,7 +235,7 @@ export function FeedPane({
             {state.threads.map((thread, index) => (
               <Fragment key={thread.head.id}>
                 {renderPageNotices(index)}
-                <li>
+                <li data-thread-id={thread.head.id}>
                   <ThreadRow
                     thread={thread}
                     forumName={isTimeline && thread.head.forumId !== null ? (forumNames.get(thread.head.forumId) ?? null) : null}

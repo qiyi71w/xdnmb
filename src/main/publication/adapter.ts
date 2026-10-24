@@ -1,0 +1,198 @@
+import { randomUUID } from 'node:crypto'
+import { open } from 'node:fs/promises'
+import { request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http'
+import { request as httpsRequest } from 'node:https'
+import { pipeline, Transform, Writable } from 'node:stream'
+import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib'
+import { Parser } from 'htmlparser2'
+import type { DraftSaveInput } from '../../shared/drafts'
+import type { PublicationProblem } from '../../shared/publication'
+import { parseContent } from '../forum/content'
+import { createForumClient } from '../forum/client'
+import { createForumTransport } from '../forum/transport'
+import { PUBLISH_DEADLINE_MS, type PublicationAdapter, type PublishReport } from './contract'
+
+const COOKIE = /^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+$/
+const ID = /^[1-9]\d{0,19}$/
+const MEDIA: Record<string, string> = { png: 'image/png', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }
+
+interface Response { status: number; text: string }
+
+/** Bounded, streamed response decoding; never follows a redirect or includes response text in errors. */
+function receive(response: IncomingMessage, done: (result: Response) => void, fail: () => void): void {
+  const encoding = response.headers['content-encoding']?.toLowerCase().trim() ?? 'identity'
+  const decoder = encoding === 'gzip' ? createGunzip() : encoding === 'deflate' ? createInflate()
+    : encoding === 'br' ? createBrotliDecompress() : null
+  if (encoding !== 'identity' && decoder === null) { response.destroy(); fail(); return }
+  let raw = 0
+  let decoded = 0
+  const chunks: Buffer[] = []
+  const count = new Transform({ transform(chunk: Buffer, _encoding, callback) {
+    raw += chunk.length
+    callback(raw > 4 * 1024 * 1024 ? new Error('response limit') : null, chunk)
+  } })
+  const collect = new Writable({ write(chunk: Buffer, _encoding, callback) {
+    decoded += chunk.length
+    if (decoded > 16 * 1024 * 1024) callback(new Error('response limit'))
+    else { chunks.push(chunk); callback() }
+  } })
+  const complete = (error: NodeJS.ErrnoException | null) => {
+    if (error) { fail(); return }
+    try {
+      const charset = /charset\s*=\s*["']?([^;\s"']+)/i.exec(response.headers['content-type'] ?? '')?.[1] ?? 'utf-8'
+      done({ status: response.statusCode ?? 0, text: new TextDecoder(charset, { fatal: true }).decode(Buffer.concat(chunks, decoded)) })
+    } catch { fail() }
+  }
+  if (decoder) pipeline(response, count, decoder, collect, complete)
+  else pipeline(response, count, collect, complete)
+}
+
+function outcome(response: Response): 'success' | PublicationProblem {
+  let success = false
+  let error = false
+  const parser = new Parser({ onopentag(name, attributes) {
+    if (name !== 'p') return
+    const classes = (attributes.class ?? '').split(/\s+/)
+    success ||= classes.includes('success')
+    error ||= classes.includes('error')
+  } })
+  parser.end(response.text)
+  // Conflicting markers are never treated as a safe-to-retry rejection.
+  if (response.status === 200 && success && !error) return 'success'
+  if (success) return 'response'
+  if (response.status === 429) return 'rate-limited'
+  if (error) {
+    const plain = parseContent(response.text).plainText
+    return /验证码|captcha/i.test(plain) ? 'captcha' : /频繁|太快|间隔|限制/.test(plain) ? 'rate-limited' : 'rejected'
+  }
+  return 'response'
+}
+
+function json(text: string): unknown {
+  return JSON.parse(text, (key: string, value: unknown, context?: { source?: string }) =>
+    ['id', 'resto', 'fid'].includes(key) && typeof value === 'number' ? context?.source : value)
+}
+function object(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+// The forum content parser omits trailing rendered line breaks; compare the same representation.
+function comparableText(text: string): string { return text.replace(/\r\n?/g, '\n').replace(/\n+$/, '') }
+function bodyMatches(value: Record<string, unknown>, input: DraftSaveInput): boolean {
+  if (typeof value.content !== 'string') return false
+  if (comparableText(parseContent(value.content).plainText) !== comparableText(input.fields.content)) return false
+  for (const field of ['title', 'name', 'email'] as const) {
+    if (input.fields[field] !== '' && value[field] !== input.fields[field]) return false
+  }
+  return true
+}
+
+/** Main-site publication is independent of browsing identity and subscription source. */
+export function createPublicationAdapter(options: {
+  origin?: string
+  apiOrigin?: string
+  publishTimeoutMs?: number
+  readTimeoutMs?: number
+} = {}): PublicationAdapter {
+  const origin = new URL(options.origin ?? 'https://www.nmbxd1.com')
+  const apiOrigin = new URL(options.apiOrigin ?? 'https://api.nmb.best')
+  for (const url of [origin, apiOrigin]) {
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('Invalid publication origin')
+  }
+  const publicTransport = createForumTransport({ allowedOrigins: [apiOrigin.origin], timeoutMs: options.readTimeoutMs ?? 20_000 })
+  const publicClient = createForumClient({ transport: publicTransport, baseUrl: apiOrigin.origin })
+
+  return { async publish({ payload, userhash, attachment, onAccepted }): Promise<PublishReport> {
+    if (!COOKIE.test(userhash)) return { state: 'failed', problem: 'identity' }
+    const cookies = new Map<string, string>([['userhash', userhash]])
+    async function request(path: string, fields: Record<string, string> | null): Promise<Response> {
+      const url = new URL(path, origin)
+      if (url.origin !== origin.origin) throw new Error('Invalid publication target')
+      const boundary = `xidao-${randomUUID()}`
+      const file = fields !== null && attachment !== null ? await open(attachment.path, 'r') : null
+      try {
+        const stat = file === null ? null : await file.stat()
+        if (stat !== null && !stat.isFile()) throw new Error('Unavailable attachment')
+        const prefix = fields === null ? '' : Object.entries(fields).map(([name, value]) =>
+          `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`).join('') +
+          (file === null ? '' : `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="image.${attachment!.format}"\r\nContent-Type: ${MEDIA[attachment!.format]}\r\n\r\n`)
+        const suffix = fields === null ? '' : `${file === null ? '' : '\r\n'}--${boundary}--\r\n`
+        return await new Promise<Response>((resolve, reject) => {
+          let settled = false
+          let req: ClientRequest
+          let response: IncomingMessage | undefined
+          let stream: ReturnType<NonNullable<typeof file>['createReadStream']> | undefined
+          const fail = () => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            stream?.destroy(); req?.destroy(); response?.destroy()
+            reject(new Error('Publication transport failed'))
+          }
+          const timer = setTimeout(fail, fields === null ? options.readTimeoutMs ?? 20_000 : options.publishTimeoutMs ?? PUBLISH_DEADLINE_MS)
+          const send = url.protocol === 'https:' ? httpsRequest : httpRequest
+          req = send(url, { method: fields === null ? 'GET' : 'POST', headers: {
+            Accept: fields === null ? 'application/json' : 'text/html',
+            'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': 'Xidao/0.1',
+            Cookie: [...cookies].map(([name, value]) => `${name}=${value}`).join('; '),
+            ...(fields === null ? {} : { 'Content-Type': `multipart/form-data; boundary=${boundary}`,
+              'Content-Length': String(Buffer.byteLength(prefix) + (stat?.size ?? 0) + Buffer.byteLength(suffix)) })
+          } }, incoming => {
+            response = incoming
+            if (settled) { incoming.destroy(); return }
+            // A per-attempt session only. A server cannot replace the selected userhash.
+            for (const cookie of incoming.headers['set-cookie'] ?? []) {
+              const match = /^([A-Za-z0-9_-]+)=([^;]*)/.exec(cookie)
+              if (match && match[1] !== 'userhash' && COOKIE.test(match[2]!) && cookies.size < 32) cookies.set(match[1]!, match[2]!)
+            }
+            receive(incoming, result => {
+              if (settled) return
+              settled = true; clearTimeout(timer); stream?.destroy(); resolve(result)
+            }, fail)
+          })
+          req.on('error', fail)
+          if (fields === null) { req.end(); return }
+          req.write(prefix)
+          if (file === null) req.end(suffix)
+          else {
+            stream = file.createReadStream({ autoClose: false })
+            stream.on('error', fail)
+            stream.on('end', () => { if (!settled) req.end(suffix) })
+            stream.pipe(req, { end: false })
+          }
+        })
+      } finally { await file?.close() }
+    }
+
+    const fields: Record<string, string> = {
+      ...(payload.target.kind === 'thread' ? { fid: payload.target.forumId } : { resto: payload.target.threadId }),
+      content: payload.fields.content, title: payload.fields.title, name: payload.fields.name, email: payload.fields.email,
+      ...(payload.fields.watermark ? { water: 'true' } : {})
+    }
+    let result: 'success' | PublicationProblem
+    try { result = outcome(await request(payload.target.kind === 'thread' ? '/Home/Forum/doPostThread.html' : '/Home/Forum/doReplyThread.html', fields)) }
+    catch { return { state: 'unknown', problem: 'network' } }
+    if (result !== 'success') return { state: ['rejected', 'rate-limited', 'captcha'].includes(result) ? 'failed' : 'unknown', problem: result }
+    onAccepted?.()
+    try {
+      const response = await request('/Api/getLastPost', null)
+      if (response.status !== 200) return { state: 'unconfirmed', problem: 'response' }
+      const candidate = json(response.text)
+      if (!object(candidate) || typeof candidate.id !== 'string' || !ID.test(candidate.id) || !bodyMatches(candidate, payload)) return { state: 'unconfirmed', problem: null }
+      const postId = candidate.id
+      if (payload.target.kind === 'thread') {
+        if (candidate.resto !== '0') return { state: 'unconfirmed', problem: null }
+        const page = await publicClient.getThreadPage(postId, 'all', 1, new AbortController().signal)
+        if (page.head.forumId !== payload.target.forumId || comparableText(page.head.plainText) !== comparableText(payload.fields.content) ||
+            (payload.fields.title !== '' && page.head.title !== payload.fields.title) || (attachment !== null && page.head.image === null)) return { state: 'unconfirmed', problem: null }
+        return { state: 'confirmed', postId, threadId: postId }
+      }
+      if (candidate.resto !== payload.target.threadId || postId === payload.target.threadId) return { state: 'unconfirmed', problem: null }
+      const url = new URL('/api/ref', apiOrigin)
+      url.searchParams.set('id', postId)
+      const ref = json((await publicTransport.get(url, new AbortController().signal)).text)
+      if (!object(ref) || ref.id !== postId || !bodyMatches(ref, { ...payload, fields: { ...payload.fields, email: '' } }) ||
+          (attachment !== null && !(typeof ref.img === 'string' && ref.img.length > 0))) return { state: 'unconfirmed', problem: null }
+      return { state: 'confirmed', postId, threadId: payload.target.threadId }
+    } catch { return { state: 'unconfirmed', problem: 'network' } }
+  } }
+}

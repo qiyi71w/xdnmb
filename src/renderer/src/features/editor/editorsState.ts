@@ -11,6 +11,29 @@ import {
   type SavedDraft
 } from '../../../../shared/drafts'
 import type { CredentialId, IdentityOverview } from '../../../../shared/identity'
+import type { PoPrompt, PublicationAttempt, PublicationProblem } from '../../../../shared/publication'
+
+/**
+ * An explicit send of the editor that has not ended in something the editor can continue from.
+ * While it is set the editor is locked: nothing edits, saves, discards, retargets or sends it again.
+ * - `submitting`: the send request is on its way to the main process.
+ * - `prompt`: the PO identity question holds the frozen payload.
+ * - `uncertain`: that request failed inside the app; whether it left a durable attempt is being
+ *   (or must be) checked by its `requestId`. Never sent again as a new request.
+ * - `attempt`: a durable attempt that is `sending`, `unknown` or `unconfirmed`.
+ */
+export type EditorPublication =
+  | { phase: 'submitting'; requestId: string }
+  | { phase: 'prompt'; requestId: string; prompt: PoPrompt; resolving: boolean }
+  | { phase: 'uncertain'; requestId: string; checking: boolean }
+  | { phase: 'attempt'; attempt: PublicationAttempt; readFailed: boolean }
+
+/** Outcome of the last send shown in an unlocked editor, until the next send. */
+export type SendNotice =
+  | { kind: 'refused'; reason: PublicationProblem }
+  | { kind: 'failed'; problem: PublicationProblem | null; saved: boolean }
+  /** An uncertain request turned out to have left no attempt: nothing was sent. */
+  | { kind: 'not-sent' }
 
 /**
  * Editors (未发送编辑) of all tabs. Each editor belongs to one tab and one target; a tab has at
@@ -34,6 +57,8 @@ export interface Editor {
   /** The saved draft this editor continues: the version that discarding returns to. */
   draft: SavedDraft | null
   expanded: boolean
+  publication: EditorPublication | null
+  sendNotice: SendNotice | null
 }
 
 export interface EditorsState {
@@ -42,6 +67,16 @@ export interface EditorsState {
 }
 
 export const INITIAL_EDITORS: EditorsState = { editors: [], nextId: 1 }
+
+/**
+ * Editor IDs are unique per window load: the main process keys send locks and attachment holds by
+ * editor ID, and a send started by a closed window can still be running when a new window opens.
+ */
+const WINDOW_RUN = crypto.randomUUID().slice(0, 8)
+
+function newEditorId(n: number): EditorId {
+  return `editor-${WINDOW_RUN}-${n}`
+}
 
 export type EditorsAction =
   /**
@@ -68,6 +103,25 @@ export type EditorsAction =
   | { type: 'discard'; editorId: EditorId }
   /** The tab closed after its unsaved editors were handled. */
   | { type: 'close-tab'; tabId: number }
+  /** Locks the editor for one explicit send. Ignored while it is already locked. */
+  | { type: 'publish-start'; editorId: EditorId; requestId: string }
+  | { type: 'publish-prompt'; editorId: EditorId; requestId: string; prompt: PoPrompt }
+  | { type: 'publish-resolving'; editorId: EditorId; resolving: boolean }
+  | { type: 'publish-uncertain'; editorId: EditorId; requestId: string; checking: boolean }
+  /**
+   * A durable attempt of this editor that is still unresolved. Its frozen payload's identity is
+   * the editor's identity from now on (a PO switch changed it).
+   */
+  | { type: 'publish-attempt'; editorId: EditorId; attempt: PublicationAttempt; readFailed: boolean }
+  /** Nothing was sent (refused, cancelled, or no attempt exists): unlocks the editor. */
+  | { type: 'publish-released'; editorId: EditorId; notice: SendNotice | null }
+  /** Explicit failure: unlocks and continues the automatically saved draft when there is one. */
+  | { type: 'publish-failed'; editorId: EditorId; problem: PublicationProblem | null; draft: SavedDraft | null }
+  /**
+   * Removes a locked editor whose content now lives in its durable attempt: sent and confirmed,
+   * or ended by the user while the result is unknown / the ID unconfirmed.
+   */
+  | { type: 'publish-ended'; editorId: EditorId }
 
 function update(state: EditorsState, editorId: EditorId, change: (editor: Editor) => Editor): EditorsState {
   let changed = false
@@ -84,6 +138,16 @@ function fromDraft(draft: SavedDraft): Pick<Editor, 'target' | 'credentialId' | 
   return { target: draft.target, credentialId: draft.credentialId, fields: { ...draft.fields }, attachment: draft.attachment }
 }
 
+/** Applies `change` only to an editor no send has locked. */
+function unlocked(change: (editor: Editor) => Editor): (editor: Editor) => Editor {
+  return (editor) => (editor.publication === null ? change(editor) : editor)
+}
+
+/** Changes the publication of a locked editor only. */
+function locked(change: (editor: Editor, publication: EditorPublication) => Editor): (editor: Editor) => Editor {
+  return (editor) => (editor.publication === null ? editor : change(editor, editor.publication))
+}
+
 export function editorsReducer(state: EditorsState, action: EditorsAction): EditorsState {
   switch (action.type) {
     case 'open': {
@@ -91,7 +155,7 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
       if (existing !== null) return update(state, existing.id, (editor) => (editor.expanded ? editor : { ...editor, expanded: true }))
       const identity = action.identity
       const editor: Editor = {
-        id: `editor-${state.nextId}`,
+        id: newEditorId(state.nextId),
         tabId: action.tabId,
         target: action.target,
         credentialId: identity.source === 'unknown' || identity.selection.state === 'none' ? null : identity.selection.credentialId,
@@ -99,7 +163,9 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
         fields: { ...EMPTY_FIELDS },
         attachment: null,
         draft: null,
-        expanded: true
+        expanded: true,
+        publication: null,
+        sendNotice: null
       }
       return { editors: [...state.editors, editor], nextId: state.nextId + 1 }
     }
@@ -107,34 +173,48 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
       if (editorForDraft(state, action.draft.id) !== null) return state
       if (editorFor(state, action.tabId, action.draft.target) !== null) return state
       const editor: Editor = {
-        id: `editor-${state.nextId}`,
+        id: newEditorId(state.nextId),
         tabId: action.tabId,
         ...fromDraft(action.draft),
         identityUnknown: false,
         draft: action.draft,
-        expanded: true
+        expanded: true,
+        publication: null,
+        sendNotice: null
       }
       return { editors: [...state.editors, editor], nextId: state.nextId + 1 }
     }
     case 'edit':
-      return update(state, action.editorId, (editor) => ({ ...editor, fields: { ...editor.fields, ...action.patch } }))
+      return update(
+        state,
+        action.editorId,
+        unlocked((editor) => ({ ...editor, fields: { ...editor.fields, ...action.patch } }))
+      )
     case 'set-identity':
-      return update(state, action.editorId, (editor) => ({ ...editor, credentialId: action.credentialId, identityUnknown: false }))
+      return update(
+        state,
+        action.editorId,
+        unlocked((editor) => ({ ...editor, credentialId: action.credentialId, identityUnknown: false }))
+      )
     case 'set-attachment':
-      return update(state, action.editorId, (editor) => ({ ...editor, attachment: action.attachment }))
+      return update(state, action.editorId, unlocked((editor) => ({ ...editor, attachment: action.attachment })))
     case 'retarget':
-      return update(state, action.editorId, (editor) => {
-        if (sameTarget(editor.target, action.target)) return editor
-        if (editorFor(state, editor.tabId, action.target) !== null) return editor
-        return { ...editor, target: action.target }
-      })
+      return update(
+        state,
+        action.editorId,
+        unlocked((editor) => {
+          if (sameTarget(editor.target, action.target)) return editor
+          if (editorFor(state, editor.tabId, action.target) !== null) return editor
+          return { ...editor, target: action.target }
+        })
+      )
     case 'set-expanded':
       return update(state, action.editorId, (editor) => (editor.expanded === action.expanded ? editor : { ...editor, expanded: action.expanded }))
     case 'saved':
       return update(state, action.editorId, (editor) => ({ ...editor, draft: action.draft }))
     case 'discard': {
       const editor = state.editors.find((item) => item.id === action.editorId)
-      if (editor === undefined) return state
+      if (editor === undefined || editor.publication !== null) return state
       const draft = editor.draft
       const occupant = draft === null ? null : editorFor(state, editor.tabId, draft.target)
       if (draft === null || (occupant !== null && occupant.id !== editor.id)) {
@@ -144,6 +224,65 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
     }
     case 'close-tab': {
       const editors = state.editors.filter((editor) => editor.tabId !== action.tabId)
+      return editors.length === state.editors.length ? state : { ...state, editors }
+    }
+    case 'publish-start':
+      return update(
+        state,
+        action.editorId,
+        unlocked((editor) => ({ ...editor, publication: { phase: 'submitting', requestId: action.requestId }, sendNotice: null }))
+      )
+    case 'publish-prompt':
+      return update(
+        state,
+        action.editorId,
+        locked((editor) => ({
+          ...editor,
+          publication: { phase: 'prompt', requestId: action.requestId, prompt: action.prompt, resolving: false }
+        }))
+      )
+    case 'publish-resolving':
+      return update(
+        state,
+        action.editorId,
+        locked((editor, publication) =>
+          publication.phase === 'prompt' && publication.resolving !== action.resolving
+            ? { ...editor, publication: { ...publication, resolving: action.resolving } }
+            : editor
+        )
+      )
+    case 'publish-uncertain':
+      return update(
+        state,
+        action.editorId,
+        locked((editor) => ({ ...editor, publication: { phase: 'uncertain', requestId: action.requestId, checking: action.checking } }))
+      )
+    case 'publish-attempt':
+      return update(
+        state,
+        action.editorId,
+        locked((editor) => ({
+          ...editor,
+          credentialId: action.attempt.payload.credentialId,
+          identityUnknown: false,
+          publication: { phase: 'attempt', attempt: action.attempt, readFailed: action.readFailed }
+        }))
+      )
+    case 'publish-released':
+      return update(state, action.editorId, locked((editor) => ({ ...editor, publication: null, sendNotice: action.notice })))
+    case 'publish-failed':
+      return update(
+        state,
+        action.editorId,
+        locked((editor) => {
+          const notice: SendNotice = { kind: 'failed', problem: action.problem, saved: action.draft !== null }
+          const draft = action.draft
+          if (draft === null) return { ...editor, publication: null, sendNotice: notice }
+          return { ...editor, ...fromDraft(draft), identityUnknown: false, draft, publication: null, sendNotice: notice }
+        })
+      )
+    case 'publish-ended': {
+      const editors = state.editors.filter((editor) => editor.id !== action.editorId || editor.publication === null)
       return editors.length === state.editors.length ? state : { ...state, editors }
     }
   }
@@ -184,9 +323,18 @@ export function isUnsaved(editor: Editor): boolean {
   )
 }
 
-/** Unsaved editors of one tab, including those hidden because the tab shows another target. */
+/**
+ * Unsaved editors of every tab, including collapsed ones and those hidden because their tab shows
+ * another target. An editor whose content is held by a durable unresolved attempt is not among
+ * them: its content stays in that attempt (发送记录).
+ */
+export function unsavedEditors(state: EditorsState): Editor[] {
+  return state.editors.filter((editor) => editor.publication?.phase !== 'attempt' && isUnsaved(editor))
+}
+
+/** Unsaved editors of one tab (see `unsavedEditors`); closing the tab keeps any attempt in 发送记录. */
 export function unsavedInTab(state: EditorsState, tabId: number): Editor[] {
-  return state.editors.filter((editor) => editor.tabId === tabId && isUnsaved(editor))
+  return unsavedEditors(state).filter((editor) => editor.tabId === tabId)
 }
 
 export function saveInput(editor: Editor): DraftSaveInput {

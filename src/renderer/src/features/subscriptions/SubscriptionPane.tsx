@@ -101,8 +101,9 @@ export function SubscriptionPane({
     const memory = registry?.listMemory.get(entryKey)
     return memory?.kind === 'subscriptions' ? memory : null
   })
+  const [saved] = useState(() => remembered === null ? registry?.savedLists.get(entryKey) : undefined)
   /** 同步与合并 replaces the list in this pane; the list stays mounted (hidden) with its scroll position. */
-  const [view, setView] = useState<'list' | 'reconcile'>(remembered?.view ?? 'list')
+  const [view, setView] = useState<'list' | 'reconcile'>(remembered?.view ?? saved?.subscriptionView ?? 'list')
   const reconcileHeadingRef = useRef<HTMLHeadingElement>(null)
   const reconcileButtonRef = useRef<HTMLButtonElement>(null)
   const viewFocus = useRef(false)
@@ -136,7 +137,7 @@ export function SubscriptionPane({
   /** The read this view is waiting for; any other result is stale. */
   const reading = useRef<{ operationId: string; selection: string } | null>(null)
   /** Explicit navigation (no remembered list) or a source switch made here reads page 1. */
-  const autoRead = useRef(remembered === null)
+  const autoRead = useRef(remembered === null && saved === undefined)
 
   const read = useCallback(async (observationId: string | null) => {
     const current = overviewRef.current
@@ -241,9 +242,10 @@ export function SubscriptionPane({
 
   // ---------- Scroll memory (same approach as the forum list) ----------
   const scrollRef = useRef<HTMLDivElement>(null)
-  const scrollTop = useRef(remembered?.scrollTop ?? 0)
+  const scrollTop = useRef(remembered?.scrollTop ?? saved?.scrollTop ?? 0)
   useLayoutEffect(() => {
     registry?.listMemory.set(entryKey, { kind: 'subscriptions', state, scrollTop: scrollTop.current, view })
+    if (state.activity === 'idle' && state.selection !== null) registry?.savedLists.delete(entryKey)
   })
   // The scroller exists only once the overview is known (the loading view has none).
   const overviewKnown = overview !== null

@@ -18,6 +18,7 @@ import { createSubscriptionService } from '../src/main/subscriptions/service'
 import type { SubscriptionService } from '../src/main/subscriptions/service'
 import { parseAppList } from '../src/main/subscriptions/protocol'
 import { asStore } from './helpers/store'
+import { MIGRATIONS as SUBSCRIPTION_MIGRATIONS } from './fixtures/reconciliation-v6'
 
 const UUID_A = '00000000-0000-4000-8000-000000000001'
 const UUID_B = '00000000-0000-4000-8000-000000000002'
@@ -735,7 +736,7 @@ describe('previewed subscription reconciliation', () => {
     expect(writes(remote.requests)).toHaveLength(1)
     expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(true)
     db.close(); databases.delete(db)
-    const restarted = create(subscriptionStore(open(file)))
+    const restarted = create(asStore(open(file)))
     const before = remote.requests.length
     await restarted.recover()
     expect(remote.requests).toHaveLength(before)
@@ -763,7 +764,7 @@ describe('previewed subscription reconciliation', () => {
     const preview = await syncPreview(running)
     await executePreview(running, preview)
     db.close(); databases.delete(db)
-    const restarted = create(subscriptionStore(open(file)))
+    const restarted = create(asStore(open(file)))
     const before = remote.requests.length
     await restarted.recover()
     expect(remote.requests).toHaveLength(before)
@@ -818,7 +819,7 @@ describe('subscription plan restart boundaries', () => {
     expect(result.items.map((item) => item.state)).toEqual(['confirmed', 'unknown', 'skipped'])
     remote.behavior.onWrite = null
     db.close(); databases.delete(db)
-    const restarted = create(subscriptionStore(open(file)))
+    const restarted = create(asStore(open(file)))
     const before = remote.requests.length
     await restarted.recover()
     expect(remote.requests).toHaveLength(before)
@@ -867,7 +868,7 @@ describe('unacknowledged subscription reports', () => {
 describe('subscription reconciliation persistence', () => {
   it('upgrades v5 while retaining immutable identities, manual journal and reading positions', async () => {
     const file = path()
-    const old = openReadingDatabase(file, MIGRATIONS.filter((migration) => migration.version <= 5))
+    const old = openReadingDatabase(file, SUBSCRIPTION_MIGRATIONS.filter((migration) => migration.version <= 5))
     const protector = new Protector()
     const cookie = old.insertCredential({ name: '旧绑定', source: 'raw', importedAt: '2026-10-23', ciphertext: await protector.encrypt(COOKIE_A) })
     old.setRoleSelection('web-sync', cookie.id)
@@ -880,13 +881,14 @@ describe('subscription reconciliation persistence', () => {
       createdAt: '2026-10-23', objectLabel: '旧绑定', state: 'needs-reconciliation', report: 'unknown', reportError: null,
       before: null, after: null, verification: 'unknown' })
     const journal = old.loadSubscriptionOperations()
-    const reading = old.getReadingState('1001')
     old.close()
     const upgraded = open(file)
-    expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: 6 })
+    expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((migration) => migration.version)) })
     expect(upgraded.loadSubscriptionConfiguration()).toEqual(configuration)
     expect(upgraded.loadSubscriptionOperations()).toEqual(journal)
-    expect(upgraded.getReadingState('1001')).toEqual(reading)
+    expect(upgraded.getReadingState('1001')).toMatchObject({ mode: 'po', positions: {
+      po: { anchor: { postId: '1001', page: 1, offsetRatio: 0.5, viewportOffset: 40 }, savedAt: '2026-10-23' }
+    } })
     expect(await protector.decrypt(upgraded.loadSubscriptionAppCiphertext('historical-app-reference')!)).toBe(UUID_A)
     expect(upgraded.loadSubscriptionBaseline(configuration.context)).toBeNull()
     expect(upgraded.loadSubscriptionPlans()).toEqual([])

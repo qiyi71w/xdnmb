@@ -8,14 +8,17 @@ import {
 } from '../shared/drafts'
 import { DEFAULT_SETTINGS, type AppSettings, type ReadingAnchor } from '../shared/reading'
 import type { ContentService } from './content/service'
+import { CLOSE_ACTIONS, MAX_WORKSPACE_LENGTH, type CloseAction } from '../shared/lifecycle'
 import type { DraftService } from './drafts/service'
 import type { IdentityService } from './identity/service'
 import type { ImageService } from './images/service'
 import type { ReadingService } from './reading/service'
-import type { ReadingStore } from './storage/contract'
+import type { AppStore } from './storage/contract'
 import { emptyReadingState } from './storage/reading-state'
 import type { SubscriptionSource } from '../shared/subscriptions'
 import type { SubscriptionService } from './subscriptions/service'
+import type { PublicationService } from './publication/service'
+import type { Lifecycle } from './lifecycle/controller'
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
@@ -40,10 +43,12 @@ interface IpcDeps {
   content: ContentService
   reading: ReadingService
   images: ImageService
-  store: ReadingStore
+  store: AppStore
   identities: IdentityService
   drafts: DraftService
   subscriptions: SubscriptionService
+  publication: PublicationService
+  lifecycle: Pick<Lifecycle, 'reside' | 'requestQuit' | 'presentQuit' | 'cancelQuit' | 'completeQuit'>
   getStatus: () => AppStatus
   /** True only for the app's own renderer document in its main frame. */
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
@@ -181,8 +186,9 @@ function settingsPatch(value: unknown): Partial<AppSettings> {
   const input = record(value)
   const patch: Partial<AppSettings> = {}
   for (const [key, item] of Object.entries(input)) {
-    if (key !== 'newTabSplitDefault' || typeof item !== 'boolean') throw new InvalidRequestError()
-    patch.newTabSplitDefault = item
+    if (key === 'newTabSplitDefault' && typeof item === 'boolean') patch.newTabSplitDefault = item
+    else if (key === 'closeAction' && CLOSE_ACTIONS.includes(item as CloseAction)) patch.closeAction = item as CloseAction
+    else throw new InvalidRequestError()
   }
   return patch
 }
@@ -224,13 +230,22 @@ class OperationRegistry {
     const prefix = `${sender.id}:`
     for (const [key, controller] of this.active) if (key.startsWith(prefix)) controller.abort()
   }
+
+  cancelAll(): void {
+    for (const controller of this.active.values()) controller.abort()
+  }
+}
+
+export interface IpcRegistration {
+  /** The page went away: cancel its reads, prompts and holds. */
+  cancelAllFor: (sender: WebContents) => void
+  /** Cancels every running read and download, whoever started it. */
+  cancelAll: () => void
 }
 
 export function registerIpc({
-  reading, images, identities, drafts, content, subscriptions, store, getStatus, isTrustedSender, chooseSavePath, chooseImageFile
-}: IpcDeps): {
-  cancelAllFor: (sender: WebContents) => void
-} {
+  reading, images, identities, drafts, content, subscriptions, publication, lifecycle, store, getStatus, isTrustedSender, chooseSavePath, chooseImageFile
+}: IpcDeps): IpcRegistration {
   const operations = new OperationRegistry()
   const subscriptionReads = new OperationRegistry()
 
@@ -568,6 +583,63 @@ export function registerIpc({
   handle(IpcChannel.subscriptionCancel, async (event, raw) => {
     subscriptionReads.cancel(event.sender, operationId(record(raw)))
   })
+  handle(IpcChannel.submitPublication, async (_event, raw) => {
+    const input = record(raw)
+    return publication.submit({ requestId: viewId(input.requestId), editorId: viewId(input.editorId), payload: draftSaveInput(input.payload) })
+  })
+  handle(IpcChannel.resolvePoPrompt, async (_event, raw) => {
+    const input = record(raw)
+    if (!['switch', 'current', 'cancel'].includes(String(input.choice)) || typeof input.suppress !== 'boolean') throw new InvalidRequestError()
+    return publication.resolvePrompt({ token: viewId(input.token), choice: input.choice as 'switch' | 'current' | 'cancel', suppress: input.suppress })
+  })
+  handle(IpcChannel.listPublications, async () => publication.listAttempts())
+  handle(IpcChannel.getPublication, async (_event, raw) => publication.getAttempt({ attemptId: localId(record(raw).attemptId) }))
+  handle(IpcChannel.listOwnPosts, async () => publication.listOwnPosts())
+  handle(IpcChannel.addOwnPost, async (_event, raw) => {
+    const input = record(raw)
+    if (typeof input.isThread !== 'boolean') throw new InvalidRequestError()
+    return publication.addOwnPost({ postId: forumId(input.postId), threadId: forumId(input.threadId), isThread: input.isThread })
+  })
+  handle(IpcChannel.getPoWarning, async () => publication.getPoWarning())
+  handle(IpcChannel.setPoWarning, async (_event, raw) => {
+    const input = record(raw)
+    if (typeof input.enabled !== 'boolean') throw new InvalidRequestError()
+    return publication.setPoWarning({ enabled: input.enabled })
+  })
+
+  // Window lifecycle. The serialized workspace is opaque here; the renderer validates it on load.
+  handle(IpcChannel.lifecycleReside, async () => lifecycle.reside())
+  handle(IpcChannel.lifecycleRequestQuit, async () => lifecycle.requestQuit())
+  handle(IpcChannel.lifecyclePresentQuit, async () => lifecycle.presentQuit())
+  handle(IpcChannel.lifecycleCancelQuit, async () => lifecycle.cancelQuit())
+  handle(IpcChannel.lifecycleCompleteQuit, async () => lifecycle.completeQuit())
+  handle(IpcChannel.loadWorkspace, async () => {
+    try {
+      return { ok: true, workspace: await store.loadWorkspace() }
+    } catch {
+      return { ok: false }
+    }
+  })
+  handle(IpcChannel.saveWorkspace, async (_event, raw) => {
+    const workspace = record(raw).workspace
+    if (typeof workspace !== 'string' || workspace.length > MAX_WORKSPACE_LENGTH) throw new InvalidRequestError()
+    return { ok: await attempt(() => store.saveWorkspace(workspace, new Date().toISOString())) }
+  })
+  handle(IpcChannel.listLaunchNotices, async () => {
+    try {
+      return { ok: true, attempts: await store.listLaunchNotices() }
+    } catch {
+      return { ok: false }
+    }
+  })
+  handle(IpcChannel.dismissLaunchNotices, async (_event, raw) => {
+    const ids = record(raw).attemptIds
+    if (!Array.isArray(ids) || ids.length > 1000) throw new InvalidRequestError()
+    const attemptIds = ids.map(localId)
+    return { ok: await attempt(() => store.dismissLaunchNotices(attemptIds)) }
+  })
+  handle(IpcChannel.listUnstoredResults, async () => ({ attempts: publication.unstoredResults() }))
+  handle(IpcChannel.retryUnstoredResults, async () => ({ ok: await publication.retryUnstored().catch(() => false) }))
 
   handle(IpcChannel.getStatus, async () => getStatus())
 
@@ -575,9 +647,14 @@ export function registerIpc({
     cancelAllFor: (sender) => {
       operations.cancelAllFor(sender)
       subscriptionReads.cancelAllFor(sender)
+      publication.releasePrompts()
       void images.releaseOwner(String(sender.id))
       void drafts.releaseOwner(String(sender.id))
       void content.releaseOwner(String(sender.id)).catch(() => undefined)
+    },
+    cancelAll: () => {
+      operations.cancelAll()
+      subscriptionReads.cancelAll()
     }
   }
 }

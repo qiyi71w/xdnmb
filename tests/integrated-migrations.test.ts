@@ -4,12 +4,15 @@ import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Post, ThreadPage } from '../src/shared/forum'
-import type { SubscriptionObservation, SubscriptionOperation } from '../src/shared/subscriptions'
+import type { SubscriptionObservation, SubscriptionOperation, SubscriptionPlan } from '../src/shared/subscriptions'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS } from '../src/main/storage/migrations'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 import { createSubscriptionService } from '../src/main/subscriptions/service'
 import { asStore } from './helpers/store'
+import { MIGRATIONS as INTEGRATED_V7 } from './fixtures/integrated-v7'
+import { MIGRATIONS as RECONCILIATION_V6 } from './fixtures/reconciliation-v6'
+import { MIGRATIONS as LIFECYCLE_V7 } from './fixtures/lifecycle-v7'
 
 const at = '2026-10-24T00:00:00.000Z'
 const later = '2026-10-24T00:01:00.000Z'
@@ -19,6 +22,18 @@ const context = { generation: 9, appCredentialId: 'historical-app', webCredentia
 const folders: string[] = []
 const connections: ReadingDatabase[] = []
 const supportedVersion = Math.max(...MIGRATIONS.map((migration) => migration.version))
+const heads = ['integrated-v7', 'reconciliation-v6', 'lifecycle-v7'] as const
+type Predecessor = 'subscriptions-v5' | 'retained-v6' | typeof heads[number]
+const hasSubscriptions = (kind: Predecessor) => kind === 'subscriptions-v5' || kind === 'integrated-v7' || kind === 'reconciliation-v6'
+const hasDrafts = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'lifecycle-v7'
+const hasRetained = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7'
+
+function plan(): SubscriptionPlan {
+  return { id: 'historical-plan', preview: { id: 'historical-preview', mode: 'sync', context, createdAt: at,
+    left: observation(), right: { ...observation('historical-web'), source: 'web' }, leftLabel: 'App', rightLabel: '网页',
+    firstSync: false, deletionsAllowed: false, items: [] }, createdAt: at, finishedAt: later,
+    state: 'completed', stopReason: null, items: [] }
+}
 
 // Frozen subscription-v5 schema, not the current v5 migration (which belongs to drafts).
 const subscriptionV5 = `
@@ -55,13 +70,15 @@ function operation(): SubscriptionOperation {
     before: observation(), after: null, verification: 'unknown' }
 }
 
-function predecessor(kind: 'subscriptions-v5' | 'retained-v6'): string {
+function predecessor(kind: Predecessor): string {
   const folder = mkdtempSync(join(tmpdir(), 'xidao-integration-migration-'))
   folders.push(folder)
   const path = join(folder, 'app.sqlite')
   const db = new Database(path)
   try {
-    for (const migration of MIGRATIONS.filter((migration) => migration.version <= (kind === 'subscriptions-v5' ? 4 : 6))) migration.up(db)
+    const migrations = kind === 'integrated-v7' ? INTEGRATED_V7 : kind === 'reconciliation-v6' ? RECONCILIATION_V6
+      : kind === 'lifecycle-v7' ? LIFECYCLE_V7 : MIGRATIONS.filter((migration) => migration.version <= (kind === 'subscriptions-v5' ? 4 : 6))
+    for (const migration of migrations) migration.up(db)
     db.prepare('INSERT INTO credentials(id, name, source, imported_at, ciphertext) VALUES (7, ?, ?, ?, ?)')
       .run('旧同步饼干', 'raw', at, Buffer.from(ciphertext))
     db.prepare("INSERT INTO identity_roles VALUES ('web-sync', 7)").run()
@@ -80,22 +97,24 @@ function predecessor(kind: 'subscriptions-v5' | 'retained-v6'): string {
     db.prepare("INSERT INTO thread_attention VALUES ('100', ?, 'import', '101')").run(at)
     db.prepare("INSERT INTO thread_visits VALUES ('100', ?, ?, 3)").run(at, later)
     db.prepare("INSERT INTO settings VALUES ('newTabSplitDefault', 'false')").run()
-    if (kind === 'subscriptions-v5') {
-      db.exec(subscriptionV5)
+    if (hasSubscriptions(kind)) {
+      if (kind === 'subscriptions-v5') db.exec(subscriptionV5)
       db.prepare("INSERT INTO subscription_app_credentials VALUES ('historical-app', ?)").run(Buffer.from(ciphertext))
       db.prepare("INSERT INTO subscription_app_credentials VALUES ('replaced-app', ?)").run(Buffer.from([99, 88]))
-      db.prepare("INSERT INTO subscription_configuration VALUES (1, 9, 'historical-app', 'web')").run()
+      db.prepare("INSERT OR REPLACE INTO subscription_configuration VALUES (1, 9, 'historical-app', 'web')").run()
       db.prepare("INSERT INTO subscription_observations VALUES (?, 'app', 9, 'historical-app', '7', ?, ?)")
         .run(observation().id, JSON.stringify(observation()), JSON.stringify(observation()))
       db.prepare('INSERT INTO subscription_operations VALUES (?, ?)').run(operation().id, JSON.stringify(operation()))
-      db.pragma('user_version = 5')
-    } else {
+    }
+    if (hasDrafts(kind)) {
       db.prepare(`INSERT INTO draft_attachments(id, file_name, format, bytes, width, height, original_name, created_at)
         VALUES (4, 'old-copy.png', 'png', 24, 2, 3, 'original.png', ?)`).run(at)
       db.prepare(`INSERT INTO drafts(id, target_kind, target_id, credential_id, content, title, name, email,
         watermark, attachment_id, version, created_at, saved_at)
         VALUES (8, 'reply', '100', 7, '未发送草稿', '草稿标题', '', '', 1, 4, 3, ?, ?)`).run(at, later)
       db.prepare("INSERT INTO thread_post_identities VALUES ('100', 7, ?)").run(at)
+    }
+    if (hasRetained(kind)) {
       db.prepare("INSERT INTO favorites VALUES ('100', ?)").run(at)
       db.prepare("INSERT INTO retained_titles VALUES ('100', '离线标题', ?)").run(at)
       db.prepare(`INSERT INTO offline_copies(thread_id, created_at, updated_at, include_images, state, end_candidate_page)
@@ -103,8 +122,21 @@ function predecessor(kind: 'subscriptions-v5' | 'retained-v6'): string {
       db.prepare("INSERT INTO offline_pages VALUES ('100', 1, '100', ?, 1, 0, 1)").run(at)
       db.prepare("INSERT INTO offline_page_posts VALUES ('100', 1, '101')").run()
       db.prepare("INSERT INTO reading_observations VALUES ('100', 'all', 1, ?, '[\"101\"]', 0, 0)").run(at)
-      db.pragma('user_version = 6')
     }
+    if (kind === 'reconciliation-v6') {
+      db.prepare('INSERT INTO subscription_baselines VALUES (9, ?)').run(JSON.stringify({ context, ids: ['100'] }))
+      db.prepare('INSERT INTO subscription_plans VALUES (?, ?)').run(plan().id, JSON.stringify(plan()))
+    }
+    if (kind === 'lifecycle-v7') {
+      const payload = { draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: '7',
+        fields: { content: '待核对的发送', title: '', name: '', email: '', watermark: false }, attachmentId: '4' }
+      db.prepare(`INSERT INTO publication_attempts(request_id, editor_id, payload_json, credential_id, forum_id,
+        attachment_id, state, created_at, updated_at, launch_notice) VALUES ('historical-send', 'old-editor', ?, 7, '4', 4, 'unknown', ?, ?, 1)`)
+        .run(JSON.stringify(payload), at, later)
+      db.prepare("INSERT INTO workspace VALUES (1, '{\"saved\":true}', ?)").run(at)
+    }
+    const version = kind === 'subscriptions-v5' ? 5 : Math.max(...migrations.map((migration) => migration.version))
+    db.pragma(`user_version = ${version}`)
   } finally { db.close() }
   return path
 }
@@ -125,31 +157,63 @@ afterEach(() => {
 })
 
 describe('combined predecessor migration', () => {
-  it.each(['subscriptions-v5', 'retained-v6'] as const)('preserves %s personal state and supports combined reading and operation APIs', async (kind) => {
+  it.each(heads)('converges %s to the same tables, columns and indexes as a fresh install', (kind) => {
+    const path = predecessor(kind)
+    const folder = mkdtempSync(join(tmpdir(), 'xidao-fresh-schema-'))
+    folders.push(folder)
+    const freshPath = join(folder, 'fresh.sqlite')
+    open(path).close()
+    open(freshPath).close()
+    const shape = (file: string) => {
+      const connection = new Database(file, { readonly: true })
+      try {
+        const objects = connection.prepare("SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all() as { type: string; name: string }[]
+        return objects.map((object) => ({ ...object,
+          columns: object.type === 'table' ? connection.pragma(`table_info(${object.name})`) : null,
+          indexes: object.type === 'table' ? connection.pragma(`index_list(${object.name})`) : null }))
+      } finally { connection.close() }
+    }
+    expect(shape(path)).toEqual(shape(freshPath))
+  })
+
+  it.each(['subscriptions-v5', 'retained-v6', ...heads] as const)('preserves %s personal state and supports combined reading and operation APIs', async (kind) => {
     const path = predecessor(kind)
     const db = open(path)
     expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
     expect(db.loadCredentialCiphertext('7')).toEqual(ciphertext)
     expect(db.loadRoleSelections()['web-sync']).toEqual({ state: 'selected', credentialId: '7' })
-    expect(db.loadSettings()).toEqual({ newTabSplitDefault: false })
+    expect(db.loadSettings()).toEqual({ newTabSplitDefault: false, closeAction: 'ask' })
     expect(db.loadThreadPage('100', 'all', 1)?.value.replies).toEqual([post('101')])
     expect(db.findPostThread('101')).toEqual({ threadId: '100', isHead: false, preferredMode: 'po', pages: { all: 1, po: null } })
     expect(db.getReadingState('100')).toMatchObject({ mode: 'po', readPostIds: ['101'],
       positions: { all: { anchor: { postId: '101', offsetRatio: 0.4, viewportOffset: 12 } } }, attention: { startedAt: at } })
     expect(db.listRetained('history')[0]).toMatchObject({ threadId: '100', at: later })
-    if (kind === 'subscriptions-v5') {
+    if (hasSubscriptions(kind)) {
       expect(db.loadSubscriptionConfiguration()).toEqual({ source: 'web', context })
       expect(db.loadSubscriptionAppCiphertext('historical-app')).toEqual(ciphertext)
       expect(db.loadSubscriptionAppCiphertext('replaced-app')).toEqual(Uint8Array.of(99, 88))
       expect(db.loadSubscriptionObservation('app', context, true)).toEqual(observation())
       expect(db.loadSubscriptionOperations()).toEqual([operation()])
-      expect(db.listDrafts()).toEqual([])
-    } else {
+    }
+    if (hasDrafts(kind)) {
       expect(db.listDrafts()[0]).toMatchObject({ id: '8', version: 3, credentialId: '7', fields: { content: '未发送草稿', watermark: true },
         attachment: { id: '4', fileName: 'old-copy.png', bytes: 24, originalName: 'original.png' } })
       expect(db.getThreadPostIdentity('100')).toEqual({ state: 'selected', credentialId: '7' })
+    } else expect(db.listDrafts()).toEqual([])
+    if (hasRetained(kind)) {
       expect(db.isFavorite('100')).toBe(true)
       expect(db.getOfflineCopy('100')).toMatchObject({ pages: [1], postCount: 2, state: 'stopped' })
+    }
+    if (kind === 'reconciliation-v6') {
+      expect(db.loadSubscriptionBaseline(context)).toEqual({ context, ids: ['100'] })
+      expect(db.loadSubscriptionPlans()).toEqual([plan()])
+    }
+    if (kind === 'lifecycle-v7') {
+      expect(db.listPublications()[0]).toMatchObject({ requestId: 'historical-send', state: 'unknown', payload: { attachmentId: '4' } })
+      expect(db.listLaunchNotices().map((attempt) => attempt.requestId)).toEqual(['historical-send'])
+      expect(db.loadWorkspace()).toBe('{"saved":true}')
+    }
+    if (!hasSubscriptions(kind)) {
       expect(db.loadSubscriptionConfiguration()).toEqual({ source: 'app', context: { generation: 0, appCredentialId: null, webCredentialId: '7' } })
       db.setSubscriptionAppCredential(context.appCredentialId, ciphertext)
       db.saveSubscriptionObservation({ ...observation(), context: db.loadSubscriptionConfiguration().context }, 'import')
@@ -174,14 +238,14 @@ describe('combined predecessor migration', () => {
     expect(reopened.loadSubscriptionOperations()[0]).toMatchObject({ state: 'settled', verification: 'present' })
     expect(reopened.loadCredentialCiphertext('7')).toEqual(ciphertext)
     expect(reopened.listDrafts().some((draft) => draft.fields.content === '新草稿')).toBe(true)
-    if (kind === 'retained-v6') {
+    if (hasRetained(kind)) {
       clear(reopened)
       expect(reopened.loadThreadPage('100', 'all', 1)?.value.replies).toEqual([post('101')])
       expect(reopened.listDrafts().some((draft) => draft.attachment?.fileName === 'old-copy.png')).toBe(true)
     }
   })
 
-  it.each(['subscriptions-v5', 'retained-v6'] as const)('rolls back every schema/data change when %s migration fails', (kind) => {
+  it.each(['subscriptions-v5', 'retained-v6', ...heads] as const)('rolls back every schema/data change when %s migration fails', (kind) => {
     const path = predecessor(kind)
     const originalBytes = readFileSync(path)
     const db = openReadingDatabase(path, [...MIGRATIONS, { version: supportedVersion + 1, up(connection) {
@@ -195,7 +259,7 @@ describe('combined predecessor migration', () => {
     expect(recovered.status.state).toBe('ready')
     expect(recovered.listCredentials()[0]?.name).toBe('旧同步饼干')
     expect(recovered.loadThreadPage('100', 'all', 1)?.value.replies[0]?.plainText).toBe('旧正文101')
-    if (kind === 'subscriptions-v5') expect(recovered.loadSubscriptionOperations()).toEqual([operation()])
+    if (hasSubscriptions(kind)) expect(recovered.loadSubscriptionOperations()).toEqual([operation()])
     else expect(recovered.listDrafts()[0]?.fields.content).toBe('未发送草稿')
   })
 

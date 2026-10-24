@@ -367,6 +367,19 @@ export const MIGRATIONS: readonly Migration[] = [
       if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'offline_copies'").get()) {
         MIGRATIONS.find((migration) => migration.version === 6)!.up(db)
       }
+      MIGRATIONS.find((migration) => migration.version === 7)!.up(db)
+      ensurePublication(db)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS workspace (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          state_json TEXT NOT NULL,
+          saved_at TEXT NOT NULL
+        );
+      `)
+      const columns = db.pragma('table_info(publication_attempts)') as { name: string }[]
+      if (!columns.some((column) => column.name === 'launch_notice')) {
+        db.exec('ALTER TABLE publication_attempts ADD COLUMN launch_notice INTEGER NOT NULL DEFAULT 0 CHECK (launch_notice IN (0, 1))')
+      }
       db.exec(`
         CREATE TABLE IF NOT EXISTS subscription_baselines (
           generation INTEGER PRIMARY KEY NOT NULL,
@@ -380,3 +393,53 @@ export const MIGRATIONS: readonly Migration[] = [
     }
   }
 ]
+
+/** Publication-v6 and lifecycle-v7 used the same versions as retained/subscription layouts. */
+function ensurePublication(db: Database.Database): void {
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'publication_attempts'").get()) return
+  db.exec(`
+        CREATE TABLE publication_attempts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          request_id TEXT NOT NULL UNIQUE,
+          editor_id TEXT NOT NULL,
+          draft_id INTEGER,
+          payload_json TEXT NOT NULL,
+          credential_id INTEGER NOT NULL CHECK (credential_id >= 1),
+          forum_id TEXT NOT NULL,
+          attachment_id INTEGER REFERENCES draft_attachments(id),
+          state TEXT NOT NULL CHECK (state IN ('sending', 'confirmed', 'failed', 'unknown', 'unconfirmed')),
+          problem TEXT CHECK (problem IS NULL OR problem IN (
+            'storage', 'identity', 'attachment', 'target', 'empty', 'busy', 'interval',
+            'rejected', 'rate-limited', 'captcha', 'network', 'response'
+          )),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          post_id TEXT,
+          thread_id TEXT,
+          saved_draft_id INTEGER,
+          CHECK (state != 'confirmed' OR (post_id IS NOT NULL AND thread_id IS NOT NULL))
+        );
+        CREATE UNIQUE INDEX publication_locked_draft ON publication_attempts(draft_id)
+          WHERE draft_id IS NOT NULL AND state IN ('sending', 'unknown', 'unconfirmed');
+        CREATE INDEX publication_attachment_id ON publication_attempts(attachment_id);
+        CREATE INDEX publication_identity_forum ON publication_attempts(credential_id, forum_id, created_at);
+
+        CREATE TABLE own_posts (
+          post_id TEXT PRIMARY KEY NOT NULL,
+          thread_id TEXT NOT NULL,
+          is_thread INTEGER NOT NULL CHECK (is_thread IN (0, 1)),
+          credential_id INTEGER CHECK (credential_id IS NULL OR credential_id >= 1),
+          evidence TEXT NOT NULL CHECK (evidence IN ('submission-readback', 'manual')),
+          confirmed_at TEXT NOT NULL,
+          CHECK (is_thread = 0 OR post_id = thread_id),
+          CHECK (evidence != 'submission-readback' OR credential_id IS NOT NULL)
+        );
+
+        -- Kept separate from reading settings so saving an older settings shape cannot reset it.
+        CREATE TABLE publication_settings (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          po_warning_enabled INTEGER NOT NULL CHECK (po_warning_enabled IN (0, 1))
+        );
+        INSERT INTO publication_settings (id, po_warning_enabled) VALUES (1, 1);
+  `)
+}

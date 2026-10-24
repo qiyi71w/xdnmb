@@ -17,6 +17,8 @@ export interface EditorWorkspace {
    * the editor's tab. `occupied`: the tab already edits that target; nothing changed.
    */
   retarget: (editorId: EditorId, target: PostTarget) => 'done' | 'occupied'
+  /** Opens 发送记录, where every attempt (including ended editors') can be reviewed. */
+  openAttempts: () => void
 }
 
 export const EditorWorkspaceContext = createContext<EditorWorkspace | null>(null)
