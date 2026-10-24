@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react'
+import type { ThreadEndResult, ThreadPageResult } from '../../../../shared/api'
 import type { Post, ReadingMode, ThreadId } from '../../../../shared/forum'
 import { OperationScope } from '../../lib/operations'
 import { initialThreadState, threadReducer, type ThreadTask } from './threadState'
@@ -10,24 +11,31 @@ type PageTask = Exclude<ThreadTask, { type: 'locate' }>
  * switching either unmounts this hook and cancels its reads. Within a reader at most one read runs;
  * explicit actions (jump, 开头, 末尾, 首条未读, 刷新) cancel the running read, whose late result is
  * then discarded. `firstPage` is the page loaded first (resume, target or page 1).
+ *
+ * `hold` protects the reader's content from cache eviction; every read waits for it first, so a
+ * page is never fetched for an unheld reader (a cache limit of 0 would evict it at once).
  */
-export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Post | null, firstPage: number) {
+export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Post | null, firstPage: number, hold: () => Promise<void>) {
   const [state, dispatch] = useReducer(threadReducer, initialHead, initialThreadState)
   const scope = useRef(new OperationScope())
   const threadRef = useRef(threadId)
   const modeRef = useRef(mode)
   const firstPageRef = useRef(firstPage)
   const stateRef = useRef(state)
+  const holdRef = useRef(hold)
   useEffect(() => {
     stateRef.current = state
+    holdRef.current = hold
   })
 
   const readPage = useCallback(async (task: PageTask) => {
     const page = task.type === 'initial' ? (task.page ?? 1) : task.page
     dispatch({ type: 'start', task })
-    const settled = await scope.current.run((operationId) =>
-      window.xidao.reading.readThreadPage({ operationId, threadId: threadRef.current, mode: modeRef.current, page })
-    )
+    const settled = await scope.current.run<ThreadPageResult>(async (operationId) => {
+      await holdRef.current()
+      if (!scope.current.isActive(operationId)) return { status: 'cancelled' }
+      return window.xidao.reading.readThreadPage({ operationId, threadId: threadRef.current, mode: modeRef.current, page })
+    })
     switch (settled.type) {
       case 'stale':
         return
@@ -45,9 +53,11 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
   const locate = useCallback(async () => {
     const task: ThreadTask = { type: 'locate' }
     dispatch({ type: 'start', task })
-    const settled = await scope.current.run((operationId) =>
-      window.xidao.reading.locateThreadEnd({ operationId, threadId: threadRef.current, mode: modeRef.current })
-    )
+    const settled = await scope.current.run<ThreadEndResult>(async (operationId) => {
+      await holdRef.current()
+      if (!scope.current.isActive(operationId)) return { status: 'cancelled' }
+      return window.xidao.reading.locateThreadEnd({ operationId, threadId: threadRef.current, mode: modeRef.current })
+    })
     switch (settled.type) {
       case 'stale':
         return

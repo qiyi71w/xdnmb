@@ -172,8 +172,12 @@
 
 /* ---------- Browsing identity ---------- */
 
-/* App entries that are not feeds (草稿). Outside the roving feed list; ordinary Tab stops. */
+/* App entries that are not feeds (收藏, 历史, 离线, 草稿). Outside the roving feed list; ordinary Tab
+   stops. Two per row when the column is wide enough, one per row when narrow or zoomed. */
 .nav-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(6.5em, 1fr));
+  gap: 1px 2px;
   padding: 6px calc(8px - 4px * var(--nav-t));
   border-top: 1px solid var(--line-soft);
 }

@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, type CSSProperties, type Ref } from 'react'
+import type { RetainedList } from '../../../../shared/content'
 import type { BoardDirectory, FeedRef } from '../../../../shared/forum'
-import { Icon } from '../../components/Icon'
+import { Icon, type IconName } from '../../components/Icon'
 import { FailureNotice, IdentitySettingsAction, Loading, SourceNotice } from '../../components/Notices'
 import { describeFailure, formatLocalTime } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
@@ -9,6 +10,12 @@ import type { IdentitiesState } from '../identity/useIdentities'
 import { feedKey } from './feeds'
 import type { DirectoryState } from './useDirectory'
 import './navigation.css'
+
+const RETAINED_ENTRIES: { kind: RetainedList; label: string; icon: IconName }[] = [
+  { kind: 'favorites', label: '收藏', icon: 'star' },
+  { kind: 'history', label: '历史', icon: 'history' },
+  { kind: 'offline', label: '离线', icon: 'download' }
+]
 
 interface NavItem {
   ref: FeedRef
@@ -57,7 +64,8 @@ export function Navigation({
   id,
   identities,
   onOpenSettings,
-  onOpenDrafts
+  onOpenDrafts,
+  onOpenRetained
 }: {
   state: DirectoryState
   selected: FeedRef | null
@@ -71,6 +79,8 @@ export function Navigation({
   onOpenSettings: () => void
   /** Opens the 草稿 library. */
   onOpenDrafts: () => void
+  /** Opens the 收藏 / 历史 / 离线 lists. */
+  onOpenRetained: (kind: RetainedList) => void
 }) {
   const { directory } = state
   const sections = useMemo(() => navSections(directory), [directory])
@@ -143,6 +153,12 @@ export function Navigation({
 
       <DirectoryStatus state={state} />
       <div className="nav-tools">
+        {RETAINED_ENTRIES.map((item) => (
+          <button key={item.kind} type="button" className="nav-item" aria-haspopup="dialog" onClick={() => onOpenRetained(item.kind)}>
+            <Icon name={item.icon} className="nav-item-icon" />
+            <span className="nav-item-label">{item.label}</span>
+          </button>
+        ))}
         <button type="button" className="nav-item" aria-haspopup="dialog" onClick={onOpenDrafts}>
           <Icon name="draft" className="nav-item-icon" />
           <span className="nav-item-label">草稿</span>

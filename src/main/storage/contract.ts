@@ -14,6 +14,7 @@ import type { ImageFormat, ImageKind } from '../../shared/images'
 import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, ThreadReadingState } from '../../shared/reading'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
 import type { AttachmentId, DraftId, DraftSaveInput, PostFields, PostTarget } from '../../shared/drafts'
+import type { ContentStore } from './content-contract'
 
 /** A write was refused because the database is read-only (newer schema) or unavailable. */
 export class StorageWriteRefusedError extends Error {
@@ -34,7 +35,7 @@ export interface Stored<T> {
  * startup). Drafts and offline copies add their own kinds when they start holding images.
  */
 export interface ImageHolder {
-  kind: 'reading'
+  kind: 'reading' | 'offline'
   id: string
 }
 
@@ -181,4 +182,4 @@ export interface DraftStore {
   setThreadPostIdentity(threadId: ThreadId, id: CredentialId, at: string): Promise<boolean>
 }
 
-export type AppStore = ReadingStore & IdentityStore & DraftStore
+export type AppStore = ReadingStore & IdentityStore & DraftStore & ContentStore

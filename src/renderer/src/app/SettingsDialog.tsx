@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react'
 import type { AppSettings } from '../../../shared/reading'
 import { Icon } from '../components/Icon'
 import { Modal, ModalHeader } from '../components/Modal'
+import { CacheSection } from '../features/content/CacheSection'
 import { CookieSection } from '../features/identity/CookieSection'
 import type { IdentitiesState } from '../features/identity/useIdentities'
 import './settings.css'
@@ -35,6 +36,7 @@ export function SettingsDialog({
       <div className="modal-body settings-body">
         <TabsSection settings={settings} onChange={onSettingsChange} />
         <CookieSection identities={identities} />
+        <CacheSection />
       </div>
     </Modal>
   )

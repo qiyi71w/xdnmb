@@ -255,8 +255,11 @@ describe('identity service with real SQLite', () => {
 
   it('upgrades a schema-1 database with content and adds empty identity tables', () => {
     const path = databasePath()
-    const v1 = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version === 1))
-    v1.saveDirectory({ groups: [], timelines: [], skippedItems: 0 }, '2026-10-23T08:00:00.000Z')
+    const v1 = new Database(path)
+    for (const migration of MIGRATIONS.filter((migration) => migration.version === 1)) migration.up(v1)
+    v1.pragma('user_version = 1')
+    v1.prepare('INSERT INTO directory_snapshot VALUES (1, ?, ?)')
+      .run(JSON.stringify({ groups: [], timelines: [], skippedItems: 0 }), '2026-10-23T08:00:00.000Z')
     v1.close()
     const { db } = setup(path)
     expect(db.loadDirectory()?.fetchedAt).toBe('2026-10-23T08:00:00.000Z')

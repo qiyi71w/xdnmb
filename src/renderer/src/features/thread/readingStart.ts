@@ -42,13 +42,16 @@ export function savedStart(state: ThreadReadingState | null, mode: ReadingMode):
 
 /**
  * Opening a thread: an explicit target wins (shown in its own mode), then the entry's snapshot
- * (back/forward), then the saved position of the saved mode preference, then page 1 top.
+ * (back/forward) unless the thread's reading data was cleared since it was taken (`generation`),
+ * then the saved position of the saved mode preference, then page 1 top.
  */
-export function decideStart(open: ThreadOpen, state: ThreadReadingState | null): ReaderStart {
+export function decideStart(open: ThreadOpen, state: ThreadReadingState | null, generation: number): ReaderStart {
   if (open.target !== null) {
     return { mode: open.target.mode, position: { kind: 'post', postId: open.target.postId, page: open.target.page } }
   }
-  if (open.snapshot !== null) return { mode: open.snapshot.mode, position: { kind: 'anchor', anchor: open.snapshot.anchor } }
+  if (open.snapshot !== null && open.snapshot.generation === generation) {
+    return { mode: open.snapshot.mode, position: { kind: 'anchor', anchor: open.snapshot.anchor } }
+  }
   return savedStart(state, state?.mode ?? 'all')
 }
 
@@ -65,4 +68,26 @@ export function markReadChunks(postIds: readonly PostId[]): PostId[][] {
     chunks.push(postIds.slice(start, start + MAX_MARK_READ_IDS))
   }
   return chunks
+}
+
+/**
+ * 全部标为已读 in bounded chunks. `writable` is asked before every chunk and once after the last:
+ * a history clear that blocked or reset the thread meanwhile stops the batch, so no later chunk is
+ * sent and the caller must not show the posts as read. `markRead` resolves to whether it saved.
+ */
+export async function markAllInChunks(
+  postIds: readonly PostId[],
+  writable: () => boolean,
+  markRead: (chunk: PostId[]) => Promise<boolean>
+): Promise<{ failed: boolean; stopped: boolean }> {
+  let failed = false
+  for (const chunk of markReadChunks(postIds)) {
+    if (!writable()) return { failed, stopped: true }
+    try {
+      if (!(await markRead(chunk))) failed = true
+    } catch {
+      failed = true
+    }
+  }
+  return { failed, stopped: !writable() }
 }

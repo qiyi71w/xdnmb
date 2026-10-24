@@ -277,6 +277,21 @@ export function createImageService(options: {
         if (stored !== null && (await storedPath(stored)) !== null) {
           return signal.aborted ? { status: 'cancelled' } : loaded(stored, 'stored')
         }
+        // Offline copies keep originals, not thumbnails. A locally available original can also
+        // supply the reading preview, while its actual kind remains explicit in the result.
+        if (input.kind === 'thumb') {
+          const originalUrl = sourceUrl(image, 'original')
+          try {
+            const original = originalUrl === null ? null : await store.findImageResource(
+              'original', originalUrl, activeHolders.has(holder) ? reading(holder) : null
+            )
+            if (original !== null && (await storedPath(original)) !== null) {
+              return signal.aborted ? { status: 'cancelled' } : loaded(original, 'stored')
+            }
+          } catch {
+            return { status: 'failed', error: { reason: 'storage' } }
+          }
+        }
       }
       return joinFlight(`${input.kind}|${url}`, input.kind, url, holder, signal)
     },

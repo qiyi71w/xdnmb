@@ -1,3 +1,4 @@
+import type { ContentApi } from './content'
 import type { BoardDirectory, FeedPage, FeedRef, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
 import type {
   CredentialId, IdentityMutationResult, IdentityOverview, IdentityRole, ImportResult
@@ -110,6 +111,7 @@ export const MAX_MARK_READ_IDS = 2000
 
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
+  content: ContentApi
   reading: {
     loadDirectory(input: { operationId: OperationId; strategy: DirectoryStrategy }): Promise<ReadOutcome<BoardDirectory>>
     /** Foreground read; falls back to the stored page when the network read fails. */
@@ -216,6 +218,18 @@ export interface XidaoApi {
 
 /** IPC channel names. Each maps 1:1 to an XidaoApi method; there is no generic channel. */
 export const IpcChannel = {
+  listRetained: 'content:list',
+  favorite: 'content:favorite',
+  isFavorite: 'content:is-favorite',
+  clearHistory: 'content:clear-history',
+  contentUsage: 'content:usage',
+  setCacheLimit: 'content:set-cache-limit',
+  clearCache: 'content:clear-cache',
+  saveOffline: 'content:save-offline',
+  offlineStatus: 'content:offline-status',
+  cancelOffline: 'content:cancel-offline',
+  holdContentReader: 'content:hold-reader',
+  releaseContentReader: 'content:release-reader',
   loadDirectory: 'reading:load-directory',
   readFeedPage: 'reading:read-feed-page',
   readThreadPage: 'reading:read-thread-page',

@@ -14,6 +14,7 @@ import { startPage, unreadInMode, type ReaderPosition } from './readingStart'
 import type { ThreadTask } from './threadState'
 import { useReadingViewport } from './useReadingViewport'
 import { useThread } from './useThread'
+import { FavoriteButton, OfflineButton } from '../content/ThreadRetention'
 
 const MODE_NAMES: Record<ReadingMode, string> = { all: '全部回复', po: '只看 PO' }
 const NO_POSTS: readonly PostId[] = []
@@ -61,6 +62,8 @@ export interface ThreadReaderProps {
    * preference. Positions of such a temporary display are never saved.
    */
   temporaryOf: ReadingMode | null
+  /** Reading-data generation this reader was created under; stamped on its snapshots. */
+  generation: number
   start: ReaderPosition
   initialHead: Post | null
   /** Tab active and reader pane actually shown. */
@@ -90,6 +93,7 @@ export function ThreadReader({
   threadId,
   mode,
   temporaryOf,
+  generation,
   start,
   initialHead,
   displayed,
@@ -107,7 +111,16 @@ export function ThreadReader({
   footer
 }: ThreadReaderProps) {
   const startRef = useRef(start)
-  const thread = useThread(threadId, mode, initialHead, startPage(startRef.current))
+  // One view ID per mounted reader: it protects the images it loaded and, through the content
+  // hold, its thread from cache eviction. Both are released on unmount.
+  const [viewId] = useState(() => crypto.randomUUID())
+  const held = useRef<Promise<void> | null>(null)
+  const hold = useCallback(() => {
+    // A failed hold leaves reading possible; storage then treats the thread like other cache.
+    held.current ??= window.xidao.content.holdReader({ viewId, threadId }).catch(() => undefined)
+    return held.current
+  }, [viewId, threadId])
+  const thread = useThread(threadId, mode, initialHead, startPage(startRef.current), hold)
   const { state, firstPage, lastPage } = thread
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -119,8 +132,6 @@ export function ThreadReader({
   const [nearby, setNearby] = useState(false)
   const temporary = temporaryOf !== null
 
-  // Images of this reader: one view ID protecting what it loaded, released on unmount.
-  const [viewId] = useState(() => crypto.randomUUID())
   const [near] = useState(() => new NearViewport(() => scrollRef.current))
   const [viewer, setViewer] = useState<ViewerRequest | null>(null)
   const imageView = useMemo<ImageView>(() => ({ viewId, near, openViewer: setViewer }), [viewId, near])
@@ -129,6 +140,8 @@ export function ThreadReader({
     () => () => {
       near.disconnect()
       window.xidao.images.releaseView({ viewId }).catch(() => undefined)
+      held.current = null
+      window.xidao.content.releaseReader({ viewId }).catch(() => undefined)
     },
     [near, viewId]
   )
@@ -179,7 +192,7 @@ export function ThreadReader({
   useRegisterContent('readers', entryKey, {
     capture: () => {
       const anchor = currentAnchor()
-      return anchor === null ? null : { mode, anchor }
+      return anchor === null ? null : { mode, anchor, generation }
     },
     refresh: thread.refresh
   })
@@ -275,6 +288,8 @@ export function ThreadReader({
                 </div>
               </div>
               <div className="toolbar-group">
+                <FavoriteButton threadId={threadId} />
+                <OfflineButton threadId={threadId} title={title ?? `No.${threadId}`} />
                 <button type="button" className="btn" onClick={thread.refresh} title="重新读取已加载的最后一页并合并">
                   <Icon name="refresh" />
                   刷新

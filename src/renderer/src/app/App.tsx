@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react'
 import type { AppPlatform, StorageStatus } from '../../../shared/api'
+import type { RetainedList } from '../../../shared/content'
 import { sameTarget, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
-import type { FeedRef, ThreadSummary } from '../../../shared/forum'
+import type { FeedRef, ThreadId, ThreadSummary } from '../../../shared/forum'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/reading'
 import { Icon } from '../components/Icon'
 import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/directory/feeds'
 import { Navigation, NavMeasure } from '../features/directory/Navigation'
 import { useDirectory } from '../features/directory/useDirectory'
+import { RetainedDialog } from '../features/content/RetainedDialog'
 import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
 import { editorFor, editorForDraft, isUnsaved, unsavedInTab } from '../features/editor/editorsState'
 import { UnsavedEditorsDialog } from '../features/editor/UnsavedEditorsDialog'
@@ -111,6 +113,8 @@ export function App() {
   const closeSettings = useCallback(() => setSettingsOpen(false), [])
   const [draftsOpen, setDraftsOpen] = useState(false)
   const closeDrafts = useCallback(() => setDraftsOpen(false), [])
+  const [retained, setRetained] = useState<RetainedList | null>(null)
+  const closeRetained = useCallback(() => setRetained(null), [])
   /** Tab whose close waits for its unsaved editors to be handled. */
   const [closing, setClosing] = useState<{ tabId: number; editorIds: EditorId[] } | null>(null)
 
@@ -406,6 +410,28 @@ export function App() {
     setDraftsOpen(true)
   }, [closeNav])
 
+  const openRetained = useCallback(
+    (kind: RetainedList) => {
+      closeNav(false)
+      setRetained(kind)
+    },
+    [closeNav]
+  )
+
+  /** 打开 from 收藏 / 历史 / 离线: the active tab shows the thread in its reader (a new history step). */
+  const openThread = useCallback(
+    (threadId: ThreadId) => {
+      setRetained(null)
+      withActive((tab) => {
+        const entry = currentEntry(tab)
+        if (entry.thread?.threadId === threadId && readerShown(tab, entry, stateRef.current.singlePane)) return
+        leave(tab)
+        dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'thread', thread: { threadId, head: null, target: null, snapshot: null } } })
+      })
+    },
+    [withActive, leave]
+  )
+
   /**
    * Ctrl/Cmd+S: the editor holding focus, else the expanded editor the active tab shows (reader
    * before list). Nothing while a modal dialog or the active tab's image viewer is open.
@@ -547,6 +573,7 @@ export function App() {
                     identities={identities}
                     onOpenSettings={openSettings}
                     onOpenDrafts={openDrafts}
+                    onOpenRetained={openRetained}
                   />
                 </div>
               )}
@@ -605,6 +632,7 @@ export function App() {
                     identities={identities}
                     onOpenSettings={openSettings}
                     onOpenDrafts={openDrafts}
+                    onOpenRetained={openRetained}
                   />
                 </>
               )}
@@ -623,6 +651,16 @@ export function App() {
               tabTitle={tabTitle}
               onContinue={continueDraft}
               onClose={closeDrafts}
+              fallbackFocus={() => navTriggerRef.current}
+            />
+          )}
+          {retained !== null && (
+            <RetainedDialog
+              initial={retained}
+              resets={registry.readingResets}
+              favorites={registry.favorites}
+              onOpenThread={openThread}
+              onClose={closeRetained}
               fallbackFocus={() => navTriggerRef.current}
             />
           )}

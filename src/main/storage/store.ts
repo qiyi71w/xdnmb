@@ -160,6 +160,22 @@ export async function openReadingStore(options: {
     listDraftAttachmentFileNames: () => request('listDraftAttachmentFileNames'),
     getThreadPostIdentity: (threadId) => request('getThreadPostIdentity', threadId),
     setThreadPostIdentity: (threadId, id, at) => request('setThreadPostIdentity', threadId, id, at),
+    listRetained: (kind) => request('listRetained', kind),
+    isFavorite: (threadId) => request('isFavorite', threadId),
+    setFavorite: (threadId, favorite, at) => request('setFavorite', threadId, favorite, at),
+    clearHistory: (threadId, clearReading) => request('clearHistory', threadId, clearReading),
+    getContentUsage: () => request('getContentUsage'),
+    setCacheLimit: (bytes) => request('setCacheLimit', bytes),
+    evictContentBatch: (clearAll) => request('evictContentBatch', clearAll),
+    holdContentReader: (holder, threadId) => request('holdContentReader', holder, threadId),
+    releaseContentReaders: (prefix) => request('releaseContentReaders', prefix),
+    getOfflineCopy: (threadId) => request('getOfflineCopy', threadId),
+    beginOfflineCopy: (threadId, images, at) => request('beginOfflineCopy', threadId, images, at),
+    saveOfflinePage: (page, at) => request('saveOfflinePage', page, at),
+    updateOfflineCopy: (threadId, patch, at) => request('updateOfflineCopy', threadId, patch, at),
+    holdOfflineImage: (threadId, postId) => request('holdOfflineImage', threadId, postId),
+    listOfflineImagePosts: (threadId, after, limit) => request('listOfflineImagePosts', threadId, after, limit),
+    recoverContent: () => request('recoverContent'),
     close() {
       if (!closePromise) {
         closing = true

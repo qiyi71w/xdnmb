@@ -69,6 +69,22 @@ port.on('message', (request: StorageRequest) => {
       case 'listDraftAttachmentFileNames': value = db.listDraftAttachmentFileNames(...request.args); break
       case 'getThreadPostIdentity': value = db.getThreadPostIdentity(...request.args); break
       case 'setThreadPostIdentity': value = db.setThreadPostIdentity(...request.args); break
+      case 'listRetained': value = db.listRetained(...request.args); break
+      case 'isFavorite': value = db.isFavorite(...request.args); break
+      case 'setFavorite': value = db.setFavorite(...request.args); break
+      case 'clearHistory': value = db.clearHistory(...request.args); break
+      case 'getContentUsage': value = db.getContentUsage(...request.args); break
+      case 'setCacheLimit': value = db.setCacheLimit(...request.args); break
+      case 'evictContentBatch': value = db.evictContentBatch(...request.args); break
+      case 'holdContentReader': value = db.holdContentReader(...request.args); break
+      case 'releaseContentReaders': value = db.releaseContentReaders(...request.args); break
+      case 'getOfflineCopy': value = db.getOfflineCopy(...request.args); break
+      case 'beginOfflineCopy': value = db.beginOfflineCopy(...request.args); break
+      case 'saveOfflinePage': value = db.saveOfflinePage(...request.args); break
+      case 'updateOfflineCopy': value = db.updateOfflineCopy(...request.args); break
+      case 'holdOfflineImage': value = db.holdOfflineImage(...request.args); break
+      case 'listOfflineImagePosts': value = db.listOfflineImagePosts(...request.args); break
+      case 'recoverContent': value = db.recoverContent(...request.args); break
       case 'close': value = db.close(...request.args); break
       default: throw new Error('unknown storage method')
     }

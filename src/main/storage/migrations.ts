@@ -233,5 +233,89 @@ export const MIGRATIONS: readonly Migration[] = [
         );
       `)
     }
+  },
+  {
+    version: 6,
+    up(db) {
+      db.exec(`
+        -- Relations and observations are personal evidence, independent of cached payload lifetime.
+        ALTER TABLE post_threads RENAME TO old_post_threads;
+        CREATE TABLE post_threads (
+          post_id TEXT PRIMARY KEY NOT NULL, thread_id TEXT NOT NULL,
+          observed_as TEXT NOT NULL, feed_kind TEXT, feed_id TEXT, mode TEXT,
+          page INTEGER NOT NULL, fetched_at TEXT NOT NULL
+        );
+        INSERT INTO post_threads SELECT * FROM old_post_threads;
+        DROP TABLE old_post_threads;
+        CREATE INDEX post_threads_thread_id ON post_threads(thread_id);
+        CREATE TABLE reading_observations AS SELECT thread_id, mode, page, fetched_at,
+          reply_ids_json, end_candidate, skipped_items FROM thread_pages;
+        CREATE UNIQUE INDEX reading_observations_page ON reading_observations(thread_id, mode, page);
+        CREATE TABLE retained_titles (thread_id TEXT PRIMARY KEY NOT NULL, title TEXT, fetched_at TEXT NOT NULL);
+        INSERT INTO retained_titles SELECT id, title, fetched_at FROM posts WHERE id IN (SELECT thread_id FROM post_threads);
+        CREATE TABLE favorites (thread_id TEXT PRIMARY KEY NOT NULL, added_at TEXT NOT NULL);
+        CREATE TABLE content_readers (holder TEXT PRIMARY KEY NOT NULL, thread_id TEXT NOT NULL);
+        CREATE INDEX content_readers_thread ON content_readers(thread_id);
+        CREATE TABLE content_clock (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), tick INTEGER NOT NULL);
+        INSERT INTO content_clock VALUES (1, 0);
+        ALTER TABLE posts ADD COLUMN last_used INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE posts ADD COLUMN derived_bytes INTEGER NOT NULL DEFAULT 0 CHECK(derived_bytes >= 0);
+        ALTER TABLE thread_pages ADD COLUMN last_used INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE feed_pages ADD COLUMN last_used INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE directory_snapshot ADD COLUMN last_used INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE image_resources ADD COLUMN last_used INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE offline_copies (
+          thread_id TEXT PRIMARY KEY NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          include_images INTEGER NOT NULL CHECK(include_images IN (0, 1)),
+          state TEXT NOT NULL CHECK(state IN ('saving', 'stopped', 'cancelled', 'interrupted')),
+          end_candidate_page INTEGER, failed_page INTEGER, error_json TEXT,
+          image_failures_json TEXT NOT NULL DEFAULT '[]'
+        );
+        CREATE TABLE offline_pages (
+          thread_id TEXT NOT NULL REFERENCES offline_copies(thread_id), page INTEGER NOT NULL CHECK(page >= 1),
+          head_id TEXT NOT NULL REFERENCES posts(id), fetched_at TEXT NOT NULL,
+          reply_count INTEGER, skipped_items INTEGER NOT NULL, end_candidate INTEGER NOT NULL,
+          PRIMARY KEY(thread_id, page)
+        );
+        CREATE TABLE offline_page_posts (
+          thread_id TEXT NOT NULL, page INTEGER NOT NULL, post_id TEXT NOT NULL REFERENCES posts(id),
+          PRIMARY KEY(thread_id, page, post_id),
+          FOREIGN KEY(thread_id, page) REFERENCES offline_pages(thread_id, page)
+        );
+        CREATE INDEX offline_page_posts_post ON offline_page_posts(post_id);
+        CREATE TABLE offline_images (
+          thread_id TEXT NOT NULL REFERENCES offline_copies(thread_id),
+          post_id TEXT NOT NULL REFERENCES posts(id), resource_id INTEGER NOT NULL REFERENCES image_resources(id),
+          PRIMARY KEY(thread_id, post_id, resource_id)
+        );
+        CREATE VIEW protected_posts AS
+          SELECT head_id AS post_id FROM offline_pages UNION SELECT post_id FROM offline_page_posts
+          UNION SELECT p.post_id FROM post_threads p JOIN content_readers r ON r.thread_id = p.thread_id
+          UNION SELECT p.post_id FROM post_threads p JOIN drafts d ON d.target_kind = 'reply' AND d.target_id = p.thread_id;
+        CREATE VIEW cached_post_references AS
+          SELECT head_id AS post_id FROM thread_pages
+          UNION SELECT j.value FROM thread_pages, json_each(reply_ids_json) j
+          UNION SELECT json_extract(s.value, '$.headId') FROM feed_pages, json_each(summaries_json) s
+          UNION SELECT j.value FROM feed_pages, json_each(summaries_json) s,
+            json_each(json_extract(s.value, '$.recentReplyIds')) j;
+        CREATE VIEW content_post_bytes AS SELECT p.id,
+          length(CAST(json_array(p.id, forum_id, created_at, user_hash, name, title, is_admin, is_sage,
+            content_json, plain_text, image_path, image_ext, fetched_at) AS BLOB)) + derived_bytes AS bytes,
+          EXISTS(SELECT 1 FROM protected_posts h WHERE h.post_id = p.id) AS protected
+          FROM posts p;
+        CREATE VIEW content_metadata_bytes AS
+          SELECT length(CAST(json_array(thread_id, mode, page, head_id, fetched_at, reply_ids_json, reply_count, skipped_items, end_candidate) AS BLOB)) AS bytes,
+            (thread_id IN (SELECT thread_id FROM content_readers) OR thread_id IN (SELECT target_id FROM drafts WHERE target_kind = 'reply')) AS protected FROM thread_pages
+          UNION ALL SELECT length(CAST(json_array(feed_kind, feed_id, page, fetched_at, summaries_json, skipped_items) AS BLOB)), 0 FROM feed_pages
+          UNION ALL SELECT length(CAST(json_array(directory_json, fetched_at) AS BLOB)), 0 FROM directory_snapshot
+          UNION ALL SELECT length(CAST(json_array(id, kind, source_url, file_name, format, bytes, width, height, fetched_at) AS BLOB)),
+            (EXISTS(SELECT 1 FROM image_holders h WHERE h.resource_id = r.id) OR EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)) FROM image_resources r;
+        CREATE VIEW content_cache_bytes AS SELECT
+          (SELECT coalesce(sum(bytes), 0) FROM content_post_bytes WHERE NOT protected) +
+          (SELECT coalesce(sum(bytes), 0) FROM content_metadata_bytes WHERE NOT protected) +
+          (SELECT coalesce(sum(bytes), 0) FROM image_resources r WHERE NOT EXISTS(SELECT 1 FROM image_holders h WHERE h.resource_id = r.id)
+            AND NOT EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)) AS bytes;
+      `)
+    }
   }
 ]

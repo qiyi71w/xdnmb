@@ -28,6 +28,7 @@ import { computeCoverage } from './coverage'
 import { buildReadingState, emptyReadingState, endObservation, type AttentionRecord } from './reading-state'
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
+import { RetainedContentDatabase, contentTick, touchThread } from './retained'
 
 /** The worker owns this synchronous core; callers outside the worker use AppStore. */
 export type ReadingDatabase = {
@@ -182,7 +183,20 @@ const UPSERT_POST = `
     user_hash = excluded.user_hash, name = excluded.name, title = excluded.title,
     is_admin = excluded.is_admin, is_sage = excluded.is_sage,
     content_json = excluded.content_json, plain_text = excluded.plain_text,
-    image_path = excluded.image_path, image_ext = excluded.image_ext,
+    image_path = CASE
+      WHEN excluded.image_path IS NULL AND (
+        EXISTS (SELECT 1 FROM offline_page_posts WHERE post_id = posts.id)
+        OR EXISTS (SELECT 1 FROM offline_pages WHERE head_id = posts.id)
+      ) THEN posts.image_path
+      ELSE excluded.image_path
+    END,
+    image_ext = CASE
+      WHEN excluded.image_path IS NULL AND (
+        EXISTS (SELECT 1 FROM offline_page_posts WHERE post_id = posts.id)
+        OR EXISTS (SELECT 1 FROM offline_pages WHERE head_id = posts.id)
+      ) THEN posts.image_ext
+      ELSE excluded.image_ext
+    END,
     fetched_at = excluded.fetched_at
   WHERE julianday(excluded.fetched_at) >= julianday(posts.fetched_at)
 `
@@ -192,6 +206,29 @@ class SqliteReadingDatabase implements ReadingDatabase {
     private db: Database.Database | null,
     private currentStatus: StorageStatus
   ) {}
+
+  private readonly content = new RetainedContentDatabase(
+    () => this.writable(),
+    (page, at) => this.saveThreadPage(page, at),
+    (threadId, at) => this.establishAttention(threadId, 'favorite', at)
+  )
+
+  listRetained: ReadingDatabase['listRetained'] = (kind) => this.content.listRetained(kind)
+  isFavorite: ReadingDatabase['isFavorite'] = (threadId) => this.content.isFavorite(threadId)
+  setFavorite: ReadingDatabase['setFavorite'] = (threadId, favorite, at) => this.content.setFavorite(threadId, favorite, at)
+  clearHistory: ReadingDatabase['clearHistory'] = (threadId, clearReading) => this.content.clearHistory(threadId, clearReading)
+  getContentUsage: ReadingDatabase['getContentUsage'] = () => this.content.getContentUsage()
+  setCacheLimit: ReadingDatabase['setCacheLimit'] = (bytes) => this.content.setCacheLimit(bytes)
+  evictContentBatch: ReadingDatabase['evictContentBatch'] = (clearAll) => this.content.evictContentBatch(clearAll)
+  holdContentReader: ReadingDatabase['holdContentReader'] = (holder, threadId) => this.content.holdContentReader(holder, threadId)
+  releaseContentReaders: ReadingDatabase['releaseContentReaders'] = (prefix) => this.content.releaseContentReaders(prefix)
+  getOfflineCopy: ReadingDatabase['getOfflineCopy'] = (threadId) => this.content.getOfflineCopy(threadId)
+  beginOfflineCopy: ReadingDatabase['beginOfflineCopy'] = (threadId, images, at) => this.content.beginOfflineCopy(threadId, images, at)
+  saveOfflinePage: ReadingDatabase['saveOfflinePage'] = (page, at) => this.content.saveOfflinePage(page, at)
+  updateOfflineCopy: ReadingDatabase['updateOfflineCopy'] = (threadId, patch, at) => this.content.updateOfflineCopy(threadId, patch, at)
+  holdOfflineImage: ReadingDatabase['holdOfflineImage'] = (threadId, postId) => this.content.holdOfflineImage(threadId, postId)
+  listOfflineImagePosts: ReadingDatabase['listOfflineImagePosts'] = (threadId, after, limit) => this.content.listOfflineImagePosts(threadId, after, limit)
+  recoverContent: ReadingDatabase['recoverContent'] = () => this.content.recoverContent()
 
   get status(): StorageStatus {
     return this.currentStatus
@@ -229,6 +266,12 @@ class SqliteReadingDatabase implements ReadingDatabase {
         fetchedAt
       })
       relationStatement.run({ postId: post.id, threadId, ...source, fetchedAt })
+      db.prepare('UPDATE posts SET last_used = ? WHERE id = ?').run(contentTick(db), post.id)
+      if (source.observedAs === 'head') {
+        db.prepare(`INSERT INTO retained_titles VALUES (?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET
+          title = coalesce(excluded.title, retained_titles.title), fetched_at = excluded.fetched_at
+          WHERE julianday(excluded.fetched_at) >= julianday(retained_titles.fetched_at)`).run(threadId, post.title, fetchedAt)
+      }
     }
   }
 
@@ -263,6 +306,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
         ON CONFLICT(singleton) DO UPDATE SET
           directory_json = excluded.directory_json, fetched_at = excluded.fetched_at
       `).run(JSON.stringify(directory), fetchedAt)
+      db.prepare('UPDATE directory_snapshot SET last_used = ? WHERE singleton = 1').run(contentTick(db))
     })()
   }
 
@@ -271,6 +315,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     const row = this.db.prepare<[], { directory_json: string; fetched_at: string }>(
       'SELECT directory_json, fetched_at FROM directory_snapshot WHERE singleton = 1'
     ).get()
+    if (row && this.currentStatus.state === 'ready') this.db.prepare('UPDATE directory_snapshot SET last_used = ? WHERE singleton = 1').run(contentTick(this.db))
     return row ? { value: JSON.parse(row.directory_json) as BoardDirectory, fetchedAt: row.fetched_at } : null
   }
 
@@ -299,6 +344,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
           fetched_at = excluded.fetched_at, summaries_json = excluded.summaries_json,
           skipped_items = excluded.skipped_items
       `).run(page.feed.kind, page.feed.id, page.page, fetchedAt, JSON.stringify(summaries), page.skippedItems)
+      db.prepare('UPDATE feed_pages SET last_used = ? WHERE feed_kind = ? AND feed_id = ? AND page = ?').run(contentTick(db), page.feed.kind, page.feed.id, page.page)
     })()
   }
 
@@ -315,6 +361,10 @@ class SqliteReadingDatabase implements ReadingDatabase {
       if (!row) return null
       const readPost = this.postReader(db)
       const summaries = JSON.parse(row.summaries_json) as FeedSummaryRow[]
+      if (this.currentStatus.state === 'ready') {
+        db.prepare('UPDATE feed_pages SET last_used = ? WHERE feed_kind = ? AND feed_id = ? AND page = ?').run(contentTick(db), feed.kind, feed.id, page)
+        for (const summary of summaries) touchThread(db, summary.headId)
+      }
       return {
         fetchedAt: row.fetched_at,
         value: {
@@ -363,6 +413,11 @@ class SqliteReadingDatabase implements ReadingDatabase {
         skippedItems: page.skippedItems,
         endCandidate: Number(page.endCandidate)
       })
+      db.prepare(`INSERT INTO reading_observations(thread_id, mode, page, fetched_at, reply_ids_json, end_candidate, skipped_items)
+        VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(thread_id, mode, page) DO UPDATE SET fetched_at = excluded.fetched_at,
+        reply_ids_json = excluded.reply_ids_json, end_candidate = excluded.end_candidate, skipped_items = excluded.skipped_items`)
+        .run(page.threadId, page.mode, page.page, fetchedAt, JSON.stringify(page.replies.map((reply) => reply.id)), Number(page.endCandidate), page.skippedItems)
+      touchThread(db, page.threadId)
       if (page.replyCount !== null) {
         db.prepare(`
           INSERT INTO thread_reply_counts (thread_id, mode, reply_count, fetched_at)
@@ -388,10 +443,21 @@ class SqliteReadingDatabase implements ReadingDatabase {
     if (!this.db) return null
     const db = this.db
     return db.transaction(() => {
-      const row = db.prepare<[string, string, number], ThreadPageRow>(
+      let row = db.prepare<[string, string, number], ThreadPageRow>(
         'SELECT * FROM thread_pages WHERE thread_id = ? AND mode = ? AND page = ?'
       ).get(threadId, mode, page)
+      if (mode === 'all') {
+        const offline = db.prepare<[string, number], ThreadPageRow>(`SELECT page, head_id, fetched_at,
+          '[]' AS reply_ids_json, reply_count, skipped_items, end_candidate FROM offline_pages WHERE thread_id = ? AND page = ?`).get(threadId, page)
+        if (offline) {
+          const ids = new Set(row ? JSON.parse(row.reply_ids_json) as string[] : [])
+          for (const post of db.prepare<[string, number], { post_id: string }>('SELECT post_id FROM offline_page_posts WHERE thread_id = ? AND page = ?').all(threadId, page)) ids.add(post.post_id)
+          const replies = [...ids].sort((a, b) => a.length - b.length || a.localeCompare(b))
+          row = { ...(row ?? offline), reply_ids_json: JSON.stringify(replies) }
+        }
+      }
       if (!row) return null
+      if (this.currentStatus.state === 'ready') touchThread(db, threadId)
       const readPost = this.postReader(db)
       return {
         fetchedAt: row.fetched_at,
@@ -425,6 +491,15 @@ class SqliteReadingDatabase implements ReadingDatabase {
       endCandidate: row.end_candidate !== 0,
       skippedItems: row.skipped_items
     }))
+    if (mode === 'all') {
+      const retained = db.prepare<[string], ThreadPageRow>(`SELECT o.*, '[]' AS reply_ids_json FROM offline_pages o WHERE thread_id = ? ORDER BY page`).all(threadId)
+      for (const offline of retained) {
+        if (pages.some((page) => page.page === offline.page)) continue
+        const replies = db.prepare<[string, number], { post_id: string }>('SELECT post_id FROM offline_page_posts WHERE thread_id = ? AND page = ?').all(threadId, offline.page)
+        pages.push({ page: offline.page, fetchedAt: offline.fetched_at, replyIds: replies.map((reply) => reply.post_id), endCandidate: offline.end_candidate !== 0, skippedItems: offline.skipped_items })
+      }
+      pages.sort((a, b) => a.page - b.page)
+    }
     return computeCoverage(threadId, mode, pages, latestCount?.reply_count ?? null)
   }
 
@@ -462,14 +537,21 @@ class SqliteReadingDatabase implements ReadingDatabase {
             firstProvenNewPostId: this.firstProvenNewPost(db, attentionRow.started_at)
           }
         : null
-      return buildReadingState({
+      const coverage = { all: this.getThreadCoverage(threadId, 'all'), po: this.getThreadCoverage(threadId, 'po') }
+      const observedCoverage = (mode: ReadingMode): ThreadCoverage => {
+        const rows = db.prepare<[string, string], ThreadPageRow>('SELECT * FROM reading_observations WHERE thread_id = ? AND mode = ? ORDER BY page').all(threadId, mode)
+        return computeCoverage(threadId, mode, rows.map((row) => ({ page: row.page, fetchedAt: row.fetched_at,
+          replyIds: JSON.parse(row.reply_ids_json) as string[], endCandidate: row.end_candidate !== 0, skippedItems: row.skipped_items })), coverage[mode].reportedReplyCount)
+      }
+      const state = buildReadingState({
         threadId,
         mode: modeRow?.mode ?? 'all',
         positions,
         readPostIds,
         attention,
-        coverage: { all: this.getThreadCoverage(threadId, 'all'), po: this.getThreadCoverage(threadId, 'po') }
+        coverage: { all: observedCoverage('all'), po: observedCoverage('po') }
       })
+      return { ...state, coverage }
     })()
   }
 
@@ -525,7 +607,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     const db = this.writable()
     return db.transaction(() => {
       // The highest post ID observed anywhere so far: every post at or below it existed before now.
-      const watermark = db.prepare<[], { id: string }>('SELECT id FROM posts ORDER BY length(id) DESC, id DESC LIMIT 1').get()
+      const watermark = db.prepare<[], { id: string }>('SELECT post_id AS id FROM post_threads ORDER BY length(post_id) DESC, post_id DESC LIMIT 1').get()
       db.prepare(`
         INSERT INTO thread_attention (thread_id, started_at, source, watermark_post_id) VALUES (?, ?, ?, ?)
         ON CONFLICT(thread_id) DO NOTHING
@@ -603,6 +685,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
         'SELECT * FROM image_resources WHERE kind = ? AND source_url = ?'
       ).get(kind, sourceUrl)
       if (!row) return null
+      if (this.currentStatus.state === 'ready') db.prepare('UPDATE image_resources SET last_used = ? WHERE id = ?').run(contentTick(db), row.id)
       if (holder !== null) this.holdImage(this.writable(), row.id, [holder])
       return imageResource(row)
     }
@@ -627,6 +710,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
         RETURNING *
       `).get(resource) as ImageResourceRow
       this.holdImage(db, row.id, holders)
+      db.prepare('UPDATE image_resources SET last_used = ? WHERE id = ?').run(contentTick(db), row.id)
       const replaced = previous !== undefined && previous.file_name !== row.file_name ? previous.file_name : null
       return { resource: imageResource(row), replacedFileName: replaced }
     })()
@@ -644,6 +728,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
       const remove = db.prepare<[number], { file_name: string }>(`
         DELETE FROM image_resources
         WHERE id = ? AND NOT EXISTS (SELECT 1 FROM image_holders WHERE resource_id = image_resources.id)
+          AND NOT EXISTS (SELECT 1 FROM offline_images WHERE resource_id = image_resources.id)
         RETURNING file_name
       `)
       const removed: string[] = []

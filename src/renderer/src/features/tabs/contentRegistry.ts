@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useRef } from 'react'
+import { createFavoriteWrites, type FavoriteWrites } from '../content/favoriteWrites'
+import { createReadingResets, type ReadingResets } from '../content/readingResets'
 import type { FeedState } from '../feed/feedState'
 import type { ThreadSnapshot } from './tabsState'
 
@@ -23,15 +25,19 @@ export interface ListMemory {
  * Mounted readers and lists, keyed by the history entry key that shows them, plus the runtime
  * memory of lists that are not mounted (split toggled, single pane, back/forward). Memory lives
  * only while the app runs; the shell drops it when its entry leaves every tab's history.
+ * `readingResets` tells open readers that their thread's reading data was cleared; `favorites`
+ * keeps every mounted 收藏 entry point on the last successfully written state.
  */
 export interface ContentRegistry {
   readers: Map<number, { current: ReaderHandle }>
   lists: Map<number, { current: ListHandle }>
   listMemory: Map<number, ListMemory>
+  readingResets: ReadingResets
+  favorites: FavoriteWrites
 }
 
 export function createContentRegistry(): ContentRegistry {
-  return { readers: new Map(), lists: new Map(), listMemory: new Map() }
+  return { readers: new Map(), lists: new Map(), listMemory: new Map(), readingResets: createReadingResets(), favorites: createFavoriteWrites() }
 }
 
 export const ContentRegistryContext = createContext<ContentRegistry | null>(null)

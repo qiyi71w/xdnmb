@@ -3,6 +3,20 @@ import { IpcChannel, type XidaoApi } from '../shared/api'
 
 // Named operations only: no generic invoke/send, no Electron objects, URLs, SQL or file access.
 const api: XidaoApi = {
+  content: {
+    list: (input) => ipcRenderer.invoke(IpcChannel.listRetained, input),
+    favorite: (input) => ipcRenderer.invoke(IpcChannel.favorite, input),
+    isFavorite: (input) => ipcRenderer.invoke(IpcChannel.isFavorite, input),
+    clearHistory: (input) => ipcRenderer.invoke(IpcChannel.clearHistory, input),
+    usage: () => ipcRenderer.invoke(IpcChannel.contentUsage),
+    setCacheLimit: (input) => ipcRenderer.invoke(IpcChannel.setCacheLimit, input),
+    clearCache: () => ipcRenderer.invoke(IpcChannel.clearCache),
+    saveOffline: (input) => ipcRenderer.invoke(IpcChannel.saveOffline, input),
+    offlineStatus: (input) => ipcRenderer.invoke(IpcChannel.offlineStatus, input),
+    cancelOffline: (input) => ipcRenderer.invoke(IpcChannel.cancelOffline, input),
+    holdReader: (input) => ipcRenderer.invoke(IpcChannel.holdContentReader, input),
+    releaseReader: (input) => ipcRenderer.invoke(IpcChannel.releaseContentReader, input)
+  },
   reading: {
     loadDirectory: (input) => ipcRenderer.invoke(IpcChannel.loadDirectory, input),
     readFeedPage: (input) => ipcRenderer.invoke(IpcChannel.readFeedPage, input),

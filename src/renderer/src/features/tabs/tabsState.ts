@@ -17,6 +17,8 @@ export interface ThreadTarget {
 export interface ThreadSnapshot {
   mode: ReadingMode
   anchor: ReadingAnchor
+  /** Reading-data generation of the reader that captured it; a later history clear voids it. */
+  generation: number
 }
 
 export interface ThreadOpen {

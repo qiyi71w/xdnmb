@@ -27,6 +27,11 @@ export class OperationScope {
     return this.active.size > 0
   }
 
+  /** Whether the operation is still current (not finished, cancelled or superseded). */
+  isActive(operationId: OperationId): boolean {
+    return this.active.has(operationId)
+  }
+
   async run<T>(call: (operationId: OperationId) => Promise<ReadOutcome<T>>): Promise<Settled<T>> {
     const operationId = crypto.randomUUID()
     this.active.add(operationId)

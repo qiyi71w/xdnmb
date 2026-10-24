@@ -7,6 +7,7 @@ import {
   MAX_DRAFT_CONTENT_LENGTH, MAX_DRAFT_FIELD_LENGTH, type DraftSaveInput, type PostFields, type PostTarget
 } from '../shared/drafts'
 import { DEFAULT_SETTINGS, type AppSettings, type ReadingAnchor } from '../shared/reading'
+import type { ContentService } from './content/service'
 import type { DraftService } from './drafts/service'
 import type { IdentityService } from './identity/service'
 import type { ImageService } from './images/service'
@@ -34,6 +35,7 @@ class InvalidRequestError extends Error {
 }
 
 interface IpcDeps {
+  content: ContentService
   reading: ReadingService
   images: ImageService
   store: ReadingStore
@@ -217,7 +219,7 @@ class OperationRegistry {
 }
 
 export function registerIpc({
-  reading, images, identities, drafts, store, getStatus, isTrustedSender, chooseSavePath, chooseImageFile
+  reading, images, identities, drafts, content, store, getStatus, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): {
   cancelAllFor: (sender: WebContents) => void
 } {
@@ -230,18 +232,58 @@ export function registerIpc({
     })
   }
 
+  const enforceQuota = () => { void content.enforceQuota().catch(() => console.error('[content] cleanup failed')) }
+  const boolean = (value: unknown): boolean => {
+    if (typeof value !== 'boolean') throw new InvalidRequestError()
+    return value
+  }
+  handle(IpcChannel.listRetained, async (_event, raw) => {
+    const kind = record(raw).kind
+    if (kind !== 'favorites' && kind !== 'history' && kind !== 'offline') throw new InvalidRequestError()
+    return content.list({ kind })
+  })
+  handle(IpcChannel.favorite, async (_event, raw) => {
+    const input = record(raw)
+    return content.favorite({ threadId: forumId(input.threadId), favorite: boolean(input.favorite) })
+  })
+  handle(IpcChannel.isFavorite, async (_event, raw) => content.isFavorite({ threadId: forumId(record(raw).threadId) }))
+  handle(IpcChannel.clearHistory, async (_event, raw) => {
+    const input = record(raw)
+    return content.clearHistory({ threadId: input.threadId === null ? null : forumId(input.threadId), clearReading: boolean(input.clearReading) })
+  })
+  handle(IpcChannel.contentUsage, async () => content.usage())
+  handle(IpcChannel.setCacheLimit, async (_event, raw) => {
+    const bytes = record(raw).bytes
+    if (typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes < 0) throw new InvalidRequestError()
+    return content.setCacheLimit({ bytes })
+  })
+  handle(IpcChannel.clearCache, async () => content.clearCache())
+  handle(IpcChannel.saveOffline, async (_event, raw) => {
+    const input = record(raw)
+    return content.saveOffline({ threadId: forumId(input.threadId), includeImages: boolean(input.includeImages) })
+  })
+  handle(IpcChannel.offlineStatus, async (_event, raw) => content.offlineStatus({ threadId: forumId(record(raw).threadId) }))
+  handle(IpcChannel.cancelOffline, async (_event, raw) => content.cancelOffline({ threadId: forumId(record(raw).threadId) }))
+  handle(IpcChannel.holdContentReader, async (event, raw) => {
+    const input = record(raw)
+    await content.holdReader(String(event.sender.id), { viewId: viewId(input.viewId), threadId: forumId(input.threadId) })
+  })
+  handle(IpcChannel.releaseContentReader, async (event, raw) => {
+    await content.releaseReader(String(event.sender.id), { viewId: viewId(record(raw).viewId) })
+  })
+
   handle(IpcChannel.loadDirectory, async (event, raw) => {
     const input = record(raw)
     const strategy = input.strategy
     if (!STRATEGIES.includes(strategy as DirectoryStrategy)) throw new InvalidRequestError()
-    return operations.run(event.sender, operationId(input), (signal) => reading.loadDirectory(strategy as DirectoryStrategy, signal))
+    return operations.run(event.sender, operationId(input), (signal) => reading.loadDirectory(strategy as DirectoryStrategy, signal)).finally(enforceQuota)
   })
 
   handle(IpcChannel.readFeedPage, async (event, raw) => {
     const input = record(raw)
     const feed = feedRef(input.feed)
     const pageNumber = page(input.page)
-    return operations.run(event.sender, operationId(input), (signal) => reading.readFeedPage(feed, pageNumber, signal))
+    return operations.run(event.sender, operationId(input), (signal) => reading.readFeedPage(feed, pageNumber, signal)).finally(enforceQuota)
   })
 
   handle(IpcChannel.readThreadPage, async (event, raw) => {
@@ -249,14 +291,26 @@ export function registerIpc({
     const threadId = forumId(input.threadId)
     const mode = readingMode(input.mode)
     const pageNumber = page(input.page)
-    return operations.run(event.sender, operationId(input), (signal) => reading.readThreadPage(threadId, mode, pageNumber, signal))
+    const id = operationId(input)
+    return operations.run(event.sender, id, async (signal) => {
+      const held = { viewId: `request-${id}`, threadId }
+      await content.holdReader(String(event.sender.id), held).catch(() => undefined)
+      try { return await reading.readThreadPage(threadId, mode, pageNumber, signal) }
+      finally { await content.releaseReader(String(event.sender.id), held).catch(() => undefined) }
+    })
   })
 
   handle(IpcChannel.locateThreadEnd, async (event, raw) => {
     const input = record(raw)
     const threadId = forumId(input.threadId)
     const mode = readingMode(input.mode)
-    return operations.run(event.sender, operationId(input), (signal) => reading.locateThreadEnd(threadId, mode, signal))
+    const id = operationId(input)
+    return operations.run(event.sender, id, async (signal) => {
+      const held = { viewId: `request-${id}`, threadId }
+      await content.holdReader(String(event.sender.id), held).catch(() => undefined)
+      try { return await reading.locateThreadEnd(threadId, mode, signal) }
+      finally { await content.releaseReader(String(event.sender.id), held).catch(() => undefined) }
+    })
   })
 
   handle(IpcChannel.cancel, async (event, raw) => {
@@ -336,7 +390,7 @@ export function registerIpc({
       kind: imageKind(input.kind),
       refresh: input.refresh === true
     }
-    return operations.run(event.sender, operationId(input), (signal) => images.load(String(event.sender.id), load, signal))
+    return operations.run(event.sender, operationId(input), (signal) => images.load(String(event.sender.id), load, signal)).finally(enforceQuota)
   })
 
   handle(IpcChannel.cancelImage, async (event, raw) => {
@@ -345,6 +399,7 @@ export function registerIpc({
 
   handle(IpcChannel.releaseImageView, async (event, raw) => {
     await images.releaseView(String(event.sender.id), viewId(record(raw).viewId))
+    enforceQuota()
   })
 
   handle(IpcChannel.saveOriginalImage, async (event, raw) => {
@@ -413,6 +468,7 @@ export function registerIpc({
       operations.cancelAllFor(sender)
       void images.releaseOwner(String(sender.id))
       void drafts.releaseOwner(String(sender.id))
+      void content.releaseOwner(String(sender.id)).catch(() => undefined)
     }
   }
 }

@@ -485,17 +485,19 @@ describe('reading context', () => {
 
   it('upgrades a version 1 database without losing content and starts with empty reading state', () => {
     const path = databasePath()
-    const writer = open(path)
-    writer.saveThreadPage(threadPage(1, [post('1001')]), fetchedAt)
-    writer.close()
-    // Turn the file into what a version 1 build left behind: no reading-context, image, identity or draft tables.
     const raw = new Database(path)
-    raw.exec(`
-      DROP TABLE thread_reading; DROP TABLE reading_positions; DROP TABLE post_reads;
-      DROP TABLE thread_attention; DROP TABLE end_observations; DROP TABLE thread_visits; DROP TABLE settings;
-      DROP TABLE image_holders; DROP TABLE image_resources; DROP TABLE credentials; DROP TABLE identity_roles;
-      DROP TABLE drafts; DROP TABLE draft_attachments; DROP TABLE thread_post_identities;
-    `)
+    MIGRATIONS[0]!.up(raw)
+    for (const value of [post(threadId), post('1001')]) {
+      raw.prepare(`INSERT INTO posts(id, forum_id, created_at, user_hash, name, title, is_admin, is_sage,
+        content_json, plain_text, image_path, image_ext, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(value.id, value.forumId, value.createdAt, value.userHash, value.name, value.title,
+          value.isAdmin === null ? null : Number(value.isAdmin), value.isSage === null ? null : Number(value.isSage),
+          JSON.stringify(value.content), value.plainText, null, null, fetchedAt)
+      raw.prepare('INSERT INTO post_threads VALUES (?, ?, ?, NULL, NULL, ?, 1, ?)')
+        .run(value.id, threadId, value.id === threadId ? 'head' : 'thread-reply', 'all', fetchedAt)
+    }
+    raw.prepare('INSERT INTO thread_pages VALUES (?, ?, 1, ?, ?, ?, NULL, 0, 0)')
+      .run(threadId, 'all', threadId, fetchedAt, JSON.stringify(['1001']))
     raw.pragma('user_version = 1')
     raw.close()
     expect(schema(path).version).toBe(1)

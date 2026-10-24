@@ -6,6 +6,7 @@ import { Readable } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import type { AppPlatform } from '../shared/api'
 import { IMAGE_FORMAT_EXTENSION, IMAGE_SCHEME } from '../shared/images'
+import { createContentService, type ContentService } from './content/service'
 import { createDraftService } from './drafts/service'
 import { createForumClient } from './forum/client'
 import { createForumTransport } from './forum/transport'
@@ -41,6 +42,7 @@ function isAppDocument(url: string): boolean {
 let mainWindow: BrowserWindow | null = null
 let store: AppStore | null = null
 let storeClosed = false
+let content: ContentService | null = null
 
 // Every renderer runs sandboxed; one main process owns the database worker.
 app.enableSandbox()
@@ -160,15 +162,13 @@ async function start(): Promise<void> {
     storageState: () => openedStore.status.state
   })
 
-  const reading = createReadingService({
-    client: createForumClient({
-      transport: createForumTransport({ allowedOrigins: [FORUM_API_ORIGIN], credentialOrigins: [FORUM_API_ORIGIN] }),
-      baseUrl: FORUM_API_ORIGIN,
-      browseIdentity: () => identities.browseUserhash()
-    }),
-    store: openedStore,
-    scheduler: createRequestScheduler()
+  const client = createForumClient({
+    transport: createForumTransport({ allowedOrigins: [FORUM_API_ORIGIN], credentialOrigins: [FORUM_API_ORIGIN] }),
+    baseUrl: FORUM_API_ORIGIN,
+    browseIdentity: () => identities.browseUserhash()
   })
+  const scheduler = createRequestScheduler()
+  const reading = createReadingService({ client, store: openedStore, scheduler })
 
   const imageFiles = await openManagedImageFiles(join(app.getPath('userData'), 'images'))
   const images = createImageService({
@@ -186,12 +186,21 @@ async function start(): Promise<void> {
   await drafts.recover().catch(() => console.error('[drafts] recovery failed'))
   serveManagedImages({ file: imageFiles, draft: draftFiles })
 
+  const retained = createContentService({
+    store: openedStore, client, scheduler, images, files: imageFiles,
+    databasePath: join(app.getPath('userData'), 'xidao.sqlite')
+  })
+  content = retained
+  await retained.recover().catch(() => console.error('[content] recovery failed'))
+  await retained.enforceQuota().catch(() => console.error('[content] cleanup failed'))
+
   installMenu()
   const ipc = registerIpc({
     reading,
     images,
     identities,
     drafts,
+    content: retained,
     store: openedStore,
     getStatus: () => ({ storage: openedStore.status, platform }),
     async chooseSavePath(sender, suggestedName, format) {
@@ -247,5 +256,8 @@ app.on('will-quit', (event) => {
   if (!store || storeClosed) return
   event.preventDefault()
   storeClosed = true
-  void store.close().finally(() => app.quit())
+  void (async () => {
+    await content?.stop()
+    await store?.close()
+  })().finally(() => app.quit())
 })
