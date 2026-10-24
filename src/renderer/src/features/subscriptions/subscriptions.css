@@ -835,3 +835,8 @@
 .sub-plan-details > .sub-plan-items {
   margin-top: 6px;
 }
+
+/* Compact density: list and row padding only; text sizes stay. */
+:root[data-density='compact'] .sub-journal-item {
+  padding: 6px 10px;
+}

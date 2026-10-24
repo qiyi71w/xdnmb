@@ -1,6 +1,15 @@
 import type { AppPlatform } from '../../../shared/api'
 
-export type ShortcutAction = 'new-tab' | 'close-tab' | 'next-tab' | 'previous-tab' | 'refresh' | 'save' | 'back' | 'forward'
+export type ShortcutAction =
+  | 'new-tab'
+  | 'close-tab'
+  | 'next-tab'
+  | 'previous-tab'
+  | 'refresh'
+  | 'save'
+  | 'back'
+  | 'forward'
+  | 'open-settings'
 
 export interface KeyInput {
   key: string
@@ -18,8 +27,9 @@ function letterOf(event: KeyInput): string | null {
 }
 
 /**
- * App shortcuts. macOS: Cmd+T/W/R/S, Control+Tab, Cmd+[ / Cmd+]. Windows/Linux:
- * Ctrl+T/W/R/S, Ctrl+Tab, Alt+Left / Alt+Right. Backspace is never “back”.
+ * App shortcuts (spec I11). macOS: Cmd+T/W/R/S, Cmd+, , Control+Tab, Cmd+[ / Cmd+]. Windows/Linux:
+ * Ctrl+T/W/R/S, Ctrl+, , Ctrl+Tab, Alt+Left / Alt+Right. Backspace is never “back”. Zoom keys
+ * (Ctrl/Cmd + = / - / 0) are handled by the main process before the page sees them.
  */
 export function matchShortcut(event: KeyInput, platform: AppPlatform): ShortcutAction | null {
   if (event.key === 'Tab' && event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -37,6 +47,7 @@ export function matchShortcut(event: KeyInput, platform: AppPlatform): ShortcutA
     }
     if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return null
   }
+  if (event.key === ',' || event.code === 'Comma') return 'open-settings'
   switch (letterOf(event)) {
     case 't':
       return 'new-tab'
@@ -66,7 +77,8 @@ const LABELS: Record<ShortcutAction, { mac: string; other: string }> = {
   refresh: { mac: '⌘R', other: 'Ctrl+R' },
   save: { mac: '⌘S', other: 'Ctrl+S' },
   back: { mac: '⌘[', other: 'Alt+←' },
-  forward: { mac: '⌘]', other: 'Alt+→' }
+  forward: { mac: '⌘]', other: 'Alt+→' },
+  'open-settings': { mac: '⌘,', other: 'Ctrl+,' }
 }
 
 /** Shortcut shown in tooltips; empty until the platform is known. */

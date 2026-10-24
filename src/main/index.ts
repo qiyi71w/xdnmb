@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, dialog, Menu, nativeImage, Notification, protocol, session, Tray,
+  app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, protocol, session, Tray,
   type IpcMainInvokeEvent, type MenuItemConstructorOptions
 } from 'electron'
 import { createReadStream } from 'node:fs'
@@ -11,6 +11,8 @@ import { LIFECYCLE_REQUEST_CHANNEL, type AppPlatform } from '../shared/api'
 import { IMAGE_FORMAT_EXTENSION, IMAGE_SCHEME } from '../shared/images'
 import { createContentService, type ContentService } from './content/service'
 import { createDraftService } from './drafts/service'
+import type { ZoomAction } from '../shared/settings'
+import { createSettingsService } from './appearance'
 import { createForumClient } from './forum/client'
 import { createForumTransport } from './forum/transport'
 import { IMAGE_MEDIA_TYPE, openManagedImageFiles, type ManagedImageFiles } from './images/files'
@@ -32,6 +34,7 @@ import trayIconPath from '../../resources/tray-icon.png?asset'
 import { REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
 import { createReminderService } from './reminders/service'
 import { createReminderNotifier } from './reminders/notifier'
+import { applyZoom, zoomActionOf } from './zoom'
 
 /** Verified JSON API origin; the only destination for the selected browse credential. */
 const FORUM_API_ORIGIN = 'https://api.nmb.best'
@@ -84,10 +87,23 @@ const platform: AppPlatform = process.platform === 'darwin' || process.platform 
 /**
  * Application menu without the default Reload / Force Reload / Close Window accelerators:
  * Ctrl/Cmd+R refreshes the current content and Ctrl/Cmd+W closes the current tab inside the app.
- * Edit roles keep native copy/paste (required on macOS); zoom roles keep interface zoom.
+ * Edit roles keep native copy/paste (required on macOS). Zoom keys are handled in `before-input-event`
+ * (so `=`, `+` and the numpad all work); the menu only shows them.
  */
 function installMenu(): void {
-  const view: MenuItemConstructorOptions[] = [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }]
+  const zoomItem = (label: string, accelerator: string, action: ZoomAction): MenuItemConstructorOptions => ({
+    label,
+    accelerator,
+    registerAccelerator: false,
+    click: () => {
+      if (mainWindow) applyZoom(mainWindow.webContents, action)
+    }
+  })
+  const view: MenuItemConstructorOptions[] = [
+    zoomItem('实际大小', 'CommandOrControl+0', 'reset'),
+    zoomItem('放大', 'CommandOrControl+=', 'in'),
+    zoomItem('缩小', 'CommandOrControl+-', 'out')
+  ]
   if (rendererDevUrl) view.push({ type: 'separator' }, { role: 'toggleDevTools' })
   const template: MenuItemConstructorOptions[] = [
     ...(platform === 'darwin' ? [{ role: 'appMenu' } satisfies MenuItemConstructorOptions] : []),
@@ -120,11 +136,17 @@ function createWindow(): BrowserWindow {
   })
   // Windows/Linux keep the menu's accelerators but show no menu bar.
   if (platform !== 'darwin') window.setMenuBarVisibility(false)
-  // The close button asks / resides / quits; only the final exit lets a window close normally.
+  // Lifecycle owns close; zoom only consumes its own input events.
   window.on('close', (event) => {
     if (lifecycle === null || lifecycle.phase === 'exiting') return
     event.preventDefault()
     void lifecycle.closeRequested()
+  })
+  window.webContents.on('before-input-event', (event, input) => {
+    const action = zoomActionOf(input, platform)
+    if (action === null) return
+    event.preventDefault()
+    applyZoom(window.webContents, action)
   })
   if (rendererDevUrl) void window.loadURL(rendererDevUrl)
   else void window.loadFile(rendererFile)
@@ -350,6 +372,7 @@ async function start(): Promise<void> {
     reminders,
     lifecycle: controller,
     store: openedStore,
+    settings: createSettingsService(openedStore),
     getStatus: () => ({ storage: openedStore.status, platform }),
     async chooseSavePath(sender, suggestedName, format) {
       const window = BrowserWindow.fromWebContents(sender)
@@ -373,6 +396,7 @@ async function start(): Promise<void> {
       const result = window === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(window, options)
       return result.canceled ? null : (result.filePaths[0] ?? null)
     },
+    systemPrefersDark: () => nativeTheme.shouldUseDarkColors,
     isTrustedSender: (event: IpcMainInvokeEvent) =>
       mainWindow !== null &&
       event.sender === mainWindow.webContents &&

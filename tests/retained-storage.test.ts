@@ -7,6 +7,7 @@ import type { Post, ThreadPage } from '../src/shared/forum'
 import { StorageWriteRefusedError } from '../src/main/storage/contract'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS } from '../src/main/storage/migrations'
+import { DEFAULT_SETTINGS } from '../src/shared/settings'
 
 const t0 = '2026-10-24T00:00:00.000Z'
 const t1 = '2026-10-24T00:01:00.000Z'
@@ -143,9 +144,9 @@ describe('retained content storage', () => {
     db.saveThreadPage({ ...observed, head: post('100', false, '中'), replies: [post('101', false, '中')] }, t0)
     expect(db.getContentUsage().cacheTextBytes).toBe(asciiBytes + 8)
     db.setCacheLimit(250)
-    db.saveSettings({ newTabSplitDefault: false, closeAction: 'ask' })
+    db.saveSettings({ ...DEFAULT_SETTINGS, newTabSplitDefault: false })
     expect(db.getContentUsage().limitBytes).toBe(250)
-    expect(db.loadSettings()).toEqual({ newTabSplitDefault: false, closeAction: 'ask' })
+    expect(db.loadSettings()).toEqual({ ...DEFAULT_SETTINGS, newTabSplitDefault: false })
   })
 
   it('evicts the least recently loaded thread and counts shared feed/thread text only once', () => {

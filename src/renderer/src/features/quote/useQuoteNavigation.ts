@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import type { AppPlatform, QuoteLocation } from '../../../../shared/api'
 import type { ThreadId } from '../../../../shared/forum'
-import type { AppSettings } from '../../../../shared/reading'
+import type { AppSettings } from '../../../../shared/settings'
 import { isEditableTarget } from '../../app/shortcuts'
 import { openLayer } from '../../lib/layers'
 import type { ContentRegistry } from '../tabs/contentRegistry'

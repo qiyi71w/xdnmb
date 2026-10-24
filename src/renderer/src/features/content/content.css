@@ -89,7 +89,7 @@
 }
 
 .history-confirm .choice-row:hover {
-  background: oklch(0.47 0.15 27 / 0.06);
+  background: color-mix(in oklch, var(--danger-ink) 6%, transparent);
 }
 
 .history-confirm-actions {
@@ -415,4 +415,14 @@
 .limit-input {
   width: 9em;
   font-variant-numeric: tabular-nums;
+}
+
+/* Compact density: list and row padding only; text sizes stay. */
+:root[data-density='compact'] .retained-list {
+  gap: 4px;
+}
+
+:root[data-density='compact'] .retained-item {
+  gap: 6px 12px;
+  padding: 6px 10px;
 }

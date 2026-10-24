@@ -3,7 +3,7 @@ import type { AppPlatform } from '../../../../shared/api'
 import type { EditorId } from '../../../../shared/drafts'
 import type { LifecycleRequest } from '../../../../shared/lifecycle'
 import type { PublicationAttempt } from '../../../../shared/publication'
-import type { AppSettings } from '../../../../shared/reading'
+import type { AppSettings } from '../../../../shared/settings'
 import { matchShortcut } from '../../app/shortcuts'
 import { unsavedEditors, type Editor } from '../editor/editorsState'
 import { UnsavedEditorsDialog } from '../editor/UnsavedEditorsDialog'
@@ -221,8 +221,9 @@ export function LifecycleHost({
     }
   }, [closeModals, whenRestored, flush, settle, ask, store, buildWorkspace])
 
-  // App shortcuts (new tab, save, refresh…) act on the shell even behind a modal dialog; a running
-  // quit takes them all, before the app-level dispatcher, which skips prevented events.
+  // The app-level dispatcher skips shortcuts while a modal dialog covers the app; a running quit
+  // takes them all for its whole duration (dialog or not), before that dispatcher, which skips
+  // prevented events.
   const quitRunning = work !== null
   useLayoutEffect(() => {
     if (!quitRunning || platform === null) return

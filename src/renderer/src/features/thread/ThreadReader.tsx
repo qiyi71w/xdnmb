@@ -3,6 +3,7 @@ import type { Post, PostId, ReadingMode, ThreadId } from '../../../../shared/for
 import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, IdentitySettingsAction, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
+import { useCover } from '../../lib/appCovered'
 import { describeReadError, formatPageList, meaningfulTitle } from '../../lib/format'
 import { useNearEnd } from '../../lib/useNearEnd'
 import { NearViewport, type ImageView, type ViewerRequest } from '../image/imageView'
@@ -157,6 +158,7 @@ export function ThreadReader({
   const rules = useThreadRules(ruleThreads)
   /** The 提醒 panel floats over the top of the content: nothing is judged read while it is open. */
   const [reminderPanelOpen, setReminderPanelOpen] = useState(false)
+  useCover(reminderPanelOpen)
   useEffect(
     () => () => {
       near.disconnect()
@@ -187,7 +189,6 @@ export function ThreadReader({
     contentRef,
     toolbarRef,
     displayed,
-    covered: viewer !== null || reminderPanelOpen,
     canSave: !temporary,
     knownRead: readingState?.readPostIds ?? NO_POSTS,
     onRead,
@@ -314,6 +315,7 @@ export function ThreadReader({
 
   const parsedPage = /^\d+$/.test(pageInput.trim()) ? Number(pageInput.trim()) : NaN
   const pageValid = Number.isSafeInteger(parsedPage) && parsedPage >= 1
+  const pageInvalid = pageInput.trim() !== '' && !pageValid
   const onJump = (event: FormEvent) => {
     event.preventDefault()
     if (pageValid) goTo({ kind: 'page', page: parsedPage }, () => thread.jump(parsedPage))
@@ -427,11 +429,18 @@ export function ThreadReader({
                     placeholder={lastPage === undefined ? '1' : String(lastPage.page)}
                     value={pageInput}
                     onChange={(event) => setPageInput(event.target.value)}
-                    aria-invalid={pageInput.trim() !== '' && !pageValid ? true : undefined}
+                    aria-invalid={pageInvalid ? true : undefined}
+                    aria-describedby={pageInvalid ? `page-${entryKey}-${threadId}-error` : undefined}
                   />
                   <button type="submit" className="btn" disabled={!pageValid} aria-label="跳转到输入的页码">
                     跳转
                   </button>
+                  {pageInvalid && (
+                    <span className="page-jump-error" id={`page-${entryKey}-${threadId}-error`}>
+                      <Icon name="alert" size={13} />
+                      页码须为 1 以上的整数
+                    </span>
+                  )}
                 </form>
               </div>
               <button

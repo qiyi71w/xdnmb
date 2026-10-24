@@ -1,7 +1,7 @@
 import type { Worker, WorkerOptions } from 'node:worker_threads'
 import type { StorageStatus } from '../../shared/api'
 import type { ReadingMode, ThreadId } from '../../shared/forum'
-import { DEFAULT_SETTINGS } from '../../shared/reading'
+import { DEFAULT_SETTINGS } from '../../shared/settings'
 import { StorageWriteRefusedError } from './contract'
 import type { AppStore } from './contract'
 import { computeCoverage } from './coverage'

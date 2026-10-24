@@ -4,7 +4,7 @@ import type { RetainedList } from '../../../shared/content'
 import { sameTarget, type DraftId, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
 import type { FeedRef, ThreadId, ThreadSummary } from '../../../shared/forum'
 import type { WorkspaceLoadResult } from '../../../shared/lifecycle'
-import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/reading'
+import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/settings'
 import { Icon } from '../components/Icon'
 import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/directory/feeds'
 import { Navigation, NavMeasure } from '../features/directory/Navigation'
@@ -46,13 +46,16 @@ import {
   type ThreadOpen
 } from '../features/tabs/tabsState'
 import { parseWorkspace, type Workspace } from '../features/tabs/workspaceSnapshot'
+import { AppCoveredContext, useCoverageScope } from '../lib/appCovered'
 import { meaningfulTitle } from '../lib/format'
+import { useAppearance } from '../lib/useAppearance'
 import { usePopover } from '../lib/usePopover'
+import { SettingsDialog } from './SettingsDialog'
 import { isEditableTarget, matchShortcut, type ShortcutAction } from './shortcuts'
 import { TabView } from './TabView'
 import { TopBar } from './TopBar'
 import { SettingsOpenerContext } from '../lib/settingsOpener'
-import { SettingsDialog } from './SettingsDialog'
+import { useSettingsWriter } from './useSettingsWriter'
 import './layout.css'
 
 function StorageBanner({ storage }: { storage: StorageStatus | null }) {
@@ -122,6 +125,8 @@ export function App() {
   const [storage, setStorage] = useState<StorageStatus | null>(null)
   const [platform, setPlatform] = useState<AppPlatform | null>(null)
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
+  useAppearance(settings)
+  const settingsWriter = useSettingsWriter(settings, setSettings)
   const [tabs, dispatch] = useReducer(shellReducer, null)
   const registry = useMemo(createContentRegistry, [])
   const directory = useDirectory()
@@ -141,14 +146,8 @@ export function App() {
         : { unread: reminderOverview.totalUnread, coverageProblem: overviewHasCoverageProblem(reminderOverview) },
     [reminderOverview]
   )
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const openSettings = useCallback(() => setSettingsOpen(true), [])
-  const closeSettings = useCallback(() => {
-    setSettingsOpen(false)
-    // UUID, binding or source may have changed inside settings.
-    void refreshSubscriptions()
-    void refreshSubscriptionJournal()
-  }, [refreshSubscriptions, refreshSubscriptionJournal])
+  /** The app's coverage scope: every modal dialog (`Modal`) covers it while open. */
+  const coverage = useCoverageScope()
   const [draftsOpen, setDraftsOpen] = useState(false)
   const closeDrafts = useCallback(() => setDraftsOpen(false), [])
   const [retained, setRetained] = useState<RetainedList | null>(null)
@@ -262,9 +261,9 @@ export function App() {
   }, [navOverlay, closeNav])
 
   // ---------- Navigation actions ----------
-  const stateRef = useRef({ tabs, settings, singlePane: layout.singlePane, closing })
+  const stateRef = useRef({ tabs, settings, singlePane: layout.singlePane, closing, covered: coverage.covered })
   useLayoutEffect(() => {
-    stateRef.current = { tabs, settings, singlePane: layout.singlePane, closing }
+    stateRef.current = { tabs, settings, singlePane: layout.singlePane, closing, covered: coverage.covered }
   })
   const pendingTabFocus = useRef(false)
 
@@ -352,6 +351,26 @@ export function App() {
       alive = false
     }
   }, [restored, reopenDrafts, registry])
+
+  // ---------- Settings dialog ----------
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  /** Focus target when whatever opened the dialog (button, navigation, Ctrl/Cmd+, from anywhere) is gone. */
+  const settingsButtonRef = useRef<HTMLButtonElement>(null)
+  const { clearStatus: clearSettingsStatus } = settingsWriter
+
+  const openSettings = useCallback(() => {
+    // The dialog becomes the only layer: an open navigation overlay closes first.
+    closeNav(false)
+    clearSettingsStatus()
+    setSettingsOpen(true)
+  }, [closeNav, clearSettingsStatus])
+
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false)
+    // UUID, binding or source may have changed inside settings.
+    void refreshSubscriptions()
+    void refreshSubscriptionJournal()
+  }, [refreshSubscriptions, refreshSubscriptionJournal])
 
   /** Before leaving an entry that shows a thread, remember its mode and anchor in the entry. */
   const leave = useCallback(
@@ -679,11 +698,12 @@ export function App() {
 
   /**
    * Ctrl/Cmd+S: the editor holding focus, else the expanded editor the active tab shows (reader
-   * before list). Nothing while a modal dialog or the active tab's image viewer is open.
+   * before list). Nothing while the active tab's image viewer is open (the dispatcher already skips
+   * every shortcut behind a modal dialog).
    */
   const saveCurrent = useCallback(() => {
     const state = stateRef.current.tabs
-    if (state === null || document.querySelector('dialog[open]') !== null) return
+    if (state === null) return
     const tab = activeTab(state)
     if (document.getElementById(`tabpanel-${tab.id}`)?.querySelector('.image-viewer') != null) return
     const editorsState = currentEditors()
@@ -734,16 +754,14 @@ export function App() {
   useLayoutEffect(() => {
     actions.current = {
       'new-tab': newTab,
-      // Not behind a modal dialog (e.g. the PO identity question holding a send).
-      'close-tab': () => {
-        if (document.querySelector('dialog[open]') === null) withActive((tab) => closeTab(tab.id))
-      },
+      'close-tab': () => withActive((tab) => closeTab(tab.id)),
       'next-tab': () => dispatch({ type: 'cycle', delta: 1 }),
       'previous-tab': () => dispatch({ type: 'cycle', delta: -1 }),
       refresh,
       save: saveCurrent,
       back: goBack,
-      forward: goForward
+      forward: goForward,
+      'open-settings': openSettings
     }
   })
 
@@ -753,8 +771,11 @@ export function App() {
       if (event.defaultPrevented || event.isComposing) return
       const action = matchShortcut(event, platform)
       if (action === null) return
+      // Text fields keep their editing keys (history keys); Ctrl/Cmd+, is not one and works there too.
       if ((action === 'back' || action === 'forward') && isEditableTarget(event.target)) return
       event.preventDefault()
+      // A modal dialog over the app is the only layer: shortcuts never act on the tabs behind it.
+      if (stateRef.current.covered) return
       if (event.repeat && action !== 'next-tab' && action !== 'previous-tab' && action !== 'back' && action !== 'forward') return
       actions.current?.[action]()
     }
@@ -802,6 +823,7 @@ export function App() {
   const promptEditor = editors.state.editors.find((editor) => editor.publication?.phase === 'prompt')
 
   return (
+    <AppCoveredContext value={coverage}>
     <SettingsOpenerContext value={openSettings}>
       <EditorWorkspaceContext value={editorWorkspace}>
       <SubscriptionsContext value={subscriptions}>
@@ -865,7 +887,7 @@ export function App() {
                       onActivate={activate}
                       onClose={closeTab}
                       onNewTab={newTab}
-                      onOpenSettings={openSettings}
+                      settingsTrigger={{ ref: settingsButtonRef, expanded: settingsOpen, onOpen: openSettings }}
                     />
                     <div className="tab-host">
                       {tabs.tabs.map((tab) => (
@@ -924,8 +946,12 @@ export function App() {
               identities={identities}
               subscriptions={subscriptions}
               settings={settings}
-              onSettingsChange={setSettings}
+              platform={platform}
+              status={settingsWriter.status}
+              write={settingsWriter.write}
+              adopt={settingsWriter.adopt}
               onClose={closeSettings}
+              fallbackFocus={() => settingsButtonRef.current}
             />
           )}
           {draftsOpen && (
@@ -997,5 +1023,6 @@ export function App() {
       </SubscriptionsContext>
       </EditorWorkspaceContext>
     </SettingsOpenerContext>
+    </AppCoveredContext>
   )
 }

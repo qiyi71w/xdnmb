@@ -14,9 +14,8 @@ import type {
   ThreadId,
   ThreadPage
 } from '../../shared/forum'
-import { DEFAULT_SETTINGS } from '../../shared/reading'
-import { CLOSE_ACTIONS, type CloseAction } from '../../shared/lifecycle'
-import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, SavedPosition, ThreadReadingState } from '../../shared/reading'
+import type { AttentionSource, AttentionState, ReadingAnchor, SavedPosition, ThreadReadingState } from '../../shared/reading'
+import { DEFAULT_SETTINGS, settingsFromStored, type AppSettings } from '../../shared/settings'
 import type { ImageFormat, ImageKind } from '../../shared/images'
 import { IDENTITY_ROLES } from '../../shared/identity'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
@@ -777,16 +776,19 @@ class SqliteReadingDatabase implements ReadingDatabase {
     return row?.post_id ?? null
   }
 
+  /** Each stored value is validated again; an unreadable or invalid value falls back to its default. */
   loadSettings(): AppSettings {
     if (!this.db) return { ...DEFAULT_SETTINGS }
     const rows = this.db.prepare<[], { key: string; value_json: string }>('SELECT key, value_json FROM settings').all()
-    const settings: AppSettings = { ...DEFAULT_SETTINGS }
+    const stored = new Map<string, unknown>()
     for (const row of rows) {
-      const value: unknown = JSON.parse(row.value_json)
-      if (row.key === 'newTabSplitDefault' && typeof value === 'boolean') settings.newTabSplitDefault = value
-      if (row.key === 'closeAction' && CLOSE_ACTIONS.includes(value as CloseAction)) settings.closeAction = value as CloseAction
+      try {
+        stored.set(row.key, JSON.parse(row.value_json))
+      } catch {
+        // Corrupt row: its default applies.
+      }
     }
-    return settings
+    return settingsFromStored(stored)
   }
 
   saveSettings(settings: AppSettings): void {

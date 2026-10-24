@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { useCover } from '../lib/appCovered'
 import { openLayer } from '../lib/layers'
 import { Icon } from './Icon'
 import './modal.css'
@@ -9,7 +10,8 @@ const FOCUSABLE =
 /**
  * Modal dialog: mount it to open (`showModal`), unmount it to close. Focus returns to whatever
  * had it when the dialog opened, or to `fallbackFocus` when that control is gone. Tab stays
- * inside; Esc asks `onClose`, which may ignore it (e.g. while an action runs).
+ * inside; Esc asks `onClose`, which may ignore it (e.g. while an action runs). While mounted it
+ * covers the whole app: nothing behind it is judged read.
  */
 export function Modal({
   className,
@@ -31,6 +33,7 @@ export function Modal({
   useLayoutEffect(() => {
     fallback.current = fallbackFocus
   })
+  useCover(true, 'app')
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current

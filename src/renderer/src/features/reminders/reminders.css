@@ -569,3 +569,18 @@
   flex: none;
   margin-top: 2px;
 }
+
+/* Compact density: list and row padding only; text sizes stay. */
+:root[data-density='compact'] .reminder-groups {
+  gap: 4px;
+  padding: 4px 6px 0;
+}
+
+:root[data-density='compact'] .reminder-group {
+  gap: 4px;
+  padding: 6px 10px;
+}
+
+:root[data-density='compact'] .reminder-open-row {
+  padding: 4px 8px;
+}

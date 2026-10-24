@@ -23,12 +23,12 @@ export function TopBar({
   canForward,
   splitToggle,
   navTrigger,
+  settingsTrigger,
   onBack,
   onForward,
   onActivate,
   onClose,
-  onNewTab,
-  onOpenSettings
+  onNewTab
 }: {
   tabs: readonly Tab[]
   activeId: number
@@ -41,17 +41,19 @@ export function TopBar({
   /** Shown only for list entries. */
   splitToggle: { pressed: boolean; onToggle: () => void } | null
   navTrigger: { ref: RefObject<HTMLButtonElement | null>; expanded: boolean; onToggle: () => void } | null
+  /** Opens the settings dialog (also Ctrl/Cmd+,); focus returns to the opener when it closes. */
+  settingsTrigger: { ref: RefObject<HTMLButtonElement | null>; expanded: boolean; onOpen: () => void }
   onBack: () => void
   onForward: () => void
   onActivate: (tabId: number) => void
   onClose: (tabId: number) => void
   onNewTab: () => void
-  onOpenSettings: () => void
 }) {
   const stripRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    stripRef.current?.querySelector(`#tab-${activeId}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    // Instant on purpose: no smooth scrolling (reduced motion), the selected tab is simply brought into view.
+    stripRef.current?.querySelector(`#tab-${activeId}`)?.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'nearest' })
   }, [activeId, tabs.length])
 
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -168,12 +170,14 @@ export function TopBar({
         <Icon name="plus" />
       </button>
       <button
+        ref={settingsTrigger.ref}
         type="button"
         className="icon-btn"
         aria-label="设置"
-        title="设置"
+        title={withShortcut('设置', shortcutLabel('open-settings', platform))}
         aria-haspopup="dialog"
-        onClick={onOpenSettings}
+        aria-expanded={settingsTrigger.expanded}
+        onClick={settingsTrigger.onOpen}
       >
         <Icon name="settings" />
       </button>

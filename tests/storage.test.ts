@@ -13,6 +13,7 @@ import { openReadingDatabase } from '../src/main/storage/database'
 import type { ReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS } from '../src/main/storage/migrations'
 import { openReadingStore } from '../src/main/storage/store'
+import { DEFAULT_SETTINGS } from '../src/shared/settings'
 import { MIGRATIONS as PUBLICATION_MIGRATIONS } from './fixtures/lifecycle-v7'
 
 const fetchedAt = '2026-10-23T08:00:00.000Z'
@@ -512,10 +513,10 @@ describe('reading context', () => {
   it('defaults new tabs to split and the close button to asking, and persists both settings', () => {
     const path = databasePath()
     const db = open(path)
-    expect(db.loadSettings()).toEqual({ newTabSplitDefault: true, closeAction: 'ask' })
-    db.saveSettings({ newTabSplitDefault: false, closeAction: 'background' })
+    expect(db.loadSettings()).toEqual(DEFAULT_SETTINGS)
+    db.saveSettings({ ...DEFAULT_SETTINGS, newTabSplitDefault: false, closeAction: 'background', density: 'compact', colorScheme: 'dark' })
     db.close()
-    expect(open(path).loadSettings()).toEqual({ newTabSplitDefault: false, closeAction: 'background' })
+    expect(open(path).loadSettings()).toEqual({ ...DEFAULT_SETTINGS, newTabSplitDefault: false, closeAction: 'background', density: 'compact', colorScheme: 'dark' })
   })
 })
 

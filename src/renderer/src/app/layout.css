@@ -70,8 +70,10 @@
 
 /* ---------- Top bar ---------- */
 
+/* Wraps when narrow (200% zoom): the tab strip then takes its own line instead of being squeezed. */
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   min-width: 0;
@@ -111,7 +113,7 @@
 }
 
 .tab-strip {
-  flex: 1;
+  flex: 1 1 160px;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -183,8 +185,8 @@
   flex: none;
   display: inline-grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   margin-right: 4px;
   border: 0;
   border-radius: var(--radius-s);
@@ -219,6 +221,28 @@
   color: var(--ink-3);
 }
 
+/* Compact density: tab strip and top bar padding only (targets stay ≥ 24 px, text unchanged). */
+:root[data-density='compact'] .topbar {
+  padding: 5px 8px 4px;
+}
+
+:root[data-density='compact'] .tab-strip {
+  gap: 2px;
+}
+
+:root[data-density='compact'] .tab-button {
+  min-height: 26px;
+  padding: 2px 4px 2px 8px;
+}
+
+:root[data-density='compact'] .tab-close {
+  margin-right: 2px;
+}
+
+:root[data-density='compact'] .btn-back-quote {
+  min-height: 26px;
+  padding: 1px 8px 1px 6px;
+}
 /* ---------- Tab content ---------- */
 
 .tab-host {

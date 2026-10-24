@@ -12,7 +12,8 @@ import type {
   ThreadPage
 } from '../../shared/forum'
 import type { ImageFormat, ImageKind } from '../../shared/images'
-import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, ThreadReadingState } from '../../shared/reading'
+import type { AttentionSource, AttentionState, ReadingAnchor, ThreadReadingState } from '../../shared/reading'
+import type { AppSettings } from '../../shared/settings'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
 import type { AttachmentId, DraftId, DraftSaveInput, PostFields, PostTarget } from '../../shared/drafts'
 import type { ContentStore } from './content-contract'

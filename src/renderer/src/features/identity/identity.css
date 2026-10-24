@@ -1,14 +1,3 @@
-.settings-section {
-  display: grid;
-  gap: 14px;
-}
-
-.settings-section-title {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 650;
-}
-
 .settings-group {
   display: grid;
   gap: 6px;
@@ -82,8 +71,9 @@
   outline-offset: 0;
 }
 
+/* Invalid fields: thicker border plus a written reason or an issue list, not color alone. */
 .text-input[aria-invalid='true'] {
-  border-color: var(--danger-ink);
+  border: 2px solid var(--danger-ink);
 }
 
 .select-input.is-warning {

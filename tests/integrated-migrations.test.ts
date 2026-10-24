@@ -7,6 +7,7 @@ import type { Post, ThreadPage } from '../src/shared/forum'
 import type { SubscriptionObservation, SubscriptionOperation, SubscriptionPlan } from '../src/shared/subscriptions'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS } from '../src/main/storage/migrations'
+import { DEFAULT_SETTINGS } from '../src/shared/settings'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 import { createSubscriptionService } from '../src/main/subscriptions/service'
 import { asStore } from './helpers/store'
@@ -182,7 +183,7 @@ describe('combined predecessor migration', () => {
     expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
     expect(db.loadCredentialCiphertext('7')).toEqual(ciphertext)
     expect(db.loadRoleSelections()['web-sync']).toEqual({ state: 'selected', credentialId: '7' })
-    expect(db.loadSettings()).toEqual({ newTabSplitDefault: false, closeAction: 'ask' })
+    expect(db.loadSettings()).toEqual({ ...DEFAULT_SETTINGS, newTabSplitDefault: false })
     expect(db.loadThreadPage('100', 'all', 1)?.value.replies).toEqual([post('101')])
     expect(db.findPostThread('101')).toEqual({ threadId: '100', isHead: false, preferredMode: 'po', pages: { all: 1, po: null } })
     expect(db.getReadingState('100')).toMatchObject({ mode: 'po', readPostIds: ['101'],
