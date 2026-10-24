@@ -24,6 +24,9 @@ import type { Lifecycle } from './lifecycle/controller'
 import { REMINDERS_CHANGED_CHANNEL } from '../shared/reminders'
 import type { ReminderService } from './reminders/service'
 import { applyZoom, currentZoom } from './zoom'
+import type { SearchService } from './search/service'
+import type { ContentFilters, SearchScope } from '../shared/search'
+import { serverCalendarDate } from '../shared/search-filters'
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
@@ -46,6 +49,7 @@ class InvalidRequestError extends Error {
 
 interface IpcDeps {
   content: ContentService
+  search: SearchService
   reading: ReadingService
   images: ImageService
   store: AppStore
@@ -70,6 +74,34 @@ interface IpcDeps {
 function record(input: unknown): Record<string, unknown> {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) throw new InvalidRequestError()
   return input as Record<string, unknown>
+}
+
+function searchRecord(raw: unknown, keys: string[]): Record<string, unknown> {
+  const input = record(raw)
+  if (Object.keys(input).length !== keys.length || keys.some((key) => !Object.hasOwn(input, key))) throw new InvalidRequestError()
+  return input
+}
+
+function searchFilters(raw: unknown): ContentFilters {
+  const input = searchRecord(raw, ['forumId', 'fromDate', 'toDate', 'image'])
+  const date = (value: unknown): string | null => {
+    if (value === null) return null
+    if (typeof value !== 'string' || value.length !== 10 || serverCalendarDate(value) !== value) throw new InvalidRequestError()
+    return value
+  }
+  if (input.image !== 'any' && input.image !== 'with' && input.image !== 'without') throw new InvalidRequestError()
+  const fromDate = date(input.fromDate)
+  const toDate = date(input.toDate)
+  if (fromDate !== null && toDate !== null && fromDate > toDate) throw new InvalidRequestError()
+  return { forumId: input.forumId === null ? null : forumId(input.forumId), fromDate, toDate, image: input.image }
+}
+
+function searchScope(raw: unknown): SearchScope {
+  const input = record(raw)
+  if (input.kind === 'local') { searchRecord(input, ['kind']); return { kind: 'local' } }
+  if (input.kind !== 'thread') throw new InvalidRequestError()
+  searchRecord(input, ['kind', 'threadId', 'mode'])
+  return { kind: 'thread', threadId: forumId(input.threadId), mode: readingMode(input.mode) }
 }
 
 function operationId(input: Record<string, unknown>): string {
@@ -243,7 +275,7 @@ export interface IpcRegistration {
 }
 
 export function registerIpc({
-  reading, images, identities, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings,
+  reading, images, identities, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search,
   getStatus, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): IpcRegistration {
   const operations = new OperationRegistry()
@@ -270,6 +302,26 @@ export function registerIpc({
       return handler(event, input)
     })
   }
+
+  handle(IpcChannel.searchStart, async (event, raw) => {
+    const input = searchRecord(raw, ['operationId', 'query', 'scope', 'filters'])
+    if (typeof input.query !== 'string' || input.query.length === 0 || input.query.length > 512 || input.query.includes('\0')) throw new InvalidRequestError()
+    return search.forOwner(String(event.sender.id)).start({ operationId: operationId(input), query: input.query,
+      scope: searchScope(input.scope), filters: searchFilters(input.filters) })
+  })
+  handle(IpcChannel.searchNext, async (event, raw) => search.forOwner(String(event.sender.id)).next({ operationId: operationId(searchRecord(raw, ['operationId'])) }))
+  handle(IpcChannel.searchCancel, async (event, raw) => search.forOwner(String(event.sender.id)).cancel({ operationId: operationId(searchRecord(raw, ['operationId'])) }))
+  handle(IpcChannel.searchFetchThread, async (event, raw) => {
+    const input = searchRecord(raw, ['operationId', 'threadId'])
+    return search.forOwner(String(event.sender.id)).fetchThread({ operationId: operationId(input), threadId: forumId(input.threadId) })
+  })
+  handle(IpcChannel.searchFetchStatus, async (event, raw) => search.forOwner(String(event.sender.id)).fetchStatus({ operationId: operationId(searchRecord(raw, ['operationId'])) }))
+  handle(IpcChannel.searchRebuild, async (event, raw) => search.forOwner(String(event.sender.id)).rebuild({ operationId: operationId(searchRecord(raw, ['operationId'])) }))
+  handle(IpcChannel.searchThreadMetadata, async (event, raw) => {
+    const input = searchRecord(raw, ['threadIds'])
+    if (!Array.isArray(input.threadIds) || input.threadIds.length > 200) throw new InvalidRequestError()
+    return search.forOwner(String(event.sender.id)).threadMetadata({ threadIds: input.threadIds.map(forumId) })
+  })
 
   const enforceQuota = () => { void content.enforceQuota().catch(() => console.error('[content] cleanup failed')) }
   const boolean = (value: unknown): boolean => {
@@ -703,6 +755,7 @@ export function registerIpc({
       operations.cancelAllFor(sender)
       subscriptionReads.cancelAllFor(sender)
       publication.releasePrompts()
+      search.releaseOwner(String(sender.id))
       void images.releaseOwner(String(sender.id))
       void drafts.releaseOwner(String(sender.id))
       void content.releaseOwner(String(sender.id)).catch(() => undefined)

@@ -10,6 +10,8 @@ export type ShortcutAction =
   | 'back'
   | 'forward'
   | 'open-settings'
+  | 'search-thread'
+  | 'search-local'
 
 export interface KeyInput {
   key: string
@@ -27,14 +29,17 @@ function letterOf(event: KeyInput): string | null {
 }
 
 /**
- * App shortcuts (spec I11). macOS: Cmd+T/W/R/S, Cmd+, , Control+Tab, Cmd+[ / Cmd+]. Windows/Linux:
- * Ctrl+T/W/R/S, Ctrl+, , Ctrl+Tab, Alt+Left / Alt+Right. Backspace is never “back”. Zoom keys
- * (Ctrl/Cmd + = / - / 0) are handled by the main process before the page sees them.
+ * App shortcuts (spec I11). macOS: Cmd+T/W/R/S, Cmd+, , Control+Tab, Cmd+[ / Cmd+], Cmd+F /
+ * Cmd+Shift+F. Windows/Linux: Ctrl+T/W/R/S, Ctrl+, , Ctrl+Tab, Alt+Left / Alt+Right, Ctrl+F /
+ * Ctrl+Shift+F. Backspace is never “back”. Zoom keys (Ctrl/Cmd + = / - / 0) are handled by the main
+ * process before the page sees them.
  */
 export function matchShortcut(event: KeyInput, platform: AppPlatform): ShortcutAction | null {
   if (event.key === 'Tab' && event.ctrlKey && !event.metaKey && !event.altKey) {
     return event.shiftKey ? 'previous-tab' : 'next-tab'
   }
+  const primary = platform === 'darwin' ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
+  if (primary && !event.altKey && letterOf(event) === 'f') return event.shiftKey ? 'search-local' : 'search-thread'
   if (platform === 'darwin') {
     if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return null
     if (event.key === '[' || event.code === 'BracketLeft') return 'back'
@@ -78,7 +83,9 @@ const LABELS: Record<ShortcutAction, { mac: string; other: string }> = {
   save: { mac: '⌘S', other: 'Ctrl+S' },
   back: { mac: '⌘[', other: 'Alt+←' },
   forward: { mac: '⌘]', other: 'Alt+→' },
-  'open-settings': { mac: '⌘,', other: 'Ctrl+,' }
+  'open-settings': { mac: '⌘,', other: 'Ctrl+,' },
+  'search-thread': { mac: '⌘F', other: 'Ctrl+F' },
+  'search-local': { mac: '⌘⇧F', other: 'Ctrl+Shift+F' }
 }
 
 /** Shortcut shown in tooltips; empty until the platform is known. */

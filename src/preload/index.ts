@@ -40,6 +40,15 @@ const api: XidaoApi = {
       return () => { reminderOpenListeners.delete(listener) }
     }
   },
+  search: {
+    start: (input) => ipcRenderer.invoke(IpcChannel.searchStart, input),
+    next: (input) => ipcRenderer.invoke(IpcChannel.searchNext, input),
+    cancel: (input) => ipcRenderer.invoke(IpcChannel.searchCancel, input),
+    fetchThread: (input) => ipcRenderer.invoke(IpcChannel.searchFetchThread, input),
+    fetchStatus: (input) => ipcRenderer.invoke(IpcChannel.searchFetchStatus, input),
+    rebuild: (input) => ipcRenderer.invoke(IpcChannel.searchRebuild, input),
+    threadMetadata: (input) => ipcRenderer.invoke(IpcChannel.searchThreadMetadata, input)
+  },
   content: {
     list: (input) => ipcRenderer.invoke(IpcChannel.listRetained, input),
     favorite: (input) => ipcRenderer.invoke(IpcChannel.favorite, input),

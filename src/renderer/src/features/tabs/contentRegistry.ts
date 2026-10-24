@@ -1,8 +1,10 @@
 import { createContext, useContext, useEffect, useRef } from 'react'
-import type { ThreadId } from '../../../../shared/forum'
+import type { RetainedList } from '../../../../shared/content'
+import type { ReadingMode, ThreadId } from '../../../../shared/forum'
 import { createFavoriteWrites, type FavoriteWrites } from '../content/favoriteWrites'
 import { createReadingResets, type ReadingResets } from '../content/readingResets'
 import type { FeedState } from '../feed/feedState'
+import type { ListFilters } from '../search/listFilters'
 import type { SubscriptionListState } from '../subscriptions/subscriptionListState'
 import type { TabsState, ThreadSnapshot, ThreadTarget } from './tabsState'
 import { MAX_LIST_PAGES, type WorkspaceList } from './workspaceSnapshot'
@@ -17,6 +19,8 @@ export interface ReaderHandle {
    * post is visible in its viewport, highlights it and returns true (no navigation needed).
    */
   showInPlace(threadId: ThreadId, target: ThreadTarget): boolean
+  /** Thread and mode on screen now (a temporary target mode included), for 串内搜索. */
+  shown(): { threadId: ThreadId; mode: ReadingMode; title: string | null }
 }
 
 export interface ListHandle {
@@ -24,11 +28,18 @@ export interface ListHandle {
 }
 
 /**
- * What a list entry has while mounted or in navigation history, discriminated by its source.
+ * What a list entry has while mounted or in navigation history, discriminated by its source, with
+ * the filters of the feed and subscription lists.
  */
 export type ListMemory =
-  | { kind: 'feed'; state: FeedState; scrollTop: number; anchor: WorkspaceList['anchor'] }
-  | { kind: 'subscriptions'; state: SubscriptionListState; scrollTop: number; view: 'list' | 'reconcile' }
+  | { kind: 'feed'; state: FeedState; scrollTop: number; anchor: WorkspaceList['anchor']; filters: ListFilters }
+  | {
+      kind: 'subscriptions'
+      state: SubscriptionListState
+      scrollTop: number
+      view: 'list' | 'reconcile'
+      filters: ListFilters
+    }
   /** The 提醒 list reads its overview again on mount; only where it was scrolled is kept. */
   | { kind: 'reminders'; scrollTop: number }
 
@@ -37,7 +48,8 @@ export type ListMemory =
  * memory of lists that are not mounted (split toggled, single pane, back/forward). Memory lives
  * only while the app runs; the shell drops it when its entry leaves every tab's history.
  * `readingResets` tells open readers that their thread's reading data was cleared; `favorites`
- * keeps every mounted 收藏 entry point on the last successfully written state.
+ * keeps every mounted 收藏 entry point on the last successfully written state; `retainedFilters`
+ * keeps the filters of each 收藏／历史／离线 list while the app runs.
  * `savedLists` is list context restored from the last quit for lists not shown again yet: a list
  * consumes its own once it has read its pages again and placed its position, or was refreshed.
  */
@@ -48,10 +60,19 @@ export interface ContentRegistry {
   readingResets: ReadingResets
   favorites: FavoriteWrites
   savedLists: Map<number, WorkspaceList>
+  retainedFilters: Map<RetainedList, ListFilters>
 }
 
 export function createContentRegistry(): ContentRegistry {
-  return { readers: new Map(), lists: new Map(), listMemory: new Map(), readingResets: createReadingResets(), favorites: createFavoriteWrites(), savedLists: new Map() }
+  return {
+    readers: new Map(),
+    lists: new Map(),
+    listMemory: new Map(),
+    readingResets: createReadingResets(),
+    favorites: createFavoriteWrites(),
+    savedLists: new Map(),
+    retainedFilters: new Map()
+  }
 }
 
 /**

@@ -30,6 +30,10 @@ import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/lay
 import { QuoteCard } from '../features/quote/QuoteCard'
 import { QuoteActiveContext, QuoteControllerContext } from '../features/quote/QuoteContext'
 import { useQuoteNavigation } from '../features/quote/useQuoteNavigation'
+import { SearchOpenerContext, type SearchRequest } from '../features/search/SearchContext'
+import { SearchSheet } from '../features/search/SearchSheet'
+import { tabSearchOf } from '../features/search/searchState'
+import { useSearch } from '../features/search/useSearch'
 import { captureLists, ContentRegistryContext, createContentRegistry } from '../features/tabs/contentRegistry'
 import {
   activeTab,
@@ -51,7 +55,7 @@ import { meaningfulTitle } from '../lib/format'
 import { useAppearance } from '../lib/useAppearance'
 import { usePopover } from '../lib/usePopover'
 import { SettingsDialog } from './SettingsDialog'
-import { isEditableTarget, matchShortcut, type ShortcutAction } from './shortcuts'
+import { isEditableTarget, matchShortcut, shortcutLabel, type ShortcutAction } from './shortcuts'
 import { TabView } from './TabView'
 import { TopBar } from './TopBar'
 import { SettingsOpenerContext } from '../lib/settingsOpener'
@@ -261,9 +265,11 @@ export function App() {
   }, [navOverlay, closeNav])
 
   // ---------- Navigation actions ----------
-  const stateRef = useRef({ tabs, settings, singlePane: layout.singlePane, closing, covered: coverage.covered })
+  const stateRef = useRef({ tabs, settings, singlePane: layout.singlePane, closing, covered: coverage.covered, searchOpen: false })
   useLayoutEffect(() => {
-    stateRef.current = { tabs, settings, singlePane: layout.singlePane, closing, covered: coverage.covered }
+    // `search` is created below (it reads this ref); this runs after the render that created it.
+    const searchOpen = tabs !== null && search.state.openTab === tabs.activeId
+    stateRef.current = { tabs, settings, singlePane: layout.singlePane, closing, covered: coverage.covered, searchOpen }
   })
   const pendingTabFocus = useRef(false)
 
@@ -372,6 +378,20 @@ export function App() {
     void refreshSubscriptionJournal()
   }, [refreshSubscriptions, refreshSubscriptionJournal])
 
+  // ---------- Local / thread search ----------
+  /** Tab whose reader takes focus after a search hit was opened in it. */
+  const pendingReaderFocus = useRef<number | null>(null)
+  const search = useSearch({
+    tabs,
+    getTabs: () => stateRef.current.tabs,
+    dispatch,
+    registry,
+    onCommitted: (tabId) => {
+      pendingReaderFocus.current = tabId
+    }
+  })
+  const { commands: searchCommands } = search
+
   /** Before leaving an entry that shows a thread, remember its mode and anchor in the entry. */
   const leave = useCallback(
     (tab: Tab) => {
@@ -478,10 +498,14 @@ export function App() {
     () =>
       withActive((tab) => {
         if (tab.index === 0) return
+        const fromSearch = currentEntry(tab).origin === 'search'
+        const sourceKey = (tab.entries[tab.index - 1] as TabEntry).key
         leave(tab)
         dispatch({ type: 'back', tabId: tab.id })
+        // 返回搜索结果: the source entry comes back with the search it had when the hit was opened.
+        if (fromSearch) searchCommands.returnTo(tab.id, sourceKey)
       }),
-    [withActive, leave]
+    [withActive, leave, searchCommands]
   )
 
   const goForward = useCallback(
@@ -686,8 +710,9 @@ export function App() {
     setOwnPostsOpen(false)
     setClosing(null)
     setRetained(null)
+    searchCommands.close()
     quote.cardProps?.onClose()
-  }, [closeNav, quote.cardProps])
+  }, [closeNav, searchCommands, quote.cardProps])
 
   /** Opens a target from 发送记录 / 我的发言 in a new tab (global split default), to read or check it. */
   const openTargetInTab = useCallback((target: PostTarget) => {
@@ -749,6 +774,50 @@ export function App() {
     }
   }, [activeId, tabs])
 
+  // An opened search hit: its new reader takes focus (the sheet that had it is gone).
+  useLayoutEffect(() => {
+    const tabId = pendingReaderFocus.current
+    if (tabId === null) return
+    pendingReaderFocus.current = null
+    document.getElementById(`tabpanel-${tabId}`)?.querySelector<HTMLElement>('main.reader-wrap:not([hidden])')?.focus({ preventScroll: true })
+  }, [tabs])
+
+  /**
+   * Search of the active tab. `thread` searches the thread its reader shows, starting in the mode
+   * it is shown in; `local` everything retained. Its entry points are inert or skipped (shortcuts)
+   * while another modal dialog covers the app; with the sheet itself open it switches its view.
+   */
+  const openSearch = useCallback(
+    (request: SearchRequest) => {
+      closeNav(false)
+      withActive((tab) => {
+        if (request.view === 'local') {
+          searchCommands.open(tab.id, { view: 'local' })
+          return
+        }
+        if (currentEntry(tab).key !== request.entryKey) return
+        searchCommands.open(tab.id, { view: 'thread', scope: { threadId: request.threadId, mode: request.mode, title: request.title } })
+      })
+    },
+    [closeNav, withActive, searchCommands]
+  )
+
+  const openLocalSearch = useCallback(() => openSearch({ view: 'local' }), [openSearch])
+
+  /** Ctrl/Cmd+F: the thread on screen, else everything retained. */
+  const searchShownThread = useCallback(
+    () =>
+      withActive((tab) => {
+        const entry = currentEntry(tab)
+        const shown =
+          entry.thread !== null && readerShown(tab, entry, stateRef.current.singlePane)
+            ? (registry.readers.get(entry.key)?.current.shown() ?? null)
+            : null
+        openSearch(shown === null ? { view: 'local' } : { view: 'thread', entryKey: entry.key, ...shown })
+      }),
+    [withActive, registry, openSearch]
+  )
+
   // ---------- Keyboard (spec I11): one app-level dispatcher ----------
   const actions = useRef<Record<ShortcutAction, () => void> | null>(null)
   useLayoutEffect(() => {
@@ -761,7 +830,9 @@ export function App() {
       save: saveCurrent,
       back: goBack,
       forward: goForward,
-      'open-settings': openSettings
+      'open-settings': openSettings,
+      'search-thread': searchShownThread,
+      'search-local': openLocalSearch
     }
   })
 
@@ -775,7 +846,9 @@ export function App() {
       if ((action === 'back' || action === 'forward') && isEditableTarget(event.target)) return
       event.preventDefault()
       // A modal dialog over the app is the only layer: shortcuts never act on the tabs behind it.
-      if (stateRef.current.covered) return
+      // Ctrl/Cmd+F and Ctrl/Cmd+Shift+F still reach the search sheet when it is that dialog.
+      const searchAction = action === 'search-thread' || action === 'search-local'
+      if (stateRef.current.covered && !(searchAction && stateRef.current.searchOpen)) return
       if (event.repeat && action !== 'next-tab' && action !== 'previous-tab' && action !== 'back' && action !== 'forward') return
       actions.current?.[action]()
     }
@@ -840,6 +913,7 @@ export function App() {
           <ContentRegistryContext.Provider value={registry}>
             <QuoteControllerContext.Provider value={quote.controller}>
             <QuoteActiveContext.Provider value={quote.activeKey}>
+            <SearchOpenerContext value={openSearch}>
             <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
               {!navOverlay && (
                 <div
@@ -865,6 +939,8 @@ export function App() {
                     onOpenOwnPosts={openOwnPosts}
                     pendingAttempts={pendingAttempts}
                     reminderBadge={reminderBadge}
+                    onOpenSearch={openLocalSearch}
+                    searchShortcut={shortcutLabel('search-local', platform)}
                   />
                 </div>
               )}
@@ -878,7 +954,9 @@ export function App() {
                       titleOf={titleOf}
                       platform={platform}
                       canBack={current.index > 0}
-                      backToQuote={entry.origin === 'quote' && current.index > 0}
+                      backLabel={
+                        current.index === 0 ? null : entry.origin === 'quote' ? '返回引用处' : entry.origin === 'search' ? '返回搜索结果' : null
+                      }
                       canForward={current.index < current.entries.length - 1}
                       splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
                       navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
@@ -932,15 +1010,34 @@ export function App() {
                     onOpenOwnPosts={openOwnPosts}
                     pendingAttempts={pendingAttempts}
                     reminderBadge={reminderBadge}
+                    onOpenSearch={openLocalSearch}
+                    searchShortcut={shortcutLabel('search-local', platform)}
                   />
                 </>
               )}
             </div>
+            </SearchOpenerContext>
             </QuoteActiveContext.Provider>
             </QuoteControllerContext.Provider>
           </ContentRegistryContext.Provider>
           {/* Outside every reader's content: showing a quote card never counts as reading. */}
           {quote.cardProps !== null && <QuoteCard {...quote.cardProps} />}
+          {/* Modal: readers below judge nothing read while it is open, and hits shown here never count as reading. */}
+          {tabs !== null && search.state.openTab === tabs.activeId && (
+            <SearchSheet
+              key={`${tabs.activeId}:${search.state.restoreSeq}`}
+              tabId={tabs.activeId}
+              tab={tabSearchOf(search.state, tabs.activeId)}
+              rebuild={search.state.rebuild}
+              focus={search.state.focus}
+              focusSeq={search.state.focusSeq}
+              restoreSeq={search.state.restoreSeq}
+              commands={searchCommands}
+              forums={names}
+              platform={platform}
+              fallbackFocus={() => document.querySelector<HTMLElement>(`#tabpanel-${tabs.activeId} [data-pane-focus]`)}
+            />
+          )}
           {settingsOpen && (
             <SettingsDialog
               identities={identities}
@@ -968,6 +1065,8 @@ export function App() {
               initial={retained}
               resets={registry.readingResets}
               favorites={registry.favorites}
+              filters={registry.retainedFilters}
+              forumNames={names}
               onOpenThread={openThread}
               onClose={closeRetained}
               fallbackFocus={() => navTriggerRef.current}

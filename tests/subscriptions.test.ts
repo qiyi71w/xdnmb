@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { SubscriptionPreview, SubscriptionResult, SubscriptionSource } from '../src/shared/subscriptions'
+import type { SubscriptionOperation, SubscriptionPreview, SubscriptionResult, SubscriptionSource } from '../src/shared/subscriptions'
 import type { SecretProtector } from '../src/main/identity/protection'
 import type { AppStore } from '../src/main/storage/contract'
 import { openReadingDatabase } from '../src/main/storage/database'
@@ -877,11 +877,15 @@ describe('subscription reconciliation persistence', () => {
     old.setReadingMode('1001', 'po', '2026-10-23')
     old.saveReadingPosition('1001', 'po', { postId: '1001', page: 1, offsetRatio: 0.5, viewportOffset: 40 }, '2026-10-23')
     const configuration = old.loadSubscriptionConfiguration()
-    old.saveSubscriptionOperation({ id: 'old-operation', source: 'web', threadId: '1001', action: 'add', context: configuration.context,
+    const operation: SubscriptionOperation = { id: 'old-operation', source: 'web', threadId: '1001', action: 'add', context: configuration.context,
       createdAt: '2026-10-23', objectLabel: '旧绑定', state: 'needs-reconciliation', report: 'unknown', reportError: null,
-      before: null, after: null, verification: 'unknown' })
-    const journal = old.loadSubscriptionOperations()
+      before: null, after: null, verification: 'unknown' }
     old.close()
+    // Seed the frozen schema directly: the current write interface also maintains v10 projections.
+    const legacy = new Database(file)
+    legacy.prepare('INSERT INTO subscription_operations VALUES (?, ?)').run(operation.id, JSON.stringify(operation))
+    legacy.close()
+    const journal = [operation]
     const upgraded = open(file)
     expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((migration) => migration.version)) })
     expect(upgraded.loadSubscriptionConfiguration()).toEqual(configuration)

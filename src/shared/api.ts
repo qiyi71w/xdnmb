@@ -13,6 +13,7 @@ import type { LifecycleApi } from './lifecycle'
 import type { RemindersApi } from './reminders'
 import type { AppSettings, ZoomAction, ZoomState } from './settings'
 import type { AppearanceIssue } from './theme'
+import type { SearchApi } from './search'
 
 /**
  * Classified read failure. Server/body text is never included except a short
@@ -183,6 +184,7 @@ export type ThemeExportResult = { status: 'exported' } | { status: 'cancelled' }
 export interface XidaoApi {
   content: ContentApi
   subscriptions: SubscriptionsApi
+  search: SearchApi
   reading: {
     loadDirectory(input: { operationId: OperationId; strategy: DirectoryStrategy }): Promise<ReadOutcome<BoardDirectory>>
     /** Foreground read; falls back to the stored page when the network read fails. */
@@ -315,6 +317,13 @@ export interface XidaoApi {
 
 /** IPC channel names. Each maps 1:1 to an XidaoApi method; there is no generic channel. */
 export const IpcChannel = {
+  searchStart: 'search:start',
+  searchNext: 'search:next',
+  searchCancel: 'search:cancel',
+  searchFetchThread: 'search:fetch-thread',
+  searchFetchStatus: 'search:fetch-status',
+  searchRebuild: 'search:rebuild',
+  searchThreadMetadata: 'search:thread-metadata',
   listRetained: 'content:list',
   favorite: 'content:favorite',
   isFavorite: 'content:is-favorite',

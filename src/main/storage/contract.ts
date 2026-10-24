@@ -20,6 +20,7 @@ import type { ContentStore } from './content-contract'
 import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionPlan, SubscriptionSource } from '../../shared/subscriptions'
 import type { PublicationStore } from '../publication/contract'
 import type { ReminderStore } from '../reminders/contract'
+import type { SearchStore } from './search-contract'
 
 /** A write was refused because the database is read-only (newer schema) or unavailable. */
 export class StorageWriteRefusedError extends Error {
@@ -242,4 +243,4 @@ export interface WorkspaceStore {
   saveWorkspace(state: string, at: string): Promise<void>
 }
 
-export type AppStore = ReadingStore & IdentityStore & DraftStore & ContentStore & SubscriptionStore & PublicationStore & WorkspaceStore & ReminderStore
+export type AppStore = ReadingStore & IdentityStore & DraftStore & ContentStore & SubscriptionStore & PublicationStore & WorkspaceStore & ReminderStore & SearchStore

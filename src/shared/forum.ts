@@ -54,6 +54,8 @@ export interface Post {
   /** Searchable plain text derived from `content`; line breaks are `\n`. */
   plainText: string
   image: PostImage | null
+  /** Missing in historical observations; only explicit source image fields prove absence. */
+  imageKnown?: boolean
 }
 
 /** One thread entry in a forum or timeline list. */

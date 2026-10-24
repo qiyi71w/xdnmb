@@ -133,6 +133,11 @@ export async function openReadingStore(options: {
 
   return {
     get status() { return status },
+    searchBoundary: () => request('searchBoundary'),
+    searchBatch: (input) => request('searchBatch', input),
+    beginSearchRebuild: () => request('beginSearchRebuild'),
+    rebuildSearchBatch: () => request('rebuildSearchBatch'),
+    searchMetadata: (ids) => request('searchMetadata', ids),
     saveDirectory: (directory, fetchedAt) => request('saveDirectory', directory, fetchedAt),
     loadDirectory: () => request('loadDirectory'),
     saveFeedPage: (page, fetchedAt) => request('saveFeedPage', page, fetchedAt),

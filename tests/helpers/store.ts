@@ -7,6 +7,11 @@ export function asStore(db: ReadingDatabase): AppStore {
     get status() {
       return db.status
     },
+    searchBoundary: async () => db.searchBoundary(),
+    searchBatch: async (input) => db.searchBatch(input),
+    beginSearchRebuild: async () => db.beginSearchRebuild(),
+    rebuildSearchBatch: async () => db.rebuildSearchBatch(),
+    searchMetadata: async (ids) => db.searchMetadata(ids),
     saveDirectory: async (...args) => db.saveDirectory(...args),
     loadDirectory: async () => db.loadDirectory(),
     saveFeedPage: async (...args) => db.saveFeedPage(...args),

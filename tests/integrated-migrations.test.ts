@@ -14,6 +14,8 @@ import { asStore } from './helpers/store'
 import { MIGRATIONS as INTEGRATED_V7 } from './fixtures/integrated-v7'
 import { MIGRATIONS as RECONCILIATION_V6 } from './fixtures/reconciliation-v6'
 import { MIGRATIONS as LIFECYCLE_V7 } from './fixtures/lifecycle-v7'
+import { MIGRATIONS as REMINDERS_V9 } from './fixtures/reminders-v9'
+import { MIGRATIONS as SEARCH_V8 } from './fixtures/local-search-v8'
 
 const at = '2026-10-24T00:00:00.000Z'
 const later = '2026-10-24T00:01:00.000Z'
@@ -23,11 +25,11 @@ const context = { generation: 9, appCredentialId: 'historical-app', webCredentia
 const folders: string[] = []
 const connections: ReadingDatabase[] = []
 const supportedVersion = Math.max(...MIGRATIONS.map((migration) => migration.version))
-const heads = ['integrated-v7', 'reconciliation-v6', 'lifecycle-v7', 'integrated-v8'] as const
+const heads = ['integrated-v7', 'reconciliation-v6', 'lifecycle-v7', 'integrated-v8', 'reminders-v9'] as const
 type Predecessor = 'subscriptions-v5' | 'retained-v6' | typeof heads[number]
-const hasSubscriptions = (kind: Predecessor) => kind === 'subscriptions-v5' || kind === 'integrated-v7' || kind === 'reconciliation-v6' || kind === 'integrated-v8'
-const hasDrafts = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'lifecycle-v7' || kind === 'integrated-v8'
-const hasRetained = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'integrated-v8'
+const hasSubscriptions = (kind: Predecessor) => kind === 'subscriptions-v5' || kind === 'integrated-v7' || kind === 'reconciliation-v6' || kind === 'integrated-v8' || kind === 'reminders-v9'
+const hasDrafts = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'lifecycle-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
+const hasRetained = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
 
 function plan(): SubscriptionPlan {
   return { id: 'historical-plan', preview: { id: 'historical-preview', mode: 'sync', context, createdAt: at,
@@ -78,7 +80,8 @@ function predecessor(kind: Predecessor): string {
   const db = new Database(path)
   try {
     const migrations = kind === 'integrated-v7' ? INTEGRATED_V7 : kind === 'reconciliation-v6' ? RECONCILIATION_V6
-      : kind === 'lifecycle-v7' ? LIFECYCLE_V7 : MIGRATIONS.filter((migration) => migration.version <= (kind === 'integrated-v8' ? 8 : kind === 'subscriptions-v5' ? 4 : 6))
+      : kind === 'lifecycle-v7' ? LIFECYCLE_V7 : kind === 'reminders-v9' ? REMINDERS_V9
+        : MIGRATIONS.filter((migration) => migration.version <= (kind === 'integrated-v8' ? 8 : kind === 'subscriptions-v5' ? 4 : 6))
     for (const migration of migrations) migration.up(db)
     db.prepare('INSERT INTO credentials(id, name, source, imported_at, ciphertext) VALUES (7, ?, ?, ?, ?)')
       .run('旧同步饼干', 'raw', at, Buffer.from(ciphertext))
@@ -124,17 +127,23 @@ function predecessor(kind: Predecessor): string {
       db.prepare("INSERT INTO offline_page_posts VALUES ('100', 1, '101')").run()
       db.prepare("INSERT INTO reading_observations VALUES ('100', 'all', 1, ?, '[\"101\"]', 0, 0)").run(at)
     }
-    if (kind === 'reconciliation-v6' || kind === 'integrated-v8') {
+    if (kind === 'reconciliation-v6' || kind === 'integrated-v8' || kind === 'reminders-v9') {
       db.prepare('INSERT INTO subscription_baselines VALUES (9, ?)').run(JSON.stringify({ context, ids: ['100'] }))
       db.prepare('INSERT INTO subscription_plans VALUES (?, ?)').run(plan().id, JSON.stringify(plan()))
     }
-    if (kind === 'lifecycle-v7' || kind === 'integrated-v8') {
+    if (kind === 'lifecycle-v7' || kind === 'integrated-v8' || kind === 'reminders-v9') {
       const payload = { draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: '7',
         fields: { content: '待核对的发送', title: '', name: '', email: '', watermark: false }, attachmentId: '4' }
       db.prepare(`INSERT INTO publication_attempts(request_id, editor_id, payload_json, credential_id, forum_id,
         attachment_id, state, created_at, updated_at, launch_notice) VALUES ('historical-send', 'old-editor', ?, 7, '4', 4, 'unknown', ?, ?, 1)`)
         .run(JSON.stringify(payload), at, later)
       db.prepare("INSERT INTO workspace VALUES (1, '{\"saved\":true}', ?)").run(at)
+    }
+    if (kind === 'reminders-v9') {
+      db.prepare("INSERT INTO reminder_rules VALUES ('100', 'all', 1, 3, ?, '101', NULL, ?)").run(at, later)
+      db.prepare("INSERT INTO reminder_rounds(id, trigger, started_at, finished_at, state, threads_total, threads_done, new_events) VALUES (1, 'manual', ?, ?, 'finished', 1, 1, 1)").run(at, later)
+      db.prepare("INSERT INTO reminder_notifications VALUES (1, 1, 1, 1, 'complete', 'shown', ?)").run(later)
+      db.prepare("INSERT INTO reminder_events VALUES ('101', '100', '[\"all\"]', 'all', 1, '保留提醒摘要', NULL, '{}', '[]', 1, ?, 1)").run(later)
     }
     const version = kind === 'subscriptions-v5' ? 5 : Math.max(...migrations.map((migration) => migration.version))
     db.pragma(`user_version = ${version}`)
@@ -158,6 +167,51 @@ afterEach(() => {
 })
 
 describe('combined predecessor migration', () => {
+  it('rejects frozen search-v8 without changing any original bytes', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'xidao-search-v8-collision-'))
+    folders.push(folder)
+    const path = join(folder, 'old.sqlite')
+    const old = new Database(path)
+    for (const migration of SEARCH_V8) migration.up(old)
+    old.prepare("INSERT INTO credentials(id, name, source, imported_at, ciphertext) VALUES (7, '保留凭据', 'raw', ?, ?)").run(at, Buffer.from(ciphertext))
+    old.pragma('user_version = 8')
+    old.close()
+    const original = readFileSync(path)
+    const refused = open(path)
+    expect(refused.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    refused.close()
+    expect(readFileSync(path)).toEqual(original)
+    const unchanged = new Database(path, { readonly: true })
+    try {
+      expect(unchanged.pragma('user_version', { simple: true })).toBe(8)
+      expect(unchanged.prepare('SELECT name, ciphertext FROM credentials WHERE id = 7').get()).toEqual({ name: '保留凭据', ciphertext: Buffer.from(ciphertext) })
+      expect(unchanged.prepare("SELECT name FROM sqlite_master WHERE name = 'reminder_rules'").get()).toBeUndefined()
+    } finally { unchanged.close() }
+  })
+
+  it('upgrades frozen reminders-v9 to searchable v10 and keeps reminder and notification records', () => {
+    const path = predecessor('reminders-v9')
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: 10 })
+    db.beginSearchRebuild()
+    let rebuilt = false
+    for (let batch = 0; batch < 100 && !rebuilt; batch++) rebuilt = db.rebuildSearchBatch()
+    expect(rebuilt).toBe(true)
+    const result = db.searchBatch({ query: '旧正文', scope: { kind: 'local' },
+      filters: { forumId: null, fromDate: null, toDate: null, image: 'any' }, after: 0, upper: db.searchBoundary() })
+    expect(result.batch.hits.map((hit) => hit.postId)).toEqual(['100', '101'])
+    expect(db.getReadingState('100').readPostIds).toEqual(['101'])
+    expect(db.getContentUsage().protectedTextBytes).toBeGreaterThan(0)
+    const raw = new Database(path, { readonly: true })
+    try {
+      const bytes = raw.prepare<[], { bytes: number }>('SELECT sum(derived_bytes) AS bytes FROM posts').get()
+      expect(bytes?.bytes).toBeGreaterThan(0)
+      expect(raw.prepare('SELECT generation, enabled FROM reminder_rules').get()).toEqual({ generation: 3, enabled: 1 })
+      expect(raw.prepare('SELECT excerpt, notification_id FROM reminder_events').get()).toEqual({ excerpt: '保留提醒摘要', notification_id: 1 })
+      expect(raw.prepare('SELECT state FROM reminder_notifications').get()).toEqual({ state: 'shown' })
+    } finally { raw.close() }
+  })
+
   it.each(heads)('converges %s to the same tables, columns and indexes as a fresh install', (kind) => {
     const path = predecessor(kind)
     const folder = mkdtempSync(join(tmpdir(), 'xidao-fresh-schema-'))
@@ -205,11 +259,11 @@ describe('combined predecessor migration', () => {
       expect(db.isFavorite('100')).toBe(true)
       expect(db.getOfflineCopy('100')).toMatchObject({ pages: [1], postCount: 2, state: 'stopped' })
     }
-    if (kind === 'reconciliation-v6' || kind === 'integrated-v8') {
+    if (kind === 'reconciliation-v6' || kind === 'integrated-v8' || kind === 'reminders-v9') {
       expect(db.loadSubscriptionBaseline(context)).toEqual({ context, ids: ['100'] })
       expect(db.loadSubscriptionPlans()).toEqual([plan()])
     }
-    if (kind === 'lifecycle-v7' || kind === 'integrated-v8') {
+    if (kind === 'lifecycle-v7' || kind === 'integrated-v8' || kind === 'reminders-v9') {
       expect(db.listPublications()[0]).toMatchObject({ requestId: 'historical-send', state: 'unknown', payload: { attachmentId: '4' } })
       expect(db.listLaunchNotices().map((attempt) => attempt.requestId)).toEqual(['historical-send'])
       expect(db.loadWorkspace()).toBe('{"saved":true}')

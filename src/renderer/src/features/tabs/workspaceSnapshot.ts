@@ -48,17 +48,19 @@ const DRAFT_ID = /^[1-9]\d{0,14}$/
 
 /**
  * One-shot targets (首条未读, quotes) are dropped: once restarted, the thread opens where it was left
- * (the entry's snapshot) or at its saved reading position.
+ * (the entry's snapshot) or at its saved reading position. A search session is not kept past the
+ * run either, so an entry opened from a search hit comes back as a plain step (plain 后退).
  */
 export function serializeWorkspace(workspace: Workspace): string {
   const tabs: TabsState = {
     ...workspace.tabs,
     tabs: workspace.tabs.tabs.map((tab) => ({
       ...tab,
-      entries: tab.entries.map((entry) =>
-        entry.thread === null ? entry : ({ ...entry, thread: { ...entry.thread, target: null,
+      entries: tab.entries.map((item) => {
+        const entry = item.origin === 'search' ? ({ ...item, origin: null } as TabEntry) : item
+        return entry.thread === null ? entry : ({ ...entry, thread: { ...entry.thread, target: null,
           snapshot: entry.thread.snapshot === null ? null : { ...entry.thread.snapshot, generation: 0 } } } as TabEntry)
-      )
+      })
     }))
   }
   return JSON.stringify({ version: VERSION, tabs, editors: workspace.editors, lists: workspace.lists })

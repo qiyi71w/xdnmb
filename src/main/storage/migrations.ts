@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { createSearchSchema } from './search-schema'
 
 export interface Migration {
   version: number
@@ -395,6 +396,12 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     version: 9,
     up(db) {
+      // Search-v8 was developed on a different history. Do not treat its version number as
+      // convergence-v8: fail inside the migration transaction, leaving that database untouched.
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]
+      for (const name of ['workspace', 'publication_attempts', 'subscription_plans', 'subscription_baselines']) {
+        if (!tables.some((table) => table.name === name)) throw new Error('incompatible version 8 schema')
+      }
       db.exec(`
         CREATE TABLE reminder_rules (
           thread_id TEXT NOT NULL,
@@ -460,6 +467,18 @@ export const MIGRATIONS: readonly Migration[] = [
         CREATE INDEX reminder_events_thread ON reminder_events(thread_id, discovered_at DESC);
         CREATE INDEX reminder_events_round ON reminder_events(round_id, notification_id);
       `)
+    }
+  },
+  {
+    version: 10,
+    up(db) {
+      db.exec(`ALTER TABLE posts ADD COLUMN image_known INTEGER;
+        DROP VIEW content_post_bytes;
+        CREATE VIEW content_post_bytes AS SELECT p.id,
+          length(CAST(json_array(p.id,forum_id,created_at,user_hash,name,title,is_admin,is_sage,
+            content_json,plain_text,image_path,image_ext,fetched_at,image_known) AS BLOB))+derived_bytes AS bytes,
+          EXISTS(SELECT 1 FROM protected_posts h WHERE h.post_id=p.id) AS protected FROM posts p;`)
+      createSearchSchema(db)
     }
   }
 ]

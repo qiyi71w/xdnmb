@@ -19,6 +19,16 @@ function thread(replies: unknown[], extra: Record<string, unknown> = {}) {
 const tips = { id: '9999999', user_hash: 'Tips', content: 'not a reply' }
 
 describe('forum JSON normalization', () => {
+  it.each([
+    [{}, false, null], [{ img: '', ext: '' }, true, null],
+    [{ img: 'path', ext: '' }, false, null], [{ img: 'path' }, false, null],
+    [{ img: 'path', ext: '.png' }, true, { path: 'path', ext: '.png' }]
+  ])('distinguishes explicit absent images from unknown/malformed fields (%j)', async (fields, known, image) => {
+    const result = await fixture(thread([], fields as Record<string, unknown>)).getThreadPage('100', 'all', 1, signal)
+    expect(result.head.imageKnown).toBe(known)
+    expect(result.head.image).toEqual(image)
+  })
+
   it('does not turn a short page into an end candidate', async () => {
     const client = fixture(thread(Array.from({ length: 5 }, (_, index) => ({
       id: String(200 + index), content: 'reply'

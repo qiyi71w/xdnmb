@@ -3,8 +3,11 @@ import type { ForumId, ThreadSummary } from '../../../../shared/forum'
 import { Content, contentText } from '../../components/Content'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
+import { formatPageList } from '../../lib/format'
 import { useNearEnd } from '../../lib/useNearEnd'
 import { useRovingFocus } from '../../lib/useRovingFocus'
+import { ListFilterBar } from '../search/FilterFields'
+import { filterList, headMeta, listFilterCount, NO_LIST_FILTERS, type ListFilters } from '../search/listFilters'
 import type { FeedInfo } from '../directory/feeds'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import type { WorkspaceList } from '../tabs/workspaceSnapshot'
@@ -66,9 +69,12 @@ export function FeedPane({
   const [saved] = useState(() => (remembered === null ? (registry?.savedLists.get(entryKey) ?? null) : null))
   const restorePages = saved === null ? null : Math.min(saved.pages, info.maxPage ?? saved.pages)
   const { state, hasMore, canAppend, loadMore, refresh, retry } = useFeed(info.ref, info.maxPage, remembered?.state ?? null, restorePages)
+  const [filters, setFilters] = useState<ListFilters>(() => remembered?.filters ?? NO_LIST_FILTERS)
+  const filtering = listFilterCount(filters) > 0
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
-  useNearEnd(scrollRef, sentinelRef, canAppend, state.pages.length, loadMore)
+  // While filtering, more pages are read only on request: a filter never scans the feed by itself.
+  useNearEnd(scrollRef, sentinelRef, canAppend && !filtering, state.pages.length, loadMore)
 
   /** Last scroll position while the list was displayed (a hidden scroller reports 0). */
   const scrollTop = useRef(remembered?.scrollTop ?? 0)
@@ -78,8 +84,16 @@ export function FeedPane({
   /** Saved position still to place; until then this list keeps no memory and the saved one is kept. */
   const pendingRestore = useRef(saved)
 
+  const filtersRef = useRef(filters)
+
   const remember = useCallback(() => {
-    registry?.listMemory.set(entryKey, { kind: 'feed', state: stateRef.current, scrollTop: scrollTop.current, anchor: anchor.current })
+    registry?.listMemory.set(entryKey, {
+      kind: 'feed',
+      state: stateRef.current,
+      scrollTop: scrollTop.current,
+      anchor: anchor.current,
+      filters: filtersRef.current
+    })
   }, [registry, entryKey])
 
   /** Places the saved position once the restored pages are shown and the scroller can be measured. */
@@ -112,6 +126,7 @@ export function FeedPane({
   // list is placed in the commit that shows its pages, before it paints.
   useLayoutEffect(() => {
     stateRef.current = state
+    filtersRef.current = filters
     const scroller = scrollRef.current
     if (scroller !== null && settleRestore(scroller)) return
     if (pendingRestore.current === null) remember()
@@ -141,7 +156,9 @@ export function FeedPane({
     remember()
   }
 
-  const ids = useMemo(() => state.threads.map((thread) => thread.head.id), [state.threads])
+  const filtered = useMemo(() => filterList(state.threads, (thread) => headMeta(thread.head), filters), [state.threads, filters])
+  const uncertainById = useMemo(() => new Map(filtered.shown.map(({ item, uncertain }) => [item.head.id, uncertain])), [filtered])
+  const ids = useMemo(() => filtered.shown.map(({ item }) => item.head.id), [filtered])
   const roving = useRovingFocus(ids, selectedThreadId)
 
   const isTimeline = info.ref.kind === 'timeline'
@@ -195,6 +212,20 @@ export function FeedPane({
           </details>
         )}
 
+        {!firstLoad && state.threads.length > 0 && (
+          <ListFilterBar
+            filters={filters}
+            onChange={setFilters}
+            forums={isTimeline ? forumNames : null}
+            unreadOffered={false}
+            noun="串"
+            total={state.threads.length}
+            result={filtered}
+            metadata={null}
+            coverage={`已加载的第 ${formatPageList(state.pages.map((record) => record.page))} 页`}
+          />
+        )}
+
         <div className="list-status">
           {state.activity === 'refresh' && <Loading>正在刷新第 1 页…</Loading>}
           {error !== null && error.action === 'refresh' && (
@@ -231,23 +262,34 @@ export function FeedPane({
         )}
 
         {!firstLoad && (
-          <ul className="thread-list" aria-label="串列表" onKeyDown={roving.onKeyDown}>
-            {state.threads.map((thread, index) => (
-              <Fragment key={thread.head.id}>
-                {renderPageNotices(index)}
-                <li data-thread-id={thread.head.id}>
-                  <ThreadRow
-                    thread={thread}
-                    forumName={isTimeline && thread.head.forumId !== null ? (forumNames.get(thread.head.forumId) ?? null) : null}
-                    selected={thread.head.id === selectedThreadId}
-                    onOpen={() => onOpenThread(thread)}
-                    itemProps={roving.itemProps(thread.head.id)}
-                  />
-                </li>
-              </Fragment>
-            ))}
+          <ul className="thread-list" aria-label={filtering ? '串列表（已筛选）' : '串列表'} onKeyDown={roving.onKeyDown}>
+            {state.threads.map((thread, index) => {
+              const uncertain = uncertainById.get(thread.head.id)
+              return (
+                <Fragment key={thread.head.id}>
+                  {renderPageNotices(index)}
+                  {uncertain !== undefined && (
+                    <li data-thread-id={thread.head.id}>
+                      <ThreadRow
+                        thread={thread}
+                        forumName={isTimeline && thread.head.forumId !== null ? (forumNames.get(thread.head.forumId) ?? null) : null}
+                        selected={thread.head.id === selectedThreadId}
+                        uncertain={uncertain}
+                        onOpen={() => onOpenThread(thread)}
+                        itemProps={roving.itemProps(thread.head.id)}
+                      />
+                    </li>
+                  )}
+                </Fragment>
+              )
+            })}
             {renderPageNotices(state.threads.length)}
           </ul>
+        )}
+        {filtering && state.threads.length > 0 && filtered.shown.length === 0 && (
+          <p className="list-filters-empty" role="status">
+            已加载的串都不符合筛选。可以读取下一页，或清除筛选。
+          </p>
         )}
 
         <div className="list-footer">

@@ -35,6 +35,7 @@ import { REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
 import { createReminderService } from './reminders/service'
 import { createReminderNotifier } from './reminders/notifier'
 import { applyZoom, zoomActionOf } from './zoom'
+import { createSearchService, type SearchService } from './search/service'
 
 /** Verified JSON API origin; the only destination for the selected browse credential. */
 const FORUM_API_ORIGIN = 'https://api.nmb.best'
@@ -59,6 +60,7 @@ let content: ContentService | null = null
 let lifecycle: Lifecycle | null = null
 /** Kept referenced for the app's lifetime (Windows/Linux). */
 let tray: Tray | null = null
+let search: SearchService | null = null
 
 // Every renderer runs sandboxed; one main process owns the database worker.
 app.enableSandbox()
@@ -298,6 +300,10 @@ async function start(): Promise<void> {
   content = retained
   await retained.recover().catch(() => console.error('[content] recovery failed'))
   await retained.enforceQuota().catch(() => console.error('[content] cleanup failed'))
+  const searchService = createSearchService({ store: openedStore, client, scheduler, enforceQuota: () => retained.enforceQuota() })
+  search = searchService
+  // Batched worker backfill runs alongside the window; search stays unavailable until complete.
+  void searchService.recover().catch(() => console.error('[search] index unavailable'))
 
   installMenu()
   let ipc: IpcRegistration | null = null
@@ -371,6 +377,7 @@ async function start(): Promise<void> {
     publication,
     reminders,
     lifecycle: controller,
+    search: searchService,
     store: openedStore,
     settings: createSettingsService(openedStore),
     getStatus: () => ({ storage: openedStore.status, platform }),
@@ -440,6 +447,7 @@ app.on('will-quit', (event) => {
   event.preventDefault()
   storeClosed = true
   void (async () => {
+    await search?.stop()
     await content?.stop()
     await store?.close()
   })().finally(() => app.quit())

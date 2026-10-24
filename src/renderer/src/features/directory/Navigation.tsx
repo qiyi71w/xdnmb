@@ -92,7 +92,9 @@ export function Navigation({
   onOpenAttempts,
   onOpenOwnPosts,
   pendingAttempts,
-  reminderBadge
+  reminderBadge,
+  onOpenSearch,
+  searchShortcut
 }: {
   state: DirectoryState
   selected: ListRef | null
@@ -115,6 +117,10 @@ export function Navigation({
   pendingAttempts: PendingAttempts
   /** `null` while the reminder overview is not known. */
   reminderBadge: ReminderBadge | null
+  /** Opens the search of everything retained on this machine, in the active tab. */
+  onOpenSearch: () => void
+  /** Shortcut shown in the search entry's tooltip; empty until the platform is known. */
+  searchShortcut: string
 }) {
   const { directory } = state
   const sections = useMemo(() => navSections(directory), [directory])
@@ -201,6 +207,16 @@ export function Navigation({
 
       <DirectoryStatus state={state} />
       <div className="nav-tools">
+        <button
+          type="button"
+          className="nav-item"
+          aria-haspopup="dialog"
+          title={searchShortcut === '' ? '搜索本机保有的内容' : `搜索本机保有的内容（${searchShortcut}）`}
+          onClick={onOpenSearch}
+        >
+          <Icon name="search" className="nav-item-icon" />
+          <span className="nav-item-label">搜索</span>
+        </button>
         {RETAINED_ENTRIES.map((item) => (
           <button key={item.kind} type="button" className="nav-item" aria-haspopup="dialog" onClick={() => onOpenRetained(item.kind)}>
             <Icon name={item.icon} className="nav-item-icon" />

@@ -42,7 +42,8 @@ function appPost(value: unknown): Post {
     isAdmin: typeof raw.admin === 'boolean' ? raw.admin : typeof raw.admin === 'number' ? raw.admin !== 0 : null,
     isSage: typeof raw.sage === 'boolean' ? raw.sage : typeof raw.sage === 'number' ? raw.sage !== 0 : null,
     content: content.nodes, plainText: content.plainText,
-    image: typeof raw.img === 'string' && raw.img !== '' ? { path: raw.img, ext: string(raw.ext) ?? '' } : null }
+    image: typeof raw.img === 'string' && raw.img !== '' && typeof raw.ext === 'string' && raw.ext !== '' ? { path: raw.img, ext: raw.ext } : null,
+    imageKnown: typeof raw.img === 'string' && typeof raw.ext === 'string' && ((raw.img === '' && raw.ext === '') || (raw.img !== '' && raw.ext !== '')) }
 }
 
 export function parseAppList(response: TransportResponse): ThreadSummary[] {

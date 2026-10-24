@@ -7,6 +7,16 @@ const normal = (items = '') => web(`<html><head><title>网页订阅 - X岛</titl
 const item = (id: string, body = '正文') => `<div class="h-threads-item-main" data-threads-id="${id}"><a class="h-threads-info-id" href="/t/${id}">No.${id}</a><div class="h-threads-content">${body}</div></div>`
 
 describe('App subscription JSON adapter', () => {
+  it('preserves explicit image absence without inventing it for missing or malformed source fields', () => {
+    const heads = parseAppList(app([
+      { id: '1', content: 'text' }, { id: '2', content: 'text', img: '', ext: '' },
+      { id: '3', content: 'text', img: 'path', ext: '' }, { id: '4', content: 'text', img: 'path', ext: '.png' }
+    ])).map((thread) => thread.head)
+    expect(heads.map((head) => head.imageKnown)).toEqual([false, true, false, true])
+    expect(heads.map((head) => head.image)).toEqual([null, null, null, { path: 'path', ext: '.png' }])
+    expect(parseWebList(normal(item('100')))[0]?.head.imageKnown).toBeUndefined()
+  })
+
   it('preserves decimal IDs and unknown statistics, sanitizing bodies', () => {
     const result = parseAppList({ mediaType: 'application/json', text: '[{"id":90071992547409931234,"content":"<script>steal()</script><b>正文</b>","fid":"4"}]' })
     expect(result[0]?.head.id).toBe('90071992547409931234')

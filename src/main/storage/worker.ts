@@ -31,6 +31,11 @@ port.on('message', (request: StorageRequest) => {
     if (!Array.isArray(request.args)) throw new Error('invalid storage request')
     let value: unknown
     switch (request.method) {
+      case 'searchBoundary': value = db.searchBoundary(...request.args); break
+      case 'searchBatch': value = db.searchBatch(...request.args); break
+      case 'beginSearchRebuild': value = db.beginSearchRebuild(...request.args); break
+      case 'rebuildSearchBatch': value = db.rebuildSearchBatch(...request.args); break
+      case 'searchMetadata': value = db.searchMetadata(...request.args); break
       case 'saveDirectory': value = db.saveDirectory(...request.args); break
       case 'loadDirectory': value = db.loadDirectory(...request.args); break
       case 'saveFeedPage': value = db.saveFeedPage(...request.args); break
