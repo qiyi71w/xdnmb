@@ -5,6 +5,7 @@ import { createFavoriteWrites, type FavoriteWrites } from '../content/favoriteWr
 import { createReadingResets, type ReadingResets } from '../content/readingResets'
 import type { FeedState } from '../feed/feedState'
 import type { ListFilters } from '../search/listFilters'
+import { OnlineSearchSessions } from '../search/onlineSearchSession'
 import type { SubscriptionListState } from '../subscriptions/subscriptionListState'
 import type { TabsState, ThreadSnapshot, ThreadTarget } from './tabsState'
 import { MAX_LIST_PAGES, type WorkspaceList } from './workspaceSnapshot'
@@ -27,6 +28,12 @@ export interface ListHandle {
   refresh(): void
 }
 
+/** What the shell can ask of a mounted online search page. */
+export interface OnlineSearchPaneHandle {
+  /** Moves keyboard focus to the search box (choosing 联网搜索 while already on the page). */
+  focusInput(): void
+}
+
 /**
  * What a list entry has while mounted or in navigation history, discriminated by its source, with
  * the filters of the feed and subscription lists.
@@ -44,9 +51,10 @@ export type ListMemory =
   | { kind: 'reminders'; scrollTop: number }
 
 /**
- * Mounted readers and lists, keyed by the history entry key that shows them, plus the runtime
- * memory of lists that are not mounted (split toggled, single pane, back/forward). Memory lives
- * only while the app runs; the shell drops it when its entry leaves every tab's history.
+ * Mounted readers, lists and online search pages, keyed by the history entry key that shows them,
+ * plus the runtime memory of lists that are not mounted (split toggled, single pane, back/forward)
+ * and the sessions of online search entries (query, obtained pages, view). Memory lives only while
+ * the app runs; the shell drops it when its entry leaves every tab's history.
  * `readingResets` tells open readers that their thread's reading data was cleared; `favorites`
  * keeps every mounted 收藏 entry point on the last successfully written state; `retainedFilters`
  * keeps the filters of each 收藏／历史／离线 list while the app runs.
@@ -56,22 +64,26 @@ export type ListMemory =
 export interface ContentRegistry {
   readers: Map<number, { current: ReaderHandle }>
   lists: Map<number, { current: ListHandle }>
+  onlineSearchPanes: Map<number, { current: OnlineSearchPaneHandle }>
   listMemory: Map<number, ListMemory>
   readingResets: ReadingResets
   favorites: FavoriteWrites
   savedLists: Map<number, WorkspaceList>
   retainedFilters: Map<RetainedList, ListFilters>
+  onlineSearches: OnlineSearchSessions
 }
 
 export function createContentRegistry(): ContentRegistry {
   return {
     readers: new Map(),
     lists: new Map(),
+    onlineSearchPanes: new Map(),
     listMemory: new Map(),
     readingResets: createReadingResets(),
     favorites: createFavoriteWrites(),
     savedLists: new Map(),
-    retainedFilters: new Map()
+    retainedFilters: new Map(),
+    onlineSearches: new OnlineSearchSessions()
   }
 }
 
@@ -108,7 +120,7 @@ export function captureLists(tabs: TabsState, registry: ContentRegistry): Worksp
 export const ContentRegistryContext = createContext<ContentRegistry | null>(null)
 
 /** Registers the latest `handle` under `entryKey` for as long as the component is mounted. */
-export function useRegisterContent<K extends 'readers' | 'lists'>(
+export function useRegisterContent<K extends 'readers' | 'lists' | 'onlineSearchPanes'>(
   kind: K,
   entryKey: number,
   handle: ContentRegistry[K] extends Map<number, { current: infer H }> ? H : never

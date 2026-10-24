@@ -391,4 +391,45 @@ describe('quote location', () => {
     f.onRequest(() => controller.abort())
     expect(await reading.locateQuote('701', controller.signal)).toEqual({ status: 'cancelled' })
   })
+
+  it('locates a search-link reply without records by reading only the hinted page of the named thread', async () => {
+    const f = quoteForum({ '700': { all: [['701', '702'], ['703', '704']] } })
+    const reading = service(f.client)
+    expect(located(await reading.locateQuote('704', signal(), { threadId: '700', page: 2 })))
+      .toEqual({ threadId: '700', postId: '704', page: 2, mode: 'all', source: 'fresh' })
+    // Outdated page clue: the thread is readable, the reply is not there, nothing else is scanned.
+    f.set('700', { all: [['701', '702', '703'], ['704']] })
+    f.requests.length = 0
+    expect(await reading.locateQuote('703', signal(), { threadId: '700', page: 2 })).toMatchObject({ status: 'thread-known', threadId: '700', head: { id: '700' } })
+    expect(f.requests).toEqual(['700/all/2'])
+  })
+
+  it('tries the hinted page after the recorded page misses, and lets records override a link naming another thread', async () => {
+    const f = quoteForum({ '700': { all: [['701', '702'], ['703', '704']] }, '800': { all: [['801']] } })
+    const reading = service(f.client)
+    await reading.readThreadPage('700', 'all', 2, signal())
+    f.set('700', { all: [['701', '702', '703'], ['704']] })
+    f.requests.length = 0
+    expect(located(await reading.locateQuote('703', signal(), { threadId: '700', page: 1 })))
+      .toEqual({ threadId: '700', postId: '703', page: 1, mode: 'all', source: 'fresh' })
+    expect(f.requests).toEqual(['700/all/2', '700/all/1'])
+
+    f.requests.length = 0
+    expect(located(await reading.locateQuote('704', signal(), { threadId: '800', page: 1 }))).toMatchObject({ threadId: '700', postId: '704', page: 2 })
+    expect(f.requests).toEqual(['700/all/2'])
+  })
+
+  it('locates the main post named by a search link on page 1, whatever page the link points at', async () => {
+    const f = quoteForum({ '700': { all: [['701'], ['702']] } })
+    const reading = service(f.client)
+    expect(located(await reading.locateQuote('700', signal(), { threadId: '700', page: 2 })))
+      .toEqual({ threadId: '700', postId: '700', page: 1, mode: 'all', source: 'fresh' })
+  })
+
+  it('reports a link to a missing thread as not found, not as an unknown owner', async () => {
+    const f = quoteForum({})
+    const reading = service(f.client)
+    expect(await reading.locateQuote('901', signal(), { threadId: '900', page: null }))
+      .toMatchObject({ status: 'failed', threadId: '900', error: { kind: 'not-found' } })
+  })
 })

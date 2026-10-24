@@ -179,7 +179,7 @@ describe('locating search hits', () => {
     const source = currentEntry(tab)
     const thread = { threadId: '100', head: null, target: { postId: '150', page: 3, mode: 'all' as const }, snapshot: null, unlocatedPostId: null }
     tabs = runTabs(tabs, { type: 'search-navigate', tabId: tab.id, entryKey: source.key, source: null, thread })
-    expect(currentEntry(activeTab(tabs))).toMatchObject({ kind: 'thread', origin: 'search', thread: { target: { postId: '150', page: 3 } } })
+    expect(currentEntry(activeTab(tabs))).toMatchObject({ kind: 'thread', origin: 'local-search', thread: { target: { postId: '150', page: 3 } } })
     // A stale commit (entry changed meanwhile) is ignored.
     expect(runTabs(tabs, { type: 'search-navigate', tabId: tab.id, entryKey: source.key, source: null, thread })).toBe(tabs)
     tabs = runTabs(tabs, { type: 'back', tabId: tab.id })

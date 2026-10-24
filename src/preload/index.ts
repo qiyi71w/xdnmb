@@ -90,6 +90,13 @@ const api: XidaoApi = {
     preview: (input) => ipcRenderer.invoke(IpcChannel.previewQuote, input),
     locate: (input) => ipcRenderer.invoke(IpcChannel.locateQuote, input)
   },
+  onlineSearch: {
+    run: (input) => ipcRenderer.invoke(IpcChannel.runOnlineSearch, input),
+    page: (input) => ipcRenderer.invoke(IpcChannel.onlineSearchPage, input),
+    cancel: (input) => ipcRenderer.invoke(IpcChannel.cancelOnlineSearch, input),
+    close: (input) => ipcRenderer.invoke(IpcChannel.closeOnlineSearch, input),
+    openSite: () => ipcRenderer.invoke(IpcChannel.openOnlineSearchSite)
+  },
   readingState: {
     get: (input) => ipcRenderer.invoke(IpcChannel.getReadingState, input),
     setMode: (input) => ipcRenderer.invoke(IpcChannel.setReadingMode, input),

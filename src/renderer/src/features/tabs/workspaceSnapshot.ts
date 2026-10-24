@@ -1,7 +1,7 @@
 import type { DraftId } from '../../../../shared/drafts'
 import type { ContentNode, Post } from '../../../../shared/forum'
 import type { ReadingAnchor } from '../../../../shared/reading'
-import type { ListRef, Tab, TabEntry, TabsState, ThreadOpen, ThreadSnapshot } from './tabsState'
+import { entryThread, type ListRef, type Tab, type TabEntry, type TabsState, type ThreadOpen, type ThreadSnapshot } from './tabsState'
 
 /**
  * The workspace saved at a real quit and restored at the next start: every tab with its own
@@ -48,8 +48,10 @@ const DRAFT_ID = /^[1-9]\d{0,14}$/
 
 /**
  * One-shot targets (首条未读, quotes) are dropped: once restarted, the thread opens where it was left
- * (the entry's snapshot) or at its saved reading position. A search session is not kept past the
- * run either, so an entry opened from a search hit comes back as a plain step (plain 后退).
+ * (the entry's snapshot) or at its saved reading position. Search sessions (the local search sheet
+ * and online search pages) are not kept past the run either: an entry opened from a search result
+ * comes back as a plain step (plain 后退), and an online search page comes back empty, without its
+ * query or results and without any request.
  */
 export function serializeWorkspace(workspace: Workspace): string {
   const tabs: TabsState = {
@@ -57,9 +59,10 @@ export function serializeWorkspace(workspace: Workspace): string {
     tabs: workspace.tabs.tabs.map((tab) => ({
       ...tab,
       entries: tab.entries.map((item) => {
-        const entry = item.origin === 'search' ? ({ ...item, origin: null } as TabEntry) : item
-        return entry.thread === null ? entry : ({ ...entry, thread: { ...entry.thread, target: null,
-          snapshot: entry.thread.snapshot === null ? null : { ...entry.thread.snapshot, generation: 0 } } } as TabEntry)
+        const entry = item.origin === 'local-search' || item.origin === 'online-search' ? ({ ...item, origin: null } as TabEntry) : item
+        const thread = entryThread(entry)
+        return thread === null ? entry : ({ ...entry, thread: { ...thread, target: null,
+          snapshot: thread.snapshot === null ? null : { ...thread.snapshot, generation: 0 } } } as TabEntry)
       })
     }))
   }
@@ -190,6 +193,7 @@ function entry(value: unknown): TabEntry {
   const origin = input.origin ?? null
   if (origin !== null && origin !== 'quote') fail()
   if (input.kind === 'thread') return { kind: 'thread', key, thread: threadOpen(input.thread), origin }
+  if (input.kind === 'online-search') return { kind: 'online-search', key, origin }
   if (input.kind !== 'list') fail()
   const thread = input.thread === null ? null : threadOpen(input.thread)
   if (input.pane !== 'list' && input.pane !== 'reader') fail()

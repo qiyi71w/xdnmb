@@ -41,11 +41,24 @@ function workspace(): Workspace {
 }
 
 describe('workspace snapshot', () => {
+  it('restores an online page empty and persists search-origin reader steps as ordinary history', () => {
+    const value = workspace()
+    value.tabs.tabs[0]!.entries.push({ kind: 'online-search', key: 5, origin: null })
+    value.tabs.nextKey = 6
+    value.tabs.tabs[1]!.entries[0]!.origin = 'local-search'
+    value.tabs.tabs[0]!.entries[1]!.origin = 'online-search'
+    const restored = parseWorkspace(serializeWorkspace(value))
+    expect(restored?.tabs.tabs[0]!.entries[2]).toEqual({ kind: 'online-search', key: 5, origin: null })
+    expect(restored?.tabs.tabs[0]!.entries[1]?.origin).toBeNull()
+    expect(restored?.tabs.tabs[1]!.entries[0]?.origin).toBeNull()
+    expect(restored?.tabs.activeId).toBe(3)
+  })
+
   it('restores tabs, active tab, history position, split, pane, list context and where each thread was left, without one-shot targets', () => {
     const restored = parseWorkspace(serializeWorkspace(workspace()))
     const expected = workspace()
     const entry = expected.tabs.tabs[0]!.entries[1]!
-    if (entry.thread !== null) entry.thread.target = null
+    if (entry.kind !== 'online-search' && entry.thread !== null) entry.thread.target = null
     expect(restored).toEqual(expected)
   })
 

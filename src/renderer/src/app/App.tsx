@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import type { AppPlatform, StorageStatus } from '../../../shared/api'
 import type { RetainedList } from '../../../shared/content'
 import { sameTarget, type DraftId, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
@@ -38,6 +38,7 @@ import { captureLists, ContentRegistryContext, createContentRegistry } from '../
 import {
   activeTab,
   currentEntry,
+  entryThread,
   initialTabsState,
   listKey,
   tabsReducer,
@@ -96,12 +97,13 @@ function threadTitle(open: ThreadOpen): string {
 function viewOf(tab: Tab): LayoutView {
   const entry = currentEntry(tab)
   if (entry.kind === 'thread') return 'reader'
+  if (entry.kind === 'online-search') return 'list'
   return entry.feed !== null && tab.split ? 'split' : 'list'
 }
 
 /** Whether the entry's thread is on screen (refresh targets it instead of the list). */
 function readerShown(tab: Tab, entry: TabEntry, singlePane: boolean): boolean {
-  if (entry.kind === 'thread') return true
+  if (entry.kind !== 'list') return entry.kind === 'thread'
   return entry.thread !== null && entry.feed !== null && tab.split && (!singlePane || entry.pane === 'reader')
 }
 
@@ -112,8 +114,9 @@ function readerShown(tab: Tab, entry: TabEntry, singlePane: boolean): boolean {
 function shownTargets(tab: Tab, singlePane: boolean): PostTarget[] {
   const entry = currentEntry(tab)
   const targets: PostTarget[] = []
-  if (entry.thread !== null && readerShown(tab, entry, singlePane)) targets.push({ kind: 'reply', threadId: entry.thread.threadId })
-  const listHidden = entry.thread !== null && tab.split && singlePane && entry.kind === 'list' && entry.pane === 'reader'
+  const thread = entryThread(entry)
+  if (thread !== null && readerShown(tab, entry, singlePane)) targets.push({ kind: 'reply', threadId: thread.threadId })
+  const listHidden = thread !== null && tab.split && singlePane && entry.kind === 'list' && entry.pane === 'reader'
   if (entry.kind === 'list' && entry.feed?.kind === 'forum' && !listHidden) targets.push({ kind: 'thread', forumId: entry.feed.id })
   return targets
 }
@@ -396,7 +399,7 @@ export function App() {
   const leave = useCallback(
     (tab: Tab) => {
       const entry = currentEntry(tab)
-      if (entry.thread === null) return
+      if (entryThread(entry) === null) return
       const snapshot = registry.readers.get(entry.key)?.current.capture() ?? null
       if (snapshot !== null) dispatch({ type: 'snapshot', tabId: tab.id, entryKey: entry.key, snapshot })
     },
@@ -413,14 +416,14 @@ export function App() {
     if (state === null) return null
     for (const tab of state.tabs) {
       const entry = currentEntry(tab)
-      if (entry.thread === null) continue
+      if (entryThread(entry) === null) continue
       const snapshot = registry.readers.get(entry.key)?.current.capture() ?? null
       if (snapshot !== null) state = tabsReducer(state, { type: 'snapshot', tabId: tab.id, entryKey: entry.key, snapshot })
     }
     // Runtime reset generations do not survive a restart. Drop every stale history position
     // before serialization resets the remaining generations for the next process.
     state = { ...state, tabs: state.tabs.map((tab) => ({ ...tab, entries: tab.entries.map((entry) => {
-      const thread = entry.thread
+      const thread = entryThread(entry)
       if (thread?.snapshot == null || registry.readingResets.writable(thread.threadId, thread.snapshot.generation)) return entry
       return { ...entry, thread: { ...thread, snapshot: null, target: null } } as TabEntry
     }) })) }
@@ -449,6 +452,34 @@ export function App() {
     },
     [closeNav, withActive, leave]
   )
+
+  /**
+   * 联网搜索: an online search page as a new step of the current tab; on such a page already, focus
+   * its search box. No shortcut (spec I11 names none).
+   */
+  const openOnlineSearch = useCallback(() => {
+    closeNav()
+    withActive((tab) => {
+      const entry = currentEntry(tab)
+      if (entry.kind === 'online-search') {
+        registry.onlineSearchPanes.get(entry.key)?.current.focusInput()
+        return
+      }
+      leave(tab)
+      dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'online-search' } })
+    })
+  }, [closeNav, withActive, leave, registry])
+
+  /**
+   * An online search result opens as a new `online-search` step of the tab still showing that page
+   * (back reads 返回搜索结果 and the page comes back from its session without a new request).
+   */
+  const openFromOnlineSearch = useCallback((entryKey: number, init: EntryInit): boolean => {
+    const tab = stateRef.current.tabs?.tabs.find((item) => currentEntry(item).key === entryKey)
+    if (tab === undefined) return false
+    dispatch({ type: 'navigate', tabId: tab.id, entry: init, origin: 'online-search' })
+    return true
+  }, [])
 
   const selectThread = useCallback(
     (tabId: number, summary: ThreadSummary) => {
@@ -498,11 +529,12 @@ export function App() {
     () =>
       withActive((tab) => {
         if (tab.index === 0) return
-        const fromSearch = currentEntry(tab).origin === 'search'
+        const fromSearch = currentEntry(tab).origin === 'local-search'
         const sourceKey = (tab.entries[tab.index - 1] as TabEntry).key
         leave(tab)
         dispatch({ type: 'back', tabId: tab.id })
-        // 返回搜索结果: the source entry comes back with the search it had when the hit was opened.
+        // 返回搜索结果 (local / thread search): the source entry comes back with the search sheet it
+        // had when the hit was opened. An online search page restores itself from its session.
         if (fromSearch) searchCommands.returnTo(tab.id, sourceKey)
       }),
     [withActive, leave, searchCommands]
@@ -645,7 +677,7 @@ export function App() {
       setRetained(null)
       withActive((tab) => {
         const entry = currentEntry(tab)
-        if (entry.thread?.threadId === threadId && readerShown(tab, entry, stateRef.current.singlePane)) return
+        if (entryThread(entry)?.threadId === threadId && readerShown(tab, entry, stateRef.current.singlePane)) return
         leave(tab)
         dispatch({
           type: 'navigate',
@@ -753,14 +785,16 @@ export function App() {
     [withActive, registry]
   )
 
-  // List memory and restored list context live only as long as their entry is in some tab's
-  // history (forward branch replaced, tab closed → dropped).
+  // List memory, restored list context and online search sessions live only as long as their entry
+  // is in some tab's history (forward branch replaced, tab closed → dropped; a dropped online search
+  // session is closed).
   useEffect(() => {
     if (tabs === null) return
     const live = new Set<number>()
     for (const tab of tabs.tabs) for (const item of tab.entries) live.add(item.key)
     for (const key of registry.listMemory.keys()) if (!live.has(key)) registry.listMemory.delete(key)
     for (const key of registry.savedLists.keys()) if (!live.has(key)) registry.savedLists.delete(key)
+    registry.onlineSearches.retain(live)
   }, [tabs, registry])
 
   // A closed tab takes its focused controls with it: hand focus to the newly active tab.
@@ -810,7 +844,7 @@ export function App() {
       withActive((tab) => {
         const entry = currentEntry(tab)
         const shown =
-          entry.thread !== null && readerShown(tab, entry, stateRef.current.singlePane)
+          entryThread(entry) !== null && readerShown(tab, entry, stateRef.current.singlePane)
             ? (registry.readers.get(entry.key)?.current.shown() ?? null)
             : null
         openSearch(shown === null ? { view: 'local' } : { view: 'thread', entryKey: entry.key, ...shown })
@@ -857,10 +891,13 @@ export function App() {
   }, [platform])
 
   // ---------- Render ----------
+  // Re-render when an online search page's submitted query (its tab title) changes.
+  useSyncExternalStore(registry.onlineSearches.subscribe, registry.onlineSearches.getVersion)
   const titleOf = useCallback(
     (tab: Tab) => {
       const entry = currentEntry(tab)
       if (entry.kind === 'thread') return threadTitle(entry.thread)
+      if (entry.kind === 'online-search') return registry.onlineSearches.title(entry.key)
       if (entry.feed === null) return '新标签'
       const name =
         entry.feed.kind === 'subscriptions'
@@ -870,11 +907,12 @@ export function App() {
             : (feedInfo(entry.feed)?.name ?? (entry.feed.kind === 'timeline' ? '时间线' : '版面'))
       return entry.thread !== null && tab.split ? `${name} › ${threadTitle(entry.thread)}` : name
     },
-    [feedInfo]
+    [feedInfo, registry]
   )
 
   const entry = current === null ? null : currentEntry(current)
   const selectedFeed = entry?.kind === 'list' ? entry.feed : null
+  const onlineSearchCurrent = entry?.kind === 'online-search'
 
   const workspaceStyle = {
     '--nav-width': `${layout.navWidth}px`,
@@ -927,6 +965,8 @@ export function App() {
                     state={directory.state}
                     selected={selectedFeed}
                     onSelect={selectFeed}
+                    onlineSearchCurrent={onlineSearchCurrent}
+                    onOpenOnlineSearch={openOnlineSearch}
                     onRetry={directory.retry}
                     variant="inline"
                     progress={layout.navProgress}
@@ -939,8 +979,8 @@ export function App() {
                     onOpenOwnPosts={openOwnPosts}
                     pendingAttempts={pendingAttempts}
                     reminderBadge={reminderBadge}
-                    onOpenSearch={openLocalSearch}
-                    searchShortcut={shortcutLabel('search-local', platform)}
+                    onOpenLocalSearch={openLocalSearch}
+                    localSearchShortcut={shortcutLabel('search-local', platform)}
                   />
                 </div>
               )}
@@ -955,7 +995,13 @@ export function App() {
                       platform={platform}
                       canBack={current.index > 0}
                       backLabel={
-                        current.index === 0 ? null : entry.origin === 'quote' ? '返回引用处' : entry.origin === 'search' ? '返回搜索结果' : null
+                        current.index === 0
+                          ? null
+                          : entry.origin === 'quote'
+                            ? '返回引用处'
+                            : entry.origin === 'local-search' || entry.origin === 'online-search'
+                              ? '返回搜索结果'
+                              : null
                       }
                       canForward={current.index < current.entries.length - 1}
                       splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
@@ -983,6 +1029,7 @@ export function App() {
                           onShowPane={showPane}
                           onOpenTarget={openListTarget}
                           onOpenNav={navOverlay ? navPopover.toggle : null}
+                          onOpenFromOnlineSearch={openFromOnlineSearch}
                         />
                       ))}
                     </div>
@@ -997,6 +1044,8 @@ export function App() {
                     state={directory.state}
                     selected={selectedFeed}
                     onSelect={selectFeed}
+                    onlineSearchCurrent={onlineSearchCurrent}
+                    onOpenOnlineSearch={openOnlineSearch}
                     onRetry={directory.retry}
                     variant="overlay"
                     progress={0}
@@ -1010,8 +1059,8 @@ export function App() {
                     onOpenOwnPosts={openOwnPosts}
                     pendingAttempts={pendingAttempts}
                     reminderBadge={reminderBadge}
-                    onOpenSearch={openLocalSearch}
-                    searchShortcut={shortcutLabel('search-local', platform)}
+                    onOpenLocalSearch={openLocalSearch}
+                    localSearchShortcut={shortcutLabel('search-local', platform)}
                   />
                 </>
               )}

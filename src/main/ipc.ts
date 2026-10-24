@@ -1,5 +1,5 @@
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy, type ReadOutcome } from '../shared/api'
+import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy, type ReadOutcome, type LocateHint } from '../shared/api'
 import type { FeedRef, PostId, ReadingMode } from '../shared/forum'
 import type { ImageFormat, ImageKind } from '../shared/images'
 import { IDENTITY_ROLES, type CredentialId, type IdentityRole } from '../shared/identity'
@@ -27,11 +27,15 @@ import { applyZoom, currentZoom } from './zoom'
 import type { SearchService } from './search/service'
 import type { ContentFilters, SearchScope } from '../shared/search'
 import { serverCalendarDate } from '../shared/search-filters'
+import { MAX_SEARCH_QUERY_LENGTH, SEARCH_SITE_URL } from '../shared/online-search'
+import type { OnlineSearchService } from './online-search/service'
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
 const STRATEGIES: readonly DirectoryStrategy[] = ['cache-first', 'background-refresh', 'refresh']
 const MAX_PAGE = 100_000
+/** Far beyond what anyone pages through by hand; a search page number is never a forum page. */
+const MAX_SEARCH_PAGE = 1000
 const MAX_URL_LENGTH = 2048
 const MAX_VIEWPORT_OFFSET = 100_000
 const CREDENTIAL_ID = /^[1-9]\d{0,14}$/
@@ -50,6 +54,7 @@ class InvalidRequestError extends Error {
 interface IpcDeps {
   content: ContentService
   search: SearchService
+  onlineSearch: OnlineSearchService
   reading: ReadingService
   images: ImageService
   store: AppStore
@@ -223,6 +228,26 @@ function postIds(value: unknown): PostId[] {
   return value.map(forumId)
 }
 
+/** Optional search-link clue: absent/undefined means none. */
+function locateHint(value: unknown): LocateHint | null {
+  if (value === undefined) return null
+  const input = record(value)
+  return { threadId: forumId(input.threadId), page: input.page === null ? null : page(input.page) }
+}
+
+function sessionId(input: Record<string, unknown>): string {
+  const value = input.sessionId
+  if (typeof value !== 'string' || !OPERATION_ID.test(value)) throw new InvalidRequestError()
+  return value
+}
+
+function searchQuery(value: unknown): string {
+  if (typeof value !== 'string') throw new InvalidRequestError()
+  const query = value.trim()
+  if (query.length === 0 || query.length > MAX_SEARCH_QUERY_LENGTH) throw new InvalidRequestError()
+  return query
+}
+
 
 /** Local writes report refusal/failure as `saved: false`; they never fail the renderer's call. */
 async function attempt(write: () => Promise<unknown>): Promise<boolean> {
@@ -275,9 +300,10 @@ export interface IpcRegistration {
 }
 
 export function registerIpc({
-  reading, images, identities, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search,
+  reading, images, identities, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
   getStatus, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): IpcRegistration {
+  const owner = (sender: WebContents): string => String(sender.id)
   const operations = new OperationRegistry()
   const subscriptionReads = new OperationRegistry()
   const reminderRecipients = new Set<WebContents>()
@@ -436,13 +462,35 @@ export function registerIpc({
     const input = record(raw)
     const postId = forumId(input.postId)
     const id = operationId(input)
+    const hint = locateHint(input.hint)
     return operations.run(event.sender, id, async (signal) => {
       const relation = await store.findPostThread(postId).catch(() => null)
-      const held = { viewId: `request-${id}`, threadId: relation?.threadId ?? postId }
-      await content.holdReader(String(event.sender.id), held).catch(() => undefined)
-      try { return await reading.locateQuote(postId, signal) }
-      finally { await content.releaseReader(String(event.sender.id), held).catch(() => undefined) }
+      const held = { viewId: `request-${id}`, threadId: relation?.threadId ?? hint?.threadId ?? postId }
+      await content.holdReader(owner(event.sender), held).catch(() => undefined)
+      try { return await reading.locateQuote(postId, signal, hint) }
+      finally { await content.releaseReader(owner(event.sender), held).catch(() => undefined) }
     })
+  })
+
+  handle(IpcChannel.runOnlineSearch, async (event, raw) => {
+    const input = record(raw)
+    return onlineSearch.run(owner(event.sender), sessionId(input), searchQuery(input.query))
+  })
+  handle(IpcChannel.onlineSearchPage, async (event, raw) => {
+    const input = record(raw)
+    const pageNumber = input.page
+    if (typeof pageNumber !== 'number' || !Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > MAX_SEARCH_PAGE) throw new InvalidRequestError()
+    return onlineSearch.page(owner(event.sender), sessionId(input), pageNumber)
+  })
+  handle(IpcChannel.cancelOnlineSearch, async (event, raw) => {
+    onlineSearch.cancel(owner(event.sender), sessionId(record(raw)))
+  })
+  handle(IpcChannel.closeOnlineSearch, async (event, raw) => {
+    onlineSearch.close(owner(event.sender), sessionId(record(raw)))
+  })
+  handle(IpcChannel.openOnlineSearchSite, async () => {
+    await shell.openExternal(SEARCH_SITE_URL)
+    return { opened: true }
   })
 
   handle(IpcChannel.cancel, async (event, raw) => {
@@ -756,6 +804,7 @@ export function registerIpc({
       subscriptionReads.cancelAllFor(sender)
       publication.releasePrompts()
       search.releaseOwner(String(sender.id))
+      onlineSearch.closeAll(owner(sender))
       void images.releaseOwner(String(sender.id))
       void drafts.releaseOwner(String(sender.id))
       void content.releaseOwner(String(sender.id)).catch(() => undefined)

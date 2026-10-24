@@ -72,14 +72,22 @@ function navSections(directory: BoardDirectory | null): NavSection[] {
   return result
 }
 
+/** Roving-focus keys of the two search items (list keys are `kind` or `kind:id`). */
+const LOCAL_SEARCH_KEY = 'local-search'
+const ONLINE_SEARCH_KEY = 'online-search'
+
 /**
  * Navigation panel. `inline` sits in the layout column and narrows continuously (`progress` 0 → 1
- * reduces its padding); `overlay` is the floating panel opened from the top bar.
+ * reduces its padding); `overlay` is the floating panel opened from the top bar. 本机搜索 (the
+ * local / thread search sheet) and 联网搜索 (a page of the active tab) sit above the directory and
+ * are available whether or not the directory loaded.
  */
 export function Navigation({
   state,
   selected,
   onSelect,
+  onlineSearchCurrent,
+  onOpenOnlineSearch,
   onRetry,
   variant,
   progress = 0,
@@ -93,12 +101,16 @@ export function Navigation({
   onOpenOwnPosts,
   pendingAttempts,
   reminderBadge,
-  onOpenSearch,
-  searchShortcut
+  onOpenLocalSearch,
+  localSearchShortcut
 }: {
   state: DirectoryState
   selected: ListRef | null
   onSelect: (ref: ListRef) => void
+  /** The active tab shows an online search page. */
+  onlineSearchCurrent: boolean
+  /** Opens 联网搜索 as a page of the active tab (focuses its search box when already there). */
+  onOpenOnlineSearch: () => void
   onRetry: () => void
   variant: 'inline' | 'overlay'
   progress?: number
@@ -117,16 +129,19 @@ export function Navigation({
   pendingAttempts: PendingAttempts
   /** `null` while the reminder overview is not known. */
   reminderBadge: ReminderBadge | null
-  /** Opens the search of everything retained on this machine, in the active tab. */
-  onOpenSearch: () => void
-  /** Shortcut shown in the search entry's tooltip; empty until the platform is known. */
-  searchShortcut: string
+  /** Opens the search of everything retained on this machine (the search sheet of the active tab). */
+  onOpenLocalSearch: () => void
+  /** Shortcut shown in the 本机搜索 tooltip; empty until the platform is known. */
+  localSearchShortcut: string
 }) {
   const { directory } = state
   const sections = useMemo(() => navSections(directory), [directory])
 
-  const ids = useMemo(() => sections.flatMap((section) => section.items.map((item) => listKey(item.ref))), [sections])
-  const selectedKey = selected === null ? null : listKey(selected)
+  const ids = useMemo(
+    () => [LOCAL_SEARCH_KEY, ONLINE_SEARCH_KEY, ...sections.flatMap((section) => section.items.map((item) => listKey(item.ref)))],
+    [sections]
+  )
+  const selectedKey = onlineSearchCurrent ? ONLINE_SEARCH_KEY : selected === null ? null : listKey(selected)
   const roving = useRovingFocus(ids, selectedKey)
 
   return (
@@ -143,6 +158,35 @@ export function Navigation({
       </div>
 
       <div className="nav-scroll" onKeyDown={roving.onKeyDown}>
+        <ul className="nav-list nav-search" aria-label="搜索">
+          <li>
+            <button
+              type="button"
+              className="nav-item"
+              aria-haspopup="dialog"
+              title={localSearchShortcut === '' ? '搜索本机保有的内容' : `搜索本机保有的内容（${localSearchShortcut}）`}
+              onClick={onOpenLocalSearch}
+              {...roving.itemProps(LOCAL_SEARCH_KEY)}
+            >
+              <Icon name="search" className="nav-item-icon" />
+              <span className="nav-item-label">本机搜索</span>
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              className={onlineSearchCurrent ? 'nav-item is-current' : 'nav-item'}
+              aria-current={onlineSearchCurrent ? 'page' : undefined}
+              title="通过第三方搜索服务查找论坛页面"
+              onClick={onOpenOnlineSearch}
+              {...roving.itemProps(ONLINE_SEARCH_KEY)}
+            >
+              <Icon name="globe" className="nav-item-icon" />
+              <span className="nav-item-label">联网搜索</span>
+            </button>
+          </li>
+        </ul>
+
         {sections.map((section) => (
           <section key={section.id} className="nav-section" aria-labelledby={`nav-${section.id}`}>
             <h2 className="nav-heading" id={`nav-${section.id}`}>
@@ -207,16 +251,6 @@ export function Navigation({
 
       <DirectoryStatus state={state} />
       <div className="nav-tools">
-        <button
-          type="button"
-          className="nav-item"
-          aria-haspopup="dialog"
-          title={searchShortcut === '' ? '搜索本机保有的内容' : `搜索本机保有的内容（${searchShortcut}）`}
-          onClick={onOpenSearch}
-        >
-          <Icon name="search" className="nav-item-icon" />
-          <span className="nav-item-label">搜索</span>
-        </button>
         {RETAINED_ENTRIES.map((item) => (
           <button key={item.kind} type="button" className="nav-item" aria-haspopup="dialog" onClick={() => onOpenRetained(item.kind)}>
             <Icon name={item.icon} className="nav-item-icon" />
@@ -295,6 +329,16 @@ export function NavMeasure({ directory, onMeasure }: { directory: BoardDirectory
         <span>汐岛</span>
       </div>
       <div className="nav-scroll">
+        <div className="nav-list nav-search">
+          <span className="nav-item">
+            <Icon name="search" className="nav-item-icon" />
+            <span className="nav-item-label">本机搜索</span>
+          </span>
+          <span className="nav-item">
+            <Icon name="globe" className="nav-item-icon" />
+            <span className="nav-item-label">联网搜索</span>
+          </span>
+        </div>
         {sections.map((section) => (
           <div key={section.id} className="nav-section">
             <p className="nav-heading">{section.title}</p>

@@ -14,6 +14,7 @@ import type { RemindersApi } from './reminders'
 import type { AppSettings, ZoomAction, ZoomState } from './settings'
 import type { AppearanceIssue } from './theme'
 import type { SearchApi } from './search'
+import type { SearchOutcome, SearchSessionId } from './online-search'
 
 /**
  * Classified read failure. Server/body text is never included except a short
@@ -100,6 +101,16 @@ export interface QuoteTarget {
   postId: PostId
   page: number
   mode: ReadingMode
+}
+
+/**
+ * Unverified location clue from a search result link: the thread the link names and the page of the
+ * full listing it points at (`null` = none). Used only after local records fail to locate the post,
+ * and only by reading that one page of the thread; never a stored position.
+ */
+export interface LocateHint {
+  threadId: ThreadId
+  page: number | null
 }
 
 /**
@@ -206,8 +217,33 @@ export interface XidaoApi {
   quotes: {
     /** Network first (`/api/ref`), falling back to the stored post with the failure reason. */
     preview(input: { operationId: OperationId; postId: PostId }): Promise<ReadOutcome<QuotePreview>>
-    /** Resolves owner, page and mode of a quoted post; see QuoteLocation. Cancel with `reading.cancel`. */
-    locate(input: { operationId: OperationId; postId: PostId }): Promise<QuoteLocation>
+    /**
+     * Resolves owner, page and mode of a quoted post; see QuoteLocation. Cancel with `reading.cancel`.
+     * With `hint` (a search result link) the hinted page of the hinted thread is read once when local
+     * records do not locate the post; a readable hinted thread that does not show it is `thread-known`.
+     */
+    locate(input: { operationId: OperationId; postId: PostId; hint?: LocateHint }): Promise<QuoteLocation>
+  }
+  /**
+   * Online search (nmb-search). Requests happen only for `run`, a not-yet-obtained `page` and nothing
+   * else; there is no retry, prefetch or background request. Sessions are scoped to the calling page
+   * and released by `close` or when the page goes away. No forum identity is ever involved.
+   */
+  onlineSearch: {
+    /** Starts a new query chain in the session (creating it), superseding any earlier chain; returns page 1. */
+    run(input: { sessionId: SearchSessionId; query: string }): Promise<SearchOutcome>
+    /**
+     * Page `page` of the current chain: an obtained page comes back from the session without a
+     * request; the next page is requested with the chain's token at most once (concurrent calls share
+     * the same request); anything else is `unavailable`.
+     */
+    page(input: { sessionId: SearchSessionId; page: number }): Promise<SearchOutcome>
+    /** Cancels the session's in-flight request. A cancelled next-page request spends its token. */
+    cancel(input: { sessionId: SearchSessionId }): Promise<void>
+    /** Releases the session and its pages; an in-flight request is cancelled. */
+    close(input: { sessionId: SearchSessionId }): Promise<void>
+    /** Opens the search website (fixed URL) in the system browser. */
+    openSite(): Promise<{ opened: boolean }>
   }
   /** Local reading context. Never touches the network; downloads and previews never call it. */
   readingState: {
@@ -324,6 +360,11 @@ export const IpcChannel = {
   searchFetchStatus: 'search:fetch-status',
   searchRebuild: 'search:rebuild',
   searchThreadMetadata: 'search:thread-metadata',
+  runOnlineSearch: 'online-search:run',
+  onlineSearchPage: 'online-search:page',
+  cancelOnlineSearch: 'online-search:cancel',
+  closeOnlineSearch: 'online-search:close',
+  openOnlineSearchSite: 'online-search:open-site',
   listRetained: 'content:list',
   favorite: 'content:favorite',
   isFavorite: 'content:is-favorite',

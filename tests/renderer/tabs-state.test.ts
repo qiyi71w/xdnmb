@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   activeTab,
   currentEntry,
+  entryThread,
   initialTabsState,
   listKey,
   tabsReducer,
@@ -16,6 +17,27 @@ const thread = (threadId: string): ThreadOpen => ({ threadId, head: null, target
 const run = (state: TabsState, ...actions: TabsAction[]) => actions.reduce(tabsReducer, state)
 
 describe('tabs and per-tab history', () => {
+  it('keeps online sessions and local-search return steps distinct in one history', () => {
+    let state = initialTabsState(true)
+    const tabId = state.activeId
+    state = run(state, { type: 'navigate', tabId, entry: { kind: 'online-search' } })
+    const online = currentEntry(activeTab(state))
+    expect(entryThread(online)).toBeNull()
+    state = run(state, { type: 'navigate', tabId, entry: { kind: 'online-search' } })
+    expect(currentEntry(activeTab(state)).key).toBe(online.key)
+    state = run(state, { type: 'navigate', tabId, entry: { kind: 'thread', thread: thread('200') }, origin: 'online-search' })
+    expect(currentEntry(activeTab(state))).toMatchObject({ kind: 'thread', origin: 'online-search' })
+    const source = currentEntry(activeTab(state))
+    state = run(state, { type: 'search-navigate', tabId, entryKey: source.key, source: null, thread: thread('300') })
+    expect(currentEntry(activeTab(state))).toMatchObject({ kind: 'thread', origin: 'local-search' })
+    state = run(state, { type: 'back', tabId })
+    expect(currentEntry(activeTab(state))).toMatchObject({ key: source.key, origin: 'online-search' })
+    state = run(state, { type: 'back', tabId })
+    expect(currentEntry(activeTab(state))).toMatchObject({ key: online.key, kind: 'online-search' })
+    state = run(state, { type: 'forward', tabId }, { type: 'navigate', tabId, entry: { kind: 'list', feed: forum4 } })
+    expect(activeTab(state).entries.some((entry) => entryThread(entry)?.threadId === '300')).toBe(false)
+  })
+
   it('gives each new tab the global default at creation time only', () => {
     let state = initialTabsState(true)
     state = run(state, { type: 'open-tab', entry: { kind: 'list', feed: null }, split: false, background: false })
@@ -37,7 +59,7 @@ describe('tabs and per-tab history', () => {
     )
     const tab = activeTab(after)
     expect(tab.split).toBe(true)
-    expect(tab.entries.map((entry) => (entry.kind === 'list' ? (entry.feed === null ? null : listKey(entry.feed)) : entry.thread.threadId))).toEqual([
+    expect(tab.entries.map((entry) => (entry.kind === 'list' ? (entry.feed === null ? null : listKey(entry.feed)) : entryThread(entry)?.threadId))).toEqual([
       null,
       'forum:4',
       'forum:5'

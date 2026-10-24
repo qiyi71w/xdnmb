@@ -9,7 +9,8 @@ import type { DirectoryState } from '../features/directory/useDirectory'
 import { forumLabel } from '../features/editor/editorText'
 import { FeedPane } from '../features/feed/FeedPane'
 import type { LayoutResult } from '../features/layout/layout'
-import { currentEntry, type Tab, type ThreadOpen } from '../features/tabs/tabsState'
+import { OnlineSearchPane } from '../features/search/OnlineSearchPane'
+import { currentEntry, type EntryInit, type Tab, type ThreadOpen } from '../features/tabs/tabsState'
 import { ThreadPane } from '../features/thread/ThreadPane'
 import { FailureNotice, Loading } from '../components/Notices'
 import { Icon } from '../components/Icon'
@@ -33,7 +34,8 @@ export function TabView({
   onSelectThread,
   onShowPane,
   onOpenTarget,
-  onOpenNav
+  onOpenNav,
+  onOpenFromOnlineSearch
 }: {
   tab: Tab
   active: boolean
@@ -53,6 +55,11 @@ export function TabView({
   onOpenTarget: (tabId: number, entryKey: number, thread: ThreadOpen) => boolean
   /** Opens the navigation overlay; null while the navigation is a column. */
   onOpenNav: (() => void) | null
+  /**
+   * An online search result opened from entry `entryKey` as a new `online-search` step; false when
+   * that entry is no longer current.
+   */
+  onOpenFromOnlineSearch: (entryKey: number, init: EntryInit) => boolean
 }) {
   const entry = currentEntry(tab)
   const listRef = useRef<HTMLDivElement>(null)
@@ -100,6 +107,17 @@ export function TabView({
           footer={<EditorDock tabId={tab.id} target={{ kind: 'reply', threadId: entry.thread.threadId }} displayed={active} />}
         />
       </main>
+    )
+  } else if (entry.kind === 'online-search') {
+    // The board directory recognizes board results of the page.
+    body = (
+      <OnlineSearchPane
+        key={entry.key}
+        entryKey={entry.key}
+        displayed={active}
+        directory={directory.directory}
+        onOpen={onOpenFromOnlineSearch}
+      />
     )
   } else if (entry.feed === null) {
     body = (

@@ -6,6 +6,7 @@ import {
   activeTab,
   backgroundTabEntry,
   currentEntry,
+  entryThread,
   initialTabsState,
   tabsReducer,
   type TabsAction,
@@ -54,7 +55,7 @@ describe('quote navigation in the tab history', () => {
     state = quote(state, left('101', 1), open('100', '150'))
     state = quote(state, left('150', 0), open('200', '250'))
     const tab = activeTab(state)
-    expect(tab.entries.map((entry) => [entry.kind, entry.thread?.threadId, entry.origin])).toEqual([
+    expect(tab.entries.map((entry) => [entry.kind, entryThread(entry)?.threadId, entry.origin])).toEqual([
       ['list', undefined, null],
       ['list', '100', null],
       ['list', '100', 'quote'],
@@ -69,14 +70,14 @@ describe('quote navigation in the tab history', () => {
     // Leaving A again by back/forward (no quote) keeps the quote focus to return to.
     const aKey = currentEntry(activeTab(state)).key
     const kept = run(state, { type: 'snapshot', tabId: id, entryKey: aKey, snapshot: { ...left('105'), focus: null } })
-    expect(currentEntry(activeTab(kept)).thread?.snapshot).toMatchObject({ anchor: { postId: '105' }, focus: { postId: '101', quoteIndex: 1 } })
+    expect(entryThread(currentEntry(activeTab(kept)))?.snapshot).toMatchObject({ anchor: { postId: '105' }, focus: { postId: '101', quoteIndex: 1 } })
     state = run(state, { type: 'forward', tabId: id }, { type: 'forward', tabId: id })
-    expect(currentEntry(activeTab(state)).thread?.threadId).toBe('200')
+    expect(entryThread(currentEntry(activeTab(state)))?.threadId).toBe('200')
 
     // Back to B, then quote D: the forward branch (C) is replaced.
     state = run(state, { type: 'back', tabId: id })
     state = quote(state, left('150', 2), open('300', '350'))
-    expect(activeTab(state).entries.map((entry) => entry.thread?.threadId)).toEqual([undefined, '100', '100', '300'])
+    expect(activeTab(state).entries.map((entry) => entryThread(entry)?.threadId)).toEqual([undefined, '100', '100', '300'])
     expect(run(state, { type: 'forward', tabId: id })).toBe(state)
   })
 
@@ -157,7 +158,7 @@ describe('quote navigation in the tab history', () => {
     // 打开 from 离线 is a new step that replaces the forward (quote) branch.
     state = run(state, { type: 'navigate', tabId: id, entry: { kind: 'thread', thread: open('300') } })
     const tab = activeTab(state)
-    expect(tab.entries.map((entry) => [entry.kind, entry.thread?.threadId, entry.origin])).toEqual([
+    expect(tab.entries.map((entry) => [entry.kind, entryThread(entry)?.threadId, entry.origin])).toEqual([
       ['list', undefined, null],
       ['list', '100', null],
       ['thread', '300', null]

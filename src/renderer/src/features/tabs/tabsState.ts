@@ -2,7 +2,7 @@ import type { FeedRef, Post, PostId, ReadingMode, ThreadId } from '../../../../s
 import type { ReadingAnchor } from '../../../../shared/reading'
 
 /**
- * Explicit target inside a thread (首条未读, a located quote or search hit; notifications later). It
+ * Explicit target inside a thread (首条未读, a located quote or search hit, a reminder event). It
  * takes priority over every remembered position. When `mode` differs from the thread's saved
  * preference the reader shows the target in `mode` temporarily and leaves the preference unchanged.
  */
@@ -55,11 +55,14 @@ export interface ThreadOpen {
 
 /**
  * `quote`: the entry was produced by a located quote or by 打开原串, so the back control reads
- * 返回引用处. `search`: produced by a located search hit; back reads 返回搜索结果 and shows that
- * tab's search results again. Choosing another list item in the entry clears either; history is
- * kept either way.
+ * 返回引用处. `local-search`: produced by a located hit of the local / thread search sheet; back
+ * reads 返回搜索结果 and shows that tab's search sheet again with the search the source entry had.
+ * `online-search`: opened from a result of an `online-search` page; back reads 返回搜索结果 and the
+ * page comes back from its session (query, obtained pages, scroll, focused result) without any new
+ * request. Choosing another list item in the entry clears the origin; history is kept either way.
+ * All three are transient: a saved workspace keeps such steps as plain ones.
  */
-export type EntryOrigin = 'quote' | 'search' | null
+export type EntryOrigin = 'quote' | 'local-search' | 'online-search' | null
 
 /**
  * What a list entry shows: a forum/timeline feed, the remote subscription list of whichever
@@ -78,14 +81,18 @@ export function listKey(ref: ListRef): string {
  *   yet). In split layout the open thread is shown beside the list; `pane` is what the
  *   single-pane fallback shows.
  * - `thread`: a thread opened as a whole page (split off).
+ * - `online-search`: an online search page. Its session (query chain, obtained pages) belongs to
+ *   this entry and is released when the entry leaves every tab's history.
  */
 export type TabEntry =
   | { kind: 'list'; key: number; feed: ListRef | null; thread: ThreadOpen | null; pane: 'list' | 'reader'; origin: EntryOrigin }
   | { kind: 'thread'; key: number; thread: ThreadOpen; origin: EntryOrigin }
+  | { kind: 'online-search'; key: number; origin: EntryOrigin }
 
 export type EntryInit =
   | { kind: 'list'; feed: ListRef | null; thread?: ThreadOpen | null }
   | { kind: 'thread'; thread: ThreadOpen }
+  | { kind: 'online-search' }
 
 export interface Tab {
   id: number
@@ -110,8 +117,11 @@ export type TabsAction =
   | { type: 'activate'; tabId: number }
   | { type: 'cycle'; delta: 1 | -1 }
   | { type: 'set-split'; tabId: number; split: boolean }
-  /** New navigation step; drops the forward branch. Ignored when it would repeat the current list. */
-  | { type: 'navigate'; tabId: number; entry: EntryInit }
+  /**
+   * New navigation step; drops the forward branch. Ignored when it would repeat the current list or
+   * open an online search page from one. `origin` labels the new step (`online-search` for a result).
+   */
+  | { type: 'navigate'; tabId: number; entry: EntryInit; origin?: EntryOrigin }
   /** Opening a list item: split replaces the shown thread (no back step); otherwise a new step. */
   | { type: 'select-thread'; tabId: number; thread: ThreadOpen }
   /** Single-pane fallback switches between the list and the reader of the same entry. */
@@ -131,15 +141,21 @@ export type TabsAction =
    */
   | { type: 'quote-navigate'; tabId: number; entryKey: number; source: ThreadSnapshot | null; thread: ThreadOpen }
   /**
-   * The same for a located search hit (or its 打开原串): a `search` step, whose back control reads
+   * The same for a located hit of the local / thread search (or its 打开原串): a `local-search` step,
+   * whose back control reads
    * 返回搜索结果. Works from any entry, an empty new tab included.
    */
   | { type: 'search-navigate'; tabId: number; entryKey: number; source: ThreadSnapshot | null; thread: ThreadOpen }
 
 function makeEntry(init: EntryInit, key: number, origin: EntryOrigin = null): TabEntry {
-  return init.kind === 'list'
-    ? { kind: 'list', key, feed: init.feed, thread: init.thread ?? null, pane: init.thread ? 'reader' : 'list', origin }
-    : { kind: 'thread', key, thread: init.thread, origin }
+  switch (init.kind) {
+    case 'list':
+      return { kind: 'list', key, feed: init.feed, thread: init.thread ?? null, pane: init.thread ? 'reader' : 'list', origin }
+    case 'thread':
+      return { kind: 'thread', key, thread: init.thread, origin }
+    case 'online-search':
+      return { kind: 'online-search', key, origin }
+  }
 }
 
 /**
@@ -160,6 +176,11 @@ export function initialTabsState(split: boolean): TabsState {
     nextId: 2,
     nextKey: 2
   }
+}
+
+/** The thread an entry shows (whole page, or beside its list); online search pages show none. */
+export function entryThread(entry: TabEntry): ThreadOpen | null {
+  return entry.kind === 'online-search' ? null : entry.thread
 }
 
 export function currentEntry(tab: Tab): TabEntry {
@@ -249,7 +270,8 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       ) {
         return state
       }
-      return push(state, action.tabId, action.entry)
+      if (action.entry.kind === 'online-search' && current.kind === 'online-search') return state
+      return push(state, action.tabId, action.entry, action.origin ?? null)
     }
     case 'select-thread': {
       const tab = state.tabs.find((item) => item.id === action.tabId)
@@ -281,7 +303,7 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
     case 'snapshot':
       return updateTab(state, action.tabId, (tab) => {
         const current = currentEntry(tab)
-        if (current.key !== action.entryKey || current.thread === null) return tab
+        if (current.key !== action.entryKey || current.kind === 'online-search' || current.thread === null) return tab
         const focus = action.snapshot.focus ?? current.thread.snapshot?.focus ?? null
         const thread: ThreadOpen = { ...current.thread, target: null, snapshot: { ...action.snapshot, focus } }
         return replaceCurrent(tab, { ...current, thread } as TabEntry)
@@ -297,7 +319,7 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         current.kind === 'list' && current.feed !== null && tab.split
           ? { kind: 'list', feed: current.feed, thread: action.thread }
           : { kind: 'thread', thread: action.thread }
-      return push(left, action.tabId, init, action.type === 'quote-navigate' ? 'quote' : 'search')
+      return push(left, action.tabId, init, action.type === 'quote-navigate' ? 'quote' : 'local-search')
     }
   }
 }
