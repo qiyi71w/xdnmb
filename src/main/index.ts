@@ -29,6 +29,9 @@ import { createSubscriptionService } from './subscriptions/service'
 import { createPublicationAdapter } from './publication/adapter'
 import { createPublicationService } from './publication/service'
 import trayIconPath from '../../resources/tray-icon.png?asset'
+import { REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
+import { createReminderService } from './reminders/service'
+import { createReminderNotifier } from './reminders/notifier'
 
 /** Verified JSON API origin; the only destination for the selected browse credential. */
 const FORUM_API_ORIGIN = 'https://api.nmb.best'
@@ -210,6 +213,22 @@ async function start(): Promise<void> {
     browseIdentity: () => identities.browseUserhash()
   })
   const reading = createReadingService({ client, store: openedStore, scheduler })
+  const reminders = createReminderService({
+    store: openedStore, client, scheduler,
+    async afterBatch() {
+      try { await content?.enforceQuota() }
+      catch { console.error('[content] cleanup failed') }
+    },
+    notifier: createReminderNotifier({
+      isSupported: () => Notification.isSupported(),
+      create: (message) => new Notification(message),
+      async openList() {
+        await lifecycle?.revealWithoutTrigger()
+        mainWindow?.webContents.send(REMINDERS_OPEN_CHANNEL)
+      }
+    })
+  })
+  await reminders.recover().catch(() => console.error('[reminders] recovery failed'))
 
   const subscriptions = createSubscriptionService({
     store: openedStore,
@@ -307,15 +326,16 @@ async function start(): Promise<void> {
     window: host,
     closeAction: async () => (await openedStore.loadSettings()).closeAction,
     publication,
-    stopBackgroundWork: () => {
+    stopBackgroundWork: async () => {
       ipc?.cancelAll()
-      backgroundStopped = retained.stop()
+      backgroundStopped = Promise.all([retained.stop(), reminders.stop('quit')]).then(() => undefined)
+      await backgroundStopped
     },
     notify: notifyUnfinished,
     exit: () => app.quit(),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    onTrigger: (trigger) => console.info('[lifecycle]', trigger)
+    onTrigger: (trigger) => { void reminders.request(trigger) }
   })
   lifecycle = controller
 
@@ -327,6 +347,7 @@ async function start(): Promise<void> {
     content: retained,
     subscriptions,
     publication,
+    reminders,
     lifecycle: controller,
     store: openedStore,
     getStatus: () => ({ storage: openedStore.status, platform }),

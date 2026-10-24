@@ -81,7 +81,7 @@ function setup(options: { closeAction?: CloseAction | 'unreadable'; notify?: (su
         return unstored.length === 0
       }
     },
-    stopBackgroundWork: () => stops++,
+    stopBackgroundWork: () => { stops++ },
     notify(summary) {
       notified.push(summary)
       options.notify?.(summary)
@@ -132,6 +132,35 @@ describe('window lifecycle', () => {
     s.lifecycle.reopen()
     expect(s.windowState).toBe('shown')
     expect(s.triggers).toEqual(['cold-start', 'reopen'])
+  })
+
+  it('reveals a resident window on notification click without emitting a check trigger', async () => {
+    const s = setup({ closeAction: 'background' })
+    await s.started()
+    await s.lifecycle.closeRequested()
+    await s.lifecycle.revealWithoutTrigger()
+    expect(s.windowState).toBe('shown')
+    expect(s.triggers).toEqual(['cold-start'])
+    expect(s.opens).toBe(1)
+  })
+
+  it('creates a destroyed finishing window on notification click and does not trigger a reopen check', async () => {
+    const s = setup()
+    await s.started()
+    const result = deferred<PublicationAttempt | null>()
+    s.runs.push({ attempt: sendAttempt('notice', 'sending', new Date(s.now()).toISOString()), deadline: s.now() + 60_000, done: result.promise })
+    s.lifecycle.requestQuit()
+    s.lifecycle.completeQuit()
+    await flush()
+    const reveal = s.lifecycle.revealWithoutTrigger()
+    await s.showWindow()
+    await reveal
+    expect(s.windowState).toBe('shown')
+    expect(s.lifecycle.phase).toBe('running')
+    expect(s.triggers).toEqual(['cold-start'])
+    result.resolve(sendAttempt('notice', 'confirmed', new Date(s.now()).toISOString()))
+    await flush()
+    expect(s.exits).toBe(0)
   })
 
   it('asks when no choice is remembered or it cannot be read, and quits through the renderer when quit is remembered', async () => {

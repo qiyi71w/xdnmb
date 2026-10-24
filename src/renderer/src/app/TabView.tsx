@@ -3,11 +3,12 @@ import { EditorDock } from '../features/editor/EditorDock'
 import type { FeedRef, ForumId, ThreadSummary } from '../../../shared/forum'
 import { feedKey, type FeedInfo } from '../features/directory/feeds'
 import { SubscriptionPane } from '../features/subscriptions/SubscriptionPane'
+import { ReminderPane } from '../features/reminders/ReminderPane'
 import type { DirectoryState } from '../features/directory/useDirectory'
 import { forumLabel } from '../features/editor/editorText'
 import { FeedPane } from '../features/feed/FeedPane'
 import type { LayoutResult } from '../features/layout/layout'
-import { currentEntry, type Tab } from '../features/tabs/tabsState'
+import { currentEntry, type Tab, type ThreadOpen } from '../features/tabs/tabsState'
 import { ThreadPane } from '../features/thread/ThreadPane'
 import { FailureNotice, Loading } from '../components/Notices'
 import { Icon } from '../components/Icon'
@@ -30,6 +31,7 @@ export function TabView({
   forumName,
   onSelectThread,
   onShowPane,
+  onOpenTarget,
   onOpenNav
 }: {
   tab: Tab
@@ -43,6 +45,11 @@ export function TabView({
   forumName: (forumId: string | null) => string | null
   onSelectThread: (tabId: number, thread: ThreadSummary) => void
   onShowPane: (tabId: number, pane: Region) => void
+  /**
+   * A list item resolved to an explicit target (a located reminder event): shows it from the list
+   * entry `entryKey`. False when that entry is no longer the tab's current one.
+   */
+  onOpenTarget: (tabId: number, entryKey: number, thread: ThreadOpen) => boolean
   /** Opens the navigation overlay; null while the navigation is a column. */
   onOpenNav: (() => void) | null
 }) {
@@ -108,14 +115,23 @@ export function TabView({
   } else {
     const feed = entry.feed
     const selectedThreadId = tab.split ? (entry.thread?.threadId ?? null) : null
-    const info = feed.kind === 'subscriptions' ? null : feedInfo(feed)
+    const info = feed.kind === 'subscriptions' || feed.kind === 'reminders' ? null : feedInfo(feed)
     // New threads go to forums only; timelines and subscriptions have no post target.
     const listDock =
       feed.kind === 'forum' ? (
         <EditorDock tabId={tab.id} target={{ kind: 'thread', forumId: feed.id }} displayed={active && listVisible} />
       ) : null
     let list
-    if (feed.kind === 'subscriptions') {
+    if (feed.kind === 'reminders') {
+      list = (
+        <ReminderPane
+          key={`${entry.key}:reminders`}
+          entryKey={entry.key}
+          selectedThreadId={selectedThreadId}
+          onOpenTarget={(thread) => onOpenTarget(tab.id, entry.key, thread)}
+        />
+      )
+    } else if (feed.kind === 'subscriptions') {
       list = (
         <SubscriptionPane
           key={`${entry.key}:subscriptions`}

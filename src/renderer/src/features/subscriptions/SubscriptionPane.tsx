@@ -49,6 +49,9 @@ import {
   webObjectText
 } from './subscriptionText'
 import { useSubscriptionsContext } from './useSubscriptions'
+import { askedThreads, ReminderChoiceField, useReminderAsk, type ReminderAsk, type ReminderChoice } from '../reminders/ReminderLinkage'
+import { ReminderMenu } from '../reminders/ReminderMenu'
+import { useThreadRules } from '../reminders/useReminders'
 import '../feed/feed.css'
 import '../identity/identity.css'
 import './subscriptions.css'
@@ -277,9 +280,14 @@ export function SubscriptionPane({
   }, [displayed])
   const ids = useMemo(() => threads.map((thread) => thread.head.id), [threads])
   const roving = useRovingFocus(ids, selectedThreadId)
+  const rules = useThreadRules(ids)
 
   // ---------- Explicit writes ----------
   const [draft, setDraft] = useState<ChangeDraft | null>(null)
+  /** 保留 / 关闭 for the reminders of a thread being unsubscribed; 保留 unless changed. */
+  const [reminderChoice, setReminderChoice] = useState<ReminderChoice>('keep')
+  const removeIds = useMemo(() => (draft?.action === 'remove' ? [draft.threadId] : null), [draft])
+  const reminderAsk = useReminderAsk(removeIds)
   const draftOpener = useRef<HTMLElement | null>(null)
   const confirmCancelRef = useRef<HTMLButtonElement>(null)
 
@@ -290,6 +298,7 @@ export function SubscriptionPane({
   const openDraft = (action: SubscriptionAction, threadId: ThreadId, label: string) => {
     if (overview === null || selection === null) return
     draftOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setReminderChoice('keep')
     setDraft({
       action,
       threadId,
@@ -313,13 +322,16 @@ export function SubscriptionPane({
   const confirmDraft = () => {
     if (draft === null) return
     const request = draft
+    const asked = request.action === 'remove' ? askedThreads(reminderAsk, [request.threadId]) : []
+    if (asked === null) return
     closeDraft()
     void change({
       source: request.source,
       threadId: request.threadId,
       action: request.action,
       expectedGeneration: request.generation,
-      label: request.label
+      label: request.label,
+      reminders: asked.length === 0 ? null : { threadIds: asked, choice: reminderChoice, result: null }
     })
   }
 
@@ -460,6 +472,9 @@ export function SubscriptionPane({
               }
               cancelRef={confirmCancelRef}
               onConfirm={confirmDraft}
+              reminderAsk={draft.action === 'remove' ? reminderAsk : null}
+              reminderChoice={reminderChoice}
+              onReminderChoice={setReminderChoice}
               onCancel={closeDraft}
             />
           )}
@@ -566,16 +581,28 @@ export function SubscriptionPane({
                     onOpen={() => onOpenThread(thread)}
                     itemProps={itemProps}
                   />
-                  <button
-                    type="button"
-                    className="btn btn-small btn-quiet sub-row-action"
-                    tabIndex={itemProps.tabIndex}
-                    disabled={writeBlocked || draft !== null}
-                    onClick={() => openDraft('remove', thread.head.id, threadLabel(thread))}
-                    aria-label={`取消订阅 No.${thread.head.id}`}
-                  >
-                    取消订阅
-                  </button>
+                  <div className="sub-row-actions">
+                    <ReminderMenu
+                      threadId={thread.head.id}
+                      label={threadLabel(thread)}
+                      rules={rules.rulesOf(thread.head.id)}
+                      failure={rules.failure}
+                      onRetry={rules.reload}
+                      onUpdated={rules.updated}
+                      small
+                      tabIndex={itemProps.tabIndex}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-small btn-quiet sub-row-action"
+                      tabIndex={itemProps.tabIndex}
+                      disabled={writeBlocked || draft !== null}
+                      onClick={() => openDraft('remove', thread.head.id, threadLabel(thread))}
+                      aria-label={`取消订阅 No.${thread.head.id}`}
+                    >
+                      取消订阅
+                    </button>
+                  </div>
                 </li>
               )
             })}
@@ -619,7 +646,10 @@ function ChangeConfirm({
   blockedReason,
   cancelRef,
   onConfirm,
-  onCancel
+  onCancel,
+  reminderAsk,
+  reminderChoice,
+  onReminderChoice
 }: {
   draft: ChangeDraft
   stale: boolean
@@ -627,6 +657,10 @@ function ChangeConfirm({
   cancelRef: RefObject<HTMLButtonElement | null>
   onConfirm: () => void
   onCancel: () => void
+  /** Rules of the thread being unsubscribed; `null` for 加入. */
+  reminderAsk: ReminderAsk | null
+  reminderChoice: ReminderChoice
+  onReminderChoice: (choice: ReminderChoice) => void
 }) {
   const titleId = useId()
   const textId = useId()
@@ -650,6 +684,14 @@ function ChangeConfirm({
         </p>
         <p>先在本机保存这次意图再发出；不会自动重试，也不会撤回。服务端报告与回读核对分别记录，报告成功不等于集合一定改变。</p>
       </div>
+      <ReminderChoiceField
+        ask={reminderAsk}
+        all={[draft.threadId]}
+        choice={reminderChoice}
+        onChoice={onReminderChoice}
+        labelOf={(threadId) => `No.${threadId}`}
+        single
+      />
       {reason !== null && (
         <p className="field-warning">
           <Icon name="alert" size={14} />
@@ -661,7 +703,7 @@ function ChangeConfirm({
           type="button"
           className={draft.action === 'remove' ? 'btn btn-small btn-danger' : 'btn btn-small btn-primary'}
           onClick={onConfirm}
-          disabled={reason !== null}
+          disabled={reason !== null || reminderAsk?.status === 'loading'}
         >
           确认{ACTION_NAME[draft.action]}
         </button>

@@ -19,6 +19,8 @@ import type { SubscriptionSource } from '../shared/subscriptions'
 import type { SubscriptionService } from './subscriptions/service'
 import type { PublicationService } from './publication/service'
 import type { Lifecycle } from './lifecycle/controller'
+import { REMINDERS_CHANGED_CHANNEL } from '../shared/reminders'
+import type { ReminderService } from './reminders/service'
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
@@ -48,6 +50,7 @@ interface IpcDeps {
   drafts: DraftService
   subscriptions: SubscriptionService
   publication: PublicationService
+  reminders: ReminderService
   lifecycle: Pick<Lifecycle, 'reside' | 'requestQuit' | 'presentQuit' | 'cancelQuit' | 'completeQuit'>
   getStatus: () => AppStatus
   /** True only for the app's own renderer document in its main frame. */
@@ -244,14 +247,29 @@ export interface IpcRegistration {
 }
 
 export function registerIpc({
-  reading, images, identities, drafts, content, subscriptions, publication, lifecycle, store, getStatus, isTrustedSender, chooseSavePath, chooseImageFile
+  reading, images, identities, drafts, content, subscriptions, publication, reminders, lifecycle, store, getStatus, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): IpcRegistration {
   const operations = new OperationRegistry()
   const subscriptionReads = new OperationRegistry()
+  const reminderRecipients = new Set<WebContents>()
+  let reminderChangePending = false
+  const remindersChanged = () => {
+    if (reminderChangePending) return
+    reminderChangePending = true
+    queueMicrotask(() => {
+      reminderChangePending = false
+      for (const sender of reminderRecipients) {
+        if (sender.isDestroyed()) reminderRecipients.delete(sender)
+        else sender.send(REMINDERS_CHANGED_CHANNEL)
+      }
+    })
+  }
+  reminders.onChanged(remindersChanged)
 
   function handle(channel: string, handler: (event: IpcMainInvokeEvent, input: unknown) => Promise<unknown>): void {
     ipcMain.handle(channel, (event, input: unknown) => {
       if (!isTrustedSender(event)) throw new InvalidRequestError()
+      reminderRecipients.add(event.sender)
       return handler(event, input)
     })
   }
@@ -261,6 +279,26 @@ export function registerIpc({
     if (typeof value !== 'boolean') throw new InvalidRequestError()
     return value
   }
+  const threadIds = (value: unknown): string[] => {
+    if (!Array.isArray(value) || value.length < 1 || value.length > 500) throw new InvalidRequestError()
+    return [...new Set(value.map(forumId))]
+  }
+  handle(IpcChannel.reminderGetRules, async (_event, raw) => reminders.getRules({ threadIds: threadIds(record(raw).threadIds) }))
+  handle(IpcChannel.reminderSetRule, async (_event, raw) => {
+    const input = record(raw)
+    const kind = input.kind
+    if (kind !== 'all' && kind !== 'po' && kind !== 'quote') throw new InvalidRequestError()
+    return reminders.setRule({ threadId: forumId(input.threadId), kind, enabled: boolean(input.enabled) })
+  })
+  handle(IpcChannel.reminderOverview, async () => reminders.overview())
+  handle(IpcChannel.reminderCheck, async () => reminders.check())
+  handle(IpcChannel.reminderCancel, async () => reminders.cancel())
+  handle(IpcChannel.reminderCloseForThreads, async (_event, raw) => {
+    const input = record(raw)
+    const reason = input.reason
+    if (reason !== 'unsubscribe' && reason !== 'sync-delete') throw new InvalidRequestError()
+    return reminders.closeForThreads({ threadIds: threadIds(input.threadIds), reason })
+  })
   handle(IpcChannel.listRetained, async (_event, raw) => {
     const kind = record(raw).kind
     if (kind !== 'favorites' && kind !== 'history' && kind !== 'offline') throw new InvalidRequestError()
@@ -273,7 +311,9 @@ export function registerIpc({
   handle(IpcChannel.isFavorite, async (_event, raw) => content.isFavorite({ threadId: forumId(record(raw).threadId) }))
   handle(IpcChannel.clearHistory, async (_event, raw) => {
     const input = record(raw)
-    return content.clearHistory({ threadId: input.threadId === null ? null : forumId(input.threadId), clearReading: boolean(input.clearReading) })
+    const result = await content.clearHistory({ threadId: input.threadId === null ? null : forumId(input.threadId), clearReading: boolean(input.clearReading) })
+    remindersChanged()
+    return result
   })
   handle(IpcChannel.contentUsage, async () => content.usage())
   handle(IpcChannel.setCacheLimit, async (_event, raw) => {
@@ -390,7 +430,9 @@ export function registerIpc({
     const threadId = forumId(input.threadId)
     const ids = postIds(input.postIds)
     try {
-      return { saved: true, marked: await store.markPostsRead(threadId, ids, new Date().toISOString()) }
+      const marked = await store.markPostsRead(threadId, ids, new Date().toISOString())
+      if (marked.length > 0) remindersChanged()
+      return { saved: true, marked }
     } catch {
       return { saved: false, marked: [] }
     }
@@ -645,6 +687,7 @@ export function registerIpc({
 
   return {
     cancelAllFor: (sender) => {
+      reminderRecipients.delete(sender)
       operations.cancelAllFor(sender)
       subscriptionReads.cancelAllFor(sender)
       publication.releasePrompts()

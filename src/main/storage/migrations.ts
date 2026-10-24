@@ -391,6 +391,76 @@ export const MIGRATIONS: readonly Migration[] = [
         );
       `)
     }
+  },
+  {
+    version: 9,
+    up(db) {
+      db.exec(`
+        CREATE TABLE reminder_rules (
+          thread_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('all', 'po', 'quote')),
+          enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+          generation INTEGER NOT NULL,
+          started_at TEXT NOT NULL,
+          watermark_post_id TEXT,
+          closed_by TEXT CHECK (closed_by IN ('user', 'unsubscribe', 'sync-delete')),
+          changed_at TEXT NOT NULL,
+          PRIMARY KEY (thread_id, kind)
+        );
+        CREATE TABLE reminder_coverage (
+          thread_id TEXT NOT NULL,
+          mode TEXT NOT NULL CHECK (mode IN ('all', 'po')),
+          checkpoint_json TEXT,
+          probe_json TEXT,
+          state TEXT NOT NULL,
+          issues_json TEXT NOT NULL,
+          last_error_json TEXT,
+          last_round_id INTEGER,
+          updated_at TEXT,
+          uncertain_count INTEGER NOT NULL DEFAULT 0,
+          quote_own_revision TEXT,
+          uncertainty_json TEXT NOT NULL DEFAULT '{}',
+          PRIMARY KEY (thread_id, mode)
+        );
+        CREATE TABLE reminder_rounds (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          trigger TEXT NOT NULL CHECK (trigger IN ('cold-start', 'reopen', 'manual')),
+          started_at TEXT NOT NULL,
+          finished_at TEXT,
+          state TEXT NOT NULL CHECK (state IN ('running', 'finished', 'cancelled', 'interrupted')),
+          stop_reason TEXT,
+          threads_total INTEGER NOT NULL,
+          threads_done INTEGER NOT NULL DEFAULT 0,
+          threads_failed INTEGER NOT NULL DEFAULT 0,
+          new_events INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE reminder_notifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          round_id INTEGER NOT NULL REFERENCES reminder_rounds(id),
+          event_count INTEGER NOT NULL,
+          thread_count INTEGER NOT NULL,
+          coverage TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('registered', 'shown', 'unavailable', 'failed', 'unknown')),
+          registered_at TEXT NOT NULL
+        );
+        CREATE TABLE reminder_events (
+          post_id TEXT PRIMARY KEY NOT NULL,
+          thread_id TEXT NOT NULL,
+          kinds_json TEXT NOT NULL,
+          mode TEXT NOT NULL CHECK (mode IN ('all', 'po')),
+          page INTEGER NOT NULL,
+          excerpt TEXT NOT NULL CHECK (length(excerpt) <= 120),
+          created_at TEXT,
+          author_flags_json TEXT NOT NULL,
+          quoted_own_ids_json TEXT NOT NULL,
+          round_id INTEGER NOT NULL REFERENCES reminder_rounds(id),
+          discovered_at TEXT NOT NULL,
+          notification_id INTEGER REFERENCES reminder_notifications(id)
+        );
+        CREATE INDEX reminder_events_thread ON reminder_events(thread_id, discovered_at DESC);
+        CREATE INDEX reminder_events_round ON reminder_events(round_id, notification_id);
+      `)
+    }
   }
 ]
 

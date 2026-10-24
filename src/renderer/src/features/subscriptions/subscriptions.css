@@ -317,7 +317,13 @@
   margin-top: 12px;
 }
 
-/* ---------- Rows: open the thread, or ask to cancel its subscription ---------- */
+/* ---------- Rows: open the thread, set its reminders, or ask to cancel its subscription ---------- */
+
+/* The row's width decides where its actions go, not the window: a column beside the row only when
+   the row keeps room for its header (identity + time); otherwise one wrapping line below it. */
+.sub-thread-list {
+  container-type: inline-size;
+}
 
 .sub-row {
   display: grid;
@@ -325,8 +331,36 @@
   align-items: start;
 }
 
-.sub-row-action {
+.sub-row-actions {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
   margin: 8px 4px 0 2px;
+}
+
+/* Identity and time wrap onto two lines instead of drawing over each other when the row is narrow. */
+.sub-row .row-top {
+  flex-wrap: wrap;
+}
+
+/* `.row-author` is `flex: 1` (basis 0), which never wraps: size it by its content here. */
+.sub-row .row-author {
+  flex-basis: auto;
+}
+
+@container (max-width: 32rem) {
+  .sub-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sub-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px 6px;
+    margin: -4px 8px 8px;
+  }
 }
 
 .sub-row:has(> .thread-row.is-selected) .sub-row-action {

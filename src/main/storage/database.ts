@@ -34,6 +34,7 @@ import { buildReadingState, emptyReadingState, endObservation, type AttentionRec
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
 import { RetainedContentDatabase, contentTick, touchThread } from './retained'
+import { ReminderDatabase } from './reminders'
 
 /** The worker owns this synchronous core; callers outside the worker use AppStore. */
 export type ReadingDatabase = {
@@ -305,6 +306,30 @@ class SqliteReadingDatabase implements ReadingDatabase {
   holdOfflineImage: ReadingDatabase['holdOfflineImage'] = (threadId, postId) => this.content.holdOfflineImage(threadId, postId)
   listOfflineImagePosts: ReadingDatabase['listOfflineImagePosts'] = (threadId, after, limit) => this.content.listOfflineImagePosts(threadId, after, limit)
   recoverContent: ReadingDatabase['recoverContent'] = () => this.content.recoverContent()
+
+  private readonly reminders = new ReminderDatabase(
+    () => this.writable(),
+    () => this.publicationDatabase(),
+    (threadId, at) => this.establishAttention(threadId, 'reminder', at),
+    (since) => this.firstProvenNewPost(since),
+    (postId) => this.loadPost(postId)?.value ?? null,
+    (threadId, mode) => this.getThreadCoverage(threadId, mode)
+  )
+  getReminderRules: ReadingDatabase['getReminderRules'] = (ids) => this.reminders.getRules(ids)
+  setReminderRule: ReadingDatabase['setReminderRule'] = (id, kind, enabled, at) => this.reminders.setRule(id, kind, enabled, at)
+  closeReminderThreads: ReadingDatabase['closeReminderThreads'] = (ids, reason, at) => this.reminders.closeThreads(ids, reason, at)
+  reminderRuleSnapshots: ReadingDatabase['reminderRuleSnapshots'] = () => this.reminders.snapshots()
+  getReminderCoverage: ReadingDatabase['getReminderCoverage'] = (id, mode) => this.reminders.getCoverage(id, mode)
+  saveReminderCoverage: ReadingDatabase['saveReminderCoverage'] = (value) => this.reminders.saveCoverage(value)
+  getReminderObservations: ReadingDatabase['getReminderObservations'] = (id, mode) => this.reminders.observations(id, mode)
+  reminderOwnRevision: ReadingDatabase['reminderOwnRevision'] = () => this.reminders.ownRevision()
+  evaluateReminders: ReadingDatabase['evaluateReminders'] = (input) => this.reminders.evaluate(input)
+  createReminderRound: ReadingDatabase['createReminderRound'] = (trigger, at, total) => this.reminders.createRound(trigger, at, total)
+  saveReminderRound: ReadingDatabase['saveReminderRound'] = (value) => this.reminders.saveRound(value)
+  recoverReminders: ReadingDatabase['recoverReminders'] = (at) => this.reminders.recover(at)
+  registerReminderNotification: ReadingDatabase['registerReminderNotification'] = (id, scope, at) => this.reminders.registerNotification(id, scope, at)
+  settleReminderNotification: ReadingDatabase['settleReminderNotification'] = (id, state) => this.reminders.settleNotification(id, state)
+  reminderOverview: ReadingDatabase['reminderOverview'] = () => this.reminders.overview()
 
   get status(): StorageStatus {
     return this.currentStatus
@@ -647,7 +672,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
             startedAt: attentionRow.started_at,
             source: attentionRow.source,
             watermarkPostId: attentionRow.watermark_post_id,
-            firstProvenNewPostId: this.firstProvenNewPost(db, attentionRow.started_at)
+            firstProvenNewPostId: this.firstProvenNewPost(attentionRow.started_at)
           }
         : null
       const coverage = { all: this.getThreadCoverage(threadId, 'all'), po: this.getThreadCoverage(threadId, 'po') }
@@ -736,8 +761,9 @@ class SqliteReadingDatabase implements ReadingDatabase {
    * was removed, so it proves nothing. Post IDs increase with time, so every post with an ID at or
    * above the result was posted after `since` too. Uses only observations already stored.
    */
-  private firstProvenNewPost(db: Database.Database, since: string): PostId | null {
-    const row = db.prepare<[string], { post_id: string }>(`
+  firstProvenNewPost(since: string): PostId | null {
+    if (!this.db) return null
+    const row = this.db.prepare<[string], { post_id: string }>(`
       SELECT relation.post_id FROM end_observations AS observation
       JOIN post_threads AS relation
         ON relation.thread_id = observation.thread_id AND relation.post_id <> observation.thread_id

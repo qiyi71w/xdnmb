@@ -1,9 +1,45 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IpcChannel, LIFECYCLE_REQUEST_CHANNEL, type XidaoApi } from '../shared/api'
 import type { LifecycleRequest } from '../shared/lifecycle'
+import { REMINDERS_CHANGED_CHANNEL, REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
+
+// A notification can create a window before React has mounted its listener. Keep the intent in
+// preload, not an arbitrary timeout, until a subscriber can open the in-app list.
+let pendingReminderOpen = false
+const reminderOpenListeners = new Set<() => void>()
+ipcRenderer.on(REMINDERS_OPEN_CHANNEL, () => {
+  if (reminderOpenListeners.size === 0) pendingReminderOpen = true
+  else {
+    pendingReminderOpen = false
+    for (const listener of reminderOpenListeners) listener()
+  }
+})
 
 // Named operations only: no generic invoke/send, no Electron objects, URLs, SQL or file access.
 const api: XidaoApi = {
+  reminders: {
+    getRules: (input) => ipcRenderer.invoke(IpcChannel.reminderGetRules, input),
+    setRule: (input) => ipcRenderer.invoke(IpcChannel.reminderSetRule, input),
+    overview: () => ipcRenderer.invoke(IpcChannel.reminderOverview),
+    check: () => ipcRenderer.invoke(IpcChannel.reminderCheck),
+    cancel: () => ipcRenderer.invoke(IpcChannel.reminderCancel),
+    closeForThreads: (input) => ipcRenderer.invoke(IpcChannel.reminderCloseForThreads, input),
+    onChanged(listener) {
+      const receive = () => listener()
+      ipcRenderer.on(REMINDERS_CHANGED_CHANNEL, receive)
+      return () => { ipcRenderer.removeListener(REMINDERS_CHANGED_CHANNEL, receive) }
+    },
+    onOpenList(listener) {
+      reminderOpenListeners.add(listener)
+      if (pendingReminderOpen) queueMicrotask(() => {
+        if (pendingReminderOpen && reminderOpenListeners.has(listener)) {
+          pendingReminderOpen = false
+          listener()
+        }
+      })
+      return () => { reminderOpenListeners.delete(listener) }
+    }
+  },
   content: {
     list: (input) => ipcRenderer.invoke(IpcChannel.listRetained, input),
     favorite: (input) => ipcRenderer.invoke(IpcChannel.favorite, input),

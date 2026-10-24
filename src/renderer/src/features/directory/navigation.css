@@ -197,6 +197,24 @@
   color: var(--warn-ink);
 }
 
+/* Confirmed unread reminders. */
+.nav-badge.is-count {
+  min-width: 1.6em;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Some reminder coverage is incomplete or uncertain: a separate hollow mark, never part of the number. */
+.nav-coverage-mark {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--warn-ink);
+  border-radius: 50%;
+}
+
 .nav-badge-icon {
   flex: none;
   color: var(--warn-ink);

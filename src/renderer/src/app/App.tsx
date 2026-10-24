@@ -24,6 +24,8 @@ import { LaunchNotice } from '../features/lifecycle/LaunchNotice'
 import { LifecycleHost } from '../features/lifecycle/LifecycleHost'
 import { useIdentities } from '../features/identity/useIdentities'
 import { SubscriptionsContext, useSubscriptions } from '../features/subscriptions/useSubscriptions'
+import { RemindersContext, useReminderOverview } from '../features/reminders/useReminders'
+import { overviewHasCoverageProblem } from '../features/reminders/reminderText'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { QuoteCard } from '../features/quote/QuoteCard'
 import { QuoteActiveContext, QuoteControllerContext } from '../features/quote/QuoteContext'
@@ -130,6 +132,15 @@ export function App() {
   const subscriptions = useSubscriptions()
   const { refreshOverview: refreshSubscriptions, refreshOperations: refreshSubscriptionJournal } = subscriptions
   const pendingAttempts = usePendingAttempts(editors.publicationRevision)
+  const reminders = useReminderOverview()
+  const { overview: reminderOverview, reload: reloadReminders } = reminders
+  const reminderBadge = useMemo(
+    () =>
+      reminderOverview === null
+        ? null
+        : { unread: reminderOverview.totalUnread, coverageProblem: overviewHasCoverageProblem(reminderOverview) },
+    [reminderOverview]
+  )
   const [settingsOpen, setSettingsOpen] = useState(false)
   const openSettings = useCallback(() => setSettingsOpen(true), [])
   const closeSettings = useCallback(() => {
@@ -414,6 +425,36 @@ export function App() {
 
   const showPane = useCallback((tabId: number, pane: 'list' | 'reader') => dispatch({ type: 'show-pane', tabId, pane }), [])
 
+  /**
+   * A list item resolved to an explicit target (a located reminder event) while list entry
+   * `entryKey` was current. Split shows it beside the list (no back step), otherwise a new step.
+   * The same thread already beside the list is pointed at in place when the target is visible;
+   * otherwise it opens again as a new step (the list keeps its memory) so the target applies.
+   */
+  const openListTarget = useCallback(
+    (tabId: number, entryKey: number, thread: ThreadOpen): boolean => {
+      const state = stateRef.current.tabs
+      const tab = state?.tabs.find((item) => item.id === tabId)
+      if (state == null || tab === undefined) return false
+      const entry = currentEntry(tab)
+      if (entry.key !== entryKey || entry.kind !== 'list') return false
+      if (tab.split && entry.thread?.threadId === thread.threadId) {
+        const readerVisible = !stateRef.current.singlePane || entry.pane === 'reader'
+        const reader = registry.readers.get(entry.key)?.current
+        if (readerVisible && thread.target !== null && reader?.showInPlace(thread.threadId, thread.target) === true) return true
+        leave(tab)
+        const memory = registry.listMemory.get(entry.key)
+        if (memory !== undefined) registry.listMemory.set(state.nextKey, memory)
+        dispatch({ type: 'navigate', tabId, entry: { kind: 'list', feed: entry.feed, thread } })
+        return true
+      }
+      if (!tab.split) leave(tab)
+      dispatch({ type: 'select-thread', tabId, thread })
+      return true
+    },
+    [leave, registry]
+  )
+
   const goBack = useCallback(
     () =>
       withActive((tab) => {
@@ -584,6 +625,39 @@ export function App() {
     setOwnPostsOpen(true)
   }, [closeNav])
 
+  /**
+   * A reminder notification was clicked (the main process already revealed the window without a
+   * check trigger): show a 提醒 list, the active tab's or another tab's if one shows it, else a new tab.
+   */
+  const openRemindersList = useCallback(() => {
+    const state = stateRef.current.tabs
+    if (state === null) return
+    closeNav(false)
+    void reloadReminders()
+    const shows = (tab: Tab) => {
+      const entry = currentEntry(tab)
+      return entry.kind === 'list' && entry.feed?.kind === 'reminders'
+    }
+    const active = activeTab(state)
+    const existing = shows(active) ? active : state.tabs.find(shows)
+    if (existing !== undefined) {
+      dispatch({ type: 'activate', tabId: existing.id })
+      if (existing.split && stateRef.current.singlePane) dispatch({ type: 'show-pane', tabId: existing.id, pane: 'list' })
+      return
+    }
+    dispatch({
+      type: 'open-tab',
+      entry: { kind: 'list', feed: { kind: 'reminders' } },
+      split: stateRef.current.settings.newTabSplitDefault,
+      background: false
+    })
+  }, [closeNav, reloadReminders])
+
+  useEffect(
+    () => window.xidao.reminders.onOpenList(() => void whenRestored().then(openRemindersList)),
+    [whenRestored, openRemindersList]
+  )
+
   /** A real quit closes every dialog that would compete with its questions. */
   const closeForQuit = useCallback(() => {
     closeNav(false)
@@ -697,7 +771,9 @@ export function App() {
       const name =
         entry.feed.kind === 'subscriptions'
           ? '订阅'
-          : (feedInfo(entry.feed)?.name ?? (entry.feed.kind === 'timeline' ? '时间线' : '版面'))
+          : entry.feed.kind === 'reminders'
+            ? '提醒'
+            : (feedInfo(entry.feed)?.name ?? (entry.feed.kind === 'timeline' ? '时间线' : '版面'))
       return entry.thread !== null && tab.split ? `${name} › ${threadTitle(entry.thread)}` : name
     },
     [feedInfo]
@@ -729,6 +805,7 @@ export function App() {
     <SettingsOpenerContext value={openSettings}>
       <EditorWorkspaceContext value={editorWorkspace}>
       <SubscriptionsContext value={subscriptions}>
+      <RemindersContext value={reminders}>
         <div className="app" ref={appRef}>
           <StorageBanner storage={storage} />
           <LaunchNotice
@@ -765,6 +842,7 @@ export function App() {
                     onOpenAttempts={openAttempts}
                     onOpenOwnPosts={openOwnPosts}
                     pendingAttempts={pendingAttempts}
+                    reminderBadge={reminderBadge}
                   />
                 </div>
               )}
@@ -803,6 +881,7 @@ export function App() {
                           forumName={forumName}
                           onSelectThread={selectThread}
                           onShowPane={showPane}
+                          onOpenTarget={openListTarget}
                           onOpenNav={navOverlay ? navPopover.toggle : null}
                         />
                       ))}
@@ -830,6 +909,7 @@ export function App() {
                     onOpenAttempts={openAttempts}
                     onOpenOwnPosts={openOwnPosts}
                     pendingAttempts={pendingAttempts}
+                    reminderBadge={reminderBadge}
                   />
                 </>
               )}
@@ -913,6 +993,7 @@ export function App() {
             whenRestored={whenRestored}
           />
         </div>
+      </RemindersContext>
       </SubscriptionsContext>
       </EditorWorkspaceContext>
     </SettingsOpenerContext>

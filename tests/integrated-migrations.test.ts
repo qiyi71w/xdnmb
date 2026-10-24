@@ -22,11 +22,11 @@ const context = { generation: 9, appCredentialId: 'historical-app', webCredentia
 const folders: string[] = []
 const connections: ReadingDatabase[] = []
 const supportedVersion = Math.max(...MIGRATIONS.map((migration) => migration.version))
-const heads = ['integrated-v7', 'reconciliation-v6', 'lifecycle-v7'] as const
+const heads = ['integrated-v7', 'reconciliation-v6', 'lifecycle-v7', 'integrated-v8'] as const
 type Predecessor = 'subscriptions-v5' | 'retained-v6' | typeof heads[number]
-const hasSubscriptions = (kind: Predecessor) => kind === 'subscriptions-v5' || kind === 'integrated-v7' || kind === 'reconciliation-v6'
-const hasDrafts = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'lifecycle-v7'
-const hasRetained = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7'
+const hasSubscriptions = (kind: Predecessor) => kind === 'subscriptions-v5' || kind === 'integrated-v7' || kind === 'reconciliation-v6' || kind === 'integrated-v8'
+const hasDrafts = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'lifecycle-v7' || kind === 'integrated-v8'
+const hasRetained = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'integrated-v8'
 
 function plan(): SubscriptionPlan {
   return { id: 'historical-plan', preview: { id: 'historical-preview', mode: 'sync', context, createdAt: at,
@@ -77,7 +77,7 @@ function predecessor(kind: Predecessor): string {
   const db = new Database(path)
   try {
     const migrations = kind === 'integrated-v7' ? INTEGRATED_V7 : kind === 'reconciliation-v6' ? RECONCILIATION_V6
-      : kind === 'lifecycle-v7' ? LIFECYCLE_V7 : MIGRATIONS.filter((migration) => migration.version <= (kind === 'subscriptions-v5' ? 4 : 6))
+      : kind === 'lifecycle-v7' ? LIFECYCLE_V7 : MIGRATIONS.filter((migration) => migration.version <= (kind === 'integrated-v8' ? 8 : kind === 'subscriptions-v5' ? 4 : 6))
     for (const migration of migrations) migration.up(db)
     db.prepare('INSERT INTO credentials(id, name, source, imported_at, ciphertext) VALUES (7, ?, ?, ?, ?)')
       .run('旧同步饼干', 'raw', at, Buffer.from(ciphertext))
@@ -123,11 +123,11 @@ function predecessor(kind: Predecessor): string {
       db.prepare("INSERT INTO offline_page_posts VALUES ('100', 1, '101')").run()
       db.prepare("INSERT INTO reading_observations VALUES ('100', 'all', 1, ?, '[\"101\"]', 0, 0)").run(at)
     }
-    if (kind === 'reconciliation-v6') {
+    if (kind === 'reconciliation-v6' || kind === 'integrated-v8') {
       db.prepare('INSERT INTO subscription_baselines VALUES (9, ?)').run(JSON.stringify({ context, ids: ['100'] }))
       db.prepare('INSERT INTO subscription_plans VALUES (?, ?)').run(plan().id, JSON.stringify(plan()))
     }
-    if (kind === 'lifecycle-v7') {
+    if (kind === 'lifecycle-v7' || kind === 'integrated-v8') {
       const payload = { draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: '7',
         fields: { content: '待核对的发送', title: '', name: '', email: '', watermark: false }, attachmentId: '4' }
       db.prepare(`INSERT INTO publication_attempts(request_id, editor_id, payload_json, credential_id, forum_id,
@@ -204,11 +204,11 @@ describe('combined predecessor migration', () => {
       expect(db.isFavorite('100')).toBe(true)
       expect(db.getOfflineCopy('100')).toMatchObject({ pages: [1], postCount: 2, state: 'stopped' })
     }
-    if (kind === 'reconciliation-v6') {
+    if (kind === 'reconciliation-v6' || kind === 'integrated-v8') {
       expect(db.loadSubscriptionBaseline(context)).toEqual({ context, ids: ['100'] })
       expect(db.loadSubscriptionPlans()).toEqual([plan()])
     }
-    if (kind === 'lifecycle-v7') {
+    if (kind === 'lifecycle-v7' || kind === 'integrated-v8') {
       expect(db.listPublications()[0]).toMatchObject({ requestId: 'historical-send', state: 'unknown', payload: { attachmentId: '4' } })
       expect(db.listLaunchNotices().map((attempt) => attempt.requestId)).toEqual(['historical-send'])
       expect(db.loadWorkspace()).toBe('{"saved":true}')

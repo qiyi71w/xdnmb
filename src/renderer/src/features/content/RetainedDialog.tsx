@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { RetainedEntry, RetainedList } from '../../../../shared/content'
 import type { ThreadId } from '../../../../shared/forum'
 import { Icon, type IconName } from '../../components/Icon'
@@ -9,6 +9,8 @@ import { attempt, contentFailureText, type Refused } from './contentText'
 import type { FavoriteWrites } from './favoriteWrites'
 import type { ReadingResets } from './readingResets'
 import { OfflineSummary } from './ThreadRetention'
+import { ReminderMenu } from '../reminders/ReminderMenu'
+import { useThreadRules } from '../reminders/useReminders'
 import './content.css'
 
 const LISTS: { kind: RetainedList; label: string; icon: IconName; at: string; empty: string; emptyHelp: string }[] = [
@@ -194,6 +196,12 @@ export function RetainedDialog({
   }
 
   const entries = list.status === 'ready' ? list.entries : []
+  // 收藏 rows carry each thread's 提醒 control; favorites and reminders stay independent records.
+  const favoriteIds = useMemo(
+    () => (kind === 'favorites' && list.status === 'ready' ? list.entries.map((entry) => entry.threadId) : []),
+    [kind, list]
+  )
+  const rules = useThreadRules(favoriteIds)
   const confirmingAll = confirming !== null && confirming.threadId === null
 
   return (
@@ -313,6 +321,17 @@ export function RetainedDialog({
                         <Icon name="chevron" size={14} />
                         打开
                       </button>
+                      {kind === 'favorites' && (
+                        <ReminderMenu
+                          threadId={entry.threadId}
+                          label={title}
+                          rules={rules.rulesOf(entry.threadId)}
+                          failure={rules.failure}
+                          onRetry={rules.reload}
+                          onUpdated={rules.updated}
+                          small
+                        />
+                      )}
                       {kind === 'favorites' && (
                         <button
                           type="button"

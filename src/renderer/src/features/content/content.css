@@ -328,10 +328,13 @@
   margin: 0;
 }
 
+/* May shrink and wrap (打开 / 提醒 / 取消收藏) instead of pushing the row wider than the dialog. */
 .retained-actions {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
   margin-left: auto;
 }

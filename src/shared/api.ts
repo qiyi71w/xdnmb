@@ -12,6 +12,7 @@ import type { AppSettings, MarkReadResult, ReadingAnchor, ThreadReadingState, Wr
 import type { SubscriptionsApi } from './subscriptions'
 import type { PublicationApi } from './publication'
 import type { LifecycleApi } from './lifecycle'
+import type { RemindersApi } from './reminders'
 
 /**
  * Classified read failure. Server/body text is never included except a short
@@ -266,6 +267,8 @@ export interface XidaoApi {
   publication: PublicationApi
   /** Close choice, real quit, workspace restore and notices left by sends that finished without a window. */
   lifecycle: LifecycleApi
+  /** Thread reminders, bounded catch-up checks and reminder notifications. */
+  reminders: RemindersApi
   app: {
     getStatus(): Promise<AppStatus>
   }
@@ -351,6 +354,12 @@ export const IpcChannel = {
   dismissLaunchNotices: 'lifecycle:dismiss-launch-notices',
   listUnstoredResults: 'lifecycle:list-unstored-results',
   retryUnstoredResults: 'lifecycle:retry-unstored-results',
+  reminderGetRules: 'reminders:get-rules',
+  reminderSetRule: 'reminders:set-rule',
+  reminderOverview: 'reminders:overview',
+  reminderCheck: 'reminders:check',
+  reminderCancel: 'reminders:cancel',
+  reminderCloseForThreads: 'reminders:close-for-threads',
   getStatus: 'app:get-status'
 } as const
 

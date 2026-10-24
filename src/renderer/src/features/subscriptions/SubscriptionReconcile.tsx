@@ -40,6 +40,15 @@ import {
   webObjectText
 } from './subscriptionText'
 import { useSubscriptionsContext } from './useSubscriptions'
+import {
+  askedThreads,
+  LinkageLine,
+  ReminderChoiceField,
+  useReminderAsk,
+  type ReminderAsk,
+  type ReminderChoice,
+  type ReminderLinkage
+} from '../reminders/ReminderLinkage'
 
 const MODE_NAME: Record<ReconcileMode, string> = {
   sync: '双向同步',
@@ -385,6 +394,14 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
   const executeRef = useRef<HTMLButtonElement>(null)
   const cancelConfirmRef = useRef<HTMLButtonElement>(null)
   const [confirming, setConfirming] = useState(false)
+  /** Selected deletions whose threads may have reminders: asked once for the whole plan. */
+  const removals = useMemo(() => {
+    if (!confirming) return null
+    const ids = [...new Set(preview.items.filter((item) => item.action === 'remove' && selected.has(item.id)).map((item) => item.threadId))]
+    return ids.length === 0 ? null : ids
+  }, [confirming, preview, selected])
+  const reminderAsk = useReminderAsk(removals)
+  const [reminderChoice, setReminderChoice] = useState<ReminderChoice>('keep')
   const labels = useMemo(() => threadLabels(preview), [preview])
   const groups = useMemo(() => groupCandidates(preview.items), [preview])
   const complete = observationState(preview.left).complete && observationState(preview.right).complete
@@ -403,6 +420,7 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
 
   const closeConfirm = () => {
     setConfirming(false)
+    setReminderChoice('keep')
     executeRef.current?.focus()
   }
   const onConfirmKeyDown = (event: KeyboardEvent) => {
@@ -532,9 +550,20 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
           cancelRef={cancelConfirmRef}
           onKeyDown={onConfirmKeyDown}
           onCancel={closeConfirm}
+          reminder={{
+            ask: reminderAsk,
+            all: removals ?? [],
+            choice: reminderChoice,
+            onChoice: setReminderChoice,
+            labelOf: (threadId) => itemName(threadId, labels)
+          }}
           onConfirm={() => {
+            const asked = removals === null ? [] : askedThreads(reminderAsk, removals)
+            if (asked === null) return
+            const linkage: ReminderLinkage | null = asked.length === 0 ? null : { threadIds: asked, choice: reminderChoice, result: null }
             setConfirming(false)
-            void execute()
+            setReminderChoice('keep')
+            void execute(linkage)
           }}
         />
       )}
@@ -548,7 +577,8 @@ function ExecuteConfirm({
   cancelRef,
   onKeyDown,
   onCancel,
-  onConfirm
+  onConfirm,
+  reminder
 }: {
   preview: SubscriptionPreview
   selected: ReadonlySet<string>
@@ -556,6 +586,14 @@ function ExecuteConfirm({
   onKeyDown: (event: KeyboardEvent) => void
   onCancel: () => void
   onConfirm: () => void
+  /** One 保留 / 关闭 choice for every selected deletion whose thread has enabled reminders. */
+  reminder: {
+    ask: ReminderAsk | null
+    all: readonly ThreadId[]
+    choice: ReminderChoice
+    onChoice: (choice: ReminderChoice) => void
+    labelOf: (threadId: ThreadId) => string
+  }
 }) {
   const titleId = useId()
   const textId = useId()
@@ -587,8 +625,21 @@ function ExecuteConfirm({
         )}
         {preview.mode === 'merge' && <p>旧集合不会被改动。</p>}
       </div>
+      <ReminderChoiceField
+        ask={reminder.ask}
+        all={reminder.all}
+        choice={reminder.choice}
+        onChoice={reminder.onChoice}
+        labelOf={reminder.labelOf}
+        single={false}
+      />
       <div className="credential-confirm-actions">
-        <button type="button" className={removes ? 'btn btn-small btn-danger' : 'btn btn-small btn-primary'} onClick={onConfirm}>
+        <button
+          type="button"
+          className={removes ? 'btn btn-small btn-danger' : 'btn btn-small btn-primary'}
+          onClick={onConfirm}
+          disabled={reminder.ask?.status === 'loading'}
+        >
           {empty ? '确认记录' : '确认执行'}
         </button>
         <button type="button" ref={cancelRef} className="btn btn-small" onClick={onCancel}>
@@ -622,6 +673,7 @@ function PlanProgress({ task }: { task: Extract<ReconcileTask, { phase: 'executi
           <p>{plan === null ? '正在重新读取两端并核对，确认没有变化后才开始写入…' : `已处理 ${done} / ${total} 项`}</p>
           <p className="field-hint">进度来自本机保存的记录，这里定时重读本机记录，不额外请求论坛。</p>
           {task.stopRequested && <p className="field-hint">已请求停止：不再开始新的读取或写入；已经发出的写入不会撤回。</p>}
+          {task.reminders !== null && <LinkageLine linkage={task.reminders} className="field-hint" />}
         </div>
       </div>
       <div className="sub-recon-actions">
@@ -669,6 +721,8 @@ function PlanOutcome({ task }: { task: Extract<ReconcileTask, { phase: 'finished
       <h3 className="sub-recon-title" id={titleId} tabIndex={-1} data-phase-focus="">
         {MODE_NAME[task.preview.mode]}计划结果
       </h3>
+      {/* The local reminder choice is reported on its own, whatever the plan's remote outcome. */}
+      {task.reminders !== null && <LinkageLine linkage={task.reminders} className="sub-recon-linkage" />}
       {notice !== null && (
         <div className={notice.tone === 'error' ? 'notice notice-error is-compact' : 'notice notice-cached is-compact'} role="alert">
           <Icon name="alert" className="notice-icon" />

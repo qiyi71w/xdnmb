@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, type CSSProperties, type Ref } from 'react'
 import type { RetainedList } from '../../../../shared/content'
 import type { BoardDirectory } from '../../../../shared/forum'
+import { formatReminderCount } from '../../../../shared/reminders'
 import { Icon, type IconName } from '../../components/Icon'
 import { FailureNotice, IdentitySettingsAction, Loading, SourceNotice } from '../../components/Notices'
 import { describeFailure, formatLocalTime } from '../../lib/format'
@@ -29,14 +30,26 @@ interface NavSection {
   items: NavItem[]
 }
 
-/** The remote subscription list does not depend on the forum directory, so it is always offered. */
+/** The remote subscription list and the local 提醒 list do not depend on the forum directory, so they are always offered. */
 const SUBSCRIPTION_SECTION: NavSection = {
   id: 'subscriptions',
   title: '订阅',
-  items: [{ ref: { kind: 'subscriptions' }, label: '订阅的串' }]
+  items: [
+    { ref: { kind: 'subscriptions' }, label: '订阅的串' },
+    { ref: { kind: 'reminders' }, label: '提醒' }
+  ]
 }
 
-const NAV_ICON: Record<ListRef['kind'], IconName> = { subscriptions: 'bookmark', timeline: 'timeline', forum: 'forum' }
+const NAV_ICON: Record<ListRef['kind'], IconName> = { subscriptions: 'bookmark', reminders: 'bell', timeline: 'timeline', forum: 'forum' }
+
+/**
+ * Badge of the 提醒 entry: confirmed unread reminders only (`99+` from 100), hidden at 0. Coverage
+ * that is incomplete, failed or uncertain is a separate marker and never adds to the number.
+ */
+export interface ReminderBadge {
+  unread: number
+  coverageProblem: boolean
+}
 
 function navSections(directory: BoardDirectory | null): NavSection[] {
   const result: NavSection[] = [SUBSCRIPTION_SECTION]
@@ -78,7 +91,8 @@ export function Navigation({
   onOpenRetained,
   onOpenAttempts,
   onOpenOwnPosts,
-  pendingAttempts
+  pendingAttempts,
+  reminderBadge
 }: {
   state: DirectoryState
   selected: ListRef | null
@@ -99,6 +113,8 @@ export function Navigation({
   /** Opens 我的发言. */
   onOpenOwnPosts: () => void
   pendingAttempts: PendingAttempts
+  /** `null` while the reminder overview is not known. */
+  reminderBadge: ReminderBadge | null
 }) {
   const { directory } = state
   const sections = useMemo(() => navSections(directory), [directory])
@@ -130,17 +146,31 @@ export function Navigation({
               {section.items.map((item) => {
                 const key = listKey(item.ref)
                 const current = key === selectedKey
+                const badge = item.ref.kind === 'reminders' ? reminderBadge : null
+                const unread = badge !== null && badge.unread > 0 ? formatReminderCount(badge.unread) : null
+                const marked = badge?.coverageProblem === true
                 return (
                   <li key={key}>
                     <button
                       type="button"
                       className={current ? 'nav-item is-current' : 'nav-item'}
                       aria-current={current ? 'page' : undefined}
+                      aria-label={
+                        unread === null && !marked
+                          ? undefined
+                          : `${item.label}${unread === null ? '' : `，${unread} 条未读`}${marked ? '，部分串检查未完成或无法确认' : ''}`
+                      }
                       onClick={() => onSelect(item.ref)}
                       {...roving.itemProps(key)}
                     >
                       <Icon name={NAV_ICON[item.ref.kind]} className="nav-item-icon" />
                       <span className="nav-item-label">{item.label}</span>
+                      {unread !== null && (
+                        <span className="nav-badge is-count" aria-hidden="true">
+                          {unread}
+                        </span>
+                      )}
+                      {marked && <span className="nav-coverage-mark" aria-hidden="true" title="部分串检查未完成或无法确认" />}
                     </button>
                   </li>
                 )
@@ -256,6 +286,9 @@ export function NavMeasure({ directory, onMeasure }: { directory: BoardDirectory
               <span key={listKey(item.ref)} className="nav-item">
                 <Icon name={NAV_ICON[item.ref.kind]} className="nav-item-icon" />
                 <span className="nav-item-label">{item.label}</span>
+                {/* The widest 提醒 badge stays beside its label at the compact width. */}
+                {item.ref.kind === 'reminders' && <span className="nav-badge is-count">99+</span>}
+                {item.ref.kind === 'reminders' && <span className="nav-coverage-mark" />}
               </span>
             ))}
           </div>

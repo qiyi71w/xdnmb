@@ -93,6 +93,22 @@ export function asStore(db: ReadingDatabase): AppStore {
     getPoWarningEnabled: async () => db.getPoWarningEnabled(),
     setPoWarningEnabled: async (...args) => db.setPoWarningEnabled(...args),
     lastPublicationAt: async (...args) => db.lastPublicationAt(...args),
+    firstProvenNewPost: async (...args) => db.firstProvenNewPost(...args),
+    getReminderRules: async (...args) => db.getReminderRules(...args),
+    setReminderRule: async (...args) => db.setReminderRule(...args),
+    closeReminderThreads: async (...args) => db.closeReminderThreads(...args),
+    reminderRuleSnapshots: async () => db.reminderRuleSnapshots(),
+    getReminderCoverage: async (...args) => db.getReminderCoverage(...args),
+    saveReminderCoverage: async (...args) => db.saveReminderCoverage(...args),
+    getReminderObservations: async (...args) => db.getReminderObservations(...args),
+    reminderOwnRevision: async () => db.reminderOwnRevision(),
+    evaluateReminders: async (...args) => db.evaluateReminders(...args),
+    createReminderRound: async (...args) => db.createReminderRound(...args),
+    saveReminderRound: async (...args) => db.saveReminderRound(...args),
+    recoverReminders: async (...args) => db.recoverReminders(...args),
+    registerReminderNotification: async (...args) => db.registerReminderNotification(...args),
+    settleReminderNotification: async (...args) => db.settleReminderNotification(...args),
+    reminderOverview: async () => db.reminderOverview(),
     close: async () => db.close()
   }
 }

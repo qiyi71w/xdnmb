@@ -17,6 +17,8 @@ import type { ThreadTask } from './threadState'
 import { useReadingViewport } from './useReadingViewport'
 import { useThread } from './useThread'
 import { FavoriteButton, OfflineButton } from '../content/ThreadRetention'
+import { ReminderMenu } from '../reminders/ReminderMenu'
+import { useThreadRules } from '../reminders/useReminders'
 
 const MODE_NAMES: Record<ReadingMode, string> = { all: '全部回复', po: '只看 PO' }
 /** How long a quote target stays marked after the jump. */
@@ -151,6 +153,10 @@ export function ThreadReader({
   const [viewer, setViewer] = useState<ViewerRequest | null>(null)
   const imageView = useMemo<ImageView>(() => ({ viewId, near, openViewer: setViewer }), [viewId, near])
   const closeViewer = useCallback(() => setViewer(null), [])
+  const ruleThreads = useMemo(() => [threadId], [threadId])
+  const rules = useThreadRules(ruleThreads)
+  /** The 提醒 panel floats over the top of the content: nothing is judged read while it is open. */
+  const [reminderPanelOpen, setReminderPanelOpen] = useState(false)
   useEffect(
     () => () => {
       near.disconnect()
@@ -181,7 +187,7 @@ export function ThreadReader({
     contentRef,
     toolbarRef,
     displayed,
-    covered: viewer !== null,
+    covered: viewer !== null || reminderPanelOpen,
     canSave: !temporary,
     knownRead: readingState?.readPostIds ?? NO_POSTS,
     onRead,
@@ -372,6 +378,15 @@ export function ThreadReader({
               </div>
               <div className="toolbar-group">
                 <FavoriteButton threadId={threadId} />
+                <ReminderMenu
+                  threadId={threadId}
+                  label={title ?? `No.${threadId}`}
+                  rules={rules.rulesOf(threadId)}
+                  failure={rules.failure}
+                  onRetry={rules.reload}
+                  onUpdated={rules.updated}
+                  onOpenChange={setReminderPanelOpen}
+                />
                 <OfflineButton threadId={threadId} title={title ?? `No.${threadId}`} />
                 <button type="button" className="btn" onClick={thread.refresh} title="重新读取已加载的最后一页并合并">
                   <Icon name="refresh" />

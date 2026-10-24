@@ -29,6 +29,8 @@ export interface ListHandle {
 export type ListMemory =
   | { kind: 'feed'; state: FeedState; scrollTop: number; anchor: WorkspaceList['anchor'] }
   | { kind: 'subscriptions'; state: SubscriptionListState; scrollTop: number; view: 'list' | 'reconcile' }
+  /** The 提醒 list reads its overview again on mount; only where it was scrolled is kept. */
+  | { kind: 'reminders'; scrollTop: number }
 
 /**
  * Mounted readers and lists, keyed by the history entry key that shows them, plus the runtime
@@ -72,6 +74,8 @@ export function captureLists(tabs: TabsState, registry: ContentRegistry): Worksp
         })
       } else if (memory?.kind === 'subscriptions') {
         lists.push({ entryKey: entry.key, pages: 1, anchor: null, scrollTop: Math.max(0, memory.scrollTop), subscriptionView: memory.view })
+      } else if (memory?.kind === 'reminders') {
+        lists.push({ entryKey: entry.key, pages: 1, anchor: null, scrollTop: Math.max(0, memory.scrollTop) })
       } else if (saved !== undefined) {
         lists.push(saved)
       }

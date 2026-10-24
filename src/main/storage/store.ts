@@ -55,7 +55,7 @@ export async function openReadingStore(options: {
     }
   }
 
-  /** Legacy reading fallbacks stay usable offline; publication reads and all writes must fail. */
+  /** Legacy reading fallbacks stay usable offline; publication/reminder reads and all writes fail. */
   function unavailable<Method extends StorageMethod>(
     method: Method,
     args: Parameters<ReadingDatabase[Method]>
@@ -219,6 +219,22 @@ export async function openReadingStore(options: {
     getPoWarningEnabled: () => request('getPoWarningEnabled'),
     setPoWarningEnabled: (enabled) => request('setPoWarningEnabled', enabled),
     lastPublicationAt: (credentialId, forumId) => request('lastPublicationAt', credentialId, forumId),
+    firstProvenNewPost: (since) => request('firstProvenNewPost', since),
+    getReminderRules: (ids) => request('getReminderRules', ids),
+    setReminderRule: (id, kind, enabled, at) => request('setReminderRule', id, kind, enabled, at),
+    closeReminderThreads: (ids, reason, at) => request('closeReminderThreads', ids, reason, at),
+    reminderRuleSnapshots: () => request('reminderRuleSnapshots'),
+    getReminderCoverage: (id, mode) => request('getReminderCoverage', id, mode),
+    saveReminderCoverage: (value) => request('saveReminderCoverage', value),
+    getReminderObservations: (id, mode) => request('getReminderObservations', id, mode),
+    reminderOwnRevision: () => request('reminderOwnRevision'),
+    evaluateReminders: (input) => request('evaluateReminders', input),
+    createReminderRound: (trigger, at, total) => request('createReminderRound', trigger, at, total),
+    saveReminderRound: (value) => request('saveReminderRound', value),
+    recoverReminders: (at) => request('recoverReminders', at),
+    registerReminderNotification: (id, scope, at) => request('registerReminderNotification', id, scope, at),
+    settleReminderNotification: (id, state) => request('settleReminderNotification', id, state),
+    reminderOverview: () => request('reminderOverview'),
     close() {
       if (!closePromise) {
         closing = true

@@ -101,6 +101,7 @@ function forumId(value: unknown): string {
 function feedRef(value: unknown): ListRef {
   const input = object(value)
   if (input.kind === 'subscriptions') return { kind: 'subscriptions' }
+  if (input.kind === 'reminders') return { kind: 'reminders' }
   if (input.kind !== 'forum' && input.kind !== 'timeline') fail()
   return { kind: input.kind, id: forumId(input.id) }
 }

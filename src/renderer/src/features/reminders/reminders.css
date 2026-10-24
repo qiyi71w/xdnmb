@@ -1,0 +1,571 @@
+/* ---------- 提醒 control: button + small panel of three checkboxes ---------- */
+
+.reminder-menu {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.reminder-trigger.is-on {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.reminder-trigger.is-on .icon {
+  color: var(--accent-ink);
+}
+
+.reminder-trigger.is-warning,
+.reminder-trigger.is-warning .icon {
+  color: var(--warn-ink);
+}
+
+/* In list rows the label may wrap instead of widening the action column. */
+.reminder-trigger.btn-small {
+  max-width: 11em;
+  white-space: normal;
+  text-align: start;
+}
+
+.reminder-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  inset-inline-end: 0;
+  width: max-content;
+  max-width: min(22rem, calc(100vw - 24px));
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--radius-l);
+  background: var(--glass-strong);
+  backdrop-filter: blur(24px) saturate(1.5);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+  font-size: var(--text-sm);
+  text-align: start;
+  white-space: normal;
+}
+
+.reminder-panel-title {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.reminder-panel-note {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+
+.reminder-panel-failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  color: var(--danger-ink);
+}
+
+.reminder-panel-failure p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reminder-panel-message:empty {
+  display: none;
+}
+
+.reminder-panel-message .form-message {
+  margin: 0;
+}
+
+.reminder-rules {
+  display: grid;
+  gap: 2px;
+}
+
+.reminder-rule {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-m);
+  cursor: pointer;
+}
+
+.reminder-rule:hover {
+  background: var(--hover);
+}
+
+.reminder-rule input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.reminder-rule-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.reminder-rule-name {
+  font-weight: 600;
+}
+
+.reminder-rule-help,
+.reminder-rule-state {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.reminder-rule-state.is-on {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+/* ---------- 保留 / 关闭 choice inside unsubscribe and sync-delete confirmations ---------- */
+
+.reminder-choice {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.reminder-choice-legend {
+  padding: 0 4px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.reminder-choice-list {
+  display: grid;
+  gap: 2px;
+  max-height: 10em;
+  overflow: auto;
+  padding: 2px 4px;
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.reminder-choice-kinds {
+  margin-inline-start: 6px;
+  color: var(--ink-3);
+}
+
+.reminder-choice-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.reminder-choice-row:hover {
+  background: var(--hover);
+}
+
+.reminder-choice-row input {
+  flex: none;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.reminder-choice-row > span {
+  display: grid;
+  min-width: 0;
+}
+
+.reminder-choice-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.reminder-choice-help {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.reminder-choice-note {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.reminder-linkage {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.reminder-linkage .icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.reminder-linkage.is-warning {
+  color: var(--warn-ink);
+}
+
+.sub-recon-linkage {
+  margin: 8px 0;
+  font-size: var(--text-sm);
+}
+
+/* ---------- 提醒 list ---------- */
+
+.reminder-total {
+  flex: none;
+  display: grid;
+  justify-items: end;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.reminder-total-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--warn-ink);
+}
+
+.reminder-checker {
+  display: grid;
+  gap: 6px;
+  margin: 10px 10px 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--info-bg);
+  font-size: var(--text-sm);
+}
+
+.reminder-checker-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.reminder-checker-status {
+  flex: 1 1 12em;
+  min-width: 0;
+}
+
+.reminder-checker-status .loading {
+  padding: 0;
+}
+
+.reminder-checker-line {
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.reminder-checker-line.is-warning {
+  color: var(--warn-ink);
+}
+
+.reminder-checker-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.reminder-checker-message .icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.reminder-checker-message.is-warn {
+  color: var(--warn-ink);
+}
+
+.reminder-checker-message.is-error {
+  color: var(--danger-ink);
+}
+
+.reminder-checker-hint {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.reminder-groups {
+  display: grid;
+  gap: 8px;
+  padding: 6px 8px 0;
+}
+
+.reminder-group {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  background: var(--paper);
+}
+
+.reminder-group.is-selected {
+  border-color: transparent;
+  box-shadow: inset 0 0 0 2px var(--selected);
+}
+
+.reminder-group-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.reminder-group-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.reminder-group-title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.reminder-group-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.reminder-group-line {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.reminder-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.reminder-chip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.reminder-chip-start {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.reminder-state {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.reminder-state-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+}
+
+.reminder-state-name .loading {
+  padding: 0;
+  font-size: var(--text-xs);
+}
+
+.reminder-state-detail {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.reminder-state.is-warning,
+.reminder-state.is-warning .tag {
+  color: var(--warn-ink);
+}
+
+.reminder-state.is-warning .tag {
+  background: var(--warn-bg);
+}
+
+.reminder-state.is-error,
+.reminder-state.is-error .tag {
+  color: var(--danger-ink);
+}
+
+.reminder-state.is-error .tag {
+  background: var(--danger-bg);
+}
+
+.reminder-issues {
+  display: grid;
+  gap: 1px;
+}
+
+.reminder-issues li {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--warn-ink);
+}
+
+.reminder-issues .icon,
+.reminder-uncertain .icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.reminder-counts {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.reminder-unread {
+  font-weight: 650;
+  color: var(--accent-ink);
+}
+
+.reminder-uncertain {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--warn-ink);
+}
+
+.reminder-events {
+  display: grid;
+  gap: 1px;
+  margin: 0 -6px;
+}
+
+.reminder-event {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 6px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  text-align: start;
+  cursor: pointer;
+}
+
+.reminder-event:hover {
+  background: var(--hover);
+}
+
+.reminder-event:focus-visible {
+  outline-offset: -2px;
+}
+
+.reminder-event-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  font-size: var(--text-xs);
+}
+
+.reminder-event-kind {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.reminder-event-time {
+  margin-inline-start: auto;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.reminder-event-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.reminder-event.is-unread .reminder-event-excerpt {
+  color: var(--ink);
+}
+
+.reminder-event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.reminder-open {
+  padding: 2px 6px 8px;
+}
+
+.reminder-open-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-s);
+  background: var(--info-bg);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.reminder-open-row.is-error {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+
+.reminder-open-row .loading {
+  padding: 0;
+  font-size: var(--text-xs);
+}
+
+.reminder-open-text {
+  flex: 1 1 14em;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.reminder-open-text .icon {
+  flex: none;
+  margin-top: 2px;
+}

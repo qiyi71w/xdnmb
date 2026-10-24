@@ -44,7 +44,7 @@ export interface LifecycleDeps {
   closeAction(): Promise<CloseAction>
   publication: Pick<PublicationService, 'inFlight' | 'setUnattended' | 'abandon' | 'unstoredResults' | 'retryUnstored'>
   /** Stops window-independent background work (reads, downloads, checks) once finishing starts. */
-  stopBackgroundWork(): void
+  stopBackgroundWork(): void | Promise<void>
   /** Best-effort system notification; may be unavailable or throw. Launch notices are already stored. */
   notify(summary: FinishingSummary): void
   /** Ends the process (storage is closed on the way out). */
@@ -68,8 +68,10 @@ export interface Lifecycle {
   presentQuit(): void
   cancelQuit(): void
   completeQuit(): void
-  /** Explicit opening from the tray, the Dock, a second instance or a system notification. */
+  /** Explicit opening from the tray, the Dock or a second instance. */
   reopen(): void
+  /** Notification clicks reveal/create a window without starting another check. */
+  revealWithoutTrigger(): Promise<void>
 }
 
 export function createLifecycle(deps: LifecycleDeps): Lifecycle {
@@ -78,14 +80,17 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
   /** Bumped when a finishing ends (cancelled by reopening): its late timers and results are ignored. */
   let generation = 0
   let opening = false
+  let openingTask: Promise<void> | null = null
 
   /** `trigger`: an explicit opening to report; `null` when the app brings its window back itself. */
   async function openWindow(trigger: LaunchTrigger | null): Promise<void> {
     opening = true
     try {
-      await window.open()
+      openingTask = window.open()
+      await openingTask
     } finally {
       opening = false
+      openingTask = null
     }
     if (phase === 'running' && trigger !== null) deps.onTrigger(trigger)
   }
@@ -102,7 +107,8 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
     phase = 'finishing'
     const current = ++generation
     window.destroy()
-    deps.stopBackgroundWork()
+    await deps.stopBackgroundWork()
+    if (generation !== current || phase !== 'finishing') return
     deps.publication.setUnattended(true)
     const summary: FinishingSummary = { failed: [], unknown: [] }
     const record = (attempt: PublicationAttempt | null) => {
@@ -217,6 +223,17 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       }
       window.reveal()
       if (state === 'hidden') deps.onTrigger('reopen')
+    },
+    async revealWithoutTrigger() {
+      if (phase === 'exiting') return
+      if (phase === 'finishing') {
+        generation++
+        phase = 'running'
+        deps.publication.setUnattended(false)
+      }
+      if (openingTask !== null) await openingTask
+      else if (window.state() === 'none') await openWindow(null)
+      window.reveal()
     }
   }
 }

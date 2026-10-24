@@ -60,13 +60,14 @@ export interface ThreadOpen {
 export type EntryOrigin = 'quote' | null
 
 /**
- * What a list entry shows: a forum/timeline feed, or the remote subscription list of whichever
- * source (App / 网页) is currently selected. Renderer-only; forum reads still take a `FeedRef`.
+ * What a list entry shows: a forum/timeline feed, the remote subscription list of whichever
+ * source (App / 网页) is currently selected, or the local 提醒 list (reminder events by thread).
+ * Renderer-only; forum reads still take a `FeedRef`.
  */
-export type ListRef = FeedRef | { kind: 'subscriptions' }
+export type ListRef = FeedRef | { kind: 'subscriptions' } | { kind: 'reminders' }
 
 export function listKey(ref: ListRef): string {
-  return ref.kind === 'subscriptions' ? 'subscriptions' : `${ref.kind}:${ref.id}`
+  return ref.kind === 'subscriptions' || ref.kind === 'reminders' ? ref.kind : `${ref.kind}:${ref.id}`
 }
 
 /**

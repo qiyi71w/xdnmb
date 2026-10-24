@@ -14,6 +14,7 @@ import {
   verificationText
 } from './subscriptionText'
 import { useSubscriptionsContext, type ActiveWrite, type WriteNotice } from './useSubscriptions'
+import { LinkageLine } from '../reminders/ReminderLinkage'
 
 function objectLine(write: Pick<ActiveWrite, 'source' | 'threadId' | 'label'>): string {
   const label = write.label.trim()
@@ -40,6 +41,7 @@ export function WriteStatus() {
                 ? `已先保存这次意图，使用配置代次 ${active.generation}；等待服务端报告后回读核对。之后切换来源或身份不会改变这次操作。`
                 : `只读核对，使用这条记录当时的身份与配置代次 ${active.generation}，不会再次发出写入。`}
             </p>
+            {active.reminders !== null && <LinkageLine linkage={active.reminders} className="sub-write-detail" />}
             {active.stopRequested && (
               <p className="sub-write-detail">已请求停止读取；已经发出的写入不会因此撤回。</p>
             )}
@@ -105,6 +107,8 @@ function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: ()
             {line}
           </p>
         ))}
+        {/* The local reminder choice is its own statement, true whatever the remote outcome was. */}
+        {write.reminders !== null && <LinkageLine linkage={write.reminders} className="sub-write-detail" />}
       </div>
       <button type="button" className="icon-btn" onClick={onDismiss} aria-label="关闭这条结果">
         <Icon name="close" size={14} />

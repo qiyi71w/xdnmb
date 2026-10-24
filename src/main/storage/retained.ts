@@ -95,6 +95,7 @@ export class RetainedContentDatabase {
       const personalTables = ['thread_reading', 'reading_positions', 'post_reads', 'thread_attention', 'end_observations', 'thread_visits', 'settings', 'credentials', 'identity_roles', 'drafts', 'thread_post_identities', 'favorites', 'retained_titles', 'post_threads', 'reading_observations', 'offline_copies', 'offline_pages', 'offline_page_posts', 'offline_images', 'image_holders', 'content_readers', 'draft_attachments']
       // Observations and fixed-context write/readback evidence are durable, not ordinary cache.
       personalTables.push('subscription_app_credentials', 'subscription_configuration', 'subscription_observations', 'subscription_operations')
+      personalTables.push('reminder_rules', 'reminder_coverage', 'reminder_events', 'reminder_rounds', 'reminder_notifications')
       let personalDataBytes = 0
       for (const table of personalTables) {
         const columns = db.prepare<[], { name: string }>(`PRAGMA table_info(${table})`).all().map((column) => `coalesce(length(CAST("${column.name}" AS BLOB)), 0)`)
