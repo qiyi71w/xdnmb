@@ -6,6 +6,7 @@ import { Readable } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import type { AppPlatform } from '../shared/api'
 import { IMAGE_FORMAT_EXTENSION, IMAGE_SCHEME } from '../shared/images'
+import { createDraftService } from './drafts/service'
 import { createForumClient } from './forum/client'
 import { createForumTransport } from './forum/transport'
 import { IMAGE_MEDIA_TYPE, openManagedImageFiles, type ManagedImageFiles } from './images/files'
@@ -111,13 +112,17 @@ function createWindow(): BrowserWindow {
   return window
 }
 
-/** Serves `xidao-image://file/<managed name>` from the image directory; anything else is 404. */
-function serveManagedImages(files: ManagedImageFiles): void {
+/**
+ * Serves `xidao-image://file/<managed name>` (forum images) and `xidao-image://draft/<managed name>`
+ * (draft attachment copies) from their directories; anything else is 404.
+ */
+function serveManagedImages(directories: Record<'file' | 'draft', ManagedImageFiles>): void {
   const notFound = () => new Response(null, { status: 404 })
   protocol.handle(IMAGE_SCHEME, async (request) => {
     const url = new URL(request.url)
-    const name = url.hostname === 'file' ? url.pathname.slice(1) : ''
-    const path = files.pathOf(name)
+    const files = url.hostname === 'file' || url.hostname === 'draft' ? directories[url.hostname] : null
+    const name = url.pathname.slice(1)
+    const path = files === null ? null : files.pathOf(name)
     if (path === null) return notFound()
     try {
       const stat = await lstat(path)
@@ -174,13 +179,19 @@ async function start(): Promise<void> {
   })
   // Before any view can load images: drop last run's reading holders and leftover files.
   await images.recover().catch(() => console.error('[images] recovery failed'))
-  serveManagedImages(imageFiles)
+
+  const draftFiles = await openManagedImageFiles(join(app.getPath('userData'), 'draft-images'))
+  const drafts = createDraftService({ store: openedStore, files: draftFiles })
+  // No editor exists yet: copies no saved draft references, and leftover files, are removed.
+  await drafts.recover().catch(() => console.error('[drafts] recovery failed'))
+  serveManagedImages({ file: imageFiles, draft: draftFiles })
 
   installMenu()
   const ipc = registerIpc({
     reading,
     images,
     identities,
+    drafts,
     store: openedStore,
     getStatus: () => ({ storage: openedStore.status, platform }),
     async chooseSavePath(sender, suggestedName, format) {
@@ -194,6 +205,16 @@ async function start(): Promise<void> {
       }
       const result = window === null ? await dialog.showSaveDialog(options) : await dialog.showSaveDialog(window, options)
       return result.canceled || !result.filePath ? null : result.filePath
+    },
+    async chooseImageFile(sender) {
+      const window = BrowserWindow.fromWebContents(sender)
+      const options: Electron.OpenDialogOptions = {
+        title: '选择附图',
+        filters: [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }],
+        properties: ['openFile']
+      }
+      const result = window === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(window, options)
+      return result.canceled ? null : (result.filePaths[0] ?? null)
     },
     isTrustedSender: (event: IpcMainInvokeEvent) =>
       mainWindow !== null &&

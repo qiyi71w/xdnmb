@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
+import { EditorDock } from '../features/editor/EditorDock'
 import type { FeedRef, ForumId, ThreadSummary } from '../../../shared/forum'
 import { feedKey, type FeedInfo } from '../features/directory/feeds'
 import { FeedPane } from '../features/feed/FeedPane'
@@ -78,6 +79,7 @@ export function TabView({
           displayed={active}
           forumName={forumName}
           onBackToList={null}
+          footer={<EditorDock tabId={tab.id} target={{ kind: 'reply', threadId: entry.thread.threadId }} displayed={active} />}
         />
       </main>
     )
@@ -96,10 +98,18 @@ export function TabView({
     )
   } else {
     const info = feedInfo(entry.feed)
+    // New threads go to forums only; timelines have no post target.
+    const listDock =
+      entry.feed.kind === 'forum' ? (
+        <EditorDock tabId={tab.id} target={{ kind: 'thread', forumId: entry.feed.id }} displayed={active && listVisible} />
+      ) : null
     const list =
       info === null ? (
-        <div className="pane-empty">
-          <Loading>正在读取版面目录…</Loading>
+        <div className="list-pane">
+          <div className="pane-empty list-pending">
+            <Loading>正在读取版面目录…</Loading>
+          </div>
+          {listDock}
         </div>
       ) : (
         <FeedPane
@@ -109,6 +119,7 @@ export function TabView({
           forumNames={forumNames}
           selectedThreadId={tab.split ? (entry.thread?.threadId ?? null) : null}
           onOpenThread={(summary) => onSelectThread(tab.id, summary)}
+          footer={listDock}
         />
       )
     body = splitShown ? (
@@ -136,6 +147,13 @@ export function TabView({
               displayed={active && readerVisible}
               forumName={forumName}
               onBackToList={single ? () => onShowPane(tab.id, 'list') : null}
+              footer={
+                <EditorDock
+                  tabId={tab.id}
+                  target={{ kind: 'reply', threadId: entry.thread.threadId }}
+                  displayed={active && readerVisible}
+                />
+              }
             />
           )}
         </main>

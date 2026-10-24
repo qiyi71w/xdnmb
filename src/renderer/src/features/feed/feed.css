@@ -1,9 +1,13 @@
+/* A column: the scroller takes what the bottom editor of a forum leaves. */
 .list-pane {
   height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .list-scroll {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow: hidden auto;
   overscroll-behavior: contain;
 }

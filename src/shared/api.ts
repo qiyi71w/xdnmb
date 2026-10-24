@@ -3,6 +3,10 @@ import type {
   CredentialId, IdentityMutationResult, IdentityOverview, IdentityRole, ImportResult
 } from './identity'
 import type { ImageLoadOutcome, ImageLoadRequest, ImageSaveOutcome, ImageViewId } from './images'
+import type {
+  AttachmentId, AttachResult, DraftDeleteResult, DraftId, DraftListResult, DraftSaveInput, DraftSaveResult, EditorId,
+  IdentityChoice, PostTarget
+} from './drafts'
 import type { AppSettings, MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
 
 /**
@@ -177,6 +181,34 @@ export interface XidaoApi {
     /** Sets one role only; `null` clears it to `none`. */
     select(input: { role: IdentityRole; credentialId: CredentialId | null }): Promise<IdentityMutationResult>
   }
+  /**
+   * Saved drafts and editor attachments. Drafts are never sent automatically; nothing here talks
+   * to the forum.
+   */
+  drafts: {
+    /** All saved drafts, most recently saved first; several may share one target. */
+    list(): Promise<DraftListResult>
+    /** Creates a draft or replaces its saved version; on failure the old version stays. */
+    save(input: DraftSaveInput): Promise<DraftSaveResult>
+    /** Deletes the draft record; its attachment copy is removed once nothing holds it. */
+    delete(input: { draftId: DraftId }): Promise<DraftDeleteResult>
+    /** System file chooser, then a managed copy held for `editorId`. The chosen file is only read. */
+    attachImage(input: { editorId: EditorId }): Promise<AttachResult>
+    /** The attachment the editor now shows (`null`: none). Held copies are never removed. */
+    holdAttachment(input: { editorId: EditorId; attachmentId: AttachmentId | null }): Promise<void>
+    /** The editor was closed or discarded. */
+    releaseEditor(input: { editorId: EditorId }): Promise<void>
+  }
+  /**
+   * 发言饼干 for editors: a reply starts with the thread's own selection, else the global default;
+   * a new thread with the global default. Never changes browse or sync identities.
+   */
+  posting: {
+    /** Starting identity for a new editor: the thread's own selection, else the global default. */
+    identityFor(input: { target: PostTarget }): Promise<IdentityChoice>
+    /** Remembers an explicit selection made in a reply editor for that thread only. */
+    selectThreadIdentity(input: { threadId: ThreadId; credentialId: CredentialId }): Promise<IdentityMutationResult>
+  }
   app: {
     getStatus(): Promise<AppStatus>
   }
@@ -207,5 +239,13 @@ export const IpcChannel = {
   identityRename: 'identities:rename',
   identityRemove: 'identities:remove',
   identitySelect: 'identities:select',
+  listDrafts: 'drafts:list',
+  saveDraft: 'drafts:save',
+  deleteDraft: 'drafts:delete',
+  attachDraftImage: 'drafts:attach-image',
+  holdDraftAttachment: 'drafts:hold-attachment',
+  releaseEditor: 'drafts:release-editor',
+  postingIdentityFor: 'posting:identity-for',
+  selectThreadIdentity: 'posting:select-thread-identity',
   getStatus: 'app:get-status'
 } as const

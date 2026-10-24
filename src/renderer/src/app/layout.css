@@ -296,6 +296,13 @@
   text-align: center;
 }
 
+/* Placeholder above a forum's editor while the directory has not described the forum. */
+.pane-empty.list-pending {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
 .pane-empty-title {
   font-size: 0.9375rem;
   font-weight: 600;

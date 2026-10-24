@@ -73,8 +73,12 @@ export async function openReadingStore(options: {
       case 'loadThreadPage':
       case 'getPostImage':
       case 'findImageResource':
+      case 'getDraftAttachment':
       case 'loadCredentialCiphertext': value = null; break
+      case 'getThreadPostIdentity': value = { state: 'none' }; break
       case 'listImageFileNames':
+      case 'listDraftAttachmentFileNames':
+      case 'listDrafts':
       case 'listCredentials':
       case 'loadCredentialCiphertexts': value = []; break
       case 'close': value = undefined; break
@@ -147,6 +151,15 @@ export async function openReadingStore(options: {
     deleteCredential: (id) => request('deleteCredential', id),
     loadRoleSelections: () => request('loadRoleSelections'),
     setRoleSelection: (role, id) => request('setRoleSelection', role, id),
+    listDrafts: () => request('listDrafts'),
+    saveDraft: (input, at) => request('saveDraft', input, at),
+    deleteDraft: (id) => request('deleteDraft', id),
+    insertDraftAttachment: (input) => request('insertDraftAttachment', input),
+    getDraftAttachment: (id) => request('getDraftAttachment', id),
+    deleteUnreferencedAttachments: (keep) => request('deleteUnreferencedAttachments', keep),
+    listDraftAttachmentFileNames: () => request('listDraftAttachmentFileNames'),
+    getThreadPostIdentity: (threadId) => request('getThreadPostIdentity', threadId),
+    setThreadPostIdentity: (threadId, id, at) => request('setThreadPostIdentity', threadId, id, at),
     close() {
       if (!closePromise) {
         closing = true

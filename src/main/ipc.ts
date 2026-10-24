@@ -3,7 +3,11 @@ import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy, 
 import type { FeedRef, PostId, ReadingMode } from '../shared/forum'
 import type { ImageFormat, ImageKind } from '../shared/images'
 import { IDENTITY_ROLES, type CredentialId, type IdentityRole } from '../shared/identity'
+import {
+  MAX_DRAFT_CONTENT_LENGTH, MAX_DRAFT_FIELD_LENGTH, type DraftSaveInput, type PostFields, type PostTarget
+} from '../shared/drafts'
 import { DEFAULT_SETTINGS, type AppSettings, type ReadingAnchor } from '../shared/reading'
+import type { DraftService } from './drafts/service'
 import type { IdentityService } from './identity/service'
 import type { ImageService } from './images/service'
 import type { ReadingService } from './reading/service'
@@ -17,6 +21,8 @@ const MAX_PAGE = 100_000
 const MAX_URL_LENGTH = 2048
 const MAX_VIEWPORT_OFFSET = 100_000
 const CREDENTIAL_ID = /^[1-9]\d{0,14}$/
+/** Draft and attachment IDs: never-reused local row IDs. */
+const LOCAL_ID = /^[1-9]\d{0,14}$/
 /** Pasted input and names beyond this are refused outright; the parsers report smaller limits. */
 const MAX_TEXT_LENGTH = 65_536
 
@@ -32,11 +38,14 @@ interface IpcDeps {
   images: ImageService
   store: ReadingStore
   identities: IdentityService
+  drafts: DraftService
   getStatus: () => AppStatus
   /** True only for the app's own renderer document in its main frame. */
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
   /** System save dialog for the sender's window; null when dismissed. */
   chooseSavePath: (sender: WebContents, suggestedName: string, format: ImageFormat) => Promise<string | null>
+  /** System open dialog for one image file; null when dismissed. */
+  chooseImageFile: (sender: WebContents) => Promise<string | null>
 }
 
 function record(input: unknown): Record<string, unknown> {
@@ -84,6 +93,50 @@ function credentialId(value: unknown): CredentialId {
 function identityRole(value: unknown): IdentityRole {
   if (!IDENTITY_ROLES.includes(value as IdentityRole)) throw new InvalidRequestError()
   return value as IdentityRole
+}
+
+function localId(value: unknown): string {
+  if (typeof value !== 'string' || !LOCAL_ID.test(value)) throw new InvalidRequestError()
+  return value
+}
+
+function nullableCredentialId(value: unknown): CredentialId | null {
+  return value === null ? null : credentialId(value)
+}
+
+function postTarget(value: unknown): PostTarget {
+  const input = record(value)
+  if (input.kind === 'reply') return { kind: 'reply', threadId: forumId(input.threadId) }
+  if (input.kind === 'thread') return { kind: 'thread', forumId: forumId(input.forumId) }
+  throw new InvalidRequestError()
+}
+
+function boundedText(value: unknown, max: number): string {
+  if (typeof value !== 'string' || value.length > max) throw new InvalidRequestError()
+  return value
+}
+
+function postFields(value: unknown): PostFields {
+  const input = record(value)
+  if (typeof input.watermark !== 'boolean') throw new InvalidRequestError()
+  return {
+    content: boundedText(input.content, MAX_DRAFT_CONTENT_LENGTH),
+    title: boundedText(input.title, MAX_DRAFT_FIELD_LENGTH),
+    name: boundedText(input.name, MAX_DRAFT_FIELD_LENGTH),
+    email: boundedText(input.email, MAX_DRAFT_FIELD_LENGTH),
+    watermark: input.watermark
+  }
+}
+
+function draftSaveInput(value: unknown): DraftSaveInput {
+  const input = record(value)
+  return {
+    draftId: input.draftId === null ? null : localId(input.draftId),
+    target: postTarget(input.target),
+    credentialId: nullableCredentialId(input.credentialId),
+    fields: postFields(input.fields),
+    attachmentId: input.attachmentId === null ? null : localId(input.attachmentId)
+  }
 }
 
 function feedRef(value: unknown): FeedRef {
@@ -163,7 +216,9 @@ class OperationRegistry {
   }
 }
 
-export function registerIpc({ reading, images, identities, store, getStatus, isTrustedSender, chooseSavePath }: IpcDeps): {
+export function registerIpc({
+  reading, images, identities, drafts, store, getStatus, isTrustedSender, chooseSavePath, chooseImageFile
+}: IpcDeps): {
   cancelAllFor: (sender: WebContents) => void
 } {
   const operations = new OperationRegistry()
@@ -324,12 +379,40 @@ export function registerIpc({ reading, images, identities, store, getStatus, isT
     return identities.select(identityRole(input.role), id)
   })
 
+  // Drafts and posting identity choice: local only, nothing reaches the forum.
+  handle(IpcChannel.listDrafts, async () => drafts.list())
+  handle(IpcChannel.saveDraft, async (_event, raw) => drafts.save(draftSaveInput(raw)))
+  handle(IpcChannel.deleteDraft, async (_event, raw) => drafts.delete(localId(record(raw).draftId)))
+
+  handle(IpcChannel.attachDraftImage, async (event, raw) => {
+    const editorId = viewId(record(raw).editorId)
+    return drafts.attachImage(String(event.sender.id), editorId, await chooseImageFile(event.sender))
+  })
+
+  handle(IpcChannel.holdDraftAttachment, async (event, raw) => {
+    const input = record(raw)
+    const attachmentId = input.attachmentId === null ? null : localId(input.attachmentId)
+    await drafts.holdAttachment(String(event.sender.id), viewId(input.editorId), attachmentId)
+  })
+
+  handle(IpcChannel.releaseEditor, async (event, raw) => {
+    await drafts.releaseEditor(String(event.sender.id), viewId(record(raw).editorId))
+  })
+
+  handle(IpcChannel.postingIdentityFor, async (_event, raw) => drafts.identityFor(postTarget(record(raw).target)))
+
+  handle(IpcChannel.selectThreadIdentity, async (_event, raw) => {
+    const input = record(raw)
+    return drafts.selectThreadIdentity(forumId(input.threadId), credentialId(input.credentialId))
+  })
+
   handle(IpcChannel.getStatus, async () => getStatus())
 
   return {
     cancelAllFor: (sender) => {
       operations.cancelAllFor(sender)
       void images.releaseOwner(String(sender.id))
+      void drafts.releaseOwner(String(sender.id))
     }
   }
 }

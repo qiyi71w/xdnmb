@@ -1,6 +1,6 @@
 import type { AppPlatform } from '../../../shared/api'
 
-export type ShortcutAction = 'new-tab' | 'close-tab' | 'next-tab' | 'previous-tab' | 'refresh' | 'back' | 'forward'
+export type ShortcutAction = 'new-tab' | 'close-tab' | 'next-tab' | 'previous-tab' | 'refresh' | 'save' | 'back' | 'forward'
 
 export interface KeyInput {
   key: string
@@ -18,8 +18,8 @@ function letterOf(event: KeyInput): string | null {
 }
 
 /**
- * App shortcuts (spec I11). macOS: Cmd+T/W/R, Control+Tab, Cmd+[ / Cmd+]. Windows/Linux:
- * Ctrl+T/W/R, Ctrl+Tab, Alt+Left / Alt+Right. Backspace is never “back”.
+ * App shortcuts. macOS: Cmd+T/W/R/S, Control+Tab, Cmd+[ / Cmd+]. Windows/Linux:
+ * Ctrl+T/W/R/S, Ctrl+Tab, Alt+Left / Alt+Right. Backspace is never “back”.
  */
 export function matchShortcut(event: KeyInput, platform: AppPlatform): ShortcutAction | null {
   if (event.key === 'Tab' && event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -44,6 +44,8 @@ export function matchShortcut(event: KeyInput, platform: AppPlatform): ShortcutA
       return 'close-tab'
     case 'r':
       return 'refresh'
+    case 's':
+      return 'save'
     default:
       return null
   }
@@ -62,6 +64,7 @@ const LABELS: Record<ShortcutAction, { mac: string; other: string }> = {
   'next-tab': { mac: '⌃Tab', other: 'Ctrl+Tab' },
   'previous-tab': { mac: '⌃⇧Tab', other: 'Ctrl+Shift+Tab' },
   refresh: { mac: '⌘R', other: 'Ctrl+R' },
+  save: { mac: '⌘S', other: 'Ctrl+S' },
   back: { mac: '⌘[', other: 'Alt+←' },
   forward: { mac: '⌘]', other: 'Alt+→' }
 }
@@ -70,4 +73,10 @@ const LABELS: Record<ShortcutAction, { mac: string; other: string }> = {
 export function shortcutLabel(action: ShortcutAction, platform: AppPlatform | null): string {
   if (platform === null) return ''
   return platform === 'darwin' ? LABELS[action].mac : LABELS[action].other
+}
+
+/** `aria-keyshortcuts` of 保存草稿; undefined until the platform is known. */
+export function saveAriaShortcut(platform: AppPlatform | null): string | undefined {
+  if (platform === null) return undefined
+  return platform === 'darwin' ? 'Meta+S' : 'Control+S'
 }

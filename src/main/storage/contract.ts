@@ -13,6 +13,7 @@ import type {
 import type { ImageFormat, ImageKind } from '../../shared/images'
 import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, ThreadReadingState } from '../../shared/reading'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
+import type { AttachmentId, DraftId, DraftSaveInput, PostFields, PostTarget } from '../../shared/drafts'
 
 /** A write was refused because the database is read-only (newer schema) or unavailable. */
 export class StorageWriteRefusedError extends Error {
@@ -128,4 +129,56 @@ export interface IdentityStore {
   setRoleSelection(role: IdentityRole, id: CredentialId | null): Promise<boolean>
 }
 
-export type AppStore = ReadingStore & IdentityStore
+/** One managed copy of an attached image, as stored. */
+export interface DraftAttachmentRecord {
+  id: AttachmentId
+  fileName: string
+  format: ImageFormat
+  bytes: number
+  width: number
+  height: number
+  originalName: string
+  createdAt: string
+}
+
+export interface DraftRecord {
+  id: DraftId
+  target: PostTarget
+  credentialId: CredentialId | null
+  fields: PostFields
+  attachment: DraftAttachmentRecord | null
+  version: number
+  createdAt: string
+  savedAt: string
+}
+
+export type DraftWriteOutcome =
+  | { ok: true; draft: DraftRecord }
+  | { ok: false; reason: 'not-found' | 'attachment-missing' }
+
+/**
+ * Saved drafts, their attachment records and per-thread 发言饼干 selections. A draft has exactly
+ * one saved version: saving replaces target, identity, fields and attachment together.
+ */
+export interface DraftStore {
+  /** Most recently saved first. */
+  listDrafts(): Promise<DraftRecord[]>
+  /** Creates (`draftId: null`) or replaces a draft's saved version in one transaction. */
+  saveDraft(input: DraftSaveInput, at: string): Promise<DraftWriteOutcome>
+  /** False when it did not exist. Its attachment record stays until unreferenced records are deleted. */
+  deleteDraft(id: DraftId): Promise<boolean>
+  insertDraftAttachment(input: Omit<DraftAttachmentRecord, 'id'>): Promise<DraftAttachmentRecord>
+  getDraftAttachment(id: AttachmentId): Promise<DraftAttachmentRecord | null>
+  /**
+   * Deletes, in one transaction, attachment records no draft references except those in `keep`,
+   * and returns their file names for removal.
+   */
+  deleteUnreferencedAttachments(keep: AttachmentId[]): Promise<string[]>
+  listDraftAttachmentFileNames(): Promise<string[]>
+  /** The thread's own 发言饼干 selection (`none` when never chosen). */
+  getThreadPostIdentity(threadId: ThreadId): Promise<RoleSelection>
+  /** False (and no change) when `id` is not an existing credential. */
+  setThreadPostIdentity(threadId: ThreadId, id: CredentialId, at: string): Promise<boolean>
+}
+
+export type AppStore = ReadingStore & IdentityStore & DraftStore

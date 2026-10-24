@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { PostId, ReadingMode } from '../../../../shared/forum'
 import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
 import { Loading } from '../../components/Notices'
@@ -27,7 +27,8 @@ export function ThreadPane({
   open,
   displayed,
   forumName,
-  onBackToList
+  onBackToList,
+  footer
 }: {
   entryKey: number
   /** Thread, target and snapshot of the entry; read once when the pane mounts. */
@@ -35,6 +36,8 @@ export function ThreadPane({
   displayed: boolean
   forumName: (forumId: string | null) => string | null
   onBackToList: (() => void) | null
+  /** Shown below the scroller (the reply editor). */
+  footer: ReactNode
 }) {
   const threadId = open.threadId
   const openRef = useRef(open)
@@ -178,6 +181,8 @@ export function ThreadPane({
     if (failed) setNotice('部分已读记录未能保存到本地')
   }
 
+  // The editor appears with the reader: mounting it here too would remount it (and drop its
+  // focus) a moment later when the reader replaces this placeholder.
   if (view === null) {
     return (
       <section className="reader" aria-label={`串 No.${threadId}`}>
@@ -211,6 +216,7 @@ export function ThreadPane({
       onObserved={onObserved}
       onMarkAllRead={() => void markAllRead()}
       onBackToList={onBackToList}
+      footer={footer}
     />
   )
 }

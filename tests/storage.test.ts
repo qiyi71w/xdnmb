@@ -488,12 +488,13 @@ describe('reading context', () => {
     const writer = open(path)
     writer.saveThreadPage(threadPage(1, [post('1001')]), fetchedAt)
     writer.close()
-    // Turn the file into what a version 1 build left behind: no reading-context, image or identity tables.
+    // Turn the file into what a version 1 build left behind: no reading-context, image, identity or draft tables.
     const raw = new Database(path)
     raw.exec(`
       DROP TABLE thread_reading; DROP TABLE reading_positions; DROP TABLE post_reads;
       DROP TABLE thread_attention; DROP TABLE end_observations; DROP TABLE thread_visits; DROP TABLE settings;
       DROP TABLE image_holders; DROP TABLE image_resources; DROP TABLE credentials; DROP TABLE identity_roles;
+      DROP TABLE drafts; DROP TABLE draft_attachments; DROP TABLE thread_post_identities;
     `)
     raw.pragma('user_version = 1')
     raw.close()

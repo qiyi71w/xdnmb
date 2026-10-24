@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { Post, PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
 import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
 import { Icon } from '../../components/Icon'
@@ -81,6 +81,8 @@ export interface ThreadReaderProps {
   onMarkAllRead: () => void
   /** Single-pane fallback: show the list of this entry again. */
   onBackToList: (() => void) | null
+  /** Shown below the scroller (the reply editor); covered with the reader by the image viewer. */
+  footer: ReactNode
 }
 
 export function ThreadReader({
@@ -101,7 +103,8 @@ export function ThreadReader({
   onSavePosition,
   onObserved,
   onMarkAllRead,
-  onBackToList
+  onBackToList,
+  footer
 }: ThreadReaderProps) {
   const startRef = useRef(start)
   const thread = useThread(threadId, mode, initialHead, startPage(startRef.current))
@@ -477,6 +480,9 @@ export function ThreadReader({
             )}
           </div>
         </div>
+      </div>
+      <div className="reader-dock" inert={viewer !== null}>
+        {footer}
       </div>
       {viewer !== null && (
         <ImageViewer

@@ -56,7 +56,8 @@ export function Navigation({
   panelRef,
   id,
   identities,
-  onOpenSettings
+  onOpenSettings,
+  onOpenDrafts
 }: {
   state: DirectoryState
   selected: FeedRef | null
@@ -68,6 +69,8 @@ export function Navigation({
   id?: string
   identities: IdentitiesState
   onOpenSettings: () => void
+  /** Opens the 草稿 library. */
+  onOpenDrafts: () => void
 }) {
   const { directory } = state
   const sections = useMemo(() => navSections(directory), [directory])
@@ -139,6 +142,12 @@ export function Navigation({
       </div>
 
       <DirectoryStatus state={state} />
+      <div className="nav-tools">
+        <button type="button" className="nav-item" aria-haspopup="dialog" onClick={onOpenDrafts}>
+          <Icon name="draft" className="nav-item-icon" />
+          <span className="nav-item-label">草稿</span>
+        </button>
+      </div>
       <IdentityFooter identities={identities} onOpenSettings={onOpenSettings} />
     </nav>
   )

@@ -1,4 +1,4 @@
-import { Fragment, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ForumId, ThreadSummary } from '../../../../shared/forum'
 import { Content, contentText } from '../../components/Content'
 import { Icon } from '../../components/Icon'
@@ -17,7 +17,8 @@ export function FeedPane({
   info,
   forumNames,
   selectedThreadId,
-  onOpenThread
+  onOpenThread,
+  footer
 }: {
   /** History entry showing this list; the shell refreshes it through the content registry. */
   entryKey: number
@@ -25,6 +26,8 @@ export function FeedPane({
   forumNames: ReadonlyMap<ForumId, string>
   selectedThreadId: string | null
   onOpenThread: (thread: ThreadSummary) => void
+  /** Shown below the scroller (the new-thread editor of a forum). */
+  footer: ReactNode
 }) {
   const registry = useContext(ContentRegistryContext)
   // The same entry's list as it was when last unmounted (split toggled, single pane, back/forward).
@@ -196,6 +199,7 @@ export function FeedPane({
           )}
         </div>
       </div>
+      {footer}
     </section>
   )
 }

@@ -16,11 +16,14 @@ import type {
 } from '../../shared/forum'
 import { DEFAULT_SETTINGS } from '../../shared/reading'
 import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, SavedPosition, ThreadReadingState } from '../../shared/reading'
-import type { ImageKind } from '../../shared/images'
+import type { ImageFormat, ImageKind } from '../../shared/images'
 import { IDENTITY_ROLES } from '../../shared/identity'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
+import type { AttachmentId, DraftId, DraftSaveInput, PostTarget } from '../../shared/drafts'
 import { StorageWriteRefusedError } from './contract'
-import type { AppStore, ImageHolder, ImageResourceRecord, NewImageResource, Stored } from './contract'
+import type {
+  AppStore, DraftAttachmentRecord, DraftRecord, DraftWriteOutcome, ImageHolder, ImageResourceRecord, NewImageResource, Stored
+} from './contract'
 import { computeCoverage } from './coverage'
 import { buildReadingState, emptyReadingState, endObservation, type AttentionRecord } from './reading-state'
 import { MIGRATIONS } from './migrations'
@@ -111,6 +114,59 @@ function imageResource(row: ImageResourceRow): ImageResourceRecord {
     width: row.width,
     height: row.height,
     fetchedAt: row.fetched_at
+  }
+}
+
+interface DraftAttachmentRow {
+  id: number
+  file_name: string
+  format: ImageFormat
+  bytes: number
+  width: number
+  height: number
+  original_name: string
+  created_at: string
+}
+
+function draftAttachment(row: DraftAttachmentRow): DraftAttachmentRecord {
+  return {
+    id: String(row.id),
+    fileName: row.file_name,
+    format: row.format,
+    bytes: row.bytes,
+    width: row.width,
+    height: row.height,
+    originalName: row.original_name,
+    createdAt: row.created_at
+  }
+}
+
+interface DraftRow {
+  id: number
+  target_kind: PostTarget['kind']
+  target_id: string
+  credential_id: number | null
+  content: string
+  title: string
+  name: string
+  email: string
+  watermark: number
+  attachment_id: number | null
+  version: number
+  created_at: string
+  saved_at: string
+}
+
+function draftRecord(row: DraftRow, attachment: DraftAttachmentRecord | null): DraftRecord {
+  return {
+    id: String(row.id),
+    target: row.target_kind === 'reply' ? { kind: 'reply', threadId: row.target_id } : { kind: 'thread', forumId: row.target_id },
+    credentialId: row.credential_id === null ? null : String(row.credential_id),
+    fields: { content: row.content, title: row.title, name: row.name, email: row.email, watermark: row.watermark === 1 },
+    attachment,
+    version: row.version,
+    createdAt: row.created_at,
+    savedAt: row.saved_at
   }
 }
 
@@ -664,6 +720,115 @@ class SqliteReadingDatabase implements ReadingDatabase {
         INSERT INTO identity_roles (role, credential_id) VALUES (?, ?)
         ON CONFLICT(role) DO UPDATE SET credential_id = excluded.credential_id
       `).run(role, id)
+      return true
+    }).immediate()
+  }
+
+  private attachmentById(db: Database.Database, id: number | string | null): DraftAttachmentRecord | null {
+    if (id === null) return null
+    const row = db.prepare<[number | string], DraftAttachmentRow>('SELECT * FROM draft_attachments WHERE id = ?').get(id)
+    return row ? draftAttachment(row) : null
+  }
+
+  listDrafts(): DraftRecord[] {
+    if (!this.db) return []
+    const db = this.db
+    return db.transaction(() =>
+      db.prepare<[], DraftRow>('SELECT * FROM drafts ORDER BY saved_at DESC, id DESC').all()
+        .map((row) => draftRecord(row, this.attachmentById(db, row.attachment_id)))
+    )()
+  }
+
+  saveDraft(input: DraftSaveInput, at: string): DraftWriteOutcome {
+    const db = this.writable()
+    return db.transaction((): DraftWriteOutcome => {
+      const attachment = input.attachmentId === null ? null : this.attachmentById(db, input.attachmentId)
+      if (input.attachmentId !== null && attachment === null) return { ok: false, reason: 'attachment-missing' }
+      const values = {
+        targetKind: input.target.kind,
+        targetId: input.target.kind === 'reply' ? input.target.threadId : input.target.forumId,
+        credentialId: input.credentialId,
+        ...input.fields,
+        watermark: input.fields.watermark ? 1 : 0,
+        attachmentId: input.attachmentId,
+        at
+      }
+      const row = input.draftId === null
+        ? db.prepare<typeof values, DraftRow>(`
+            INSERT INTO drafts (target_kind, target_id, credential_id, content, title, name, email, watermark,
+              attachment_id, version, created_at, saved_at)
+            VALUES (@targetKind, @targetId, @credentialId, @content, @title, @name, @email, @watermark,
+              @attachmentId, 1, @at, @at)
+            RETURNING *
+          `).get(values)
+        : db.prepare<typeof values & { id: string }, DraftRow>(`
+            UPDATE drafts SET target_kind = @targetKind, target_id = @targetId, credential_id = @credentialId,
+              content = @content, title = @title, name = @name, email = @email, watermark = @watermark,
+              attachment_id = @attachmentId, version = version + 1, saved_at = @at
+            WHERE id = @id
+            RETURNING *
+          `).get({ ...values, id: input.draftId })
+      if (!row) return { ok: false, reason: 'not-found' }
+      return { ok: true, draft: draftRecord(row, attachment) }
+    }).immediate()
+  }
+
+  deleteDraft(id: DraftId): boolean {
+    return this.writable().prepare('DELETE FROM drafts WHERE id = ?').run(id).changes === 1
+  }
+
+  insertDraftAttachment(input: Omit<DraftAttachmentRecord, 'id'>): DraftAttachmentRecord {
+    const row = this.writable().prepare<Omit<DraftAttachmentRecord, 'id'>, DraftAttachmentRow>(`
+      INSERT INTO draft_attachments (file_name, format, bytes, width, height, original_name, created_at)
+      VALUES (@fileName, @format, @bytes, @width, @height, @originalName, @createdAt)
+      RETURNING *
+    `).get(input)
+    if (!row) throw new Error('attachment insert returned no row')
+    return draftAttachment(row)
+  }
+
+  getDraftAttachment(id: AttachmentId): DraftAttachmentRecord | null {
+    return this.db ? this.attachmentById(this.db, id) : null
+  }
+
+  deleteUnreferencedAttachments(keep: AttachmentId[]): string[] {
+    const db = this.writable()
+    return db.transaction(() => {
+      const kept = new Set(keep)
+      const rows = db.prepare<[], { id: number; file_name: string }>(`
+        SELECT id, file_name FROM draft_attachments
+        WHERE NOT EXISTS (SELECT 1 FROM drafts WHERE drafts.attachment_id = draft_attachments.id)
+      `).all().filter((row) => !kept.has(String(row.id)))
+      const remove = db.prepare('DELETE FROM draft_attachments WHERE id = ?')
+      for (const row of rows) remove.run(row.id)
+      return rows.map((row) => row.file_name)
+    }).immediate()
+  }
+
+  listDraftAttachmentFileNames(): string[] {
+    if (!this.db) return []
+    return this.db.prepare<[], { file_name: string }>('SELECT file_name FROM draft_attachments').all().map((row) => row.file_name)
+  }
+
+  getThreadPostIdentity(threadId: ThreadId): RoleSelection {
+    if (!this.db) return { state: 'none' }
+    const row = this.db.prepare<[string], { credential_id: number; present: number }>(`
+      SELECT t.credential_id, EXISTS (SELECT 1 FROM credentials c WHERE c.id = t.credential_id) AS present
+      FROM thread_post_identities t WHERE t.thread_id = ?
+    `).get(threadId)
+    if (!row) return { state: 'none' }
+    const credentialId = String(row.credential_id)
+    return row.present ? { state: 'selected', credentialId } : { state: 'missing', credentialId }
+  }
+
+  setThreadPostIdentity(threadId: ThreadId, id: CredentialId, at: string): boolean {
+    const db = this.writable()
+    return db.transaction(() => {
+      if (!db.prepare('SELECT 1 FROM credentials WHERE id = ?').get(id)) return false
+      db.prepare(`
+        INSERT INTO thread_post_identities (thread_id, credential_id, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(thread_id) DO UPDATE SET credential_id = excluded.credential_id, updated_at = excluded.updated_at
+      `).run(threadId, id, at)
       return true
     }).immediate()
   }

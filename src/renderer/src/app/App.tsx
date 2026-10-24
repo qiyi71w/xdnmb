@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react'
 import type { AppPlatform, StorageStatus } from '../../../shared/api'
+import { sameTarget, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
 import type { FeedRef, ThreadSummary } from '../../../shared/forum'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/reading'
 import { Icon } from '../components/Icon'
 import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/directory/feeds'
 import { Navigation, NavMeasure } from '../features/directory/Navigation'
 import { useDirectory } from '../features/directory/useDirectory'
+import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
+import { editorFor, editorForDraft, isUnsaved, unsavedInTab } from '../features/editor/editorsState'
+import { UnsavedEditorsDialog } from '../features/editor/UnsavedEditorsDialog'
+import { focusKey, useEditorsStore } from '../features/editor/useEditorsStore'
+import { EditorWorkspaceContext, type EditorWorkspace } from '../features/editor/workspace'
 import { useIdentities } from '../features/identity/useIdentities'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { ContentRegistryContext, createContentRegistry } from '../features/tabs/contentRegistry'
@@ -14,6 +20,7 @@ import {
   currentEntry,
   initialTabsState,
   tabsReducer,
+  type EntryInit,
   type Tab,
   type TabEntry,
   type TabsAction,
@@ -68,6 +75,26 @@ function readerShown(tab: Tab, entry: TabEntry, singlePane: boolean): boolean {
   return entry.thread !== null && entry.feed !== null && tab.split && (!singlePane || entry.pane === 'reader')
 }
 
+/**
+ * Post targets whose editors the tab shows now, reader first: the shown thread's replies, then
+ * new threads of the shown forum list (hidden while the single pane shows the thread).
+ */
+function shownTargets(tab: Tab, singlePane: boolean): PostTarget[] {
+  const entry = currentEntry(tab)
+  const targets: PostTarget[] = []
+  if (entry.thread !== null && readerShown(tab, entry, singlePane)) targets.push({ kind: 'reply', threadId: entry.thread.threadId })
+  const listHidden = entry.thread !== null && tab.split && singlePane && entry.kind === 'list' && entry.pane === 'reader'
+  if (entry.kind === 'list' && entry.feed?.kind === 'forum' && !listHidden) targets.push({ kind: 'thread', forumId: entry.feed.id })
+  return targets
+}
+
+/** History entry that shows a target's editor: the thread as a page, or the forum list. */
+function entryFor(target: PostTarget): EntryInit {
+  return target.kind === 'reply'
+    ? { kind: 'thread', thread: { threadId: target.threadId, head: null, target: null, snapshot: null } }
+    : { kind: 'list', feed: { kind: 'forum', id: target.forumId } }
+}
+
 export function App() {
   const [storage, setStorage] = useState<StorageStatus | null>(null)
   const [platform, setPlatform] = useState<AppPlatform | null>(null)
@@ -77,9 +104,15 @@ export function App() {
   const directory = useDirectory()
   const { start: startDirectory } = directory
   const identities = useIdentities()
+  const editors = useEditorsStore()
+  const { current: currentEditors, dispatch: dispatchEditors, requestFocus, save: saveEditor } = editors
   const [settingsOpen, setSettingsOpen] = useState(false)
   const openSettings = useCallback(() => setSettingsOpen(true), [])
   const closeSettings = useCallback(() => setSettingsOpen(false), [])
+  const [draftsOpen, setDraftsOpen] = useState(false)
+  const closeDrafts = useCallback(() => setDraftsOpen(false), [])
+  /** Tab whose close waits for its unsaved editors to be handled. */
+  const [closing, setClosing] = useState<{ tabId: number; editorIds: EditorId[] } | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -192,9 +225,9 @@ export function App() {
   }, [navOverlay, closeNav])
 
   // ---------- Navigation actions ----------
-  const stateRef = useRef({ tabs, settings, singlePane: layout.singlePane })
+  const stateRef = useRef({ tabs, settings, singlePane: layout.singlePane, closing })
   useLayoutEffect(() => {
-    stateRef.current = { tabs, settings, singlePane: layout.singlePane }
+    stateRef.current = { tabs, settings, singlePane: layout.singlePane, closing }
   })
   const pendingTabFocus = useRef(false)
 
@@ -279,12 +312,118 @@ export function App() {
     })
   }, [])
 
-  const closeTab = useCallback((tabId: number) => {
-    pendingTabFocus.current = true
-    dispatch({ type: 'close-tab', tabId, split: stateRef.current.settings.newTabSplitDefault })
-  }, [])
+  /** Closes the tab and drops its editors; their unsaved content has been handled. */
+  const finishCloseTab = useCallback(
+    (tabId: number) => {
+      pendingTabFocus.current = true
+      dispatch({ type: 'close-tab', tabId, split: stateRef.current.settings.newTabSplitDefault })
+      dispatchEditors({ type: 'close-tab', tabId })
+    },
+    [dispatchEditors]
+  )
+
+  /** Closes at once when the tab has nothing unsaved; otherwise asks about all its unsaved editors. */
+  const closeTab = useCallback(
+    (tabId: number) => {
+      if (stateRef.current.closing !== null) return
+      const unsaved = unsavedInTab(currentEditors(), tabId)
+      if (unsaved.length === 0) finishCloseTab(tabId)
+      else setClosing({ tabId, editorIds: unsaved.map((editor) => editor.id) })
+    },
+    [currentEditors, finishCloseTab]
+  )
+
+  /** Activates the tab and makes it show `target` where its editor lives. */
+  const showTarget = useCallback(
+    (tabId: number, target: PostTarget) => {
+      const tab = stateRef.current.tabs?.tabs.find((item) => item.id === tabId)
+      if (tab === undefined) return
+      dispatch({ type: 'activate', tabId })
+      if (shownTargets(tab, stateRef.current.singlePane).some((shown) => sameTarget(shown, target))) return
+      const entry = currentEntry(tab)
+      if (entry.kind === 'list' && tab.split) {
+        // Same entry, other pane of the single-pane fallback.
+        if (target.kind === 'reply' && entry.thread?.threadId === target.threadId) {
+          dispatch({ type: 'show-pane', tabId, pane: 'reader' })
+          return
+        }
+        if (target.kind === 'thread' && entry.feed?.kind === 'forum' && entry.feed.id === target.forumId) {
+          dispatch({ type: 'show-pane', tabId, pane: 'list' })
+          return
+        }
+      }
+      leave(tab)
+      dispatch({ type: 'navigate', tabId, entry: entryFor(target) })
+    },
+    [leave]
+  )
 
   const activate = useCallback((tabId: number) => dispatch({ type: 'activate', tabId }), [])
+
+  /** Explicit 更改目标: identity untouched; the editor's tab then shows the new target. */
+  const retarget = useCallback(
+    (editorId: EditorId, target: PostTarget): 'done' | 'occupied' => {
+      const state = currentEditors()
+      const editor = state.editors.find((item) => item.id === editorId)
+      if (editor === undefined) return 'done'
+      if (editorFor(state, editor.tabId, target) !== null) return 'occupied'
+      dispatchEditors({ type: 'retarget', editorId, target })
+      showTarget(editor.tabId, target)
+      requestFocus(focusKey(editor.tabId, target))
+      return 'done'
+    },
+    [currentEditors, dispatchEditors, showTarget, requestFocus]
+  )
+
+  /**
+   * 继续 from the library: a draft already being edited is shown in its tab; otherwise a new tab
+   * (global split default) opens its target and continues it there.
+   */
+  const continueDraft = useCallback(
+    (draft: SavedDraft) => {
+      setDraftsOpen(false)
+      const existing = editorForDraft(currentEditors(), draft.id)
+      if (existing !== null) {
+        showTarget(existing.tabId, existing.target)
+        dispatchEditors({ type: 'set-expanded', editorId: existing.id, expanded: true })
+        requestFocus(focusKey(existing.tabId, existing.target))
+        return
+      }
+      const state = stateRef.current.tabs
+      if (state === null) return
+      // The new tab takes the next tab ID.
+      const tabId = state.nextId
+      dispatch({ type: 'open-tab', entry: entryFor(draft.target), split: stateRef.current.settings.newTabSplitDefault, background: false })
+      dispatchEditors({ type: 'open-draft', tabId, draft })
+      requestFocus(focusKey(tabId, draft.target))
+    },
+    [currentEditors, showTarget, dispatchEditors, requestFocus]
+  )
+
+  const openDrafts = useCallback(() => {
+    // The overlay navigation would take Esc and outside presses from the dialog: close it first.
+    closeNav(false)
+    setDraftsOpen(true)
+  }, [closeNav])
+
+  /**
+   * Ctrl/Cmd+S: the editor holding focus, else the expanded editor the active tab shows (reader
+   * before list). Nothing while a modal dialog or the active tab's image viewer is open.
+   */
+  const saveCurrent = useCallback(() => {
+    const state = stateRef.current.tabs
+    if (state === null || document.querySelector('dialog[open]') !== null) return
+    const tab = activeTab(state)
+    if (document.getElementById(`tabpanel-${tab.id}`)?.querySelector('.image-viewer') != null) return
+    const editorsState = currentEditors()
+    const focused = document.activeElement?.closest<HTMLElement>('[data-editor-id]')?.dataset.editorId
+    const editor =
+      editorsState.editors.find((item) => item.id === focused) ??
+      shownTargets(tab, stateRef.current.singlePane)
+        .map((target) => editorFor(editorsState, tab.id, target))
+        .find((item) => item !== null && item.expanded)
+    if (editor !== undefined && editor !== null && isUnsaved(editor)) void saveEditor(editor.id)
+  }, [currentEditors, saveEditor])
 
   /** Refreshes only the current content: the shown thread, otherwise the list. Never the app. */
   const refresh = useCallback(
@@ -327,6 +466,7 @@ export function App() {
       'next-tab': () => dispatch({ type: 'cycle', delta: 1 }),
       'previous-tab': () => dispatch({ type: 'cycle', delta: -1 }),
       refresh,
+      save: saveCurrent,
       back: goBack,
       forward: goForward
     }
@@ -340,7 +480,7 @@ export function App() {
       if (action === null) return
       if ((action === 'back' || action === 'forward') && isEditableTarget(event.target)) return
       event.preventDefault()
-      if (event.repeat && (action === 'new-tab' || action === 'close-tab' || action === 'refresh')) return
+      if (event.repeat && action !== 'next-tab' && action !== 'previous-tab' && action !== 'back' && action !== 'forward') return
       actions.current?.[action]()
     }
     window.addEventListener('keydown', onKeyDown)
@@ -368,104 +508,139 @@ export function App() {
     '--list-width': `${LAYOUT_DEFAULTS.listWidth}px`
   } as CSSProperties
 
+  const editorWorkspace = useMemo<EditorWorkspace>(
+    () => ({ store: editors, identities, platform, directory: dirData, forumName, retarget }),
+    [editors, identities, platform, dirData, forumName, retarget]
+  )
+
+  const tabTitle = (tabId: number) => {
+    const tab = tabs?.tabs.find((item) => item.id === tabId)
+    return tab === undefined ? '已关闭的标签' : titleOf(tab)
+  }
+
   return (
     <SettingsOpenerContext value={openSettings}>
-      <div className="app" ref={appRef}>
-        <StorageBanner storage={storage} />
-        <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
-        <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
-        <NavMeasure directory={dirData} onMeasure={setNavCompactMin} />
-        <ContentRegistryContext.Provider value={registry}>
-          <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
-            {!navOverlay && (
-              <div
-                className="nav-column"
-                onFocus={() => (navHadFocus.current = true)}
-                onBlur={(event) => {
-                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) navHadFocus.current = false
-                }}
-              >
-                <Navigation
-                  state={directory.state}
-                  selected={selectedFeed}
-                  onSelect={selectFeed}
-                  onRetry={directory.retry}
-                  variant="inline"
-                  progress={layout.navProgress}
-                  panelRef={inlineNavRef}
-                  identities={identities}
-                  onOpenSettings={openSettings}
-                />
-              </div>
-            )}
-
-            <div className="main-column">
-              {tabs !== null && current !== null && entry !== null && (
-                <>
-                  <TopBar
-                    tabs={tabs.tabs}
-                    activeId={tabs.activeId}
-                    titleOf={titleOf}
-                    platform={platform}
-                    canBack={current.index > 0}
-                    canForward={current.index < current.entries.length - 1}
-                    splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
-                    navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
-                    onBack={goBack}
-                    onForward={goForward}
-                    onActivate={activate}
-                    onClose={closeTab}
-                    onNewTab={newTab}
+      <EditorWorkspaceContext value={editorWorkspace}>
+        <div className="app" ref={appRef}>
+          <StorageBanner storage={storage} />
+          <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
+          <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
+          <NavMeasure directory={dirData} onMeasure={setNavCompactMin} />
+          <ContentRegistryContext.Provider value={registry}>
+            <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
+              {!navOverlay && (
+                <div
+                  className="nav-column"
+                  onFocus={() => (navHadFocus.current = true)}
+                  onBlur={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) navHadFocus.current = false
+                  }}
+                >
+                  <Navigation
+                    state={directory.state}
+                    selected={selectedFeed}
+                    onSelect={selectFeed}
+                    onRetry={directory.retry}
+                    variant="inline"
+                    progress={layout.navProgress}
+                    panelRef={inlineNavRef}
+                    identities={identities}
                     onOpenSettings={openSettings}
+                    onOpenDrafts={openDrafts}
                   />
-                  <div className="tab-host">
-                    {tabs.tabs.map((tab) => (
-                      <TabView
-                        key={tab.id}
-                        tab={tab}
-                        active={tab.id === tabs.activeId}
-                        layout={layout}
-                        feedInfo={feedInfo}
-                        forumNames={names}
-                        forumName={forumName}
-                        onSelectThread={selectThread}
-                        onShowPane={showPane}
-                        onOpenNav={navOverlay ? navPopover.toggle : null}
-                      />
-                    ))}
-                  </div>
+                </div>
+              )}
+
+              <div className="main-column">
+                {tabs !== null && current !== null && entry !== null && (
+                  <>
+                    <TopBar
+                      tabs={tabs.tabs}
+                      activeId={tabs.activeId}
+                      titleOf={titleOf}
+                      platform={platform}
+                      canBack={current.index > 0}
+                      canForward={current.index < current.entries.length - 1}
+                      splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
+                      navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
+                      onBack={goBack}
+                      onForward={goForward}
+                      onActivate={activate}
+                      onClose={closeTab}
+                      onNewTab={newTab}
+                      onOpenSettings={openSettings}
+                    />
+                    <div className="tab-host">
+                      {tabs.tabs.map((tab) => (
+                        <TabView
+                          key={tab.id}
+                          tab={tab}
+                          active={tab.id === tabs.activeId}
+                          layout={layout}
+                          feedInfo={feedInfo}
+                          forumNames={names}
+                          forumName={forumName}
+                          onSelectThread={selectThread}
+                          onShowPane={showPane}
+                          onOpenNav={navOverlay ? navPopover.toggle : null}
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {navOverlay && navPopover.open && (
+                <>
+                  <div className="nav-overlay-layer" aria-hidden="true" />
+                  <Navigation
+                    state={directory.state}
+                    selected={selectedFeed}
+                    onSelect={selectFeed}
+                    onRetry={directory.retry}
+                    variant="overlay"
+                    progress={0}
+                    panelRef={navPanelRef}
+                    id="nav-overlay"
+                    identities={identities}
+                    onOpenSettings={openSettings}
+                    onOpenDrafts={openDrafts}
+                  />
                 </>
               )}
             </div>
-
-            {navOverlay && navPopover.open && (
-              <>
-                <div className="nav-overlay-layer" aria-hidden="true" />
-                <Navigation
-                  state={directory.state}
-                  selected={selectedFeed}
-                  onSelect={selectFeed}
-                  onRetry={directory.retry}
-                  variant="overlay"
-                  progress={0}
-                  panelRef={navPanelRef}
-                  id="nav-overlay"
-                  identities={identities}
-                  onOpenSettings={openSettings}
-                />
-              </>
-            )}
-          </div>
-        </ContentRegistryContext.Provider>
-        {settingsOpen && (
-          <SettingsDialog
-            identities={identities}
-            settings={settings}
-            onSettingsChange={setSettings}
-            onClose={closeSettings}
-          />
-        )}
-      </div>
+          </ContentRegistryContext.Provider>
+          {settingsOpen && (
+            <SettingsDialog
+              identities={identities}
+              settings={settings}
+              onSettingsChange={setSettings}
+              onClose={closeSettings}
+            />
+          )}
+          {draftsOpen && (
+            <DraftLibraryDialog
+              tabTitle={tabTitle}
+              onContinue={continueDraft}
+              onClose={closeDrafts}
+              fallbackFocus={() => navTriggerRef.current}
+            />
+          )}
+          {closing !== null && (
+            <UnsavedEditorsDialog
+              label="关闭标签"
+              intro={`「${tabTitle(closing.tabId)}」中有未保存的编辑（包括已收起的）。关闭前保存为草稿，还是放弃？`}
+              verb="关闭"
+              editorIds={closing.editorIds}
+              onFinish={() => {
+                setClosing(null)
+                finishCloseTab(closing.tabId)
+              }}
+              onCancel={() => setClosing(null)}
+            />
+          )}
+        </div>
+      </EditorWorkspaceContext>
     </SettingsOpenerContext>
   )
 }

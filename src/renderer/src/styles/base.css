@@ -107,6 +107,47 @@ ul {
   background: var(--hover);
 }
 
+.btn-primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: oklch(1 0 0);
+  font-weight: 600;
+}
+
+.btn-primary .icon {
+  color: inherit;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--accent), var(--ink) 12%);
+}
+
+@media (prefers-color-scheme: dark) {
+  .btn-primary {
+    color: oklch(0.18 0.01 240);
+  }
+}
+
+.btn-danger {
+  color: var(--danger-ink);
+}
+
+/* Unavailable but still focusable (keeps focus where it was while an action runs). */
+.btn[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.btn[aria-disabled='true']:hover,
+.btn[aria-disabled='true']:active {
+  background: var(--paper);
+}
+
+.btn-primary[aria-disabled='true']:hover,
+.btn-primary[aria-disabled='true']:active {
+  background: var(--accent);
+}
+
 .icon-btn {
   display: inline-grid;
   place-items: center;

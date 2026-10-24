@@ -1,17 +1,26 @@
-/* Positioned: the image viewer covers exactly this reader. */
+/* Positioned: the image viewer covers exactly this reader, its editor included. A column: the
+   scroller takes what the bottom editor leaves, so the reading viewport ends above the editor. */
 .reader {
   position: relative;
   height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Browser scroll anchoring is off: the reader keeps its own anchor (post ID + position inside the
    post + viewport offset) under the reading line whenever content above or the width changes, and
    content appended below never moves the viewport. Overflow-x stays hidden: long text wraps. */
 .reader-scroll {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow: hidden auto;
   overscroll-behavior: contain;
   overflow-anchor: none;
+}
+
+/* Only carries `inert` for the editor while the image viewer is open. */
+.reader-dock {
+  display: contents;
 }
 
 .reader-scroll:focus {

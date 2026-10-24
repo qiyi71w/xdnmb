@@ -60,6 +60,15 @@ port.on('message', (request: StorageRequest) => {
       case 'deleteCredential': value = db.deleteCredential(...request.args); break
       case 'loadRoleSelections': value = db.loadRoleSelections(...request.args); break
       case 'setRoleSelection': value = db.setRoleSelection(...request.args); break
+      case 'listDrafts': value = db.listDrafts(...request.args); break
+      case 'saveDraft': value = db.saveDraft(...request.args); break
+      case 'deleteDraft': value = db.deleteDraft(...request.args); break
+      case 'insertDraftAttachment': value = db.insertDraftAttachment(...request.args); break
+      case 'getDraftAttachment': value = db.getDraftAttachment(...request.args); break
+      case 'deleteUnreferencedAttachments': value = db.deleteUnreferencedAttachments(...request.args); break
+      case 'listDraftAttachmentFileNames': value = db.listDraftAttachmentFileNames(...request.args); break
+      case 'getThreadPostIdentity': value = db.getThreadPostIdentity(...request.args); break
+      case 'setThreadPostIdentity': value = db.setThreadPostIdentity(...request.args); break
       case 'close': value = db.close(...request.args); break
       default: throw new Error('unknown storage method')
     }

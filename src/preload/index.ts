@@ -38,6 +38,18 @@ const api: XidaoApi = {
     remove: (input) => ipcRenderer.invoke(IpcChannel.identityRemove, input),
     select: (input) => ipcRenderer.invoke(IpcChannel.identitySelect, input)
   },
+  drafts: {
+    list: () => ipcRenderer.invoke(IpcChannel.listDrafts),
+    save: (input) => ipcRenderer.invoke(IpcChannel.saveDraft, input),
+    delete: (input) => ipcRenderer.invoke(IpcChannel.deleteDraft, input),
+    attachImage: (input) => ipcRenderer.invoke(IpcChannel.attachDraftImage, input),
+    holdAttachment: (input) => ipcRenderer.invoke(IpcChannel.holdDraftAttachment, input),
+    releaseEditor: (input) => ipcRenderer.invoke(IpcChannel.releaseEditor, input)
+  },
+  posting: {
+    identityFor: (input) => ipcRenderer.invoke(IpcChannel.postingIdentityFor, input),
+    selectThreadIdentity: (input) => ipcRenderer.invoke(IpcChannel.selectThreadIdentity, input)
+  },
   app: {
     getStatus: () => ipcRenderer.invoke(IpcChannel.getStatus)
   }

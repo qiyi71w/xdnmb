@@ -132,27 +132,6 @@
   color: var(--ink-2);
 }
 
-.btn-primary {
-  border-color: transparent;
-  background: var(--accent);
-  color: oklch(1 0 0);
-  font-weight: 600;
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: color-mix(in oklch, var(--accent), var(--ink) 12%);
-}
-
-@media (prefers-color-scheme: dark) {
-  .btn-primary {
-    color: oklch(0.18 0.01 240);
-  }
-}
-
-.btn-danger {
-  color: var(--danger-ink);
-}
-
 .visually-hidden {
   position: absolute;
   width: 1px;

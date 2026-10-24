@@ -190,5 +190,48 @@ export const MIGRATIONS: readonly Migration[] = [
         );
       `)
     }
+  },
+  {
+    // Saved drafts, their managed image copies and per-thread 发言饼干 selections. Credential
+    // references carry no foreign key: a removed credential stays referenced as missing.
+    version: 5,
+    up(db) {
+      db.exec(`
+        CREATE TABLE draft_attachments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          file_name TEXT NOT NULL UNIQUE,
+          format TEXT NOT NULL CHECK (format IN ('jpeg', 'png', 'gif', 'webp')),
+          bytes INTEGER NOT NULL CHECK (bytes > 0),
+          width INTEGER NOT NULL CHECK (width > 0),
+          height INTEGER NOT NULL CHECK (height > 0),
+          original_name TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        -- One row per draft holds its single saved version; saving replaces it in one transaction.
+        CREATE TABLE drafts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          target_kind TEXT NOT NULL CHECK (target_kind IN ('reply', 'thread')),
+          target_id TEXT NOT NULL,
+          credential_id INTEGER CHECK (credential_id IS NULL OR credential_id >= 1),
+          content TEXT NOT NULL,
+          title TEXT NOT NULL,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          watermark INTEGER NOT NULL CHECK (watermark IN (0, 1)),
+          attachment_id INTEGER REFERENCES draft_attachments(id),
+          version INTEGER NOT NULL CHECK (version >= 1),
+          created_at TEXT NOT NULL,
+          saved_at TEXT NOT NULL
+        );
+        CREATE INDEX drafts_attachment_id ON drafts(attachment_id);
+
+        CREATE TABLE thread_post_identities (
+          thread_id TEXT PRIMARY KEY NOT NULL,
+          credential_id INTEGER NOT NULL CHECK (credential_id >= 1),
+          updated_at TEXT NOT NULL
+        );
+      `)
+    }
   }
 ]

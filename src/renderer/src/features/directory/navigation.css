@@ -172,6 +172,12 @@
 
 /* ---------- Browsing identity ---------- */
 
+/* App entries that are not feeds (草稿). Outside the roving feed list; ordinary Tab stops. */
+.nav-tools {
+  padding: 6px calc(8px - 4px * var(--nav-t));
+  border-top: 1px solid var(--line-soft);
+}
+
 .nav-account {
   display: flex;
   padding: 8px;
