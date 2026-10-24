@@ -30,6 +30,14 @@ const api: XidaoApi = {
     releaseView: (input) => ipcRenderer.invoke(IpcChannel.releaseImageView, input),
     saveOriginal: (input) => ipcRenderer.invoke(IpcChannel.saveOriginalImage, input)
   },
+  identities: {
+    getOverview: () => ipcRenderer.invoke(IpcChannel.identityOverview),
+    importExport: (input) => ipcRenderer.invoke(IpcChannel.identityImportExport, input),
+    importRaw: (input) => ipcRenderer.invoke(IpcChannel.identityImportRaw, input),
+    rename: (input) => ipcRenderer.invoke(IpcChannel.identityRename, input),
+    remove: (input) => ipcRenderer.invoke(IpcChannel.identityRemove, input),
+    select: (input) => ipcRenderer.invoke(IpcChannel.identitySelect, input)
+  },
   app: {
     getStatus: () => ipcRenderer.invoke(IpcChannel.getStatus)
   }

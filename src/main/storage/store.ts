@@ -3,7 +3,7 @@ import type { StorageStatus } from '../../shared/api'
 import type { ReadingMode, ThreadId } from '../../shared/forum'
 import { DEFAULT_SETTINGS } from '../../shared/reading'
 import { StorageWriteRefusedError } from './contract'
-import type { ReadingStore } from './contract'
+import type { AppStore } from './contract'
 import { computeCoverage } from './coverage'
 import { emptyReadingState } from './reading-state'
 import type { ReadingDatabase } from './database'
@@ -12,7 +12,7 @@ import type { StorageMethod, StorageResponse } from './worker'
 export async function openReadingStore(options: {
   databasePath: string
   createWorker: (options: WorkerOptions) => Worker
-}): Promise<ReadingStore> {
+}): Promise<AppStore> {
   let status: StorageStatus = { state: 'unavailable', reason: 'open-failed' }
   let worker: Worker | null = null
   let stopped = false
@@ -65,12 +65,18 @@ export async function openReadingStore(options: {
       case 'getThreadCoverage': value = computeCoverage(args[0] as ThreadId, args[1] as ReadingMode, [], null); break
       case 'getReadingState': value = emptyReadingState(args[0] as ThreadId); break
       case 'loadSettings': value = { ...DEFAULT_SETTINGS }; break
+      case 'loadRoleSelections':
+        value = { browse: { state: 'none' }, 'default-post': { state: 'none' }, 'web-sync': { state: 'none' } }
+        break
       case 'loadDirectory':
       case 'loadFeedPage':
       case 'loadThreadPage':
       case 'getPostImage':
-      case 'findImageResource': value = null; break
-      case 'listImageFileNames': value = []; break
+      case 'findImageResource':
+      case 'loadCredentialCiphertext': value = null; break
+      case 'listImageFileNames':
+      case 'listCredentials':
+      case 'loadCredentialCiphertexts': value = []; break
       case 'close': value = undefined; break
       default: throw new StorageWriteRefusedError(status)
     }
@@ -133,6 +139,14 @@ export async function openReadingStore(options: {
     releaseImageHolders: (kind, idPrefix) => request('releaseImageHolders', kind, idPrefix),
     deleteUnheldImages: (resourceIds) => request('deleteUnheldImages', resourceIds),
     listImageFileNames: () => request('listImageFileNames'),
+    listCredentials: () => request('listCredentials'),
+    loadCredentialCiphertexts: () => request('loadCredentialCiphertexts'),
+    loadCredentialCiphertext: (id) => request('loadCredentialCiphertext', id),
+    insertCredential: (input) => request('insertCredential', input),
+    renameCredential: (id, name) => request('renameCredential', id, name),
+    deleteCredential: (id) => request('deleteCredential', id),
+    loadRoleSelections: () => request('loadRoleSelections'),
+    setRoleSelection: (role, id) => request('setRoleSelection', role, id),
     close() {
       if (!closePromise) {
         closing = true

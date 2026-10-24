@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { Post, PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
 import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
 import { Icon } from '../../components/Icon'
-import { FailureNotice, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
+import { FailureNotice, IdentitySettingsAction, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
 import { describeReadError, formatPageList, meaningfulTitle } from '../../lib/format'
 import { useNearEnd } from '../../lib/useNearEnd'
 import { NearViewport, type ImageView, type ViewerRequest } from '../image/imageView'
@@ -365,6 +365,9 @@ export function ThreadReader({
                   <span>已定位末尾（探测{pageLabel(mode, formatPageList(state.endProbe.probedPages))}）</span>
                 )}
               </div>
+              {task === null && state.endProbe?.status === 'interrupted' && (
+                <IdentitySettingsAction error={state.endProbe.error} />
+              )}
               {task?.type === 'locate' && (
                 <button type="button" className="btn btn-small" onClick={thread.cancel}>
                   <Icon name="close" size={14} />

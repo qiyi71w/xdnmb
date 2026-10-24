@@ -52,6 +52,14 @@ port.on('message', (request: StorageRequest) => {
       case 'releaseImageHolders': value = db.releaseImageHolders(...request.args); break
       case 'deleteUnheldImages': value = db.deleteUnheldImages(...request.args); break
       case 'listImageFileNames': value = db.listImageFileNames(...request.args); break
+      case 'listCredentials': value = db.listCredentials(...request.args); break
+      case 'loadCredentialCiphertexts': value = db.loadCredentialCiphertexts(...request.args); break
+      case 'loadCredentialCiphertext': value = db.loadCredentialCiphertext(...request.args); break
+      case 'insertCredential': value = db.insertCredential(...request.args); break
+      case 'renameCredential': value = db.renameCredential(...request.args); break
+      case 'deleteCredential': value = db.deleteCredential(...request.args); break
+      case 'loadRoleSelections': value = db.loadRoleSelections(...request.args); break
+      case 'setRoleSelection': value = db.setRoleSelection(...request.args); break
       case 'close': value = db.close(...request.args); break
       default: throw new Error('unknown storage method')
     }

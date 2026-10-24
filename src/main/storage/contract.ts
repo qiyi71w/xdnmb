@@ -12,6 +12,7 @@ import type {
 } from '../../shared/forum'
 import type { ImageFormat, ImageKind } from '../../shared/images'
 import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, ThreadReadingState } from '../../shared/reading'
+import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
 
 /** A write was refused because the database is read-only (newer schema) or unavailable. */
 export class StorageWriteRefusedError extends Error {
@@ -108,3 +109,23 @@ export interface ReadingStore {
   listImageFileNames(): Promise<string[]>
   close(): Promise<void>
 }
+
+/**
+ * Credential persistence: local references, names and ciphertext only. Plain-text secrets never
+ * reach this layer. IDs are never reused, so a role pointing at a removed credential stays missing.
+ */
+export interface IdentityStore {
+  listCredentials(): Promise<CredentialSummary[]>
+  loadCredentialCiphertexts(): Promise<Array<{ id: CredentialId; ciphertext: Uint8Array }>>
+  loadCredentialCiphertext(id: CredentialId): Promise<Uint8Array | null>
+  insertCredential(input: { name: string; source: CredentialSource; importedAt: string; ciphertext: Uint8Array }): Promise<CredentialSummary>
+  /** False when the credential does not exist. */
+  renameCredential(id: CredentialId, name: string): Promise<boolean>
+  /** Deletes the ciphertext; role references are kept. False when it did not exist. */
+  deleteCredential(id: CredentialId): Promise<boolean>
+  loadRoleSelections(): Promise<Record<IdentityRole, RoleSelection>>
+  /** Sets one role. False (and no change) when `id` is not an existing credential. */
+  setRoleSelection(role: IdentityRole, id: CredentialId | null): Promise<boolean>
+}
+
+export type AppStore = ReadingStore & IdentityStore

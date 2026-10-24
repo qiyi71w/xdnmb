@@ -89,6 +89,11 @@ function displayName(value: unknown, fallback: string): string {
 export function createForumClient(options: {
   transport: ForumTransport
   baseUrl?: string
+  /**
+   * Userhash of the selected browse identity, or null to read without one. Throws
+   * ForumReadError(identity/…) when the chosen identity cannot be used; the read is then not sent.
+   */
+  browseIdentity?: () => Promise<string | null>
 }): ForumClient {
   const baseUrl = new URL(options.baseUrl ?? 'https://api.nmb.best')
   if (!['http:', 'https:'].includes(baseUrl.protocol) || baseUrl.username || baseUrl.password) {
@@ -105,7 +110,8 @@ export function createForumClient(options: {
       url.searchParams.set('id', params.id)
       url.searchParams.set('page', String(params.page))
     }
-    const response = await options.transport.get(url, signal)
+    const userhash = options.browseIdentity ? await options.browseIdentity() : null
+    const response = await options.transport.get(url, signal, userhash === null ? undefined : { userhash })
     if (response.text.trimStart().startsWith('<') || response.mediaType === 'text/html') {
       throw new ForumReadError({
         kind: /验证码|captcha|challenge/i.test(response.text) ? 'rate-limited' : 'unknown-structure',

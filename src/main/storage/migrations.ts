@@ -169,5 +169,26 @@ export const MIGRATIONS: readonly Migration[] = [
         CREATE INDEX image_holders_holder ON image_holders(holder_kind, holder_id);
       `)
     }
+  },
+  {
+    version: 4,
+    up(db) {
+      db.exec(`
+        -- Secrets are stored only as OS-protected ciphertext; AUTOINCREMENT keeps IDs from being reused.
+        CREATE TABLE credentials (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL CHECK (length(name) >= 1),
+          source TEXT NOT NULL CHECK (source IN ('export', 'raw')),
+          imported_at TEXT NOT NULL,
+          ciphertext BLOB NOT NULL CHECK (length(ciphertext) > 0)
+        );
+
+        -- No foreign key: a removed credential must remain referenced as missing, never replaced.
+        CREATE TABLE identity_roles (
+          role TEXT PRIMARY KEY NOT NULL CHECK (role IN ('browse', 'default-post', 'web-sync')),
+          credential_id INTEGER CHECK (credential_id IS NULL OR credential_id >= 1)
+        );
+      `)
+    }
   }
 ]

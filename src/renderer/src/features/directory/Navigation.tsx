@@ -1,9 +1,11 @@
 import { useLayoutEffect, useMemo, useRef, type CSSProperties, type Ref } from 'react'
 import type { BoardDirectory, FeedRef } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
-import { FailureNotice, Loading, SourceNotice } from '../../components/Notices'
+import { FailureNotice, IdentitySettingsAction, Loading, SourceNotice } from '../../components/Notices'
 import { describeFailure, formatLocalTime } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
+import { browseStatus } from '../identity/identityText'
+import type { IdentitiesState } from '../identity/useIdentities'
 import { feedKey } from './feeds'
 import type { DirectoryState } from './useDirectory'
 import './navigation.css'
@@ -52,7 +54,9 @@ export function Navigation({
   variant,
   progress = 0,
   panelRef,
-  id
+  id,
+  identities,
+  onOpenSettings
 }: {
   state: DirectoryState
   selected: FeedRef | null
@@ -62,6 +66,8 @@ export function Navigation({
   progress?: number
   panelRef?: Ref<HTMLElement>
   id?: string
+  identities: IdentitiesState
+  onOpenSettings: () => void
 }) {
   const { directory } = state
   const sections = useMemo(() => navSections(directory), [directory])
@@ -133,6 +139,7 @@ export function Navigation({
       </div>
 
       <DirectoryStatus state={state} />
+      <IdentityFooter identities={identities} onOpenSettings={onOpenSettings} />
     </nav>
   )
 }
@@ -189,6 +196,36 @@ export function NavMeasure({ directory, onMeasure }: { directory: BoardDirectory
   )
 }
 
+function IdentityFooter({ identities, onOpenSettings }: { identities: IdentitiesState; onOpenSettings: () => void }) {
+  const { overview, failed } = identities
+  const status = overview === null ? null : browseStatus(overview)
+  const value =
+    status === null
+      ? failed
+        ? '状态读取失败'
+        : '读取中…'
+      : status.state === 'none'
+        ? '不使用饼干'
+        : status.state === 'missing'
+          ? '已移除，需重选'
+          : status.name
+  const warning = status?.state === 'missing' || (status === null && failed)
+  return (
+    <div className="nav-account">
+      <button
+        type="button"
+        className={warning ? 'nav-identity is-warning' : 'nav-identity'}
+        onClick={onOpenSettings}
+        aria-label={`浏览饼干：${value}。打开设置`}
+      >
+        {warning && <Icon name="alert" size={14} className="nav-identity-icon" />}
+        <span className="nav-identity-label">浏览饼干</span>
+        <span className="nav-identity-value">{value}</span>
+      </button>
+    </div>
+  )
+}
+
 function DirectoryStatus({ state }: { state: DirectoryState }) {
   const { source, refreshing, refreshFailure, directory } = state
   if (source === null) return null
@@ -197,9 +234,12 @@ function DirectoryStatus({ state }: { state: DirectoryState }) {
     body = <Loading>正在后台更新目录…</Loading>
   } else if (refreshFailure !== null) {
     body = (
-      <p className="nav-foot-text" role="status">
-        目录更新失败（{describeFailure(refreshFailure)}），显示 {formatLocalTime(source.fetchedAt)} 获取的本地缓存
-      </p>
+      <>
+        <p className="nav-foot-text" role="status">
+          目录更新失败（{describeFailure(refreshFailure)}），显示 {formatLocalTime(source.fetchedAt)} 获取的本地缓存
+        </p>
+        <IdentitySettingsAction error={refreshFailure} />
+      </>
     )
   } else if (source.status === 'cached' || !source.saved) {
     body = <SourceNotice source={source} subject="目录" />

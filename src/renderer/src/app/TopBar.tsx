@@ -1,9 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent, type RefObject } from 'react'
 import type { AppPlatform } from '../../../shared/api'
-import type { AppSettings } from '../../../shared/reading'
 import { Icon } from '../components/Icon'
 import type { Tab } from '../features/tabs/tabsState'
-import { SettingsMenu } from './SettingsMenu'
 import { shortcutLabel } from './shortcuts'
 
 function withShortcut(label: string, shortcut: string): string {
@@ -12,7 +10,8 @@ function withShortcut(label: string, shortcut: string): string {
 
 /**
  * D layout top bar: back / forward of the current tab, the tab strip, the tab's 分栏 toggle
- * (list entries only), 新标签 and settings. While the navigation is an overlay its trigger sits first.
+ * (list entries only), 新标签 and the settings dialog opener. While the navigation is an overlay
+ * its trigger sits first.
  */
 export function TopBar({
   tabs,
@@ -23,13 +22,12 @@ export function TopBar({
   canForward,
   splitToggle,
   navTrigger,
-  settings,
   onBack,
   onForward,
   onActivate,
   onClose,
   onNewTab,
-  onSettingsChange
+  onOpenSettings
 }: {
   tabs: readonly Tab[]
   activeId: number
@@ -40,13 +38,12 @@ export function TopBar({
   /** Shown only for list entries. */
   splitToggle: { pressed: boolean; onToggle: () => void } | null
   navTrigger: { ref: RefObject<HTMLButtonElement | null>; expanded: boolean; onToggle: () => void } | null
-  settings: AppSettings
   onBack: () => void
   onForward: () => void
   onActivate: (tabId: number) => void
   onClose: (tabId: number) => void
   onNewTab: () => void
-  onSettingsChange: (settings: AppSettings) => void
+  onOpenSettings: () => void
 }) {
   const stripRef = useRef<HTMLDivElement>(null)
 
@@ -166,7 +163,16 @@ export function TopBar({
       >
         <Icon name="plus" />
       </button>
-      <SettingsMenu settings={settings} onChange={onSettingsChange} />
+      <button
+        type="button"
+        className="icon-btn"
+        aria-label="设置"
+        title="设置"
+        aria-haspopup="dialog"
+        onClick={onOpenSettings}
+      >
+        <Icon name="settings" />
+      </button>
     </header>
   )
 }

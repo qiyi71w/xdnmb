@@ -7,14 +7,23 @@ import type { ReadError } from '../../shared/api'
 import { ForumReadError, ReadCancelledError } from './contract'
 import type { ForumTransport, TransportResponse } from './contract'
 
+/** RFC 6265 cookie-octet; anything else is refused rather than placed in a header. */
+const COOKIE_VALUE = /^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+$/
+
 export function createForumTransport(options: {
   allowedOrigins: readonly string[]
+  /** Verified forum origins that may receive the browse credential. Must also be allowed origins. */
+  credentialOrigins?: readonly string[]
   timeoutMs?: number
   maxCompressedBytes?: number
   maxDecodedBytes?: number
   userAgent?: string
 }): ForumTransport {
   const origins = new Set(options.allowedOrigins)
+  const credentialOrigins = new Set(options.credentialOrigins ?? [])
+  for (const origin of credentialOrigins) {
+    if (!origins.has(origin)) throw new Error('Invalid forum credential origin')
+  }
   const timeoutMs = options.timeoutMs ?? 20_000
   const maxCompressedBytes = options.maxCompressedBytes ?? 4 * 1024 * 1024
   const maxDecodedBytes = options.maxDecodedBytes ?? 16 * 1024 * 1024
@@ -25,10 +34,13 @@ export function createForumTransport(options: {
   }
 
   return {
-    async get(url, signal) {
+    async get(url, signal, credential) {
       if (!origins.has(url.origin) || !['http:', 'https:'].includes(url.protocol) ||
           url.username || url.password) {
         throw new Error('Forum transport target is not allowed')
+      }
+      if (credential !== undefined && (!credentialOrigins.has(url.origin) || !COOKIE_VALUE.test(credential.userhash))) {
+        throw new Error('Forum credential is not allowed for this target')
       }
       if (signal.aborted) throw new ReadCancelledError()
 
@@ -63,7 +75,9 @@ export function createForumTransport(options: {
           headers: {
             Accept: 'application/json',
             'Accept-Encoding': 'gzip, deflate, br',
-            'User-Agent': options.userAgent ?? 'Xidao/0.1'
+            'User-Agent': options.userAgent ?? 'Xidao/0.1',
+            // Redirects are never followed, so the credential reaches only this verified origin.
+            ...(credential !== undefined ? { Cookie: `userhash=${credential.userhash}` } : {})
           }
         }, (incoming) => {
           response = incoming

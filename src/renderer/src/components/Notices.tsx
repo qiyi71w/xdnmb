@@ -1,8 +1,24 @@
 import type { ReactNode } from 'react'
-import { describeFailure, describeReadError, formatLocalTime, serverMessageOf } from '../lib/format'
+import type { ReadError } from '../../../shared/api'
+import { describeFailure, describeReadError, formatLocalTime, identityErrorOf, serverMessageOf } from '../lib/format'
 import type { Failure, Source } from '../lib/operations'
+import { useSettingsOpener } from '../lib/settingsOpener'
 import { Icon, Spinner } from './Icon'
 import './notices.css'
+
+/**
+ * "打开设置" for a read that failed because of the browse identity (the read was never sent).
+ * Renders nothing for any other error or outside the settings provider.
+ */
+export function IdentitySettingsAction({ error }: { error: Failure | ReadError | null }) {
+  const openSettings = useSettingsOpener()
+  if (openSettings === null || identityErrorOf(error) === null) return null
+  return (
+    <button type="button" className="btn btn-small" onClick={openSettings}>
+      打开设置
+    </button>
+  )
+}
 
 /** Inline progress line. Lives inside a polite live region owned by the caller or itself. */
 export function Loading({ children, live = true }: { children: ReactNode; live?: boolean }) {
@@ -38,6 +54,7 @@ export function FailureNotice({
         </p>
         {serverMessage !== null && <p className="notice-detail">论坛提示：{serverMessage}</p>}
       </div>
+      <IdentitySettingsAction error={failure} />
       {onRetry !== undefined && (
         <button type="button" className="btn btn-small" onClick={onRetry}>
           {retryLabel}
@@ -79,6 +96,7 @@ export function SourceNotice({ source, subject }: { source: Source; subject?: st
           </p>
         )}
       </div>
+      <IdentitySettingsAction error={error} />
     </div>
   )
 }
