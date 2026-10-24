@@ -1,0 +1,55 @@
+/* Modal settings: frosted sheet over a soft dim. The body scrolls so nothing is clipped at 200% zoom. */
+
+.settings-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-l);
+  background: var(--glass-strong);
+  backdrop-filter: blur(28px) saturate(1.5);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+  color: var(--ink);
+  overflow: hidden;
+}
+
+.settings-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  animation: settings-in 0.18s var(--ease-out);
+}
+
+.settings-dialog::backdrop {
+  background: oklch(0.2 0.02 240 / 0.22);
+}
+
+@keyframes settings-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+}
+
+.settings-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 12px 10px 20px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.settings-title {
+  font-size: 1.0625rem;
+  font-weight: 650;
+}
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding: 16px 20px 20px;
+}

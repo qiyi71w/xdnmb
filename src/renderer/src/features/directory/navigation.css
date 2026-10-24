@@ -120,3 +120,86 @@
 .nav-foot-text {
   line-height: 1.5;
 }
+
+.nav-foot .btn {
+  margin-top: 4px;
+}
+
+/* ---------- Identity and settings ---------- */
+
+.nav-account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.nav-identity {
+  flex: 1 1 8em;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 6px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-identity:hover,
+.nav-settings:hover {
+  background: var(--hover);
+}
+
+.nav-identity:focus-visible,
+.nav-settings:focus-visible {
+  outline-offset: -2px;
+}
+
+.nav-identity-icon {
+  grid-row: span 2;
+  color: var(--warn-ink);
+}
+
+.nav-identity-label {
+  grid-column: -2;
+  color: var(--ink-3);
+}
+
+.nav-identity-value {
+  grid-column: -2;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.nav-identity:not(.is-warning) .nav-identity-label,
+.nav-identity:not(.is-warning) .nav-identity-value {
+  grid-column: 1 / -1;
+}
+
+.nav-identity.is-warning .nav-identity-value {
+  color: var(--warn-ink);
+}
+
+.nav-settings {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}

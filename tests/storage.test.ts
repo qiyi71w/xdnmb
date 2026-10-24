@@ -19,6 +19,7 @@ const later = '2026-10-23T08:01:00.000Z'
 const latest = '2026-10-23T08:02:00.000Z'
 const threadId = '900719925474099312345'
 const folders: string[] = []
+const CURRENT_VERSION = Math.max(...MIGRATIONS.map((migration) => migration.version))
 const databases: ReadingDatabase[] = []
 
 function databasePath() {
@@ -101,7 +102,7 @@ describe('reading database', () => {
     })], { replyCount: 2 })
     const second = threadPage(2, [post('900719925474099312347')], { replyCount: null })
     const db = open(path)
-    expect(db.status).toEqual({ state: 'ready', schemaVersion: 1 })
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: CURRENT_VERSION })
     db.saveThreadPage(first, fetchedAt)
     db.saveThreadPage(second, later)
     db.close()
@@ -255,8 +256,8 @@ describe('reading database', () => {
     const beforeSchema = schema(path)
     const failed = openReadingDatabase(path, [
       ...MIGRATIONS,
-      { version: 2, up(connection) { connection.exec('CREATE TABLE migration_two (id TEXT)') } },
-      { version: 3, up(connection) {
+      { version: CURRENT_VERSION + 1, up(connection) { connection.exec('CREATE TABLE migration_two (id TEXT)') } },
+      { version: CURRENT_VERSION + 2, up(connection) {
         connection.exec('CREATE TABLE migration_three (id TEXT)')
         throw new Error('injected migration failure')
       } }
@@ -271,13 +272,13 @@ describe('reading database', () => {
     expect(open(path).loadThreadPage(threadId, 'all', 1)).toEqual({ value: original, fetchedAt })
   })
 
-  it('rolls back an injected v2 migration that creates a table before throwing', () => {
+  it('rolls back an injected next migration that creates a table before throwing', () => {
     const path = databasePath()
     const db = open(path)
     db.close()
     const before = readFileSync(path)
     const failed = openReadingDatabase(path, [...MIGRATIONS, {
-      version: 2,
+      version: CURRENT_VERSION + 1,
       up(connection) {
         connection.exec('CREATE TABLE must_not_survive (id TEXT)')
         throw new Error('injected failure')
@@ -286,7 +287,7 @@ describe('reading database', () => {
     databases.push(failed)
     expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
     expect(readFileSync(path)).toEqual(before)
-    expect(schema(path).version).toBe(1)
+    expect(schema(path).version).toBe(CURRENT_VERSION)
   })
 
   it('opens newer schemas read-only, permits compatible loads, refuses every save and leaves bytes untouched', () => {
@@ -300,7 +301,7 @@ describe('reading database', () => {
     raw.close()
     const before = readFileSync(path)
     const newer = open(path)
-    expect(newer.status).toEqual({ state: 'read-only', reason: 'newer-schema', schemaVersion: 999, supportedVersion: 1 })
+    expect(newer.status).toEqual({ state: 'read-only', reason: 'newer-schema', schemaVersion: 999, supportedVersion: CURRENT_VERSION })
     expect(newer.loadThreadPage(threadId, 'all', 1)).toEqual({ value: original, fetchedAt })
     expect(() => newer.saveThreadPage(original, later)).toThrow(StorageWriteRefusedError)
     expect(() => newer.saveDirectory({ groups: [], timelines: [], skippedItems: 0 }, later)).toThrow(StorageWriteRefusedError)

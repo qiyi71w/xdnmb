@@ -13,6 +13,14 @@ const api: XidaoApi = {
   links: {
     openExternal: (input) => ipcRenderer.invoke(IpcChannel.openExternal, input)
   },
+  identities: {
+    getOverview: () => ipcRenderer.invoke(IpcChannel.identityOverview),
+    importExport: (input) => ipcRenderer.invoke(IpcChannel.identityImportExport, input),
+    importRaw: (input) => ipcRenderer.invoke(IpcChannel.identityImportRaw, input),
+    rename: (input) => ipcRenderer.invoke(IpcChannel.identityRename, input),
+    remove: (input) => ipcRenderer.invoke(IpcChannel.identityRemove, input),
+    select: (input) => ipcRenderer.invoke(IpcChannel.identitySelect, input)
+  },
   app: {
     getStatus: () => ipcRenderer.invoke(IpcChannel.getStatus)
   }

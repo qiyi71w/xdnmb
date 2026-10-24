@@ -12,17 +12,34 @@ import type {
   ThreadId,
   ThreadPage
 } from '../../shared/forum'
+import { IDENTITY_ROLES } from '../../shared/identity'
+import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
 import { StorageWriteRefusedError } from './contract'
-import type { ReadingStore, Stored } from './contract'
+import type { AppStore, Stored } from './contract'
 import { computeCoverage } from './coverage'
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
 
-/** The worker owns this synchronous core; callers outside the worker use ReadingStore. */
+/** The worker owns this synchronous core; callers outside the worker use AppStore. */
 export type ReadingDatabase = {
-  [K in keyof ReadingStore]: ReadingStore[K] extends (...args: infer Args) => Promise<infer Value>
+  [K in keyof AppStore]: AppStore[K] extends (...args: infer Args) => Promise<infer Value>
     ? (...args: Args) => Value
-    : ReadingStore[K]
+    : AppStore[K]
+}
+
+interface CredentialRow {
+  id: number
+  name: string
+  source: CredentialSource
+  imported_at: string
+}
+
+function credentialSummary(row: CredentialRow): CredentialSummary {
+  return { id: String(row.id), name: row.name, source: row.source, importedAt: row.imported_at }
+}
+
+function noRoles(): Record<IdentityRole, RoleSelection> {
+  return { browse: { state: 'none' }, 'default-post': { state: 'none' }, 'web-sync': { state: 'none' } }
 }
 
 interface PostRow {
@@ -313,6 +330,70 @@ class SqliteReadingDatabase implements ReadingDatabase {
       skippedItems: row.skipped_items
     }))
     return computeCoverage(threadId, mode, pages, latestCount?.reply_count ?? null)
+  }
+
+  listCredentials(): CredentialSummary[] {
+    if (!this.db) return []
+    return this.db.prepare<[], CredentialRow>(
+      'SELECT id, name, source, imported_at FROM credentials ORDER BY id'
+    ).all().map(credentialSummary)
+  }
+
+  loadCredentialCiphertexts(): Array<{ id: CredentialId; ciphertext: Uint8Array }> {
+    if (!this.db) return []
+    return this.db.prepare<[], { id: number; ciphertext: Buffer }>('SELECT id, ciphertext FROM credentials ORDER BY id')
+      .all().map((row) => ({ id: String(row.id), ciphertext: new Uint8Array(row.ciphertext) }))
+  }
+
+  loadCredentialCiphertext(id: CredentialId): Uint8Array | null {
+    if (!this.db) return null
+    const row = this.db.prepare<[string], { ciphertext: Buffer }>('SELECT ciphertext FROM credentials WHERE id = ?').get(id)
+    return row ? new Uint8Array(row.ciphertext) : null
+  }
+
+  insertCredential(input: { name: string; source: CredentialSource; importedAt: string; ciphertext: Uint8Array }): CredentialSummary {
+    const db = this.writable()
+    const row = db.prepare<[string, string, string, Buffer], CredentialRow>(`
+      INSERT INTO credentials (name, source, imported_at, ciphertext) VALUES (?, ?, ?, ?)
+      RETURNING id, name, source, imported_at
+    `).get(input.name, input.source, input.importedAt, Buffer.from(input.ciphertext))
+    if (!row) throw new Error('credential insert returned no row')
+    return credentialSummary(row)
+  }
+
+  renameCredential(id: CredentialId, name: string): boolean {
+    return this.writable().prepare('UPDATE credentials SET name = ? WHERE id = ?').run(name, id).changes === 1
+  }
+
+  deleteCredential(id: CredentialId): boolean {
+    return this.writable().prepare('DELETE FROM credentials WHERE id = ?').run(id).changes === 1
+  }
+
+  loadRoleSelections(): Record<IdentityRole, RoleSelection> {
+    const roles = noRoles()
+    if (!this.db) return roles
+    const rows = this.db.prepare<[], { role: IdentityRole; credential_id: number | null; present: number }>(`
+      SELECT r.role, r.credential_id, EXISTS (SELECT 1 FROM credentials c WHERE c.id = r.credential_id) AS present
+      FROM identity_roles r
+    `).all()
+    for (const row of rows) {
+      if (!IDENTITY_ROLES.includes(row.role) || row.credential_id === null) continue
+      const credentialId = String(row.credential_id)
+      roles[row.role] = row.present ? { state: 'selected', credentialId } : { state: 'missing', credentialId }
+    }
+    return roles
+  }
+
+  setRoleSelection(role: IdentityRole, id: CredentialId | null): boolean {
+    const db = this.writable()
+    return db.transaction(() => {
+      if (id !== null && !db.prepare('SELECT 1 FROM credentials WHERE id = ?').get(id)) return false
+      db.prepare(`
+        INSERT INTO identity_roles (role, credential_id) VALUES (?, ?)
+        ON CONFLICT(role) DO UPDATE SET credential_id = excluded.credential_id
+      `).run(role, id)
+      return true
+    }).immediate()
   }
 
   close(): void {

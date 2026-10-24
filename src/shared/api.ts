@@ -1,4 +1,7 @@
 import type { BoardDirectory, FeedPage, FeedRef, ThreadCoverage, ThreadId, ThreadPage } from './forum'
+import type {
+  CredentialId, IdentityMutationResult, IdentityOverview, IdentityRole, ImportResult
+} from './identity'
 
 /**
  * Classified read failure. Server/body text is never included except a short
@@ -10,6 +13,8 @@ export type ReadErrorKind =
   | 'rate-limited'
   | 'network'
   | 'unknown-structure'
+  /** The browse identity cannot be used; the read was not sent. Never means the forum rejected it. */
+  | 'identity'
 
 export type ReadErrorDetail =
   | 'timeout'
@@ -22,6 +27,12 @@ export type ReadErrorDetail =
   | 'json'
   | 'shape'
   | 'business'
+  /** `identity`: the selected browse credential was removed; a new choice is required. */
+  | 'identity-missing'
+  /** `identity`: OS protection is unavailable or the stored ciphertext could not be decrypted. */
+  | 'identity-locked'
+  /** `identity`: local storage is unavailable, so the browse choice is unknown; not treated as "no cookie". */
+  | 'identity-unknown'
 
 export interface ReadError {
   kind: ReadErrorKind
@@ -101,6 +112,19 @@ export interface XidaoApi {
     /** Opens an absolute http(s) URL in the system browser; anything else is refused. */
     openExternal(input: { url: string }): Promise<{ opened: boolean }>
   }
+  identities: {
+    /** Names, sources, role selections and protection state; never any secret. */
+    getOverview(): Promise<IdentityOverview>
+    /** 官网导出内容: Base64 of JSON `{"cookie": "<userhash>", "name": "…"}` (or that JSON itself). `name` overrides the payload name. */
+    importExport(input: { payload: string; name?: string }): Promise<ImportResult>
+    /** 原始 userhash, optionally prefixed with `userhash=`. */
+    importRaw(input: { userhash: string; name: string }): Promise<ImportResult>
+    rename(input: { credentialId: CredentialId; name: string }): Promise<IdentityMutationResult>
+    /** Deletes the credential; roles that referenced it become `missing`. */
+    remove(input: { credentialId: CredentialId }): Promise<IdentityMutationResult>
+    /** Sets one role only; `null` clears it to `none`. */
+    select(input: { role: IdentityRole; credentialId: CredentialId | null }): Promise<IdentityMutationResult>
+  }
   app: {
     getStatus(): Promise<AppStatus>
   }
@@ -114,5 +138,11 @@ export const IpcChannel = {
   locateThreadEnd: 'reading:locate-thread-end',
   cancel: 'reading:cancel',
   openExternal: 'links:open-external',
+  identityOverview: 'identities:get-overview',
+  identityImportExport: 'identities:import-export',
+  identityImportRaw: 'identities:import-raw',
+  identityRename: 'identities:rename',
+  identityRemove: 'identities:remove',
+  identitySelect: 'identities:select',
   getStatus: 'app:get-status'
 } as const

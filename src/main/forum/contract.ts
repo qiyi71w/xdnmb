@@ -25,11 +25,13 @@ export interface TransportResponse {
 }
 
 /**
- * Credential-free GET to an allow-listed origin. Resolves only for HTTP 200; every other outcome
- * throws ForumReadError (or ReadCancelledError when `signal` aborts). No retries, no redirects followed.
+ * GET to an allow-listed origin. Resolves only for HTTP 200; every other outcome throws
+ * ForumReadError (or ReadCancelledError when `signal` aborts). No retries, no redirects followed.
+ * `credential` is sent as `Cookie: userhash=…` and only to a configured credential origin; any other
+ * target with a credential is refused before connecting.
  */
 export interface ForumTransport {
-  get(url: URL, signal: AbortSignal): Promise<TransportResponse>
+  get(url: URL, signal: AbortSignal, credential?: { userhash: string }): Promise<TransportResponse>
 }
 
 /** Public JSON read API of the forum, returning normalized content only. */

@@ -6,14 +6,31 @@ const KIND_TEXT: Record<ReadError['kind'], string> = {
   permission: '无权限，或需要饼干',
   'rate-limited': '被论坛限流，或需要验证',
   network: '网络失败',
-  'unknown-structure': '返回内容无法识别'
+  'unknown-structure': '返回内容无法识别',
+  identity: '浏览饼干无法使用'
+}
+
+/** Copy for errors whose detail alone decides the text. */
+const DETAIL_TEXT: Partial<Record<ReadError['detail'], string>> = {
+  'identity-missing': '浏览饼干已移除，请在设置中重新选择',
+  'identity-locked': '浏览饼干无法使用（系统凭据保护不可用或无法解密）',
+  'identity-unknown': '本地存储不可用，无法确定浏览饼干，读取未发出'
 }
 
 /** One-line reason for a read error, including the forum's own short message when present. */
 export function describeReadError(error: ReadError): string {
-  let text = error.kind === 'network' && error.detail === 'timeout' ? '网络超时' : KIND_TEXT[error.kind]
+  const detailText = error.kind === 'identity' ? DETAIL_TEXT[error.detail] : undefined
+  let text =
+    detailText ?? (error.kind === 'network' && error.detail === 'timeout' ? '网络超时' : KIND_TEXT[error.kind])
   if (error.httpStatus !== undefined) text += `（HTTP ${error.httpStatus}）`
   return text
+}
+
+/** The read error behind a failure when it is a browse-identity problem (fixed in settings). */
+export function identityErrorOf(failure: Failure | ReadError | null): ReadError | null {
+  if (failure === null) return null
+  const error = 'type' in failure ? (failure.type === 'read' ? failure.error : null) : failure
+  return error !== null && error.kind === 'identity' ? error : null
 }
 
 export function describeFailure(failure: Failure): string {

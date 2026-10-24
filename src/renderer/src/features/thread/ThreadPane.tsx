@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import type { Post, ThreadId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
-import { FailureNotice, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
+import { FailureNotice, IdentitySettingsAction, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
 import { describeReadError, formatPageList, meaningfulTitle } from '../../lib/format'
 import { useNearEnd } from '../../lib/useNearEnd'
 import { CoverageLine } from './CoverageLine'
@@ -188,6 +188,9 @@ export function ThreadPane({
                 <span>已定位末尾（探测第 {formatPageList(state.endProbe.probedPages)} 页）</span>
               )}
             </div>
+            {task === null && state.endProbe?.status === 'interrupted' && (
+              <IdentitySettingsAction error={state.endProbe.error} />
+            )}
             {task?.type === 'locate' && (
               <button type="button" className="btn btn-small" onClick={thread.cancel}>
                 <Icon name="close" size={14} />

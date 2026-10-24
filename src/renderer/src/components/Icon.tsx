@@ -61,7 +61,20 @@ const PATHS = {
       <path d="M17 13.5V18a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4.5" />
     </>
   ),
-  chevron: <path d="m9 6 6 6-6 6" />
+  chevron: <path d="m9 6 6 6-6 6" />,
+  settings: (
+    <>
+      <path d="M4 7.5h9M17 7.5h3M4 16.5h3M11 16.5h9" />
+      <circle cx="15" cy="7.5" r="2" />
+      <circle cx="9" cy="16.5" r="2" />
+    </>
+  ),
+  key: (
+    <>
+      <circle cx="8.5" cy="12" r="3.5" />
+      <path d="M12 12h8.5M17.5 12v3M20.5 12v2.5" />
+    </>
+  )
 } as const
 
 export type IconName = keyof typeof PATHS

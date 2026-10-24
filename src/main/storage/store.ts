@@ -2,15 +2,20 @@ import type { Worker, WorkerOptions } from 'node:worker_threads'
 import type { StorageStatus } from '../../shared/api'
 import type { ReadingMode, ThreadId } from '../../shared/forum'
 import { StorageWriteRefusedError } from './contract'
-import type { ReadingStore } from './contract'
+import type { AppStore } from './contract'
 import { computeCoverage } from './coverage'
 import type { ReadingDatabase } from './database'
 import type { StorageMethod, StorageResponse } from './worker'
 
+const WRITE_METHODS: ReadonlySet<StorageMethod> = new Set<StorageMethod>([
+  'saveDirectory', 'saveFeedPage', 'saveThreadPage',
+  'insertCredential', 'renameCredential', 'deleteCredential', 'setRoleSelection'
+])
+
 export async function openReadingStore(options: {
   databasePath: string
   createWorker: (options: WorkerOptions) => Worker
-}): Promise<ReadingStore> {
+}): Promise<AppStore> {
   let status: StorageStatus = { state: 'unavailable', reason: 'open-failed' }
   let worker: Worker | null = null
   let stopped = false
@@ -57,12 +62,13 @@ export async function openReadingStore(options: {
     method: Method,
     args: Parameters<ReadingDatabase[Method]>
   ): ReturnType<ReadingDatabase[Method]> {
-    if (method === 'saveDirectory' || method === 'saveFeedPage' || method === 'saveThreadPage') {
-      throw new StorageWriteRefusedError(status)
-    }
+    if (WRITE_METHODS.has(method)) throw new StorageWriteRefusedError(status)
     const value = method === 'getThreadCoverage'
       ? computeCoverage(args[0] as ThreadId, args[1] as ReadingMode, [], null)
-      : method === 'close' ? undefined : null
+      : method === 'listCredentials' || method === 'loadCredentialCiphertexts' ? []
+        : method === 'loadRoleSelections'
+          ? { browse: { state: 'none' }, 'default-post': { state: 'none' }, 'web-sync': { state: 'none' } }
+          : method === 'close' ? undefined : null
     return value as ReturnType<ReadingDatabase[Method]>
   }
 
@@ -108,6 +114,14 @@ export async function openReadingStore(options: {
     saveThreadPage: (page, fetchedAt) => request('saveThreadPage', page, fetchedAt),
     loadThreadPage: (threadId, mode, page) => request('loadThreadPage', threadId, mode, page),
     getThreadCoverage: (threadId, mode) => request('getThreadCoverage', threadId, mode),
+    listCredentials: () => request('listCredentials'),
+    loadCredentialCiphertexts: () => request('loadCredentialCiphertexts'),
+    loadCredentialCiphertext: (id) => request('loadCredentialCiphertext', id),
+    insertCredential: (input) => request('insertCredential', input),
+    renameCredential: (id, name) => request('renameCredential', id, name),
+    deleteCredential: (id) => request('deleteCredential', id),
+    loadRoleSelections: () => request('loadRoleSelections'),
+    setRoleSelection: (role, id) => request('setRoleSelection', role, id),
     close() {
       if (!closePromise) {
         closing = true

@@ -6,7 +6,10 @@ import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/direct
 import { Navigation } from '../features/directory/Navigation'
 import { useDirectory } from '../features/directory/useDirectory'
 import { FeedPane } from '../features/feed/FeedPane'
+import { useIdentities } from '../features/identity/useIdentities'
 import { ThreadPane } from '../features/thread/ThreadPane'
+import { SettingsOpenerContext } from '../lib/settingsOpener'
+import { SettingsDialog } from './SettingsDialog'
 import './layout.css'
 
 function StorageBanner({ storage }: { storage: StorageStatus | null }) {
@@ -27,6 +30,10 @@ export function App() {
   const { start: startDirectory } = directory
   const [feed, setFeed] = useState<FeedInfo | null>(null)
   const [thread, setThread] = useState<{ id: ThreadId; head: Post } | null>(null)
+  const identities = useIdentities()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const openSettings = useCallback(() => setSettingsOpen(true), [])
+  const closeSettings = useCallback(() => setSettingsOpen(false), [])
 
   useEffect(() => {
     let alive = true
@@ -68,39 +75,49 @@ export function App() {
   }, [])
 
   return (
-    <div className="app">
-      <StorageBanner storage={storage} />
-      <div className="workspace">
-        <Navigation state={directory.state} selected={feed?.ref ?? null} onSelect={selectFeed} onRetry={directory.retry} />
+    <SettingsOpenerContext value={openSettings}>
+      <div className="app">
+        <StorageBanner storage={storage} />
+        <div className="workspace">
+          <Navigation
+            state={directory.state}
+            selected={feed?.ref ?? null}
+            onSelect={selectFeed}
+            onRetry={directory.retry}
+            identities={identities}
+            onOpenSettings={openSettings}
+          />
 
-        <div className="list-column">
-          {feed === null ? (
-            <div className="pane-empty">
-              <p className="pane-empty-title">选择时间线或版面</p>
-              <p className="pane-empty-text">串列表会显示在这里。</p>
-            </div>
-          ) : (
-            <FeedPane
-              key={feedKey(feed.ref)}
-              info={feed}
-              forumNames={names}
-              selectedThreadId={thread?.id ?? null}
-              onOpenThread={openThread}
-            />
-          )}
+          <div className="list-column">
+            {feed === null ? (
+              <div className="pane-empty">
+                <p className="pane-empty-title">选择时间线或版面</p>
+                <p className="pane-empty-text">串列表会显示在这里。</p>
+              </div>
+            ) : (
+              <FeedPane
+                key={feedKey(feed.ref)}
+                info={feed}
+                forumNames={names}
+                selectedThreadId={thread?.id ?? null}
+                onOpenThread={openThread}
+              />
+            )}
+          </div>
+
+          <main className="reader-column-wrap">
+            {thread === null ? (
+              <div className="pane-empty">
+                <p className="pane-empty-title">选择一个串开始阅读</p>
+                <p className="pane-empty-text">主帖与回复会显示在这里，接近底部时自动读取下一页。</p>
+              </div>
+            ) : (
+              <ThreadPane key={thread.id} threadId={thread.id} initialHead={thread.head} forumName={forumName} />
+            )}
+          </main>
         </div>
-
-        <main className="reader-column-wrap">
-          {thread === null ? (
-            <div className="pane-empty">
-              <p className="pane-empty-title">选择一个串开始阅读</p>
-              <p className="pane-empty-text">主帖与回复会显示在这里，接近底部时自动读取下一页。</p>
-            </div>
-          ) : (
-            <ThreadPane key={thread.id} threadId={thread.id} initialHead={thread.head} forumName={forumName} />
-          )}
-        </main>
+        {settingsOpen && <SettingsDialog identities={identities} onClose={closeSettings} />}
       </div>
-    </div>
+    </SettingsOpenerContext>
   )
 }

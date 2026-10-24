@@ -3,14 +3,19 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createForumClient } from './forum/client'
 import { createForumTransport } from './forum/transport'
+import { createSafeStorageProtector } from './identity/protection'
+import { createIdentityService } from './identity/service'
 import { registerIpc } from './ipc'
 import { createReadingService } from './reading/service'
 import { createRequestScheduler } from './reading/scheduler'
-import type { ReadingStore } from './storage/contract'
+import type { AppStore } from './storage/contract'
 import { openReadingStore } from './storage/store'
 import createStorageWorker from './storage/worker?nodeWorker'
 
-/** The only forum origin this ticket reads from (verified public JSON API). */
+/**
+ * The only forum origin this app reads from (verified public JSON API). It is also the only origin
+ * that may receive the browse credential; redirects are never followed.
+ */
 const FORUM_API_ORIGIN = 'https://api.nmb.best'
 
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL
@@ -23,7 +28,7 @@ function isAppDocument(url: string): boolean {
 }
 
 let mainWindow: BrowserWindow | null = null
-let store: ReadingStore | null = null
+let store: AppStore | null = null
 let storeClosed = false
 
 // Every renderer runs sandboxed; one main process owns the database worker.
@@ -84,14 +89,25 @@ async function start(): Promise<void> {
   store = openedStore
   if (openedStore.status.state !== 'ready') console.error('[storage] status', openedStore.status.state)
 
+  const identities = createIdentityService({
+    store: openedStore,
+    protector: createSafeStorageProtector(),
+    storageState: () => openedStore.status.state
+  })
+
   const reading = createReadingService({
-    client: createForumClient({ transport: createForumTransport({ allowedOrigins: [FORUM_API_ORIGIN] }), baseUrl: FORUM_API_ORIGIN }),
+    client: createForumClient({
+      transport: createForumTransport({ allowedOrigins: [FORUM_API_ORIGIN], credentialOrigins: [FORUM_API_ORIGIN] }),
+      baseUrl: FORUM_API_ORIGIN,
+      browseIdentity: () => identities.browseUserhash()
+    }),
     store: openedStore,
     scheduler: createRequestScheduler()
   })
 
   const ipc = registerIpc({
     reading,
+    identities,
     getStatus: () => ({ storage: openedStore.status }),
     isTrustedSender: (event: IpcMainInvokeEvent) =>
       mainWindow !== null &&
