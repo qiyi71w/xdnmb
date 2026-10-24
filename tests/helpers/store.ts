@@ -74,6 +74,11 @@ export function asStore(db: ReadingDatabase): AppStore {
     saveSubscriptionOperation: async (...args) => db.saveSubscriptionOperation(...args),
     loadSubscriptionOperations: async () => db.loadSubscriptionOperations(),
     recoverSubscriptionOperations: async () => db.recoverSubscriptionOperations(),
+    listSubscriptionAppCredentials: async () => db.listSubscriptionAppCredentials(),
+    loadSubscriptionBaseline: async (...args) => db.loadSubscriptionBaseline(...args),
+    loadSubscriptionPlans: async () => db.loadSubscriptionPlans(),
+    saveSubscriptionPlan: async (...args) => db.saveSubscriptionPlan(...args),
+    recoverSubscriptionPlans: async (...args) => db.recoverSubscriptionPlans(...args),
     close: async () => db.close()
   }
 }

@@ -16,7 +16,7 @@ import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, Threa
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
 import type { AttachmentId, DraftId, DraftSaveInput, PostFields, PostTarget } from '../../shared/drafts'
 import type { ContentStore } from './content-contract'
-import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionSource } from '../../shared/subscriptions'
+import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionPlan, SubscriptionSource } from '../../shared/subscriptions'
 
 /** A write was refused because the database is read-only (newer schema) or unavailable. */
 export class StorageWriteRefusedError extends Error {
@@ -205,11 +205,18 @@ export interface SubscriptionConfiguration {
   source: SubscriptionSource
 }
 
+/** Confirmed common membership, scoped to an immutable binding generation. */
+export interface SubscriptionBaseline {
+  context: SubscriptionContext
+  ids: ThreadId[]
+}
+
 /** UUID ciphertexts are immutable and retained for fixed-context readback after replacement. */
 export interface SubscriptionStore {
   loadSubscriptionConfiguration(): Promise<SubscriptionConfiguration>
   setSubscriptionAppCredential(id: string, ciphertext: Uint8Array): Promise<void>
   loadSubscriptionAppCiphertext(id: string): Promise<Uint8Array | null>
+  listSubscriptionAppCredentials(): Promise<string[]>
   setSubscriptionSource(source: SubscriptionSource): Promise<void>
   loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly?: boolean): Promise<SubscriptionObservation | null>
   loadSubscriptionObservationById(id: string): Promise<SubscriptionObservation | null>
@@ -218,6 +225,11 @@ export interface SubscriptionStore {
   saveSubscriptionOperation(operation: SubscriptionOperation): Promise<void>
   loadSubscriptionOperations(): Promise<SubscriptionOperation[]>
   recoverSubscriptionOperations(): Promise<void>
+  loadSubscriptionBaseline(context: SubscriptionContext): Promise<SubscriptionBaseline | null>
+  loadSubscriptionPlans(): Promise<SubscriptionPlan[]>
+  /** Links intent before dispatch and commits item outcome + confirmed baseline facts atomically. */
+  saveSubscriptionPlan(plan: SubscriptionPlan, operation?: SubscriptionOperation, baseline?: SubscriptionBaseline): Promise<void>
+  recoverSubscriptionPlans(at: string): Promise<void>
 }
 
 export type AppStore = ReadingStore & IdentityStore & DraftStore & ContentStore & SubscriptionStore

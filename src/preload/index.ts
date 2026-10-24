@@ -26,6 +26,11 @@ const api: XidaoApi = {
     change: (input) => ipcRenderer.invoke(IpcChannel.subscriptionChange, input),
     getOperations: () => ipcRenderer.invoke(IpcChannel.subscriptionOperations),
     reconcile: (input) => ipcRenderer.invoke(IpcChannel.subscriptionReconcile, input),
+    getMergeSources: () => ipcRenderer.invoke(IpcChannel.subscriptionMergeSources),
+    previewSync: (input) => ipcRenderer.invoke(IpcChannel.subscriptionPreviewSync, input),
+    previewMerge: (input) => ipcRenderer.invoke(IpcChannel.subscriptionPreviewMerge, input),
+    executePlan: (input) => ipcRenderer.invoke(IpcChannel.subscriptionExecutePlan, input),
+    getPlans: () => ipcRenderer.invoke(IpcChannel.subscriptionPlans),
     cancel: (input) => ipcRenderer.invoke(IpcChannel.subscriptionCancel, input)
   },
   reading: {

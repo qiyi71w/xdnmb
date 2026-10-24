@@ -359,5 +359,24 @@ export const MIGRATIONS: readonly Migration[] = [
         );
       `)
     }
+  },
+  {
+    version: 8,
+    up(db) {
+      // Reconciliation-v6 already has these personal records; retained-v7 does not.
+      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'offline_copies'").get()) {
+        MIGRATIONS.find((migration) => migration.version === 6)!.up(db)
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS subscription_baselines (
+          generation INTEGER PRIMARY KEY NOT NULL,
+          baseline_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS subscription_plans (
+          id TEXT PRIMARY KEY NOT NULL,
+          plan_json TEXT NOT NULL
+        );
+      `)
+    }
   }
 ]

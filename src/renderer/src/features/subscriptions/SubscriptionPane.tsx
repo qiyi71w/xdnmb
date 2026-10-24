@@ -22,12 +22,13 @@ import type {
 } from '../../../../shared/subscriptions'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, Loading } from '../../components/Notices'
-import { formatLocalTime, meaningfulTitle } from '../../lib/format'
+import { formatLocalTime } from '../../lib/format'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import { OperationJournal, WriteStatus } from './SubscriptionActivity'
+import { ReconcileView } from './SubscriptionReconcile'
 import {
   blocksNewWrite,
   displayedObservation,
@@ -37,7 +38,16 @@ import {
   subscriptionListReducer,
   type SubscriptionListState
 } from './subscriptionListState'
-import { ACTION_NAME, SOURCE_NAME, SOURCE_SHORT, coverageText, failureText, sourceBlocker, webObjectText } from './subscriptionText'
+import {
+  ACTION_NAME,
+  SOURCE_NAME,
+  SOURCE_SHORT,
+  coverageText,
+  failureText,
+  sourceBlocker,
+  threadLabel,
+  webObjectText
+} from './subscriptionText'
 import { useSubscriptionsContext } from './useSubscriptions'
 import '../feed/feed.css'
 import '../identity/identity.css'
@@ -66,13 +76,6 @@ function identityLine(overview: SubscriptionOverview): string {
   return `${first}；${second} · 配置代次 ${overview.context.generation}`
 }
 
-function threadLabel(thread: ThreadSummary): string {
-  const title = meaningfulTitle(thread.head.title)
-  if (title !== null) return title
-  const excerpt = thread.head.plainText.replace(/\s+/g, ' ').trim()
-  return excerpt === '' ? `No.${thread.head.id}` : excerpt.slice(0, 30)
-}
-
 /**
  * Remote subscription list of the currently selected source (App / 网页), in the tab's list slot.
  * Reads page 1 when the user navigates here or switches source here; further pages, refresh and
@@ -91,13 +94,28 @@ export function SubscriptionPane({
   onOpenThread: (thread: ThreadSummary) => void
 }) {
   const subscriptions = useSubscriptionsContext()
-  const { overview, overviewFailed, refreshOverview, applyOverview, active, operations, change } = subscriptions
+  const { overview, overviewFailed, refreshOverview, applyOverview, operations, change, busy, task, refreshPlans } = subscriptions
   const openSettings = useSettingsOpener()
   const registry = useContext(ContentRegistryContext)
   const [remembered] = useState(() => {
     const memory = registry?.listMemory.get(entryKey)
     return memory?.kind === 'subscriptions' ? memory : null
   })
+  /** 同步与合并 replaces the list in this pane; the list stays mounted (hidden) with its scroll position. */
+  const [view, setView] = useState<'list' | 'reconcile'>(remembered?.view ?? 'list')
+  const reconcileHeadingRef = useRef<HTMLHeadingElement>(null)
+  const reconcileButtonRef = useRef<HTMLButtonElement>(null)
+  const viewFocus = useRef(false)
+  useLayoutEffect(() => {
+    if (!viewFocus.current) return
+    viewFocus.current = false
+    if (view === 'reconcile') reconcileHeadingRef.current?.focus()
+    else reconcileButtonRef.current?.focus()
+  }, [view])
+  const showView = (next: 'list' | 'reconcile') => {
+    viewFocus.current = true
+    setView(next)
+  }
   const [state, dispatch] = useReducer(
     subscriptionListReducer,
     remembered?.state ?? initialSubscriptionListState,
@@ -199,7 +217,8 @@ export function SubscriptionPane({
     abandonRead()
     void read(null)
   }, [abandonRead, read])
-  useRegisterContent('lists', entryKey, { refresh })
+  // Ctrl/Cmd+R in 同步与合并 only re-reads local history: a preview is always started explicitly.
+  useRegisterContent('lists', entryKey, { refresh: view === 'reconcile' ? () => void refreshPlans() : refresh })
 
   const [switching, setSwitching] = useState<SubscriptionSource | null>(null)
   const [switchError, setSwitchError] = useState<string | null>(null)
@@ -224,7 +243,7 @@ export function SubscriptionPane({
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollTop = useRef(remembered?.scrollTop ?? 0)
   useLayoutEffect(() => {
-    registry?.listMemory.set(entryKey, { kind: 'subscriptions', state, scrollTop: scrollTop.current })
+    registry?.listMemory.set(entryKey, { kind: 'subscriptions', state, scrollTop: scrollTop.current, view })
   })
   // The scroller exists only once the overview is known (the loading view has none).
   const overviewKnown = overview !== null
@@ -244,7 +263,7 @@ export function SubscriptionPane({
     const scroller = scrollRef.current
     if (scroller === null || scroller.clientHeight === 0) return
     scrollTop.current = scroller.scrollTop
-    registry?.listMemory.set(entryKey, { kind: 'subscriptions', state: stateRef.current, scrollTop: scrollTop.current })
+    registry?.listMemory.set(entryKey, { kind: 'subscriptions', state: stateRef.current, scrollTop: scrollTop.current, view })
   }
 
   // ---------- Displayed list ----------
@@ -303,9 +322,22 @@ export function SubscriptionPane({
   }
 
   const blocker = overview === null ? null : sourceBlocker(overview, overview.source)
-  const writeBlocked = overview === null || blocker !== null || !overview.writable || active !== null
-  const writeHint =
-    active !== null ? '另一项订阅操作正在进行，完成后才能开始新的操作' : overview !== null && !overview.writable ? '本地存储不可写，无法保存操作意图' : blocker
+  const writeBlocked = overview === null || blocker !== null || !overview.writable || busy
+  const writeHint = busy
+    ? '另一项订阅操作、同步预览或计划正在进行，完成后才能开始新的操作'
+    : overview !== null && !overview.writable
+      ? '本地存储不可写，无法保存操作意图'
+      : blocker
+  const taskHint =
+    task === null || task.phase === 'preview-failed'
+      ? '预览两端差异后逐项确认，或从旧 UUID 合并'
+      : task.phase === 'previewing'
+        ? '预览正在读取'
+        : task.phase === 'preview'
+          ? '有一份尚未执行的预览'
+          : task.phase === 'executing'
+            ? '计划正在执行'
+            : '计划已结束，可查看结果'
 
   const labelOf = (threadId: ThreadId) => {
     const thread = threads.find((item) => item.head.id === threadId)
@@ -335,7 +367,14 @@ export function SubscriptionPane({
 
   return (
     <section className="list-pane sub-pane" aria-label={`订阅：${SOURCE_NAME[source]}`}>
-      <div className="list-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1} data-pane-focus="">
+      <div
+        className="list-scroll"
+        ref={scrollRef}
+        onScroll={onScroll}
+        tabIndex={-1}
+        data-pane-focus={view === 'list' ? '' : undefined}
+        hidden={view !== 'list'}
+      >
         <header className="list-header">
           <div className="list-title-row">
             <h2 className="list-title">
@@ -397,13 +436,20 @@ export function SubscriptionPane({
 
           <WriteStatus />
 
+          <div className="sub-recon-entry">
+            <button type="button" className="btn btn-small" ref={reconcileButtonRef} onClick={() => showView('reconcile')}>
+              同步与合并…
+            </button>
+            <span className="field-hint">{taskHint}</span>
+          </div>
+
           {draft !== null && (
             <ChangeConfirm
               draft={draft}
               stale={draft.selection !== selection}
               blockedReason={
-                active !== null
-                  ? '另一项订阅操作正在进行'
+                busy
+                  ? '另一项订阅操作、同步预览或计划正在进行'
                   : operations?.some((item) =>
                         blocksNewWrite(item, { source: draft.source, objectRef: draft.objectRef, threadId: draft.threadId })
                       )
@@ -556,6 +602,11 @@ export function SubscriptionPane({
           )}
         </div>
       </div>
+      {view === 'reconcile' && (
+        <div className="list-scroll" tabIndex={-1} data-pane-focus="">
+          <ReconcileView headingRef={reconcileHeadingRef} onBack={() => showView('list')} />
+        </div>
+      )}
     </section>
   )
 }

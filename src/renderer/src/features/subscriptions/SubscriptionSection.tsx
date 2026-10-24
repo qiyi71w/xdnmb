@@ -81,7 +81,7 @@ function SubscriptionSettings({ overview, subscriptions }: { overview: Subscript
         </div>
       )}
       <SourcePicker overview={overview} onApplied={subscriptions.applyOverview} />
-      <AppUuidForm overview={overview} onApplied={subscriptions.applyOverview} />
+      <AppUuidForm overview={overview} busy={subscriptions.busy} onApplied={subscriptions.applyOverview} />
       <div className="settings-group">
         <h4 className="settings-group-title">网页同步对象</h4>
         <p className="sub-setting-value">{webObjectText(overview)}</p>
@@ -146,7 +146,16 @@ function SourcePicker({ overview, onApplied }: { overview: SubscriptionOverview;
   )
 }
 
-function AppUuidForm({ overview, onApplied }: { overview: SubscriptionOverview; onApplied: (next: SubscriptionOverview) => void }) {
+function AppUuidForm({
+  overview,
+  busy,
+  onApplied
+}: {
+  overview: SubscriptionOverview
+  /** A write, preview or plan is running: its fixed UUID must not change under it from this form. */
+  busy: boolean
+  onApplied: (next: SubscriptionOverview) => void
+}) {
   // Uncontrolled on purpose: React would mirror a controlled value into the `value` attribute.
   const uuidRef = useRef<HTMLInputElement>(null)
   const generateRef = useRef<HTMLButtonElement>(null)
@@ -161,7 +170,7 @@ function AppUuidForm({ overview, onApplied }: { overview: SubscriptionOverview; 
   const hintId = useId()
   const messageId = useId()
   const confirmId = useId()
-  const blocked = overview.protection === 'unavailable' || !overview.writable
+  const blocked = overview.protection === 'unavailable' || !overview.writable || busy
 
   // The typed UUID never outlives this form (dialog closed or section unmounted).
   useEffect(() => {
@@ -212,8 +221,8 @@ function AppUuidForm({ overview, onApplied }: { overview: SubscriptionOverview; 
         after === before
           ? '与当前 UUID 相同，配置没有变化。'
           : kind === 'generate'
-            ? `已生成并保存新的 UUID，进入配置代次 ${after}。UUID 不会再显示；之前的远端集合和本地阅读资料保留。`
-            : `已保存这个 UUID，进入配置代次 ${after}。UUID 不会再显示；之前的远端集合和本地阅读资料保留。`
+            ? `已生成并保存新的 UUID，进入配置代次 ${after}。UUID 不会再显示；之前的远端集合和本地阅读资料保留，没有复制。需要时可在「订阅 › 同步与合并」中预览合并搬运。`
+            : `已保存这个 UUID，进入配置代次 ${after}。UUID 不会再显示；之前的远端集合和本地阅读资料保留，没有复制。需要时可在「订阅 › 同步与合并」中预览合并搬运。`
     })
   }
 
@@ -259,6 +268,7 @@ function AppUuidForm({ overview, onApplied }: { overview: SubscriptionOverview; 
             ? `已设置 · 本机引用 #${overview.context.appCredentialId ?? '未知'}`
             : '未设置'}
         </p>
+        {busy && <p className="field-hint">订阅操作、同步预览或计划正在进行，结束后才能更换 UUID。</p>}
 
         <label className="field-label" htmlFor={inputId}>
           {overview.appConfigured ? '更换为另一个 UUID' : '使用已有的 UUID'}

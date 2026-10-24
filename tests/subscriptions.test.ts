@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { SubscriptionResult, SubscriptionSource } from '../src/shared/subscriptions'
+import type { SubscriptionPreview, SubscriptionResult, SubscriptionSource } from '../src/shared/subscriptions'
 import type { SecretProtector } from '../src/main/identity/protection'
 import type { AppStore } from '../src/main/storage/contract'
 import { openReadingDatabase } from '../src/main/storage/database'
@@ -307,6 +307,9 @@ describe('protected subscription configuration and observations', () => {
     const unavailable = await openReadingStore({ databasePath: file, createWorker() { throw new Error('unavailable') } })
     expect(await unavailable.loadSubscriptionOperations()).toEqual([])
     expect(await unavailable.loadSubscriptionConfiguration()).toMatchObject({ context: { appCredentialId: null } })
+    expect(await unavailable.loadSubscriptionPlans()).toEqual([])
+    expect(await unavailable.listSubscriptionAppCredentials()).toEqual([])
+    expect(await unavailable.loadSubscriptionBaseline({ generation: 0, appCredentialId: null, webCredentialId: null })).toBeNull()
     await expect(unavailable.setSubscriptionSource('web')).rejects.toThrow()
   })
 })
@@ -535,5 +538,382 @@ describe('subscription intent, reports, readback and read-only recovery', () => 
     expect(result.verification).toBe('unknown')
     expect(remote.requests).toHaveLength(count)
     expect(writes(remote.requests)).toHaveLength(1)
+  })
+})
+
+async function syncPreview(service: SubscriptionService) {
+  return unwrap(await service.previewSync({ operationId: 'preview' }, signal()))
+}
+async function executePreview(service: SubscriptionService, preview: SubscriptionPreview, ids = preview.items.map((item) => item.id), abortSignal = signal()) {
+  return unwrap(await service.executePlan({ previewId: preview.id, selectedItemIds: ids, operationId: 'execute' }, abortSignal))
+}
+
+describe('previewed subscription reconciliation', () => {
+  it('previews without writing, confirms a first union and consumes the preview once', async () => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    const preview = unwrap(await service.previewSync({ operationId: 'preview' }, signal()))
+    expect(preview).toMatchObject({ mode: 'sync', firstSync: true, deletionsAllowed: false })
+    expect(preview.items.map(({ threadId, action, target }) => ({ threadId, action, target }))).toEqual([
+      { threadId: '1001', action: 'add', target: 'web' },
+      { threadId: '1002', action: 'add', target: 'web' },
+      { threadId: '3001', action: 'add', target: 'app' }
+    ])
+    expect(writes(remote.requests)).toHaveLength(0)
+    const plan = unwrap(await service.executePlan({ previewId: preview.id, selectedItemIds: preview.items.map((item) => item.id), operationId: 'execute' }, signal()))
+    expect(plan.state).toBe('completed')
+    expect(plan.items.map((item) => item.state)).toEqual(['confirmed', 'confirmed', 'confirmed'])
+    expect(plan.items.every((item) => item.operationId !== null)).toBe(true)
+    expect([...remote.app.get(UUID_A)!]).toEqual(['1001', '1002', '3001'])
+    expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1001', '1002'])
+    expect(await service.executePlan({ previewId: preview.id, selectedItemIds: [], operationId: 'again' }, signal())).toEqual({ ok: false, reason: 'stale' })
+    expect((await service.getPlans())[0]).toEqual(plan)
+  })
+
+  it('requires execution to establish common baseline and leaves unselected deletions untouched', async () => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    remote.web.set(COOKIE_A, new Set(['1001', '1002']))
+    await syncPreview(service)
+    remote.web.get(COOKIE_A)!.delete('1001')
+    const unconfirmed = await syncPreview(service)
+    expect(unconfirmed.firstSync).toBe(true)
+    expect(unconfirmed.items).toMatchObject([{ threadId: '1001', action: 'add', target: 'web' }])
+    remote.web.get(COOKIE_A)!.add('1001')
+    await executePreview(service, await syncPreview(service), [])
+    remote.web.get(COOKIE_A)!.delete('1001')
+    remote.app.get(UUID_A)!.delete('1002')
+    const deletion = await syncPreview(service)
+    expect(deletion).toMatchObject({ firstSync: false, deletionsAllowed: true })
+    expect(deletion.items.map(({ threadId, action, target }) => ({ threadId, action, target }))).toEqual([
+      { threadId: '1001', action: 'remove', target: 'app' }, { threadId: '1002', action: 'remove', target: 'web' }
+    ])
+    const plan = await executePreview(service, deletion, [deletion.items[0]!.id])
+    expect(plan).toMatchObject({ state: 'completed', items: [{ state: 'confirmed' }] })
+    expect(remote.app.get(UUID_A)!.has('1001')).toBe(false)
+    expect(remote.web.get(COOKIE_A)!.has('1002')).toBe(true)
+    const next = await syncPreview(service)
+    expect(next.items).toMatchObject([{ threadId: '1002', action: 'remove', target: 'web' }])
+  })
+
+  it.each(['missing-page', 'authentication'] as const)('does not infer deletion or restore baseline members after %s', async (failure) => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    await executePreview(service, await syncPreview(service))
+    remote.web.get(COOKIE_A)!.delete('1001')
+    if (failure === 'missing-page') remote.behavior.failPage = 2
+    else remote.web.delete(COOKIE_A)
+    const preview = await syncPreview(service)
+    expect(preview.deletionsAllowed).toBe(false)
+    expect(preview.right.error).not.toBeNull()
+    expect(preview.items).toEqual([])
+    const count = writes(remote.requests).length
+    await executePreview(service, preview, [])
+    expect(writes(remote.requests)).toHaveLength(count)
+  })
+
+  it.each(['sets', 'coverage', 'uuid', 'binding'] as const)('rejects a stale %s before any write and consumes the preview', async (difference) => {
+    const { service, remote, db, b } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    const preview = await syncPreview(service)
+    if (difference === 'sets') remote.app.get(UUID_A)!.add('1009')
+    if (difference === 'coverage') remote.behavior.failPage = 2
+    if (difference === 'uuid') unwrap(await service.configureApp({ uuid: UUID_B }))
+    if (difference === 'binding') db.setRoleSelection('web-sync', b.id)
+    const input = { previewId: preview.id, selectedItemIds: preview.items.map((item) => item.id), operationId: 'stale' }
+    expect(await service.executePlan(input, signal())).toEqual({ ok: false, reason: 'stale' })
+    expect(await service.executePlan(input, signal())).toEqual({ ok: false, reason: 'stale' })
+    expect(writes(remote.requests)).toHaveLength(0)
+    expect(await service.getPlans()).toEqual([])
+  })
+
+  it.each(['unknown', 'duplicate'] as const)('rejects %s candidate selection without side effects', async (invalid) => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    const preview = await syncPreview(service)
+    const selectedItemIds = invalid === 'unknown' ? ['unknown'] : [preview.items[0]!.id, preview.items[0]!.id]
+    expect(await service.executePlan({ previewId: preview.id, selectedItemIds, operationId: 'invalid' }, signal())).toEqual({ ok: false, reason: 'invalid-selection' })
+    expect(writes(remote.requests)).toHaveLength(0)
+  })
+
+  it('starts a new union-only baseline for a second bound identity without changing viewing or speaking roles', async () => {
+    const { service, remote, db, b } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    await executePreview(service, await syncPreview(service))
+    db.setRoleSelection('web-sync', b.id)
+    const preview = await syncPreview(service)
+    expect(preview).toMatchObject({ firstSync: true, deletionsAllowed: false, context: { webCredentialId: b.id } })
+    expect(preview.items.every((item) => item.action === 'add')).toBe(true)
+    await executePreview(service, preview)
+    expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1001', '1002'])
+    expect([...remote.web.get(COOKIE_B)!]).toEqual(['4001', '1001', '1002', '3001'])
+    expect(db.loadRoleSelections()).toEqual({ browse: { state: 'selected', credentialId: b.id }, 'default-post': { state: 'selected', credentialId: b.id }, 'web-sync': { state: 'selected', credentialId: b.id } })
+  })
+
+  it.each(['rejected', 'mismatch', 'lost-response'] as const)('keeps prior successes and stops subsequent items after %s', async (failure) => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    const preview = await syncPreview(service)
+    let count = 0
+    remote.behavior.onWrite = async () => {
+      count++
+      if (count === 1 && failure === 'rejected') remote.behavior.writeFailure = 'captcha'
+      if (count === 1 && failure === 'mismatch') remote.behavior.ignoreWrites = true
+      if (count === 2 && failure === 'lost-response') remote.behavior.dropNextWrite = true
+    }
+    const plan = await executePreview(service, preview)
+    expect(plan.state).toBe('stopped')
+    expect(plan.items.map((item) => item.state)).toEqual(['confirmed', failure === 'lost-response' ? 'unknown' : 'failed', 'skipped'])
+    expect(writes(remote.requests)).toHaveLength(2)
+    expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(true)
+    expect(remote.app.get(UUID_A)!.has('3001')).toBe(false)
+    const operation = (await service.getOperations()).find((entry) => entry.id === plan.items[1]!.operationId)!
+    if (failure === 'lost-response') expect(operation).toMatchObject({ report: 'unknown', verification: 'present' })
+    remote.behavior.onWrite = null
+    remote.behavior.writeFailure = null
+    remote.behavior.ignoreWrites = false
+    remote.web.get(COOKIE_A)!.delete('1001')
+    if (failure !== 'mismatch') remote.web.get(COOKIE_A)!.delete('1002')
+    const next = await syncPreview(service)
+    expect(next.items.find((item) => item.threadId === '1001')).toMatchObject({ action: 'remove', target: 'app' })
+    expect(next.items.find((item) => item.threadId === '1002')).toMatchObject({ action: 'add', target: 'web' })
+  })
+
+  it('shares the manual-write lock, exposes durable progress, and never follows a new binding mid-plan', async () => {
+    const { service, remote, db, b } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    const preview = await syncPreview(service)
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    remote.behavior.onWrite = async () => { entered.resolve(); await release.promise }
+    const pending = executePreview(service, preview)
+    await entered.promise
+    expect((await service.getPlans())[0]).toMatchObject({ state: 'running' })
+    expect((await service.getPlans())[0]!.items[0]).toMatchObject({ state: 'pending', operationId: expect.any(String) })
+    expect(await change(service, 'app', '9001', 'add')).toEqual({ ok: false, reason: 'busy' })
+    db.setRoleSelection('web-sync', b.id)
+    release.resolve()
+    const plan = await pending
+    expect(plan).toMatchObject({ state: 'stopped', stopReason: 'stale' })
+    expect(plan.items.map((item) => item.state)).toEqual(['confirmed', 'failed', 'skipped'])
+    expect(writes(remote.requests)).toHaveLength(1)
+    expect([...remote.web.get(COOKIE_B)!]).toEqual(['4001'])
+  })
+
+  it('cancels future items but records an already dispatched write without replay', async () => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    const preview = await syncPreview(service)
+    const controller = new AbortController()
+    remote.behavior.onWrite = async () => { controller.abort() }
+    const plan = await executePreview(service, preview, undefined, controller.signal)
+    expect(plan).toMatchObject({ state: 'stopped', stopReason: 'item-unknown' })
+    expect(plan.items.map((item) => item.state)).toEqual(['unknown', 'skipped', 'skipped'])
+    expect(writes(remote.requests)).toHaveLength(1)
+    expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(true)
+  })
+
+  it.each(['report', 'atomic-facts'] as const)('retains linked intent and unchanged item baseline after %s save interruption', async (failure) => {
+    const { service, remote, store, create, file, db } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    let failed = false
+    const interrupted: AppStore = { ...store,
+      async saveSubscriptionOperation(operation) {
+        if (failure === 'report' && !failed) { failed = true; throw new Error('interrupted report save') }
+        await store.saveSubscriptionOperation(operation)
+      },
+      async saveSubscriptionPlan(plan, operation, baseline) {
+        if (failure === 'atomic-facts' && operation?.after && !failed) { failed = true; throw new Error('interrupted atomic facts') }
+        await store.saveSubscriptionPlan(plan, operation, baseline)
+      }
+    }
+    const running = create(interrupted)
+    const preview = await syncPreview(running)
+    const plan = await executePreview(running, preview)
+    expect(plan).toMatchObject({ state: 'stopped', stopReason: 'result-storage' })
+    expect(plan.items[0]).toMatchObject({ state: 'unknown', operationId: expect.any(String), failure: 'result-storage' })
+    expect(writes(remote.requests)).toHaveLength(1)
+    expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(true)
+    db.close(); databases.delete(db)
+    const restarted = create(subscriptionStore(open(file)))
+    const before = remote.requests.length
+    await restarted.recover()
+    expect(remote.requests).toHaveLength(before)
+    expect(await restarted.executePlan({ previewId: preview.id, selectedItemIds: [], operationId: 'old' }, signal())).toEqual({ ok: false, reason: 'stale' })
+    const durable = (await restarted.getPlans())[0]!
+    expect(durable.items[0]!.operationId).toBe(plan.items[0]!.operationId)
+    const journal = (await restarted.getOperations()).find((entry) => entry.id === durable.items[0]!.operationId)!
+    expect(journal.report).toBe(failure === 'report' ? 'unknown' : 'success')
+    const checked = unwrap(await restarted.reconcile({ id: journal.id, operationId: 'check' }, signal()))
+    expect(checked.verification).toBe('present')
+    expect(writes(remote.requests)).toHaveLength(1)
+    remote.web.get(COOKIE_A)!.delete('1001')
+    expect((await syncPreview(restarted)).items.find((item) => item.threadId === '1001')).toMatchObject({ action: 'add', target: 'web' })
+  })
+
+  it('marks a durable running plan interrupted after storage loss and never resumes it on restart', async () => {
+    const { service, remote, store, create, file, db } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    let offline = false
+    const interrupted: AppStore = { ...store,
+      async saveSubscriptionOperation() { offline = true; throw new Error('process lost result storage') },
+      async saveSubscriptionPlan(...args) { if (offline) throw new Error('storage offline'); await store.saveSubscriptionPlan(...args) }
+    }
+    const running = create(interrupted)
+    const preview = await syncPreview(running)
+    await executePreview(running, preview)
+    db.close(); databases.delete(db)
+    const restarted = create(subscriptionStore(open(file)))
+    const before = remote.requests.length
+    await restarted.recover()
+    expect(remote.requests).toHaveLength(before)
+    const plan = (await restarted.getPlans())[0]!
+    expect(plan).toMatchObject({ state: 'interrupted', stopReason: 'result-storage' })
+    expect(plan.items.map((item) => item.state)).toEqual(['unknown', 'skipped', 'skipped'])
+    expect((await restarted.getOperations())[0]).toMatchObject({ state: 'needs-reconciliation', report: 'unknown' })
+    expect(writes(remote.requests)).toHaveLength(1)
+  })
+
+  it('merges only selected historical UUID additions, preserves source and local reading, and rejects aliases', async () => {
+    const { service, remote, db, protector } = await setup()
+    const original = unwrap(await service.configureApp({ uuid: UUID_A }))
+    const head = parseAppList({ mediaType: 'application/json', text: JSON.stringify([{ id: '1001', content: '已有正文' }]) })[0]!.head
+    db.saveThreadPage({ threadId: '1001', mode: 'all', page: 1, head, replies: [], replyCount: 0, skippedItems: 0, endCandidate: false }, '2026-10-23T10:00:00.000Z')
+    db.establishAttention('1001', 'favorite', '2026-10-23T10:00:00.000Z')
+    db.setReadingMode('1001', 'po', '2026-10-23T10:00:00.000Z')
+    db.saveReadingPosition('1001', 'po', { postId: '1001', page: 1, offsetRatio: 0.4, viewportOffset: 80 }, '2026-10-23T10:00:00.000Z')
+    db.recordVisit('1001', '2026-10-23T10:00:00.000Z')
+    db.markPostsRead('1001', ['1001'], '2026-10-23T10:00:00.000Z')
+    const reading = db.getReadingState('1001')
+    unwrap(await service.configureApp({ uuid: UUID_B }))
+    expect(writes(remote.requests)).toHaveLength(0)
+    const sources = await service.getMergeSources()
+    expect(sources).toEqual([{ appCredentialId: original.context.appCredentialId, label: expect.any(String) }])
+    const preview = unwrap(await service.previewMerge({ sourceAppCredentialId: sources[0]!.appCredentialId, operationId: 'merge' }, signal()))
+    expect(preview.leftLabel).not.toBe(preview.rightLabel)
+    expect(preview.items.map(({ threadId, action, target }) => ({ threadId, action, target }))).toEqual([
+      { threadId: '1001', action: 'add', target: 'app' }, { threadId: '1002', action: 'add', target: 'app' }
+    ])
+    const plan = await executePreview(service, preview, [preview.items[1]!.id])
+    expect(plan.state).toBe('completed')
+    expect([...remote.app.get(UUID_A)!]).toEqual(['1001', '1002'])
+    expect([...remote.app.get(UUID_B)!]).toEqual(['2001', '1002'])
+    expect(db.getReadingState('1001')).toEqual(reading)
+    expect(writes(remote.requests).map((request) => request.uuid)).toEqual([UUID_B])
+    const alias = 'same-uuid-different-local-reference'
+    db.setSubscriptionAppCredential(alias, await protector.encrypt(UUID_A))
+    expect((await service.getMergeSources()).some((entry) => entry.appCredentialId === original.context.appCredentialId)).toBe(false)
+    expect(await service.previewMerge({ sourceAppCredentialId: original.context.appCredentialId!, operationId: 'alias' }, signal())).toEqual({ ok: false, reason: 'invalid-selection' })
+  })
+})
+
+describe('subscription plan restart boundaries', () => {
+  it('retains confirmed facts across restart after a later server commit loses its response', async () => {
+    const { service, remote, db, file, create } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    const preview = await syncPreview(service)
+    let count = 0
+    remote.behavior.onWrite = async () => { if (++count === 2) remote.behavior.dropNextWrite = true }
+    const result = await executePreview(service, preview)
+    expect(result.items.map((item) => item.state)).toEqual(['confirmed', 'unknown', 'skipped'])
+    remote.behavior.onWrite = null
+    db.close(); databases.delete(db)
+    const restarted = create(subscriptionStore(open(file)))
+    const before = remote.requests.length
+    await restarted.recover()
+    expect(remote.requests).toHaveLength(before)
+    expect((await restarted.getPlans())[0]).toEqual(result)
+    expect(await restarted.executePlan({ previewId: preview.id, selectedItemIds: preview.items.map((item) => item.id), operationId: 'old' }, signal())).toEqual({ ok: false, reason: 'stale' })
+    const journal = (await restarted.getOperations()).find((entry) => entry.id === result.items[1]!.operationId)!
+    expect(unwrap(await restarted.reconcile({ id: journal.id, operationId: 'read-only' }, signal()))).toMatchObject({ report: 'unknown', verification: 'present' })
+    expect(writes(remote.requests)).toHaveLength(2)
+    remote.web.get(COOKIE_A)!.delete('1001')
+    remote.web.get(COOKIE_A)!.delete('1002')
+    const next = await syncPreview(restarted)
+    expect(next.items.find((item) => item.threadId === '1001')).toMatchObject({ action: 'remove', target: 'app' })
+    expect(next.items.find((item) => item.threadId === '1002')).toMatchObject({ action: 'add', target: 'web' })
+  })
+
+  it('never dispatches when the linked intent transaction is refused', async () => {
+    const { service, remote, store, create } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    const refusing = create({ ...store, async saveSubscriptionPlan(plan, operation, baseline) {
+      if (operation) throw new Error('intent transaction refused')
+      await store.saveSubscriptionPlan(plan, operation, baseline)
+    } })
+    const plan = await executePreview(refusing, await syncPreview(refusing))
+    expect(plan).toMatchObject({ state: 'stopped', stopReason: 'storage' })
+    expect(plan.items[0]).toMatchObject({ state: 'failed', failure: 'storage', operationId: null })
+    expect(await refusing.getOperations()).toEqual([])
+    expect(writes(remote.requests)).toHaveLength(0)
+  })
+})
+
+describe('unacknowledged subscription reports', () => {
+  it('keeps an unknown report unknown even when complete readback does not show the requested addition', async () => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    const preview = await syncPreview(service)
+    remote.behavior.dropNextWrite = true
+    remote.behavior.ignoreWrites = true
+    const plan = await executePreview(service, preview)
+    expect(plan).toMatchObject({ state: 'stopped', stopReason: 'item-unknown' })
+    expect(plan.items.map((item) => item.state)).toEqual(['unknown', 'skipped', 'skipped'])
+    expect((await service.getOperations())[0]).toMatchObject({ report: 'unknown', verification: 'mismatch' })
+    expect(writes(remote.requests)).toHaveLength(1)
+  })
+})
+
+describe('subscription reconciliation persistence', () => {
+  it('upgrades v5 while retaining immutable identities, manual journal and reading positions', async () => {
+    const file = path()
+    const old = openReadingDatabase(file, MIGRATIONS.filter((migration) => migration.version <= 5))
+    const protector = new Protector()
+    const cookie = old.insertCredential({ name: '旧绑定', source: 'raw', importedAt: '2026-10-23', ciphertext: await protector.encrypt(COOKIE_A) })
+    old.setRoleSelection('web-sync', cookie.id)
+    old.setSubscriptionAppCredential('historical-app-reference', await protector.encrypt(UUID_A))
+    old.setSubscriptionSource('web')
+    old.setReadingMode('1001', 'po', '2026-10-23')
+    old.saveReadingPosition('1001', 'po', { postId: '1001', page: 1, offsetRatio: 0.5, viewportOffset: 40 }, '2026-10-23')
+    const configuration = old.loadSubscriptionConfiguration()
+    old.saveSubscriptionOperation({ id: 'old-operation', source: 'web', threadId: '1001', action: 'add', context: configuration.context,
+      createdAt: '2026-10-23', objectLabel: '旧绑定', state: 'needs-reconciliation', report: 'unknown', reportError: null,
+      before: null, after: null, verification: 'unknown' })
+    const journal = old.loadSubscriptionOperations()
+    const reading = old.getReadingState('1001')
+    old.close()
+    const upgraded = open(file)
+    expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: 6 })
+    expect(upgraded.loadSubscriptionConfiguration()).toEqual(configuration)
+    expect(upgraded.loadSubscriptionOperations()).toEqual(journal)
+    expect(upgraded.getReadingState('1001')).toEqual(reading)
+    expect(await protector.decrypt(upgraded.loadSubscriptionAppCiphertext('historical-app-reference')!)).toBe(UUID_A)
+    expect(upgraded.loadSubscriptionBaseline(configuration.context)).toBeNull()
+    expect(upgraded.loadSubscriptionPlans()).toEqual([])
+  })
+
+  it('rolls back outcome and baseline together when SQLite rejects the confirmed item transaction', async () => {
+    const { service, remote, file } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    remote.app.set(UUID_A, new Set(['1001']))
+    remote.web.set(COOKIE_A, new Set(['1001']))
+    await executePreview(service, await syncPreview(service), [])
+    remote.app.get(UUID_A)!.add('1002')
+    const preview = await syncPreview(service)
+    const fault = new Database(file)
+    fault.exec(`CREATE TRIGGER reject_new_common_fact BEFORE INSERT ON subscription_baselines
+      WHEN instr(NEW.baseline_json, '1002') > 0 BEGIN SELECT RAISE(ABORT, 'synthetic disk failure'); END`)
+    fault.close()
+    const plan = await executePreview(service, preview)
+    expect(plan).toMatchObject({ state: 'stopped', stopReason: 'result-storage' })
+    expect(plan.items[0]).toMatchObject({ state: 'unknown', failure: 'result-storage' })
+    const operation = (await service.getOperations()).find((entry) => entry.id === plan.items[0]!.operationId)!
+    expect(operation).toMatchObject({ report: 'success', after: null, verification: 'unknown', state: 'pending' })
+    expect(remote.web.get(COOKIE_A)!.has('1002')).toBe(true)
+    remote.web.get(COOKIE_A)!.clear()
+    const next = await syncPreview(service)
+    expect(next.items.map(({ threadId, action, target }) => ({ threadId, action, target }))).toEqual([
+      { threadId: '1001', action: 'remove', target: 'app' }, { threadId: '1002', action: 'add', target: 'web' }
+    ])
   })
 })

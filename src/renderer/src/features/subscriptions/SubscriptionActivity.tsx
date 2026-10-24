@@ -161,7 +161,7 @@ const STATE_TAG: Record<SubscriptionOperation['state'], { text: string; classNam
 const RUNNING_TAG = { text: '进行中', className: 'tag' }
 
 function JournalItem({ operation }: { operation: SubscriptionOperation }) {
-  const { active, reconcile } = useSubscriptionsContext()
+  const { active, busy, reconcile } = useSubscriptionsContext()
   const tag = isRunningChange(operation, active) ? RUNNING_TAG : STATE_TAG[operation.state]
   const canReconcile = isReconcilable(operation, active)
   const reconciling = active?.kind === 'reconcile' && active.threadId === operation.threadId && active.source === operation.source
@@ -202,7 +202,7 @@ function JournalItem({ operation }: { operation: SubscriptionOperation }) {
             type="button"
             className="btn btn-small"
             onClick={() => void reconcile(operation)}
-            disabled={active !== null}
+            disabled={busy}
             aria-label={`核对：${ACTION_NAME[operation.action]} No.${operation.threadId}`}
           >
             {reconciling ? '正在核对…' : '核对'}
