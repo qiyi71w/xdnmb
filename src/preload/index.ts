@@ -1,5 +1,6 @@
-import { contextBridge, ipcRenderer } from 'electron'
-import { IpcChannel, type XidaoApi } from '../shared/api'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { IpcChannel, LIFECYCLE_REQUEST_CHANNEL, type XidaoApi } from '../shared/api'
+import type { LifecycleRequest } from '../shared/lifecycle'
 
 // Named operations only: no generic invoke/send, no Electron objects, URLs, SQL or file access.
 const api: XidaoApi = {
@@ -59,6 +60,27 @@ const api: XidaoApi = {
     addOwnPost: (input) => ipcRenderer.invoke(IpcChannel.addOwnPost, input),
     getPoWarning: () => ipcRenderer.invoke(IpcChannel.getPoWarning),
     setPoWarning: (input) => ipcRenderer.invoke(IpcChannel.setPoWarning, input)
+  },
+  lifecycle: {
+    onRequest(listener) {
+      // Only the request object crosses; never the Electron event or sender.
+      const handler = (_event: IpcRendererEvent, request: LifecycleRequest) => listener(request)
+      ipcRenderer.on(LIFECYCLE_REQUEST_CHANNEL, handler)
+      return () => {
+        ipcRenderer.removeListener(LIFECYCLE_REQUEST_CHANNEL, handler)
+      }
+    },
+    reside: () => ipcRenderer.invoke(IpcChannel.lifecycleReside),
+    requestQuit: () => ipcRenderer.invoke(IpcChannel.lifecycleRequestQuit),
+    presentQuit: () => ipcRenderer.invoke(IpcChannel.lifecyclePresentQuit),
+    cancelQuit: () => ipcRenderer.invoke(IpcChannel.lifecycleCancelQuit),
+    completeQuit: () => ipcRenderer.invoke(IpcChannel.lifecycleCompleteQuit),
+    loadWorkspace: () => ipcRenderer.invoke(IpcChannel.loadWorkspace),
+    saveWorkspace: (input) => ipcRenderer.invoke(IpcChannel.saveWorkspace, input),
+    listLaunchNotices: () => ipcRenderer.invoke(IpcChannel.listLaunchNotices),
+    dismissLaunchNotices: (input) => ipcRenderer.invoke(IpcChannel.dismissLaunchNotices, input),
+    listUnstoredResults: () => ipcRenderer.invoke(IpcChannel.listUnstoredResults),
+    retryUnstoredResults: () => ipcRenderer.invoke(IpcChannel.retryUnstoredResults)
   },
   app: {
     getStatus: () => ipcRenderer.invoke(IpcChannel.getStatus)

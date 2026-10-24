@@ -495,7 +495,7 @@ describe('reading context', () => {
       DROP TABLE thread_reading; DROP TABLE reading_positions; DROP TABLE post_reads;
       DROP TABLE thread_attention; DROP TABLE end_observations; DROP TABLE thread_visits; DROP TABLE settings;
       DROP TABLE image_holders; DROP TABLE image_resources; DROP TABLE credentials; DROP TABLE identity_roles;
-      DROP TABLE drafts; DROP TABLE draft_attachments; DROP TABLE thread_post_identities;
+      DROP TABLE drafts; DROP TABLE draft_attachments; DROP TABLE thread_post_identities; DROP TABLE workspace;
     `)
     raw.pragma('user_version = 1')
     raw.close()
@@ -507,13 +507,37 @@ describe('reading context', () => {
     expect(upgraded.markPostsRead(threadId, ['1001'], later)).toEqual(['1001'])
   })
 
-  it('defaults new tabs to split and persists the global setting', () => {
+  it('defaults new tabs to split and the close button to asking, and persists both settings', () => {
     const path = databasePath()
     const db = open(path)
-    expect(db.loadSettings()).toEqual({ newTabSplitDefault: true })
-    db.saveSettings({ newTabSplitDefault: false })
+    expect(db.loadSettings()).toEqual({ newTabSplitDefault: true, closeAction: 'ask' })
+    db.saveSettings({ newTabSplitDefault: false, closeAction: 'background' })
     db.close()
-    expect(open(path).loadSettings()).toEqual({ newTabSplitDefault: false })
+    expect(open(path).loadSettings()).toEqual({ newTabSplitDefault: false, closeAction: 'background' })
+  })
+})
+
+describe('window lifecycle storage', () => {
+  it('upgrades a version 6 database keeping its sends, without launch notices, and keeps only the latest saved workspace', () => {
+    const path = databasePath()
+    const v6 = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 6))
+    const credential = v6.insertCredential({ name: '甲', source: 'raw', importedAt: fetchedAt, ciphertext: Buffer.from('synthetic') })
+    const sent = v6.createPublication({
+      requestId: 'request-1', editorId: 'editor-1', forumId: '1', at: fetchedAt,
+      payload: { draftId: null, target: { kind: 'thread', forumId: '1' }, credentialId: credential.id,
+        fields: { content: '正文', title: '', name: '', email: '', watermark: false }, attachmentId: null }
+    })
+    v6.close()
+
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: SUPPORTED_VERSION })
+    expect(db.listPublications()).toEqual([sent])
+    expect(db.listLaunchNotices()).toEqual([])
+    expect(db.loadWorkspace()).toBeNull()
+    db.saveWorkspace('{"first":true}', later)
+    db.saveWorkspace('{"second":true}', latest)
+    db.close()
+    expect(open(path).loadWorkspace()).toBe('{"second":true}')
   })
 })
 

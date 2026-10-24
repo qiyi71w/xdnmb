@@ -285,5 +285,20 @@ export const MIGRATIONS: readonly Migration[] = [
         INSERT INTO publication_settings (id, po_warning_enabled) VALUES (1, 1);
       `)
     }
+  },
+  {
+    // Window lifecycle: the workspace saved at a real quit (one row, opaque to SQL) and a launch
+    // notice kept on a send that became failed / unknown without a window, until dismissed.
+    version: 7,
+    up(db) {
+      db.exec(`
+        CREATE TABLE workspace (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          state_json TEXT NOT NULL,
+          saved_at TEXT NOT NULL
+        );
+        ALTER TABLE publication_attempts ADD COLUMN launch_notice INTEGER NOT NULL DEFAULT 0 CHECK (launch_notice IN (0, 1));
+      `)
+    }
   }
 ]

@@ -68,6 +68,16 @@ export interface EditorsState {
 
 export const INITIAL_EDITORS: EditorsState = { editors: [], nextId: 1 }
 
+/**
+ * Editor IDs are unique per window load: the main process keys send locks and attachment holds by
+ * editor ID, and a send started by a closed window can still be running when a new window opens.
+ */
+const WINDOW_RUN = crypto.randomUUID().slice(0, 8)
+
+function newEditorId(n: number): EditorId {
+  return `editor-${WINDOW_RUN}-${n}`
+}
+
 export type EditorsAction =
   /**
    * Starts a new editor for `target` in the tab unless one already exists there, in which case
@@ -145,7 +155,7 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
       if (existing !== null) return update(state, existing.id, (editor) => (editor.expanded ? editor : { ...editor, expanded: true }))
       const identity = action.identity
       const editor: Editor = {
-        id: `editor-${state.nextId}`,
+        id: newEditorId(state.nextId),
         tabId: action.tabId,
         target: action.target,
         credentialId: identity.source === 'unknown' || identity.selection.state === 'none' ? null : identity.selection.credentialId,
@@ -163,7 +173,7 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
       if (editorForDraft(state, action.draft.id) !== null) return state
       if (editorFor(state, action.tabId, action.draft.target) !== null) return state
       const editor: Editor = {
-        id: `editor-${state.nextId}`,
+        id: newEditorId(state.nextId),
         tabId: action.tabId,
         ...fromDraft(action.draft),
         identityUnknown: false,
@@ -314,12 +324,17 @@ export function isUnsaved(editor: Editor): boolean {
 }
 
 /**
- * Unsaved editors of one tab, including those hidden because the tab shows another target. An
- * editor whose content is held by a durable unresolved attempt is not among them: closing its tab
- * keeps the attempt (and its content) in 发送记录.
+ * Unsaved editors of every tab, including collapsed ones and those hidden because their tab shows
+ * another target. An editor whose content is held by a durable unresolved attempt is not among
+ * them: its content stays in that attempt (发送记录).
  */
+export function unsavedEditors(state: EditorsState): Editor[] {
+  return state.editors.filter((editor) => editor.publication?.phase !== 'attempt' && isUnsaved(editor))
+}
+
+/** Unsaved editors of one tab (see `unsavedEditors`); closing the tab keeps any attempt in 发送记录. */
 export function unsavedInTab(state: EditorsState, tabId: number): Editor[] {
-  return state.editors.filter((editor) => editor.tabId === tabId && editor.publication?.phase !== 'attempt' && isUnsaved(editor))
+  return unsavedEditors(state).filter((editor) => editor.tabId === tabId)
 }
 
 export function saveInput(editor: Editor): DraftSaveInput {

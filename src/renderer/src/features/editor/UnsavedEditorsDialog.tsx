@@ -9,8 +9,8 @@ import { useEditorWorkspace } from './workspace'
 import './editor.css'
 
 /**
- * Handles one group of unsaved editors before something goes away (a tab now; the whole app
- * later): 保存并{verb} saves them one by one and finishes only when every save succeeded,
+ * Handles one group of unsaved editors before something goes away (a tab, or every tab on
+ * 退出汐岛): 保存并{verb} saves them one by one and finishes only when every save succeeded,
  * listing what failed otherwise; 放弃并{verb} drops their unsaved content (a continued draft
  * keeps its saved version); 取消 changes nothing. Saved drafts without changes need nothing.
  */

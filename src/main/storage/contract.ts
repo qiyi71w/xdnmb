@@ -182,4 +182,11 @@ export interface DraftStore {
   setThreadPostIdentity(threadId: ThreadId, id: CredentialId, at: string): Promise<boolean>
 }
 
-export type AppStore = ReadingStore & IdentityStore & DraftStore & PublicationStore
+/** The workspace saved at a real quit: one opaque serialized value written by the renderer. */
+export interface WorkspaceStore {
+  /** `null` when none was saved. Throws when storage cannot be read. */
+  loadWorkspace(): Promise<string | null>
+  saveWorkspace(state: string, at: string): Promise<void>
+}
+
+export type AppStore = ReadingStore & IdentityStore & DraftStore & PublicationStore & WorkspaceStore

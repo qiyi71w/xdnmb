@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react'
-import type { FeedRef } from '../../../../shared/forum'
-import { OperationScope } from '../../lib/operations'
+import type { FeedPage, FeedRef } from '../../../../shared/forum'
+import { OperationScope, type Failure, type Source } from '../../lib/operations'
 import { feedReducer, initialFeedState, type FeedActivity, type FeedState } from './feedState'
 
 /** A remembered list with loaded pages resumes as it was (reads in flight were cancelled). */
@@ -12,11 +12,16 @@ function resumeState(remembered: FeedState | null): FeedState {
  * Thread list of one feed. The owning component is keyed by feed, so the feed is fixed for the
  * hook's lifetime; switching feeds unmounts it and cancels its reads, and late results are
  * discarded by the operation scope. `remembered` (the same entry's list before it was unmounted)
- * is resumed without reading page 1 again.
+ * is resumed without reading page 1 again. Otherwise `restorePages` (a list restored from the last
+ * quit) reads pages 1..n again, stopping at an empty page or a failure, and shows them at once.
  */
-export function useFeed(feed: FeedRef, maxPage: number | null, remembered: FeedState | null) {
+export function useFeed(feed: FeedRef, maxPage: number | null, remembered: FeedState | null, restorePages: number | null) {
   const [state, dispatch] = useReducer(feedReducer, remembered, resumeState)
   const resumed = useRef(state !== initialFeedState)
+  /** Pages still to restore: until a restore shows pages, or a refresh replaces it. */
+  const restoring = useRef(state === initialFeedState ? restorePages : null)
+  /** Token of the restore in flight; a refresh or a newer restore supersedes it. */
+  const restoreRun = useRef<object | null>(null)
   const scope = useRef(new OperationScope())
   const feedRef = useRef(feed)
   const stateRef = useRef(state)
@@ -46,11 +51,38 @@ export function useFeed(feed: FeedRef, maxPage: number | null, remembered: FeedS
     []
   )
 
+  const restore = useCallback(async (pages: number) => {
+    const run = {}
+    restoreRun.current = run
+    dispatch({ type: 'start', activity: 'initial' })
+    const loaded: Array<{ page: FeedPage; source: Source }> = []
+    let failure: { page: number; failure: Failure } | null = null
+    for (let page = 1; page <= pages; page++) {
+      const settled = await scope.current.run((operationId) =>
+        window.xidao.reading.readFeedPage({ operationId, feed: feedRef.current, page })
+      )
+      if (settled.type === 'stale' || restoreRun.current !== run) return
+      if (settled.type === 'cancelled') break
+      if (settled.type === 'failed') {
+        failure = { page, failure: settled.failure }
+        break
+      }
+      loaded.push({ page: settled.data, source: settled.source })
+      if (settled.data.threads.length === 0 && settled.data.skippedItems === 0) break
+    }
+    restoreRun.current = null
+    if (loaded.length > 0) restoring.current = null
+    dispatch({ type: 'restored', pages: loaded, failure })
+  }, [])
+
   useEffect(() => {
     const current = scope.current
-    if (!resumed.current) void read('initial', 1)
+    if (!resumed.current) {
+      if (restoring.current !== null) void restore(restoring.current)
+      else void read('initial', 1)
+    }
     return () => current.cancelAll()
-  }, [read])
+  }, [read, restore])
 
   const lastPage = state.pages.at(-1)?.page ?? 0
   const hasMore = state.pages.length > 0 && state.reachedEmptyPage === null && (maxPage === null || lastPage < maxPage)
@@ -63,18 +95,22 @@ export function useFeed(feed: FeedRef, maxPage: number | null, remembered: FeedS
     void read('append', nextPage)
   }, [read])
 
-  /** Reloads page 1 and replaces the list; anything still loading is superseded. */
+  /** Reloads page 1 and replaces the list; anything still loading (a restore too) is superseded. */
   const refresh = useCallback(() => {
+    restoring.current = null
+    restoreRun.current = null
     scope.current.cancelAll()
     void read('refresh', 1)
   }, [read])
 
+  /** A restore that could not read page 1 is tried again whole. */
   const retry = useCallback(() => {
     const error = stateRef.current.error
     if (error === null) return
     scope.current.cancelAll()
-    void read(error.action, error.page)
-  }, [read])
+    if (error.action === 'initial' && restoring.current !== null) void restore(restoring.current)
+    else void read(error.action, error.page)
+  }, [read, restore])
 
   return { state, hasMore, canAppend, loadMore, refresh, retry }
 }

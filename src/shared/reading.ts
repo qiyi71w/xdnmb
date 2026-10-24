@@ -2,6 +2,7 @@
 // per-mode positions, per-post read records and the local attention start. These are separate
 // records; none of them is derived from another, from ReplyCount or from the highest post ID.
 import type { PostId, ReadingMode, ThreadCoverage, ThreadId } from './forum'
+import type { CloseAction } from './lifecycle'
 
 /**
  * Stable reading anchor. The post ID identifies the content; `page` is auxiliary (where the post
@@ -83,9 +84,11 @@ export interface ThreadReadingState {
 export interface AppSettings {
   /** Split preference given to tabs created from now on; existing tabs keep their own. */
   newTabSplitDefault: boolean
+  /** What the window's close button does; `ask` until a choice is remembered. Never skips a real quit's draft handling. */
+  closeAction: CloseAction
 }
 
-export const DEFAULT_SETTINGS: AppSettings = { newTabSplitDefault: true }
+export const DEFAULT_SETTINGS: AppSettings = { newTabSplitDefault: true, closeAction: 'ask' }
 
 /** Result of a reading-state write. `saved` is false when local storage refused or failed it. */
 export interface WriteResult {

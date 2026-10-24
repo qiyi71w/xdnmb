@@ -15,6 +15,7 @@ import type {
   ThreadPage
 } from '../../shared/forum'
 import { DEFAULT_SETTINGS } from '../../shared/reading'
+import { CLOSE_ACTIONS, type CloseAction } from '../../shared/lifecycle'
 import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, SavedPosition, ThreadReadingState } from '../../shared/reading'
 import type { ImageFormat, ImageKind } from '../../shared/images'
 import { IDENTITY_ROLES } from '../../shared/identity'
@@ -617,6 +618,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     for (const row of rows) {
       const value: unknown = JSON.parse(row.value_json)
       if (row.key === 'newTabSplitDefault' && typeof value === 'boolean') settings.newTabSplitDefault = value
+      if (row.key === 'closeAction' && CLOSE_ACTIONS.includes(value as CloseAction)) settings.closeAction = value as CloseAction
     }
     return settings
   }
@@ -630,6 +632,19 @@ class SqliteReadingDatabase implements ReadingDatabase {
       `)
       for (const [key, value] of Object.entries(settings)) statement.run(key, JSON.stringify(value))
     })()
+  }
+
+  /** The workspace saved at the last real quit, as given; `null` when none was saved. */
+  loadWorkspace(): string | null {
+    if (!this.db) throw new StorageWriteRefusedError(this.currentStatus)
+    return this.db.prepare<[], { state_json: string }>('SELECT state_json FROM workspace WHERE id = 1').get()?.state_json ?? null
+  }
+
+  saveWorkspace(state: string, at: string): void {
+    this.writable().prepare(`
+      INSERT INTO workspace (id, state_json, saved_at) VALUES (1, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, saved_at = excluded.saved_at
+    `).run(state, at)
   }
 
   getPostImage(postId: PostId): PostImage | null {
@@ -928,11 +943,15 @@ class SqliteReadingDatabase implements ReadingDatabase {
         if (attempt.draftId !== null) db.prepare('DELETE FROM drafts WHERE id = ?').run(attempt.draftId)
       }
 
+      // A launch notice is kept only for a failed / unknown result reached without a window; any
+      // later result (e.g. positive evidence resolving an unknown one) replaces it.
+      const launchNotice = input.launchNotice === true && (input.state === 'failed' || input.state === 'unknown')
       db.prepare(`
-        UPDATE publication_attempts SET state = ?, problem = ?, post_id = ?, thread_id = ?, updated_at = ?
+        UPDATE publication_attempts SET state = ?, problem = ?, post_id = ?, thread_id = ?, updated_at = ?, launch_notice = ?
         WHERE id = ?
       `).run(input.state, input.state === 'confirmed' ? null : input.problem,
-        input.state === 'confirmed' ? input.postId : null, input.state === 'confirmed' ? input.threadId : null, input.at, input.id)
+        input.state === 'confirmed' ? input.postId : null, input.state === 'confirmed' ? input.threadId : null, input.at,
+        Number(launchNotice), input.id)
 
       if (input.state === 'failed') {
         // Changing the state above releases the source lock within this same transaction only.
@@ -951,10 +970,25 @@ class SqliteReadingDatabase implements ReadingDatabase {
     }).immediate()
   }
 
+  /** Startup only: an attempt left `sending` by the last run becomes unknown and leaves a launch notice. */
   recoverPublications(at: string): void {
     this.writable().prepare(`
-      UPDATE publication_attempts SET state = 'unknown', problem = 'network', updated_at = ? WHERE state = 'sending'
+      UPDATE publication_attempts SET state = 'unknown', problem = 'network', updated_at = ?, launch_notice = 1 WHERE state = 'sending'
     `).run(at)
+  }
+
+  listLaunchNotices(): PublicationAttempt[] {
+    return this.publicationDatabase().prepare<[], PublicationRow>(
+      'SELECT * FROM publication_attempts WHERE launch_notice = 1 ORDER BY created_at, id'
+    ).all().map(publicationAttempt)
+  }
+
+  dismissLaunchNotices(ids: string[]): void {
+    const db = this.writable()
+    db.transaction(() => {
+      const statement = db.prepare('UPDATE publication_attempts SET launch_notice = 0 WHERE id = ?')
+      for (const id of ids) statement.run(id)
+    })()
   }
 
   listOwnPosts(): OwnPost[] {

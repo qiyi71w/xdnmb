@@ -29,7 +29,7 @@ function asyncStore(db: ReadingDatabase): AppStore {
 
 async function forum() {
   const seen: Array<{ path: string; cookie: string; body: string }> = []
-  let mode: 'success' | 'reject' | 'drop' | 'unrelated' | 'empty' | 'hold' | 'preflight-rate' | 'stale' = 'success'
+  let mode: 'success' | 'reject' | 'drop' | 'unrelated' | 'empty' | 'hold' | 'hold-lookup' | 'preflight-rate' | 'stale' = 'success'
   let release: (() => void) | null = null
   let last: Record<string, string> | null = null
   let number = 700
@@ -57,7 +57,8 @@ async function forum() {
       if (mode === 'hold') release = respond
       else respond()
     } else if (path === '/Api/getLastPost') {
-      if (mode === 'empty') send(null)
+      if (mode === 'hold-lookup') release = () => send(last)
+      else if (mode === 'empty') send(null)
       else if (mode === 'unrelated') send({ ...last, content: '别人的内容' })
       else send(last)
     } else if (path.startsWith('/api/getForumList')) send(mode === 'preflight-rate' ? '请求太频繁' : [{ id: '1', name: '测试', forums: [{ id: '1', name: '测试版', msg: '', interval: 0 }] }])
@@ -89,7 +90,7 @@ async function setup() {
     const drafts = createDraftService({ store, files })
     const service = createPublicationService({ store, drafts, files, protector,
       clientFor: userhash => createForumClient({ transport: createForumTransport({ allowedOrigins: [remote.origin], credentialOrigins: [remote.origin] }), baseUrl: remote.origin, browseIdentity: async () => userhash }),
-      adapter: createPublicationAdapter({ origin: remote.origin, apiOrigin: remote.origin, publishTimeoutMs: 1500 }) })
+      adapter: createPublicationAdapter({ origin: remote.origin, apiOrigin: remote.origin, publishTimeoutMs: 1500 }), deadlineMs: 1500 })
     await service.recover(); await drafts.recover()
     return { service, drafts }
   }
@@ -235,6 +236,44 @@ it('recovers an intent after result persistence fails without manufacturing a re
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
 })
 
+it('keeps a result storage could not take and writes it once storage is back, without sending again', async () => {
+  const s = await setup()
+  const store = asyncStore(s.db)
+  let down = true
+  const finishPublication: typeof store.finishPublication = async input => {
+    if (down) throw new Error('disk full')
+    return store.finishPublication(input)
+  }
+  const wrapped = new Proxy(store, { get(target, key) { return key === 'finishPublication' ? finishPublication : Reflect.get(target, key) } })
+  const { service } = await s.start(wrapped)
+  const sent = attempt(await service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: payload(s.a) }))
+  expect(await finished(service, sent.id)).toMatchObject({ state: 'unknown', problem: 'storage' })
+  expect(service.unstoredResults()).toMatchObject([{ id: sent.id, state: 'confirmed', postId: '701' }])
+  expect(await service.retryUnstored()).toBe(false)
+  expect(s.db.getPublication(sent.id)!.state).toBe('sending')
+  down = false
+  expect(await service.retryUnstored()).toBe(true)
+  expect(service.unstoredResults()).toEqual([])
+  expect(s.db.getPublication(sent.id)).toMatchObject({ state: 'confirmed', postId: '701' })
+  expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
+})
+
+it('records a result the store refuses (not a storage failure) as unknown, so it never holds up a quit', async () => {
+  const s = await setup()
+  const store = asyncStore(s.db)
+  const finishPublication: typeof store.finishPublication = async input => {
+    if (input.state === 'confirmed') throw new Error('publication confirmation target mismatch')
+    return store.finishPublication(input)
+  }
+  const wrapped = new Proxy(store, { get(target, key) { return key === 'finishPublication' ? finishPublication : Reflect.get(target, key) } })
+  const { service } = await s.start(wrapped)
+  const sent = attempt(await service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: payload(s.a) }))
+  expect(await finished(service, sent.id)).toMatchObject({ state: 'unknown', problem: 'storage' })
+  expect(s.db.getPublication(sent.id)).toMatchObject({ state: 'unknown', problem: 'storage' })
+  expect(service.unstoredResults()).toEqual([])
+  expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
+})
+
 it('PO cancel changes nothing; switch remembers the actual identity; suppression is runtime-scoped and re-enable clears it', async () => {
   const s = await setup()
   const head = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'head', payload: payload(s.a) }))
@@ -365,4 +404,65 @@ it('serializes the actual cookie across removal and reimport while other cookies
   const deliberate = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'second', payload: payload(imported.credential.id, '完成后显式发送') }))
   expect(await finished(s.service, deliberate.id)).toMatchObject({ state: 'confirmed' })
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(3)
+})
+
+it('keeps a launch notice only for failures reached without a window, until dismissed', async () => {
+  const s = await setup()
+  s.remote.setMode('reject')
+  const attended = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'shown', payload: payload(s.a, '窗口还在') }))
+  expect(await finished(s.service, attended.id)).toMatchObject({ state: 'failed' })
+  expect(s.db.listLaunchNotices()).toEqual([])
+
+  s.service.setUnattended(true)
+  const unattended = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'gone', payload: payload(s.a, '退出收尾中') }))
+  expect(s.service.inFlight().map(run => run.attempt.id)).toEqual([unattended.id])
+  expect(await s.service.inFlight()[0]!.done).toMatchObject({ id: unattended.id, state: 'failed', savedDraftId: expect.any(String) })
+  expect(s.db.listLaunchNotices()).toMatchObject([{ id: unattended.id, state: 'failed' }])
+  s.db.dismissLaunchNotices([unattended.id])
+  expect(s.db.listLaunchNotices()).toEqual([])
+  expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(2)
+})
+
+it('records a send still running at its original deadline as unknown, never resends it, and lets later evidence update only the record', async () => {
+  const s = await setup()
+  s.remote.setMode('hold')
+  const sent = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: payload(s.a) }))
+  const [run] = s.service.inFlight()
+  expect(run!.deadline).toBe(Date.parse(sent.createdAt) + 1500)
+  await expect.poll(() => s.remote.seen.filter(r => r.path.startsWith('/Home/')).length).toBe(1)
+
+  s.service.setUnattended(true)
+  expect(await s.service.abandon(sent.id)).toMatchObject({ state: 'unknown', problem: 'network' })
+  expect(await s.service.abandon(sent.id)).toBeNull()
+  expect(s.db.listLaunchNotices()).toMatchObject([{ id: sent.id, state: 'unknown' }])
+
+  // The app was reopened before exiting: the request's own completion is positive evidence.
+  s.service.setUnattended(false)
+  s.remote.release()
+  expect(await run!.done).toMatchObject({ state: 'confirmed', postId: '701' })
+  expect(s.db.listLaunchNotices()).toEqual([])
+  expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
+})
+
+it('records a send the forum already accepted as sent with the ID unconfirmed when its deadline passes during confirmation', async () => {
+  const s = await setup()
+  s.remote.setMode('hold-lookup')
+  const sent = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: payload(s.a) }))
+  await expect.poll(() => s.remote.seen.filter(r => r.path === '/Api/getLastPost').length).toBe(1)
+  s.service.setUnattended(true)
+  expect(await s.service.abandon(sent.id)).toMatchObject({ state: 'unconfirmed' })
+  expect(s.db.listLaunchNotices()).toEqual([])
+  s.remote.release()
+  await s.service.inFlight()[0]?.done
+  expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
+})
+
+it('leaves a launch notice for a send the last run left unfinished', async () => {
+  const s = await setup()
+  s.remote.setMode('hold')
+  const sent = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: payload(s.a) }))
+  await expect.poll(() => s.remote.seen.filter(r => r.path.startsWith('/Home/')).length).toBe(1)
+  await s.restart()
+  expect(s.db.listLaunchNotices()).toMatchObject([{ id: sent.id, state: 'unknown' }])
+  expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
 })

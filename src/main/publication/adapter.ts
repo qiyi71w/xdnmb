@@ -10,7 +10,7 @@ import type { PublicationProblem } from '../../shared/publication'
 import { parseContent } from '../forum/content'
 import { createForumClient } from '../forum/client'
 import { createForumTransport } from '../forum/transport'
-import type { PublicationAdapter, PublishReport } from './contract'
+import { PUBLISH_DEADLINE_MS, type PublicationAdapter, type PublishReport } from './contract'
 
 const COOKIE = /^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+$/
 const ID = /^[1-9]\d{0,19}$/
@@ -101,7 +101,7 @@ export function createPublicationAdapter(options: {
   const publicTransport = createForumTransport({ allowedOrigins: [apiOrigin.origin], timeoutMs: options.readTimeoutMs ?? 20_000 })
   const publicClient = createForumClient({ transport: publicTransport, baseUrl: apiOrigin.origin })
 
-  return { async publish({ payload, userhash, attachment }): Promise<PublishReport> {
+  return { async publish({ payload, userhash, attachment, onAccepted }): Promise<PublishReport> {
     if (!COOKIE.test(userhash)) return { state: 'failed', problem: 'identity' }
     const cookies = new Map<string, string>([['userhash', userhash]])
     async function request(path: string, fields: Record<string, string> | null): Promise<Response> {
@@ -128,7 +128,7 @@ export function createPublicationAdapter(options: {
             stream?.destroy(); req?.destroy(); response?.destroy()
             reject(new Error('Publication transport failed'))
           }
-          const timer = setTimeout(fail, fields === null ? options.readTimeoutMs ?? 20_000 : options.publishTimeoutMs ?? 60_000)
+          const timer = setTimeout(fail, fields === null ? options.readTimeoutMs ?? 20_000 : options.publishTimeoutMs ?? PUBLISH_DEADLINE_MS)
           const send = url.protocol === 'https:' ? httpsRequest : httpRequest
           req = send(url, { method: fields === null ? 'GET' : 'POST', headers: {
             Accept: fields === null ? 'application/json' : 'text/html',
@@ -172,6 +172,7 @@ export function createPublicationAdapter(options: {
     try { result = outcome(await request(payload.target.kind === 'thread' ? '/Home/Forum/doPostThread.html' : '/Home/Forum/doReplyThread.html', fields)) }
     catch { return { state: 'unknown', problem: 'network' } }
     if (result !== 'success') return { state: ['rejected', 'rate-limited', 'captcha'].includes(result) ? 'failed' : 'unknown', problem: result }
+    onAccepted?.()
     try {
       const response = await request('/Api/getLastPost', null)
       if (response.status !== 200) return { state: 'unconfirmed', problem: 'response' }

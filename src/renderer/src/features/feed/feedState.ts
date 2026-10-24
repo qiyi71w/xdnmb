@@ -26,6 +26,11 @@ export type FeedAction =
   | { type: 'loaded'; mode: 'replace' | 'append'; page: FeedPage; source: Source }
   | { type: 'failed'; action: Exclude<FeedActivity, 'idle'>; page: number; failure: Failure }
   | { type: 'idle' }
+  /**
+   * Pages 1..n read again for a restored list, applied at once (one render, positioned before it
+   * paints); `failure` is the page where reading stopped, shown as that page's usual failure.
+   */
+  | { type: 'restored'; pages: Array<{ page: FeedPage; source: Source }>; failure: { page: number; failure: Failure } | null }
 
 export const initialFeedState: FeedState = {
   threads: [],
@@ -47,6 +52,16 @@ function dedupe(threads: readonly ThreadSummary[], seen: Set<string>): ThreadSum
 
 export function feedReducer(state: FeedState, action: FeedAction): FeedState {
   switch (action.type) {
+    case 'restored': {
+      const next = action.pages.reduce<FeedState>(
+        (current, item, index) =>
+          feedReducer(current, { type: 'loaded', mode: index === 0 ? 'replace' : 'append', page: item.page, source: item.source }),
+        { ...state, activity: 'idle' }
+      )
+      if (action.failure === null) return next
+      const failed = next.pages.length === 0 ? 'initial' : 'append'
+      return feedReducer(next, { type: 'failed', action: failed, page: action.failure.page, failure: action.failure.failure })
+    }
     case 'start':
       return { ...state, activity: action.activity, error: null }
     case 'idle':

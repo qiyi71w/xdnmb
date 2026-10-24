@@ -7,12 +7,42 @@ import type { DraftService } from '../drafts/service'
 import type { ManagedImageFiles } from '../images/files'
 import type { SecretProtector } from '../identity/protection'
 import { ForumReadError, type ForumClient } from '../forum/contract'
-import type { PublicationAdapter, PublishReport } from './contract'
+import { PUBLISH_DEADLINE_MS, type PublicationAdapter, type PublicationFinish, type PublishReport } from './contract'
+
+/** A send whose intent is recorded and whose request has not produced a recorded result yet. */
+export interface InFlightPublication {
+  attempt: PublicationAttempt
+  /** Original deadline (epoch ms): intent time + the publish limit. Nothing ever moves it. */
+  deadline: number
+  /** Settles with the attempt as recorded at the end of this run (`null`: unreadable). */
+  done: Promise<PublicationAttempt | null>
+}
 
 export interface PublicationService extends PublicationApi {
   recover(): Promise<void>
   /** Discard only uncommitted prompts when the renderer goes away; in-flight writes continue. */
   releasePrompts(): void
+  /** Started sends that are still running. */
+  inFlight(): InFlightPublication[]
+  /**
+   * On: results are being reached without a window (the app is finishing a quit). A failed or
+   * unknown result then keeps a launch notice for the next start.
+   */
+  setUnattended(on: boolean): void
+  /**
+   * The send's original deadline passed while finishing: records it as unknown — or as sent with
+   * the ID unconfirmed when the forum already accepted the POST — with a launch notice. It is never
+   * sent again. Returns the recorded attempt; `null` when it is not running or recording failed
+   * (it is then listed by `unstoredResults`).
+   */
+  abandon(attemptId: string): Promise<PublicationAttempt | null>
+  /**
+   * Results reached by this process that could not be written to storage, each as it should have
+   * been recorded. Their attempts stay `sending` in storage (recovered as unknown at a later start).
+   */
+  unstoredResults(): PublicationAttempt[]
+  /** Writes those results again (never sends). `true` when none is left unstored. */
+  retryUnstored(): Promise<boolean>
 }
 class Refusal extends Error {
   constructor(readonly reason: PublicationProblem) { super(reason) }
@@ -26,18 +56,51 @@ export function createPublicationService(deps: {
   clientFor: (userhash: string) => ForumClient
   adapter: PublicationAdapter
   now?: () => Date
+  /** Publish limit of one send from its intent; the adapter's POST limit. */
+  deadlineMs?: number
 }): PublicationService {
   const { store, drafts, files, protector, adapter } = deps
   const now = deps.now ?? (() => new Date())
+  const deadlineMs = deps.deadlineMs ?? PUBLISH_DEADLINE_MS
   // Active secrets only: local credential IDs can change when a cookie is removed and reimported.
   const busy = new Set<string>()
   const editorAttempts = new Map<string, PublicationAttempt>()
   const submissions = new Map<string, Promise<SubmitResult>>()
   const prompts = new Map<string, { input: SubmitInput; prompt: PoPrompt }>()
   const resolving = new Set<string>()
+  const running = new Map<string, Running>()
   // Main-process lifetime, not window lifetime. Re-enabling the persistent setting clears it.
   let suppressed = false
   let recovered = false
+  let unattended = false
+  /**
+   * Per attempt: the writes that could not reach storage, best first (the result itself, then an
+   * `unknown` fallback the store always accepts, so only a storage failure keeps one here).
+   */
+  const unstored = new Map<string, { attempt: PublicationAttempt; writes: PublicationFinish[] }>()
+
+  interface Running extends InFlightPublication {
+    /** The forum reported the POST a success; only the ID confirmation is left. */
+    accepted: boolean
+    abandoned: boolean
+  }
+
+  /** Stores the first write the store accepts; `null` when none could be written (kept unstored). */
+  async function persist(attempt: PublicationAttempt, writes: PublicationFinish[]): Promise<PublicationAttempt | null> {
+    for (const write of writes) {
+      try {
+        const stored = await store.finishPublication(write)
+        unstored.delete(attempt.id)
+        return stored
+      } catch { /* Try the next write. */ }
+    }
+    const best = writes[0]!
+    unstored.set(attempt.id, {
+      attempt: { ...attempt, state: best.state, problem: best.problem, postId: best.postId, threadId: best.threadId, updatedAt: best.at },
+      writes
+    })
+    return null
+  }
 
   async function secret(id: string | null): Promise<string> {
     if (id === null || !(await protector.isAvailable())) throw new Refusal('identity')
@@ -96,30 +159,35 @@ export function createPublicationService(deps: {
     return { token: randomUUID(), currentName: current?.name ?? '不可用的饼干', poName: po?.name ?? '已移除的 PO 饼干', poCredentialId: own.credentialId, canSwitch }
   }
 
-  async function run(attempt: PublicationAttempt, validated: Awaited<ReturnType<typeof validate>>) {
+  async function run(entry: Running, validated: Awaited<ReturnType<typeof validate>>): Promise<PublicationAttempt | null> {
+    const attempt = entry.attempt
     try {
-      let report: PublishReport = await adapter.publish({ payload: attempt.payload, userhash: validated.userhash, attachment: validated.attachment })
+      let report: PublishReport = await adapter.publish({ payload: attempt.payload, userhash: validated.userhash, attachment: validated.attachment,
+        onAccepted: () => { entry.accepted = true } })
       if (report.state === 'confirmed') {
         const candidateId = report.postId
         if ((await store.listOwnPosts()).some(post => post.postId === candidateId)) report = { state: 'unconfirmed', problem: null }
       }
-      let result: PublicationAttempt
-      try {
-        result = await store.finishPublication({ id: attempt.id, state: report.state,
-          problem: report.state === 'confirmed' ? null : report.problem,
-          postId: report.state === 'confirmed' ? report.postId : null,
-          threadId: report.state === 'confirmed' ? report.threadId : null, at: now().toISOString() })
-      } catch {
-        // Durable intent survives even if recording the result fails. Never expose a retryable failure.
-        result = { ...attempt, state: 'unknown', problem: 'storage', updatedAt: now().toISOString() }
-      }
+      const at = now().toISOString()
+      // After an abandon, the store keeps the recorded uncertainty unless this is positive evidence.
+      const stored = await persist(attempt, [
+        { id: attempt.id, state: report.state, problem: report.state === 'confirmed' ? null : report.problem,
+          postId: report.state === 'confirmed' ? report.postId : null, threadId: report.state === 'confirmed' ? report.threadId : null,
+          at, launchNotice: unattended },
+        { id: attempt.id, state: 'unknown', problem: 'storage', postId: null, threadId: null, at, launchNotice: unattended }
+      ])
+      // Durable intent survives even if recording the result fails. Never expose a retryable failure.
+      const result: PublicationAttempt = stored ?? { ...attempt, state: 'unknown', problem: 'storage', updatedAt: at }
       editorAttempts.set(attempt.editorId, result)
       if (result.state === 'confirmed' || result.state === 'failed') editorAttempts.delete(attempt.editorId)
+      return result
     } catch {
       const result: PublicationAttempt = { ...attempt, state: 'unknown', problem: 'network', updatedAt: now().toISOString() }
       editorAttempts.set(attempt.editorId, result)
-      try { await store.finishPublication({ id: attempt.id, state: 'unknown', problem: 'network', postId: null, threadId: null, at: result.updatedAt }) } catch { /* Intent remains sending, recovered as unknown. */ }
+      // If even this cannot be stored, the intent stays sending (recovered as unknown) and is listed as unstored.
+      return await persist(attempt, [{ id: attempt.id, state: 'unknown', problem: 'network', postId: null, threadId: null, at: result.updatedAt, launchNotice: unattended }])
     } finally {
+      running.delete(attempt.id)
       busy.delete(validated.userhash)
       await drafts.releaseEditor('publication', attempt.id).catch(() => undefined)
     }
@@ -153,7 +221,9 @@ export function createPublicationService(deps: {
       editorAttempts.set(input.editorId, attempt)
       await drafts.holdAttachment('publication', attempt.id, input.payload.attachmentId)
       launched = true
-      void run(attempt, validated)
+      const entry: Running = { attempt, deadline: Date.parse(attempt.createdAt) + deadlineMs, done: Promise.resolve(null), accepted: false, abandoned: false }
+      running.set(attempt.id, entry)
+      entry.done = run(entry, validated)
       return { kind: 'attempt', attempt }
     } catch (error) {
       return { kind: 'refused', reason: error instanceof Refusal ? error.reason : 'storage' }
@@ -168,6 +238,27 @@ export function createPublicationService(deps: {
       if (store.status.state !== 'ready') return
       await store.recoverPublications(now().toISOString())
       recovered = true
+    },
+    inFlight() {
+      return [...running.values()].map(({ attempt, deadline, done }) => ({ attempt, deadline, done }))
+    },
+    setUnattended(on) { unattended = on },
+    async abandon(attemptId) {
+      const entry = running.get(attemptId)
+      if (!entry || entry.abandoned) return null
+      entry.abandoned = true
+      const result = await persist(entry.attempt, [{ id: attemptId, state: entry.accepted ? 'unconfirmed' : 'unknown', problem: 'network',
+        postId: null, threadId: null, at: now().toISOString(), launchNotice: unattended }])
+      if (result !== null) editorAttempts.set(entry.attempt.editorId, result)
+      return result
+    },
+    unstoredResults() {
+      return [...unstored.values()].map(({ attempt }) => attempt)
+    },
+    async retryUnstored() {
+      // Whoever retries now decides about the launch notice: a window showing them, or finishing without one.
+      for (const { attempt, writes } of [...unstored.values()]) await persist(attempt, writes.map(write => ({ ...write, launchNotice: unattended })))
+      return unstored.size === 0
     },
     releasePrompts() {
       for (const { input } of prompts.values()) void drafts.releaseEditor('publication', `prepare-${input.requestId}`).catch(() => undefined)

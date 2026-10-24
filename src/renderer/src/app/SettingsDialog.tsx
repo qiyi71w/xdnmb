@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from 'react'
+import { CLOSE_ACTIONS, type CloseAction } from '../../../shared/lifecycle'
 import type { AppSettings } from '../../../shared/reading'
 import { Icon } from '../components/Icon'
 import { Modal, ModalHeader } from '../components/Modal'
@@ -34,6 +35,7 @@ export function SettingsDialog({
       <ModalHeader title="设置" titleId={titleId} closeLabel="关闭设置" onClose={onClose} />
       <div className="modal-body settings-body">
         <TabsSection settings={settings} onChange={onSettingsChange} />
+        <WindowSection settings={settings} onChange={onSettingsChange} />
         <PublicationSection />
         <CookieSection identities={identities} />
       </div>
@@ -93,6 +95,77 @@ function TabsSection({ settings, onChange }: { settings: AppSettings; onChange: 
             {settings.newTabSplitDefault ? '开' : '关'}
           </span>
         </button>
+      </div>
+      {notSaved && (
+        <p className="notice-inline is-warning" role="status">
+          <Icon name="alert" size={14} />
+          未能保存：本地存储当前不可写入，设置显示的是实际生效的值
+        </p>
+      )}
+    </section>
+  )
+}
+
+const CLOSE_ACTION_LABEL: Record<CloseAction, string> = {
+  ask: '每次询问',
+  background: '后台驻留',
+  quit: '退出汐岛'
+}
+
+/**
+ * 窗口 settings: what the window's close button does. A remembered 退出汐岛 still handles every
+ * unsaved edit before quitting; 后台驻留 never asks anything.
+ */
+function WindowSection({ settings, onChange }: { settings: AppSettings; onChange: (settings: AppSettings) => void }) {
+  const headingId = useId()
+  const labelId = useId()
+  const helpId = useId()
+  const [busy, setBusy] = useState(false)
+  const [notSaved, setNotSaved] = useState(false)
+
+  const choose = async (closeAction: CloseAction) => {
+    if (busy || closeAction === settings.closeAction) return
+    setBusy(true)
+    setNotSaved(false)
+    try {
+      const result = await window.xidao.settings.update({ closeAction })
+      onChange(result.settings)
+      setNotSaved(!result.saved)
+    } catch {
+      setNotSaved(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="settings-section" aria-labelledby={headingId}>
+      <h3 className="settings-section-title" id={headingId}>
+        窗口
+      </h3>
+      <div className="setting-row is-choice">
+        <div className="setting-text">
+          <span className="setting-label" id={labelId}>
+            关闭窗口时
+          </span>
+          <span className="setting-help" id={helpId}>
+            后台驻留只隐藏窗口，保留标签和编辑，可从系统托盘（macOS 为 Dock）重新打开。记住的选择不会跳过退出时对未保存编辑的处理。
+          </span>
+        </div>
+        <div className="segmented" role="group" aria-labelledby={labelId} aria-describedby={helpId} aria-busy={busy || undefined}>
+          {CLOSE_ACTIONS.map((action) => (
+            <button
+              key={action}
+              type="button"
+              className="segmented-item"
+              aria-pressed={settings.closeAction === action}
+              aria-disabled={busy || undefined}
+              onClick={() => void choose(action)}
+            >
+              {CLOSE_ACTION_LABEL[action]}
+            </button>
+          ))}
+        </div>
       </div>
       {notSaved && (
         <p className="notice-inline is-warning" role="status">

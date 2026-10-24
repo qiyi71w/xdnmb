@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react'
 import type { AppPlatform, StorageStatus } from '../../../shared/api'
-import { sameTarget, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
+import { sameTarget, type DraftId, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
 import type { FeedRef, ThreadSummary } from '../../../shared/forum'
+import type { WorkspaceLoadResult } from '../../../shared/lifecycle'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/reading'
 import { Icon } from '../components/Icon'
 import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/directory/feeds'
@@ -17,9 +18,11 @@ import { AttemptsDialog } from '../features/publication/AttemptsDialog'
 import { OwnPostsDialog } from '../features/publication/OwnPostsDialog'
 import { PoPromptDialog } from '../features/publication/PoPromptDialog'
 import { usePendingAttempts } from '../features/publication/usePendingAttempts'
+import { LaunchNotice } from '../features/lifecycle/LaunchNotice'
+import { LifecycleHost } from '../features/lifecycle/LifecycleHost'
 import { useIdentities } from '../features/identity/useIdentities'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
-import { ContentRegistryContext, createContentRegistry } from '../features/tabs/contentRegistry'
+import { captureLists, ContentRegistryContext, createContentRegistry } from '../features/tabs/contentRegistry'
 import {
   activeTab,
   currentEntry,
@@ -32,6 +35,7 @@ import {
   type TabsState,
   type ThreadOpen
 } from '../features/tabs/tabsState'
+import { parseWorkspace, type Workspace } from '../features/tabs/workspaceSnapshot'
 import { meaningfulTitle } from '../lib/format'
 import { usePopover } from '../lib/usePopover'
 import { isEditableTarget, matchShortcut, type ShortcutAction } from './shortcuts'
@@ -53,11 +57,15 @@ function StorageBanner({ storage }: { storage: StorageStatus | null }) {
   )
 }
 
-/** Tabs exist only once the global split default is known (the first tab takes it). */
-type ShellAction = TabsAction | { type: 'init'; split: boolean }
+/**
+ * Tabs exist only once the global split default is known (the first tab takes it), or the
+ * workspace saved at the last real quit is restored.
+ */
+type ShellAction = TabsAction | { type: 'init'; split: boolean } | { type: 'restore'; tabs: TabsState }
 
 function shellReducer(state: TabsState | null, action: ShellAction): TabsState | null {
   if (action.type === 'init') return state ?? initialTabsState(action.split)
+  if (action.type === 'restore') return state ?? action.tabs
   return state === null ? null : tabsReducer(state, action)
 }
 
@@ -141,21 +149,6 @@ export function App() {
       alive = false
     }
   }, [startDirectory])
-
-  useEffect(() => {
-    let alive = true
-    window.xidao.settings
-      .get()
-      .catch(() => DEFAULT_SETTINGS)
-      .then((loaded) => {
-        if (!alive) return
-        setSettings(loaded)
-        dispatch({ type: 'init', split: loaded.newTabSplitDefault })
-      })
-    return () => {
-      alive = false
-    }
-  }, [])
 
   // Feed details come from the directory; a feed that disappeared keeps its last known details.
   const dirData = directory.state.directory
@@ -241,6 +234,82 @@ export function App() {
   })
   const pendingTabFocus = useRef(false)
 
+  // ---------- Workspace restore (spec I2) ----------
+  /** Settles once the startup restore is done: tabs exist and saved drafts were reopened. */
+  const [restored] = useState(() => Promise.withResolvers<void>())
+  const whenRestored = useCallback(() => restored.promise, [restored])
+  /** Drafts reopened collapsed: collapsed in the commit that adds their editors, before painting. */
+  const collapseOnOpen = useRef(new Set<DraftId>())
+
+  useLayoutEffect(() => {
+    if (collapseOnOpen.current.size === 0) return
+    for (const draftId of collapseOnOpen.current) {
+      const editor = editorForDraft(editors.state, draftId)
+      if (editor !== null) dispatchEditors({ type: 'set-expanded', editorId: editor.id, expanded: false })
+    }
+    collapseOnOpen.current.clear()
+  }, [editors.state, dispatchEditors])
+
+  /**
+   * Reopens the drafts the workspace's tabs were continuing. A draft that no longer exists, or that
+   * an unresolved send holds (or when that cannot be read), stays in the library; nothing is sent.
+   */
+  const reopenDrafts = useCallback(
+    async (workspace: Workspace, alive: () => boolean) => {
+      if (workspace.editors.length === 0) return
+      const [drafts, attempts] = await Promise.allSettled([window.xidao.drafts.list(), window.xidao.publication.listAttempts()])
+      if (!alive()) return
+      if (drafts.status !== 'fulfilled' || !drafts.value.ok || attempts.status !== 'fulfilled' || !attempts.value.ok) return
+      const locked = new Set(
+        attempts.value.attempts.flatMap((attempt) =>
+          (attempt.state === 'sending' || attempt.state === 'unknown' || attempt.state === 'unconfirmed') && attempt.draftId !== null
+            ? [attempt.draftId]
+            : []
+        )
+      )
+      const byId = new Map(drafts.value.drafts.map((draft) => [draft.id, draft]))
+      // A tab closed meanwhile takes its drafts' editors with it.
+      const tabIds = new Set((stateRef.current.tabs ?? workspace.tabs).tabs.map((tab) => tab.id))
+      for (const item of workspace.editors) {
+        const draft = byId.get(item.draftId)
+        if (draft === undefined || locked.has(draft.id) || !tabIds.has(item.tabId)) continue
+        dispatchEditors({ type: 'open-draft', tabId: item.tabId, draft })
+        if (!item.expanded) collapseOnOpen.current.add(draft.id)
+      }
+    },
+    [dispatchEditors]
+  )
+
+  // Settings and the saved workspace load together; without a readable workspace the shell starts fresh.
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const [loaded, saved] = await Promise.all([
+        window.xidao.settings.get().catch(() => DEFAULT_SETTINGS),
+        window.xidao.lifecycle.loadWorkspace().catch((): WorkspaceLoadResult => ({ ok: false }))
+      ])
+      if (!alive) return
+      setSettings(loaded)
+      const workspace = saved.ok && saved.workspace !== null ? parseWorkspace(saved.workspace) : null
+      if (workspace === null) {
+        dispatch({ type: 'init', split: loaded.newTabSplitDefault })
+        restored.resolve()
+        return
+      }
+      // Lists take their saved context when first shown: read their pages again, then their position.
+      for (const list of workspace.lists) registry.savedLists.set(list.entryKey, list)
+      dispatch({ type: 'restore', tabs: workspace.tabs })
+      try {
+        await reopenDrafts(workspace, () => alive)
+      } finally {
+        if (alive) restored.resolve()
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [restored, reopenDrafts, registry])
+
   /** Before leaving an entry that shows a thread, remember its mode and anchor in the entry. */
   const leave = useCallback(
     (tab: Tab) => {
@@ -251,6 +320,28 @@ export function App() {
     },
     [registry]
   )
+
+  /**
+   * The workspace to save at a real quit: every tab's shown thread captured where it is (as `leave`
+   * does), each list's loaded pages and position (also lists restored but not shown again this run),
+   * and the saved drafts that unlocked editors continue. Unsaved content was handled before.
+   */
+  const buildWorkspace = useCallback((): Workspace | null => {
+    let state = stateRef.current.tabs
+    if (state === null) return null
+    for (const tab of state.tabs) {
+      const entry = currentEntry(tab)
+      if (entry.thread === null) continue
+      const snapshot = registry.readers.get(entry.key)?.current.capture() ?? null
+      if (snapshot !== null) state = tabsReducer(state, { type: 'snapshot', tabId: tab.id, entryKey: entry.key, snapshot })
+    }
+    const editorsList = currentEditors().editors.flatMap((editor) =>
+      editor.draft !== null && editor.publication === null
+        ? [{ tabId: editor.tabId, draftId: editor.draft.id, expanded: editor.expanded }]
+        : []
+    )
+    return { tabs: state, editors: editorsList, lists: captureLists(state, registry) }
+  }, [registry, currentEditors])
 
   const withActive = useCallback((run: (tab: Tab) => void) => {
     const state = stateRef.current.tabs
@@ -429,6 +520,16 @@ export function App() {
     setOwnPostsOpen(true)
   }, [closeNav])
 
+  /** A real quit closes every dialog that would compete with its questions. */
+  const closeForQuit = useCallback(() => {
+    closeNav(false)
+    setSettingsOpen(false)
+    setDraftsOpen(false)
+    setAttemptsOpen(false)
+    setOwnPostsOpen(false)
+    setClosing(null)
+  }, [closeNav])
+
   /** Opens a target from 发送记录 / 我的发言 in a new tab (global split default), to read or check it. */
   const openTargetInTab = useCallback((target: PostTarget) => {
     setAttemptsOpen(false)
@@ -467,13 +568,14 @@ export function App() {
     [withActive, registry]
   )
 
-  // List memory lives only as long as its entry is in some tab's history (forward branch replaced,
-  // tab closed → dropped).
+  // List memory and restored list context live only as long as their entry is in some tab's
+  // history (forward branch replaced, tab closed → dropped).
   useEffect(() => {
     if (tabs === null) return
     const live = new Set<number>()
     for (const tab of tabs.tabs) for (const item of tab.entries) live.add(item.key)
     for (const key of registry.listMemory.keys()) if (!live.has(key)) registry.listMemory.delete(key)
+    for (const key of registry.savedLists.keys()) if (!live.has(key)) registry.savedLists.delete(key)
   }, [tabs, registry])
 
   // A closed tab takes its focused controls with it: hand focus to the newly active tab.
@@ -559,6 +661,10 @@ export function App() {
       <EditorWorkspaceContext value={editorWorkspace}>
         <div className="app" ref={appRef}>
           <StorageBanner storage={storage} />
+          <LaunchNotice
+            onOpenAttempts={openAttempts}
+            fallbackFocus={() => document.getElementById(`tab-${stateRef.current.tabs?.activeId}`)}
+          />
           <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
           <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
           <NavMeasure directory={dirData} onMeasure={setNavCompactMin} />
@@ -616,6 +722,8 @@ export function App() {
                           tab={tab}
                           active={tab.id === tabs.activeId}
                           layout={layout}
+                          directory={directory.state}
+                          onRetryDirectory={directory.retry}
                           feedInfo={feedInfo}
                           forumNames={names}
                           forumName={forumName}
@@ -707,6 +815,13 @@ export function App() {
               onCancel={() => setClosing(null)}
             />
           )}
+          <LifecycleHost
+            platform={platform}
+            onSettingsChange={setSettings}
+            closeModals={closeForQuit}
+            buildWorkspace={buildWorkspace}
+            whenRestored={whenRestored}
+          />
         </div>
       </EditorWorkspaceContext>
     </SettingsOpenerContext>
