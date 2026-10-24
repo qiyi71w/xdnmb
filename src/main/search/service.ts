@@ -22,6 +22,8 @@ export interface SearchService {
   /** Initial migration backfill only; unavailable search does not prevent reading startup. */
   recover(): Promise<void>
   stop(): Promise<void>
+  /** A new window after cancelled exit may create fresh sessions and rebuild an interrupted index. */
+  resume(): void
 }
 
 export function createSearchService(deps: {
@@ -193,6 +195,10 @@ export function createSearchService(deps: {
         tasks.delete(id)
       })()
       return recovery
+    },
+    resume() {
+      closing = false
+      recovery = null
     },
     async stop() {
       closing = true

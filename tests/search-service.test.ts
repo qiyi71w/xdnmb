@@ -71,6 +71,27 @@ afterEach(async () => {
 })
 
 describe('owned search service over real SQLite and controlled HTTP', () => {
+  it('stops all search work for exit and permits only fresh sessions after a window reopens', async () => {
+    const reached = Promise.withResolvers<void>()
+    const { api, service, db, requests } = await setup((page, _request, reply) => {
+      if (page === 2) { reached.resolve(); return }
+      reply.setHeader('Content-Type', 'application/json')
+      reply.end(JSON.stringify({ id: '100', content: 'head', Replies: [{ id: '101', content: 'retained searchable' }] }))
+    })
+    await api.fetchThread({ operationId: 'fetch', threadId: '100' })
+    await reached.promise
+    await service.stop()
+    expect(requests).toEqual([1, 2])
+    expect(db.loadPost('101')?.value.plainText).toBe('retained searchable')
+    expect(db.getReadingState('100').readPostIds).toEqual([])
+    expect(await api.start({ operationId: 'closed', query: 'searchable', scope: { kind: 'local' }, filters })).toEqual({ ok: false, reason: 'busy' })
+    service.resume()
+    await service.recover()
+    expect(await api.fetchStatus({ operationId: 'fetch' })).toEqual({ ok: false, reason: 'expired' })
+    expect(await api.start({ operationId: 'fresh', query: 'searchable', scope: { kind: 'local' }, filters })).toMatchObject({ ok: true, value: { hits: [{ postId: '101' }] } })
+    expect(requests).toEqual([1, 2])
+  })
+
   it('keeps scope/filter fixed, rejects concurrent cursor advancement and suppresses cancelled late batches across owners', async () => {
     const reached = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()

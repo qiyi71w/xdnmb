@@ -335,6 +335,8 @@ async function start(): Promise<void> {
     open: async () => {
       await backgroundStopped
       retained.resume()
+      searchService.resume()
+      void searchService.recover().catch(() => console.error('[search] index unavailable'))
       const { promise, resolve } = Promise.withResolvers<void>()
       const window = createWindow()
       attach(window)
@@ -365,7 +367,7 @@ async function start(): Promise<void> {
     publication,
     stopBackgroundWork: async () => {
       ipc?.cancelAll()
-      backgroundStopped = Promise.all([retained.stop(), reminders.stop('quit')]).then(() => undefined)
+      backgroundStopped = Promise.all([retained.stop(), reminders.stop('quit'), searchService.stop()]).then(() => undefined)
       await backgroundStopped
     },
     notify: notifyUnfinished,
