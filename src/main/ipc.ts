@@ -380,6 +380,29 @@ export function registerIpc({ reading, images, identities, subscriptions, store,
     return subscriptionReads.run(event.sender, request.operationId, (signal) => subscriptions.reconcile(request, signal))
   })
 
+  handle(IpcChannel.subscriptionMergeSources, async () => subscriptions.getMergeSources())
+  handle(IpcChannel.subscriptionPlans, async () => subscriptions.getPlans())
+
+  handle(IpcChannel.subscriptionPreviewSync, async (event, raw) => {
+    const request = { operationId: operationId(record(raw)) }
+    return subscriptionReads.run(event.sender, request.operationId, (signal) => subscriptions.previewSync(request, signal))
+  })
+
+  handle(IpcChannel.subscriptionPreviewMerge, async (event, raw) => {
+    const input = record(raw)
+    const request = { sourceAppCredentialId: viewId(input.sourceAppCredentialId), operationId: operationId(input) }
+    return subscriptionReads.run(event.sender, request.operationId, (signal) => subscriptions.previewMerge(request, signal))
+  })
+
+  handle(IpcChannel.subscriptionExecutePlan, async (event, raw) => {
+    const input = record(raw)
+    if (!Array.isArray(input.selectedItemIds) || input.selectedItemIds.length > 100_000) throw new InvalidRequestError()
+    const request = {
+      previewId: viewId(input.previewId), selectedItemIds: input.selectedItemIds.map(viewId), operationId: operationId(input)
+    }
+    return subscriptionReads.run(event.sender, request.operationId, (signal) => subscriptions.executePlan(request, signal))
+  })
+
   handle(IpcChannel.subscriptionCancel, async (event, raw) => {
     subscriptionReads.cancel(event.sender, operationId(record(raw)))
   })

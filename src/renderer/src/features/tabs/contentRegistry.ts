@@ -20,7 +20,7 @@ export interface ListHandle {
  */
 export type ListMemory =
   | { kind: 'feed'; state: FeedState; scrollTop: number }
-  | { kind: 'subscriptions'; state: SubscriptionListState; scrollTop: number }
+  | { kind: 'subscriptions'; state: SubscriptionListState; scrollTop: number; view: 'list' | 'reconcile' }
 
 /**
  * Mounted readers and lists, keyed by the history entry key that shows them, plus the runtime

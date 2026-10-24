@@ -62,7 +62,8 @@ export function TabView({
       ((focused === null || focused === document.body) && lastRegion.current === hiddenRegion)
     if (!stranded) return
     const target =
-      (pane === 'list' ? shown.querySelector<HTMLElement>('.thread-row.is-selected') : null) ??
+      // A list pane may hide its list behind another view (订阅 › 同步与合并).
+      (pane === 'list' ? shown.querySelector<HTMLElement>('.list-scroll:not([hidden]) .thread-row.is-selected') : null) ??
       shown.querySelector<HTMLElement>('[data-pane-focus]') ??
       shown
     target.focus({ preventScroll: pane === 'reader' })

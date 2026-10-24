@@ -62,7 +62,7 @@ export interface SubscriptionOperation {
 }
 
 /** result-storage means an explicit write may have reached the server; only read-only reconciliation is safe. */
-export type SubscriptionFailure = 'storage' | 'result-storage' | 'locked' | 'unconfigured' | 'missing' | 'invalid-uuid' | 'stale' | 'busy' | 'not-found'
+export type SubscriptionFailure = 'storage' | 'result-storage' | 'locked' | 'unconfigured' | 'missing' | 'invalid-uuid' | 'stale' | 'busy' | 'not-found' | 'invalid-selection' | 'cancelled'
 export type SubscriptionResult<T> = { ok: true; value: T } | { ok: false; reason: SubscriptionFailure }
 
 export interface SubscriptionsApi {
@@ -80,5 +80,58 @@ export interface SubscriptionsApi {
   getOperations(): Promise<SubscriptionOperation[]>
   /** Read-only check using the attempt's fixed references, never the currently selected ones. */
   reconcile(input: { id: string; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionOperation>>
+  /** Historical local object references only; never decrypted UUIDs. */
+  getMergeSources(): Promise<SubscriptionMergeSource[]>
+  /** Fresh, bounded background reads. Previews live only in this process and never execute on restart. */
+  previewSync(input: { operationId: OperationId }): Promise<SubscriptionResult<SubscriptionPreview>>
+  previewMerge(input: { sourceAppCredentialId: string; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionPreview>>
+  /** Consumes the preview once. Revalidates both observed ranges before any write, then executes serially. */
+  executePlan(input: { previewId: string; selectedItemIds: string[]; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionPlan>>
+  /** Durable history, including interrupted plans. There is deliberately no resume/replay API. */
+  getPlans(): Promise<SubscriptionPlan[]>
   cancel(input: { operationId: OperationId }): Promise<void>
+}
+
+export interface SubscriptionMergeSource {
+  appCredentialId: string
+  label: string
+}
+
+export interface SubscriptionCandidate {
+  id: string
+  threadId: ThreadId
+  action: SubscriptionAction
+  target: SubscriptionSource
+}
+
+/** For sync left=App/right=web; for merge left=old App/right=current App. */
+export interface SubscriptionPreview {
+  id: string
+  mode: 'sync' | 'merge'
+  context: SubscriptionContext
+  createdAt: string
+  left: SubscriptionObservation
+  right: SubscriptionObservation
+  leftLabel: string
+  rightLabel: string
+  firstSync: boolean
+  deletionsAllowed: boolean
+  items: SubscriptionCandidate[]
+}
+
+export interface SubscriptionPlanItem {
+  candidate: SubscriptionCandidate
+  operationId: string | null
+  state: 'pending' | 'confirmed' | 'failed' | 'unknown' | 'skipped'
+  failure: SubscriptionFailure | null
+}
+
+export interface SubscriptionPlan {
+  id: string
+  preview: SubscriptionPreview
+  createdAt: string
+  finishedAt: string | null
+  state: 'running' | 'completed' | 'stopped' | 'interrupted'
+  stopReason: SubscriptionFailure | 'item-failed' | 'item-unknown' | null
+  items: SubscriptionPlanItem[]
 }

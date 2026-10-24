@@ -19,8 +19,8 @@ import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, Saved
 import type { ImageKind } from '../../shared/images'
 import { IDENTITY_ROLES } from '../../shared/identity'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
-import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionSource } from '../../shared/subscriptions'
-import type { SubscriptionConfiguration } from './contract'
+import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionPlan, SubscriptionSource } from '../../shared/subscriptions'
+import type { SubscriptionBaseline, SubscriptionConfiguration } from './contract'
 import { StorageWriteRefusedError } from './contract'
 import type { AppStore, ImageHolder, ImageResourceRecord, NewImageResource, Stored } from './contract'
 import { computeCoverage } from './coverage'
@@ -705,6 +705,11 @@ class SqliteReadingDatabase implements ReadingDatabase {
     return row ? new Uint8Array(row.ciphertext) : null
   }
 
+  listSubscriptionAppCredentials(): string[] {
+    if (!this.db) return []
+    return this.db.prepare<[], { id: string }>('SELECT id FROM subscription_app_credentials ORDER BY rowid DESC').all().map((row) => row.id)
+  }
+
   setSubscriptionSource(source: SubscriptionSource): void {
     this.writable().prepare('UPDATE subscription_configuration SET source = ? WHERE singleton = 1').run(source)
   }
@@ -769,6 +774,49 @@ class SqliteReadingDatabase implements ReadingDatabase {
         this.saveSubscriptionOperation(operation)
       }
     })()
+  }
+
+  loadSubscriptionBaseline(context: SubscriptionContext): SubscriptionBaseline | null {
+    if (!this.db) return null
+    const row = this.db.prepare<[number], { baseline_json: string }>(
+      'SELECT baseline_json FROM subscription_baselines WHERE generation = ?'
+    ).get(context.generation)
+    if (!row) return null
+    const baseline = JSON.parse(row.baseline_json) as SubscriptionBaseline
+    return baseline.context.appCredentialId === context.appCredentialId && baseline.context.webCredentialId === context.webCredentialId ? baseline : null
+  }
+
+  loadSubscriptionPlans(): SubscriptionPlan[] {
+    if (!this.db) return []
+    return this.db.prepare<[], { plan_json: string }>('SELECT plan_json FROM subscription_plans ORDER BY rowid DESC')
+      .all().map((row) => JSON.parse(row.plan_json) as SubscriptionPlan)
+  }
+
+  saveSubscriptionPlan(plan: SubscriptionPlan, operation?: SubscriptionOperation, baseline?: SubscriptionBaseline): void {
+    const db = this.writable()
+    db.transaction(() => {
+      if (operation) this.saveSubscriptionOperation(operation)
+      db.prepare(`INSERT INTO subscription_plans (id, plan_json) VALUES (?, ?)
+        ON CONFLICT(id) DO UPDATE SET plan_json = excluded.plan_json`).run(plan.id, JSON.stringify(plan))
+      if (baseline) db.prepare(`INSERT INTO subscription_baselines (generation, baseline_json) VALUES (?, ?)
+        ON CONFLICT(generation) DO UPDATE SET baseline_json = excluded.baseline_json`).run(baseline.context.generation, JSON.stringify(baseline))
+    }).immediate()
+  }
+
+  recoverSubscriptionPlans(at: string): void {
+    const db = this.writable()
+    db.transaction(() => {
+      for (const plan of this.loadSubscriptionPlans()) {
+        if (plan.state !== 'running') continue
+        plan.state = 'interrupted'
+        plan.stopReason = 'result-storage'
+        plan.finishedAt = at
+        for (const item of plan.items) {
+          if (item.state === 'pending') item.state = item.operationId === null ? 'skipped' : 'unknown'
+        }
+        this.saveSubscriptionPlan(plan)
+      }
+    }).immediate()
   }
 
   close(): void {

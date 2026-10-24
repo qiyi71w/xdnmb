@@ -217,6 +217,11 @@ export const IpcChannel = {
   subscriptionChange: 'subscriptions:change',
   subscriptionOperations: 'subscriptions:operations',
   subscriptionReconcile: 'subscriptions:reconcile',
+  subscriptionMergeSources: 'subscriptions:merge-sources',
+  subscriptionPreviewSync: 'subscriptions:preview-sync',
+  subscriptionPreviewMerge: 'subscriptions:preview-merge',
+  subscriptionExecutePlan: 'subscriptions:execute-plan',
+  subscriptionPlans: 'subscriptions:plans',
   subscriptionCancel: 'subscriptions:cancel',
   getStatus: 'app:get-status'
 } as const

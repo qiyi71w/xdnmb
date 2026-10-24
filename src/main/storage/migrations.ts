@@ -223,5 +223,20 @@ export const MIGRATIONS: readonly Migration[] = [
         );
       `)
     }
+  },
+  {
+    version: 6,
+    up(db) {
+      db.exec(`
+        CREATE TABLE subscription_baselines (
+          generation INTEGER PRIMARY KEY NOT NULL,
+          baseline_json TEXT NOT NULL
+        );
+        CREATE TABLE subscription_plans (
+          id TEXT PRIMARY KEY NOT NULL,
+          plan_json TEXT NOT NULL
+        );
+      `)
+    }
   }
 ]

@@ -1,3 +1,4 @@
+import type { ThreadSummary } from '../../../../shared/forum'
 import type {
   SubscriptionAction,
   SubscriptionContext,
@@ -5,9 +6,11 @@ import type {
   SubscriptionObservation,
   SubscriptionOperation,
   SubscriptionOverview,
+  SubscriptionPlan,
+  SubscriptionPlanItem,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
-import { describeReadError, formatLocalTime, formatPageList } from '../../lib/format'
+import { describeReadError, formatLocalTime, formatPageList, meaningfulTitle } from '../../lib/format'
 
 // Fixed copy only. Nothing here ever includes a UUID, a userhash or any other secret: the
 // renderer only knows local references, names and generations.
@@ -25,6 +28,14 @@ export const SOURCE_SHORT: Record<SubscriptionSource, string> = {
 export const ACTION_NAME: Record<SubscriptionAction, string> = {
   add: '加入订阅',
   remove: '取消订阅'
+}
+
+/** Short human name of a thread for confirmations and records: its title, else an excerpt. */
+export function threadLabel(thread: ThreadSummary): string {
+  const title = meaningfulTitle(thread.head.title)
+  if (title !== null) return title
+  const excerpt = thread.head.plainText.replace(/\s+/g, ' ').trim()
+  return excerpt === '' ? `No.${thread.head.id}` : excerpt.slice(0, 30)
 }
 
 /** Identity combination behind a source: App local reference or the fixed web sync object. */
@@ -86,6 +97,10 @@ export function failureText(reason: SubscriptionFailure): string {
       return '另一项订阅操作正在进行，或这个串还有待核对的操作，未执行'
     case 'not-found':
       return '找不到这条记录'
+    case 'invalid-selection':
+      return '所选条目不属于这份预览，或有重复，未执行；请重新预览后再勾选'
+    case 'cancelled':
+      return '已按要求停止，之后的读取与步骤没有继续'
   }
 }
 
@@ -153,4 +168,53 @@ export function evidenceText(observation: SubscriptionObservation | null): strin
   if (observation.error !== null) return `${base} · 第 ${observation.error.page} 页读取失败`
   if (observation.cancelled) return `${base} · 已取消`
   return base
+}
+
+/** One observation's state for a preview: how far it got and why it may be incomplete. */
+export function observationState(observation: SubscriptionObservation): { complete: boolean; text: string } {
+  if (observation.error !== null) {
+    return { complete: false, text: `第 ${observation.error.page} 页读取失败（${describeReadError(observation.error.detail)}），之后的页没有读取` }
+  }
+  if (observation.cancelled) return { complete: false, text: `已停止，第 ${observation.nextPage ?? ''} 页起没有读取` }
+  if (observation.nextPage !== null) return { complete: false, text: `第 ${observation.nextPage} 页起没有读取` }
+  return { complete: true, text: '已连续读到空页（结束候选）；读取期间远端仍可能变化' }
+}
+
+export const PLAN_STATE_TEXT: Record<SubscriptionPlan['state'], string> = {
+  running: '执行中',
+  completed: '已完成',
+  stopped: '已停止',
+  interrupted: '已中断'
+}
+
+/** Why a plan stopped early; null when it did not. */
+export function stopReasonText(plan: SubscriptionPlan): string | null {
+  switch (plan.stopReason) {
+    case null:
+      return plan.state === 'interrupted' ? '应用在执行过程中关闭，计划没有继续，也不会在启动时自动继续' : null
+    case 'item-failed':
+      return '有一项失败，已停止后续写入'
+    case 'item-unknown':
+      return '有一项结果无法确认，已停止后续写入'
+    case 'cancelled':
+      return '按你的要求停止了后续步骤；已经发出的写入不会撤回'
+    default:
+      return failureText(plan.stopReason)
+  }
+}
+
+/** State of one plan item; `current` marks the item a running plan is working on. */
+export function planItemText(item: SubscriptionPlanItem, current: boolean): { text: string; tone: 'done' | 'warn' | 'error' | 'idle' } {
+  switch (item.state) {
+    case 'pending':
+      return current ? { text: '进行中', tone: 'idle' } : { text: '未开始', tone: 'idle' }
+    case 'confirmed':
+      return { text: '已确认', tone: 'done' }
+    case 'failed':
+      return { text: item.failure === null ? '失败' : `失败：${failureText(item.failure)}`, tone: 'error' }
+    case 'unknown':
+      return { text: '无法确认：写入可能已生效', tone: 'warn' }
+    case 'skipped':
+      return { text: '未执行（计划已停止）', tone: 'idle' }
+  }
 }

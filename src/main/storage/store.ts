@@ -73,6 +73,9 @@ export async function openReadingStore(options: {
       case 'loadSubscriptionObservation':
       case 'loadSubscriptionObservationById':
       case 'loadSubscriptionAppCiphertext': value = null; break
+      case 'loadSubscriptionBaseline': value = null; break
+      case 'loadSubscriptionPlans':
+      case 'listSubscriptionAppCredentials': value = []; break
       case 'loadSubscriptionOperations': value = []; break
       case 'loadDirectory':
       case 'loadFeedPage':
@@ -163,6 +166,11 @@ export async function openReadingStore(options: {
     saveSubscriptionOperation: (operation) => request('saveSubscriptionOperation', operation),
     loadSubscriptionOperations: () => request('loadSubscriptionOperations'),
     recoverSubscriptionOperations: () => request('recoverSubscriptionOperations'),
+    listSubscriptionAppCredentials: () => request('listSubscriptionAppCredentials'),
+    loadSubscriptionBaseline: (context) => request('loadSubscriptionBaseline', context),
+    loadSubscriptionPlans: () => request('loadSubscriptionPlans'),
+    saveSubscriptionPlan: (plan, operation, baseline) => request('saveSubscriptionPlan', plan, operation, baseline),
+    recoverSubscriptionPlans: (at) => request('recoverSubscriptionPlans', at),
     close() {
       if (!closePromise) {
         closing = true
