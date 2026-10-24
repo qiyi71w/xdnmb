@@ -71,6 +71,33 @@ afterEach(async () => {
 })
 
 describe('owned search service over real SQLite and controlled HTTP', () => {
+  it('does not supersede an active startup rebuild when the first window resumes', async () => {
+    let hold = false
+    const reached = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const { api, service, db, path } = await setup(undefined, (store) => ({ ...store,
+      async beginSearchRebuild() {
+        await store.beginSearchRebuild()
+        if (hold) { reached.resolve(); await release.promise }
+      }
+    }))
+    db.savePost(post('101', 'kept during recovery'), at)
+    const raw = new Database(path)
+    raw.exec('DROP TABLE search_fts')
+    raw.close()
+    await service.stop()
+    service.resume()
+    hold = true
+    const initial = service.recover()
+    await reached.promise
+    service.resume()
+    const fromWindow = service.recover()
+    expect(fromWindow).toBe(initial)
+    release.resolve()
+    await Promise.all([initial, fromWindow])
+    expect(await api.start({ operationId: 'after-recovery', query: 'recovery', scope: { kind: 'local' }, filters })).toMatchObject({ ok: true, value: { hits: [{ postId: '101' }] } })
+  })
+
   it('stops all search work for exit and permits only fresh sessions after a window reopens', async () => {
     const reached = Promise.withResolvers<void>()
     const { api, service, db, requests } = await setup((page, _request, reply) => {

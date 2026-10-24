@@ -197,6 +197,7 @@ export function createSearchService(deps: {
       return recovery
     },
     resume() {
+      if (!closing) return
       closing = false
       recovery = null
     },
