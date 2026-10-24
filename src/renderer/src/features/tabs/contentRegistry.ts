@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef } from 'react'
 import type { FeedState } from '../feed/feedState'
+import type { SubscriptionListState } from '../subscriptions/subscriptionListState'
 import type { ThreadSnapshot } from './tabsState'
 
 /** What the shell can ask of the reader mounted for a history entry. */
@@ -13,11 +14,13 @@ export interface ListHandle {
   refresh(): void
 }
 
-/** What a list entry had when its list was last unmounted: loaded pages and scroll position. */
-export interface ListMemory {
-  state: FeedState
-  scrollTop: number
-}
+/**
+ * What a list entry had when its list was last unmounted: its view state and scroll position.
+ * An entry's list kind never changes, so `kind` only tells the two list views apart.
+ */
+export type ListMemory =
+  | { kind: 'feed'; state: FeedState; scrollTop: number }
+  | { kind: 'subscriptions'; state: SubscriptionListState; scrollTop: number }
 
 /**
  * Mounted readers and lists, keyed by the history entry key that shows them, plus the runtime

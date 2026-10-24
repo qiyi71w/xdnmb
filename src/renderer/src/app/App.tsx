@@ -7,13 +7,16 @@ import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/direct
 import { Navigation, NavMeasure } from '../features/directory/Navigation'
 import { useDirectory } from '../features/directory/useDirectory'
 import { useIdentities } from '../features/identity/useIdentities'
+import { SubscriptionsContext, useSubscriptions } from '../features/subscriptions/useSubscriptions'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { ContentRegistryContext, createContentRegistry } from '../features/tabs/contentRegistry'
 import {
   activeTab,
   currentEntry,
   initialTabsState,
+  listKey,
   tabsReducer,
+  type ListRef,
   type Tab,
   type TabEntry,
   type TabsAction,
@@ -77,9 +80,22 @@ export function App() {
   const directory = useDirectory()
   const { start: startDirectory } = directory
   const identities = useIdentities()
+  const subscriptions = useSubscriptions()
+  const { refreshOverview: refreshSubscriptions, refreshOperations: refreshSubscriptionJournal } = subscriptions
   const [settingsOpen, setSettingsOpen] = useState(false)
   const openSettings = useCallback(() => setSettingsOpen(true), [])
-  const closeSettings = useCallback(() => setSettingsOpen(false), [])
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false)
+    // UUID, binding or source may have changed inside settings.
+    void refreshSubscriptions()
+    void refreshSubscriptionJournal()
+  }, [refreshSubscriptions, refreshSubscriptionJournal])
+
+  // A web-sync selection (or a removed/renamed credential) changes the subscription overview too.
+  const identityOverview = identities.overview
+  useEffect(() => {
+    if (identityOverview !== null) void refreshSubscriptions()
+  }, [identityOverview, refreshSubscriptions])
 
   useEffect(() => {
     let alive = true
@@ -215,11 +231,11 @@ export function App() {
   }, [])
 
   const selectFeed = useCallback(
-    (ref: FeedRef) => {
+    (ref: ListRef) => {
       closeNav()
       withActive((tab) => {
         const entry = currentEntry(tab)
-        if (entry.kind === 'list' && entry.feed !== null && feedKey(entry.feed) === feedKey(ref)) return
+        if (entry.kind === 'list' && entry.feed !== null && listKey(entry.feed) === listKey(ref)) return
         leave(tab)
         dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'list', feed: ref } })
       })
@@ -353,7 +369,10 @@ export function App() {
       const entry = currentEntry(tab)
       if (entry.kind === 'thread') return threadTitle(entry.thread)
       if (entry.feed === null) return '新标签'
-      const name = feedInfo(entry.feed)?.name ?? (entry.feed.kind === 'timeline' ? '时间线' : '版面')
+      const name =
+        entry.feed.kind === 'subscriptions'
+          ? '订阅'
+          : (feedInfo(entry.feed)?.name ?? (entry.feed.kind === 'timeline' ? '时间线' : '版面'))
       return entry.thread !== null && tab.split ? `${name} › ${threadTitle(entry.thread)}` : name
     },
     [feedInfo]
@@ -370,102 +389,105 @@ export function App() {
 
   return (
     <SettingsOpenerContext value={openSettings}>
-      <div className="app" ref={appRef}>
-        <StorageBanner storage={storage} />
-        <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
-        <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
-        <NavMeasure directory={dirData} onMeasure={setNavCompactMin} />
-        <ContentRegistryContext.Provider value={registry}>
-          <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
-            {!navOverlay && (
-              <div
-                className="nav-column"
-                onFocus={() => (navHadFocus.current = true)}
-                onBlur={(event) => {
-                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) navHadFocus.current = false
-                }}
-              >
-                <Navigation
-                  state={directory.state}
-                  selected={selectedFeed}
-                  onSelect={selectFeed}
-                  onRetry={directory.retry}
-                  variant="inline"
-                  progress={layout.navProgress}
-                  panelRef={inlineNavRef}
-                  identities={identities}
-                  onOpenSettings={openSettings}
-                />
-              </div>
-            )}
-
-            <div className="main-column">
-              {tabs !== null && current !== null && entry !== null && (
-                <>
-                  <TopBar
-                    tabs={tabs.tabs}
-                    activeId={tabs.activeId}
-                    titleOf={titleOf}
-                    platform={platform}
-                    canBack={current.index > 0}
-                    canForward={current.index < current.entries.length - 1}
-                    splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
-                    navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
-                    onBack={goBack}
-                    onForward={goForward}
-                    onActivate={activate}
-                    onClose={closeTab}
-                    onNewTab={newTab}
+      <SubscriptionsContext value={subscriptions}>
+        <div className="app" ref={appRef}>
+          <StorageBanner storage={storage} />
+          <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
+          <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
+          <NavMeasure directory={dirData} onMeasure={setNavCompactMin} />
+          <ContentRegistryContext.Provider value={registry}>
+            <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
+              {!navOverlay && (
+                <div
+                  className="nav-column"
+                  onFocus={() => (navHadFocus.current = true)}
+                  onBlur={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) navHadFocus.current = false
+                  }}
+                >
+                  <Navigation
+                    state={directory.state}
+                    selected={selectedFeed}
+                    onSelect={selectFeed}
+                    onRetry={directory.retry}
+                    variant="inline"
+                    progress={layout.navProgress}
+                    panelRef={inlineNavRef}
+                    identities={identities}
                     onOpenSettings={openSettings}
                   />
-                  <div className="tab-host">
-                    {tabs.tabs.map((tab) => (
-                      <TabView
-                        key={tab.id}
-                        tab={tab}
-                        active={tab.id === tabs.activeId}
-                        layout={layout}
-                        feedInfo={feedInfo}
-                        forumNames={names}
-                        forumName={forumName}
-                        onSelectThread={selectThread}
-                        onShowPane={showPane}
-                        onOpenNav={navOverlay ? navPopover.toggle : null}
-                      />
-                    ))}
-                  </div>
+                </div>
+              )}
+
+              <div className="main-column">
+                {tabs !== null && current !== null && entry !== null && (
+                  <>
+                    <TopBar
+                      tabs={tabs.tabs}
+                      activeId={tabs.activeId}
+                      titleOf={titleOf}
+                      platform={platform}
+                      canBack={current.index > 0}
+                      canForward={current.index < current.entries.length - 1}
+                      splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
+                      navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
+                      onBack={goBack}
+                      onForward={goForward}
+                      onActivate={activate}
+                      onClose={closeTab}
+                      onNewTab={newTab}
+                      onOpenSettings={openSettings}
+                    />
+                    <div className="tab-host">
+                      {tabs.tabs.map((tab) => (
+                        <TabView
+                          key={tab.id}
+                          tab={tab}
+                          active={tab.id === tabs.activeId}
+                          layout={layout}
+                          feedInfo={feedInfo}
+                          forumNames={names}
+                          forumName={forumName}
+                          onSelectThread={selectThread}
+                          onShowPane={showPane}
+                          onOpenNav={navOverlay ? navPopover.toggle : null}
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {navOverlay && navPopover.open && (
+                <>
+                  <div className="nav-overlay-layer" aria-hidden="true" />
+                  <Navigation
+                    state={directory.state}
+                    selected={selectedFeed}
+                    onSelect={selectFeed}
+                    onRetry={directory.retry}
+                    variant="overlay"
+                    progress={0}
+                    panelRef={navPanelRef}
+                    id="nav-overlay"
+                    identities={identities}
+                    onOpenSettings={openSettings}
+                  />
                 </>
               )}
             </div>
-
-            {navOverlay && navPopover.open && (
-              <>
-                <div className="nav-overlay-layer" aria-hidden="true" />
-                <Navigation
-                  state={directory.state}
-                  selected={selectedFeed}
-                  onSelect={selectFeed}
-                  onRetry={directory.retry}
-                  variant="overlay"
-                  progress={0}
-                  panelRef={navPanelRef}
-                  id="nav-overlay"
-                  identities={identities}
-                  onOpenSettings={openSettings}
-                />
-              </>
-            )}
-          </div>
-        </ContentRegistryContext.Provider>
-        {settingsOpen && (
-          <SettingsDialog
-            identities={identities}
-            settings={settings}
-            onSettingsChange={setSettings}
-            onClose={closeSettings}
-          />
-        )}
-      </div>
+          </ContentRegistryContext.Provider>
+          {settingsOpen && (
+            <SettingsDialog
+              identities={identities}
+              subscriptions={subscriptions}
+              settings={settings}
+              onSettingsChange={setSettings}
+              onClose={closeSettings}
+            />
+          )}
+        </div>
+      </SubscriptionsContext>
     </SettingsOpenerContext>
   )
 }

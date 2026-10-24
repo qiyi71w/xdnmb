@@ -3,6 +3,8 @@ import type { AppSettings } from '../../../shared/reading'
 import { Icon } from '../components/Icon'
 import { CookieSection } from '../features/identity/CookieSection'
 import type { IdentitiesState } from '../features/identity/useIdentities'
+import { SubscriptionSection } from '../features/subscriptions/SubscriptionSection'
+import type { SubscriptionsState } from '../features/subscriptions/useSubscriptions'
 import './settings.css'
 
 const FOCUSABLE =
@@ -14,11 +16,13 @@ const FOCUSABLE =
  */
 export function SettingsDialog({
   identities,
+  subscriptions,
   settings,
   onSettingsChange,
   onClose
 }: {
   identities: IdentitiesState
+  subscriptions: SubscriptionsState
   settings: AppSettings
   onSettingsChange: (settings: AppSettings) => void
   onClose: () => void
@@ -26,6 +30,7 @@ export function SettingsDialog({
   const dialogRef = useRef<HTMLDialogElement>(null)
   const titleId = useId()
   const { refresh } = identities
+  const { refreshOverview: refreshSubscriptions } = subscriptions
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current
@@ -41,7 +46,8 @@ export function SettingsDialog({
   // Show the current state each time settings opens.
   useEffect(() => {
     void refresh()
-  }, [refresh])
+    void refreshSubscriptions()
+  }, [refresh, refreshSubscriptions])
 
   // Keep Tab inside the dialog even where the platform would move focus out of the page.
   const onKeyDown = (event: KeyboardEvent<HTMLDialogElement>) => {
@@ -89,6 +95,7 @@ export function SettingsDialog({
       <div className="settings-body">
         <TabsSection settings={settings} onChange={onSettingsChange} />
         <CookieSection identities={identities} />
+        <SubscriptionSection subscriptions={subscriptions} />
       </div>
     </dialog>
   )

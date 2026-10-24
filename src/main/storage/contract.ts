@@ -13,6 +13,7 @@ import type {
 import type { ImageFormat, ImageKind } from '../../shared/images'
 import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, ThreadReadingState } from '../../shared/reading'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
+import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionSource } from '../../shared/subscriptions'
 
 /** A write was refused because the database is read-only (newer schema) or unavailable. */
 export class StorageWriteRefusedError extends Error {
@@ -128,4 +129,24 @@ export interface IdentityStore {
   setRoleSelection(role: IdentityRole, id: CredentialId | null): Promise<boolean>
 }
 
-export type AppStore = ReadingStore & IdentityStore
+export interface SubscriptionConfiguration {
+  context: SubscriptionContext
+  source: SubscriptionSource
+}
+
+/** UUID ciphertexts are immutable and retained for fixed-context readback after replacement. */
+export interface SubscriptionStore {
+  loadSubscriptionConfiguration(): Promise<SubscriptionConfiguration>
+  setSubscriptionAppCredential(id: string, ciphertext: Uint8Array): Promise<void>
+  loadSubscriptionAppCiphertext(id: string): Promise<Uint8Array | null>
+  setSubscriptionSource(source: SubscriptionSource): Promise<void>
+  loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly?: boolean): Promise<SubscriptionObservation | null>
+  loadSubscriptionObservationById(id: string): Promise<SubscriptionObservation | null>
+  /** Saves the observation and first attention starts in the same transaction. */
+  saveSubscriptionObservation(observation: SubscriptionObservation, attention: AttentionSource): Promise<void>
+  saveSubscriptionOperation(operation: SubscriptionOperation): Promise<void>
+  loadSubscriptionOperations(): Promise<SubscriptionOperation[]>
+  recoverSubscriptionOperations(): Promise<void>
+}
+
+export type AppStore = ReadingStore & IdentityStore & SubscriptionStore

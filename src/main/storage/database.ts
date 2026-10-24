@@ -19,6 +19,8 @@ import type { AppSettings, AttentionSource, AttentionState, ReadingAnchor, Saved
 import type { ImageKind } from '../../shared/images'
 import { IDENTITY_ROLES } from '../../shared/identity'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
+import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionSource } from '../../shared/subscriptions'
+import type { SubscriptionConfiguration } from './contract'
 import { StorageWriteRefusedError } from './contract'
 import type { AppStore, ImageHolder, ImageResourceRecord, NewImageResource, Stored } from './contract'
 import { computeCoverage } from './coverage'
@@ -660,12 +662,113 @@ class SqliteReadingDatabase implements ReadingDatabase {
     const db = this.writable()
     return db.transaction(() => {
       if (id !== null && !db.prepare('SELECT 1 FROM credentials WHERE id = ?').get(id)) return false
+      const previous = db.prepare<[string], { credential_id: number | null }>(
+        'SELECT credential_id FROM identity_roles WHERE role = ?'
+      ).get(role)
+      if (role === 'web-sync' && (previous?.credential_id === null || previous === undefined ? null : String(previous.credential_id)) !== id) {
+        db.prepare('UPDATE subscription_configuration SET generation = generation + 1 WHERE singleton = 1').run()
+      }
       db.prepare(`
         INSERT INTO identity_roles (role, credential_id) VALUES (?, ?)
         ON CONFLICT(role) DO UPDATE SET credential_id = excluded.credential_id
       `).run(role, id)
       return true
     }).immediate()
+  }
+
+  loadSubscriptionConfiguration(): SubscriptionConfiguration {
+    if (!this.db) return { context: { generation: 0, appCredentialId: null, webCredentialId: null }, source: 'app' }
+    const row = this.db.prepare<[], { generation: number; app_credential_id: string | null; source: SubscriptionSource }>(
+      'SELECT generation, app_credential_id, source FROM subscription_configuration WHERE singleton = 1'
+    ).get()!
+    const selection = this.loadRoleSelections()['web-sync']
+    return {
+      source: row.source,
+      context: { generation: row.generation, appCredentialId: row.app_credential_id,
+        webCredentialId: selection.state === 'none' ? null : selection.credentialId }
+    }
+  }
+
+  setSubscriptionAppCredential(id: string, ciphertext: Uint8Array): void {
+    const db = this.writable()
+    db.transaction(() => {
+      db.prepare('INSERT INTO subscription_app_credentials (id, ciphertext) VALUES (?, ?)').run(id, Buffer.from(ciphertext))
+      db.prepare(`UPDATE subscription_configuration SET app_credential_id = ?, generation = generation + 1 WHERE singleton = 1`).run(id)
+    }).immediate()
+  }
+
+  loadSubscriptionAppCiphertext(id: string): Uint8Array | null {
+    if (!this.db) return null
+    const row = this.db.prepare<[string], { ciphertext: Buffer }>(
+      'SELECT ciphertext FROM subscription_app_credentials WHERE id = ?'
+    ).get(id)
+    return row ? new Uint8Array(row.ciphertext) : null
+  }
+
+  setSubscriptionSource(source: SubscriptionSource): void {
+    this.writable().prepare('UPDATE subscription_configuration SET source = ? WHERE singleton = 1').run(source)
+  }
+
+  loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly = false): SubscriptionObservation | null {
+    if (!this.db) return null
+    const column = validOnly ? 'valid_observation_json' : 'observation_json'
+    const row = this.db.prepare<[string, number, string | null, string | null, number], { observation_json: string }>(`
+      SELECT ${column} AS observation_json FROM subscription_observations
+      WHERE source = ? AND generation = ? AND app_credential_id IS ? AND web_credential_id IS ?
+      AND (? = 0 OR valid_observation_json IS NOT NULL)
+      ORDER BY rowid DESC LIMIT 1
+    `).get(source, context.generation, context.appCredentialId, context.webCredentialId, Number(validOnly))
+    return row ? JSON.parse(row.observation_json) as SubscriptionObservation : null
+  }
+
+  loadSubscriptionObservationById(id: string): SubscriptionObservation | null {
+    if (!this.db) return null
+    const row = this.db.prepare<[string], { observation_json: string }>(
+      'SELECT observation_json FROM subscription_observations WHERE id = ?'
+    ).get(id)
+    return row ? JSON.parse(row.observation_json) as SubscriptionObservation : null
+  }
+
+  saveSubscriptionObservation(observation: SubscriptionObservation, attention: AttentionSource): void {
+    const db = this.writable()
+    db.transaction(() => {
+      const serialized = JSON.stringify(observation)
+      const valid = !observation.error && !observation.cancelled && observation.pages.length > 0 ? serialized : null
+      db.prepare(`INSERT INTO subscription_observations
+        (id, source, generation, app_credential_id, web_credential_id, observation_json, valid_observation_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET observation_json = excluded.observation_json,
+          valid_observation_json = COALESCE(excluded.valid_observation_json, subscription_observations.valid_observation_json)
+      `).run(observation.id, observation.source, observation.context.generation, observation.context.appCredentialId,
+        observation.context.webCredentialId, serialized, valid)
+      for (const page of observation.pages) {
+        for (const thread of page.threads) this.establishAttention(thread.head.id, attention, page.fetchedAt)
+      }
+    })()
+  }
+
+  saveSubscriptionOperation(operation: SubscriptionOperation): void {
+    this.writable().prepare(`INSERT INTO subscription_operations (id, operation_json) VALUES (?, ?)
+      ON CONFLICT(id) DO UPDATE SET operation_json = excluded.operation_json`).run(operation.id, JSON.stringify(operation))
+  }
+
+  loadSubscriptionOperations(): SubscriptionOperation[] {
+    if (!this.db) return []
+    return this.db.prepare<[], { operation_json: string }>(
+      'SELECT operation_json FROM subscription_operations ORDER BY rowid DESC'
+    ).all().map((row) => JSON.parse(row.operation_json) as SubscriptionOperation)
+  }
+
+  recoverSubscriptionOperations(): void {
+    const db = this.writable()
+    db.transaction(() => {
+      for (const operation of this.loadSubscriptionOperations()) {
+        if (operation.state !== 'pending') continue
+        operation.state = 'needs-reconciliation'
+        if (operation.report === 'pending') operation.report = 'unknown'
+        this.saveSubscriptionOperation(operation)
+      }
+    })()
   }
 
   close(): void {

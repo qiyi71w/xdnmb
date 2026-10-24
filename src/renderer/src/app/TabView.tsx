@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { FeedRef, ForumId, ThreadSummary } from '../../../shared/forum'
 import { feedKey, type FeedInfo } from '../features/directory/feeds'
+import { SubscriptionPane } from '../features/subscriptions/SubscriptionPane'
 import { FeedPane } from '../features/feed/FeedPane'
 import type { LayoutResult } from '../features/layout/layout'
 import { currentEntry, type Tab } from '../features/tabs/tabsState'
@@ -84,7 +85,7 @@ export function TabView({
   } else if (entry.feed === null) {
     body = (
       <div className="pane-empty">
-        <p className="pane-empty-title">选择时间线或版面</p>
+        <p className="pane-empty-title">选择订阅、时间线或版面</p>
         <p className="pane-empty-text">从导航中选择后，串列表会显示在这个标签里。</p>
         {onOpenNav !== null && (
           <button type="button" className="btn pane-empty-action" onClick={onOpenNav}>
@@ -95,19 +96,29 @@ export function TabView({
       </div>
     )
   } else {
-    const info = feedInfo(entry.feed)
+    const feed = entry.feed
+    const selectedThreadId = tab.split ? (entry.thread?.threadId ?? null) : null
+    const info = feed.kind === 'subscriptions' ? null : feedInfo(feed)
     const list =
-      info === null ? (
+      feed.kind === 'subscriptions' ? (
+        <SubscriptionPane
+          key={`${entry.key}:subscriptions`}
+          entryKey={entry.key}
+          forumNames={forumNames}
+          selectedThreadId={selectedThreadId}
+          onOpenThread={(summary) => onSelectThread(tab.id, summary)}
+        />
+      ) : info === null ? (
         <div className="pane-empty">
           <Loading>正在读取版面目录…</Loading>
         </div>
       ) : (
         <FeedPane
-          key={`${entry.key}:${feedKey(entry.feed)}`}
+          key={`${entry.key}:${feedKey(feed)}`}
           entryKey={entry.key}
           info={info}
           forumNames={forumNames}
-          selectedThreadId={tab.split ? (entry.thread?.threadId ?? null) : null}
+          selectedThreadId={selectedThreadId}
           onOpenThread={(summary) => onSelectThread(tab.id, summary)}
         />
       )

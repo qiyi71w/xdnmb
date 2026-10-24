@@ -4,6 +4,7 @@ import type {
 } from './identity'
 import type { ImageLoadOutcome, ImageLoadRequest, ImageSaveOutcome, ImageViewId } from './images'
 import type { AppSettings, MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
+import type { SubscriptionsApi } from './subscriptions'
 
 /**
  * Classified read failure. Server/body text is never included except a short
@@ -106,6 +107,7 @@ export const MAX_MARK_READ_IDS = 2000
 
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
+  subscriptions: SubscriptionsApi
   reading: {
     loadDirectory(input: { operationId: OperationId; strategy: DirectoryStrategy }): Promise<ReadOutcome<BoardDirectory>>
     /** Foreground read; falls back to the stored page when the network read fails. */
@@ -207,5 +209,14 @@ export const IpcChannel = {
   identityRename: 'identities:rename',
   identityRemove: 'identities:remove',
   identitySelect: 'identities:select',
+  subscriptionOverview: 'subscriptions:overview',
+  subscriptionConfigureApp: 'subscriptions:configure-app',
+  subscriptionSelectSource: 'subscriptions:select-source',
+  subscriptionObservation: 'subscriptions:observation',
+  subscriptionRead: 'subscriptions:read',
+  subscriptionChange: 'subscriptions:change',
+  subscriptionOperations: 'subscriptions:operations',
+  subscriptionReconcile: 'subscriptions:reconcile',
+  subscriptionCancel: 'subscriptions:cancel',
   getStatus: 'app:get-status'
 } as const

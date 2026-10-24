@@ -190,5 +190,38 @@ export const MIGRATIONS: readonly Migration[] = [
         );
       `)
     }
+  },
+  {
+    version: 5,
+    up(db) {
+      db.exec(`
+        CREATE TABLE subscription_app_credentials (
+          id TEXT PRIMARY KEY NOT NULL,
+          ciphertext BLOB NOT NULL
+        );
+        CREATE TABLE subscription_configuration (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          generation INTEGER NOT NULL,
+          app_credential_id TEXT,
+          source TEXT NOT NULL CHECK (source IN ('app', 'web'))
+        );
+        INSERT INTO subscription_configuration VALUES (1, 0, NULL, 'app');
+        CREATE TABLE subscription_observations (
+          id TEXT PRIMARY KEY NOT NULL,
+          source TEXT NOT NULL,
+          generation INTEGER NOT NULL,
+          app_credential_id TEXT,
+          web_credential_id TEXT,
+          observation_json TEXT NOT NULL,
+          valid_observation_json TEXT
+        );
+        CREATE INDEX subscription_observations_context ON subscription_observations
+          (source, generation, app_credential_id, web_credential_id);
+        CREATE TABLE subscription_operations (
+          id TEXT PRIMARY KEY NOT NULL,
+          operation_json TEXT NOT NULL
+        );
+      `)
+    }
   }
 ]

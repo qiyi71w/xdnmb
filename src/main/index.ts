@@ -19,12 +19,12 @@ import { createRequestScheduler } from './reading/scheduler'
 import type { AppStore } from './storage/contract'
 import { openReadingStore } from './storage/store'
 import createStorageWorker from './storage/worker?nodeWorker'
+import { createSubscriptionService } from './subscriptions/service'
 
-/**
- * The only forum origin this app reads from (verified public JSON API). It is also the only origin
- * that may receive the browse credential; redirects are never followed.
- */
+/** Verified JSON API origin; the only destination for the selected browse credential. */
 const FORUM_API_ORIGIN = 'https://api.nmb.best'
+/** Web subscriptions use their fixed identity, never the browse credential. */
+const FORUM_WEB_ORIGIN = 'https://www.nmbxd1.com'
 /** Image server announced by `getCDNPath` (both entries); thumbnails under `thumb/`, originals under `image/`. */
 const IMAGE_ORIGIN = 'https://image.nmb.best'
 
@@ -148,10 +148,12 @@ async function start(): Promise<void> {
   })
   store = openedStore
   if (openedStore.status.state !== 'ready') console.error('[storage] status', openedStore.status.state)
+  const protector = createSafeStorageProtector()
+  const scheduler = createRequestScheduler()
 
   const identities = createIdentityService({
     store: openedStore,
-    protector: createSafeStorageProtector(),
+    protector,
     storageState: () => openedStore.status.state
   })
 
@@ -162,8 +164,22 @@ async function start(): Promise<void> {
       browseIdentity: () => identities.browseUserhash()
     }),
     store: openedStore,
-    scheduler: createRequestScheduler()
+    scheduler
   })
+
+  const subscriptions = createSubscriptionService({
+    store: openedStore,
+    protector,
+    scheduler,
+    transport: createForumTransport({
+      allowedOrigins: [FORUM_API_ORIGIN, FORUM_WEB_ORIGIN],
+      credentialOrigins: [FORUM_WEB_ORIGIN]
+    }),
+    appOrigin: FORUM_API_ORIGIN,
+    webOrigin: FORUM_WEB_ORIGIN
+  })
+  // Recovery records unresolved intentions; it never issues a forum request.
+  await subscriptions.recover().catch(() => console.error('[subscriptions] recovery failed'))
 
   const imageFiles = await openManagedImageFiles(join(app.getPath('userData'), 'images'))
   const images = createImageService({
@@ -181,6 +197,7 @@ async function start(): Promise<void> {
     reading,
     images,
     identities,
+    subscriptions,
     store: openedStore,
     getStatus: () => ({ storage: openedStore.status, platform }),
     async chooseSavePath(sender, suggestedName, format) {

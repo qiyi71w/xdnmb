@@ -9,6 +9,8 @@ import type { ImageService } from './images/service'
 import type { ReadingService } from './reading/service'
 import type { ReadingStore } from './storage/contract'
 import { emptyReadingState } from './storage/reading-state'
+import type { SubscriptionSource } from '../shared/subscriptions'
+import type { SubscriptionService } from './subscriptions/service'
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
@@ -32,6 +34,7 @@ interface IpcDeps {
   images: ImageService
   store: ReadingStore
   identities: IdentityService
+  subscriptions: SubscriptionService
   getStatus: () => AppStatus
   /** True only for the app's own renderer document in its main frame. */
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
@@ -94,6 +97,11 @@ function feedRef(value: unknown): FeedRef {
 
 function readingMode(value: unknown): ReadingMode {
   if (value !== 'all' && value !== 'po') throw new InvalidRequestError()
+  return value
+}
+
+function subscriptionSource(value: unknown): SubscriptionSource {
+  if (value !== 'app' && value !== 'web') throw new InvalidRequestError()
   return value
 }
 
@@ -163,10 +171,11 @@ class OperationRegistry {
   }
 }
 
-export function registerIpc({ reading, images, identities, store, getStatus, isTrustedSender, chooseSavePath }: IpcDeps): {
+export function registerIpc({ reading, images, identities, subscriptions, store, getStatus, isTrustedSender, chooseSavePath }: IpcDeps): {
   cancelAllFor: (sender: WebContents) => void
 } {
   const operations = new OperationRegistry()
+  const subscriptionReads = new OperationRegistry()
 
   function handle(channel: string, handler: (event: IpcMainInvokeEvent, input: unknown) => Promise<unknown>): void {
     ipcMain.handle(channel, (event, input: unknown) => {
@@ -324,11 +333,63 @@ export function registerIpc({ reading, images, identities, store, getStatus, isT
     return identities.select(identityRole(input.role), id)
   })
 
+  handle(IpcChannel.subscriptionOverview, async () => subscriptions.getOverview())
+
+  handle(IpcChannel.subscriptionConfigureApp, async (_event, raw) => {
+    const uuid = record(raw).uuid
+    if (uuid !== null && (typeof uuid !== 'string' || uuid.length > 64)) throw new InvalidRequestError()
+    return subscriptions.configureApp({ uuid })
+  })
+
+  handle(IpcChannel.subscriptionSelectSource, async (_event, raw) =>
+    subscriptions.selectSource({ source: subscriptionSource(record(raw).source) }))
+
+  handle(IpcChannel.subscriptionObservation, async (_event, raw) =>
+    subscriptions.getObservation({ source: subscriptionSource(record(raw).source) }))
+
+  handle(IpcChannel.subscriptionRead, async (event, raw) => {
+    const input = record(raw)
+    const request = {
+      source: subscriptionSource(input.source),
+      observationId: input.observationId === null ? null : viewId(input.observationId),
+      operationId: operationId(input)
+    }
+    return subscriptionReads.run(event.sender, request.operationId, (signal) => subscriptions.read(request, signal))
+  })
+
+  handle(IpcChannel.subscriptionChange, async (event, raw) => {
+    const input = record(raw)
+    const { action, expectedGeneration } = input
+    if (action !== 'add' && action !== 'remove') throw new InvalidRequestError()
+    if (typeof expectedGeneration !== 'number' || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) {
+      throw new InvalidRequestError()
+    }
+    const request: Parameters<SubscriptionService['change']>[0] = {
+      source: subscriptionSource(input.source), threadId: forumId(input.threadId),
+      action, expectedGeneration, operationId: operationId(input)
+    }
+    // The service does not pass this cancellation signal to its explicit write request.
+    return subscriptionReads.run(event.sender, request.operationId, (signal) => subscriptions.change(request, signal))
+  })
+
+  handle(IpcChannel.subscriptionOperations, async () => subscriptions.getOperations())
+
+  handle(IpcChannel.subscriptionReconcile, async (event, raw) => {
+    const input = record(raw)
+    const request = { id: viewId(input.id), operationId: operationId(input) }
+    return subscriptionReads.run(event.sender, request.operationId, (signal) => subscriptions.reconcile(request, signal))
+  })
+
+  handle(IpcChannel.subscriptionCancel, async (event, raw) => {
+    subscriptionReads.cancel(event.sender, operationId(record(raw)))
+  })
+
   handle(IpcChannel.getStatus, async () => getStatus())
 
   return {
     cancelAllFor: (sender) => {
       operations.cancelAllFor(sender)
+      subscriptionReads.cancelAllFor(sender)
       void images.releaseOwner(String(sender.id))
     }
   }

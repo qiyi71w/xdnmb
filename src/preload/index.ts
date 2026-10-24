@@ -3,6 +3,17 @@ import { IpcChannel, type XidaoApi } from '../shared/api'
 
 // Named operations only: no generic invoke/send, no Electron objects, URLs, SQL or file access.
 const api: XidaoApi = {
+  subscriptions: {
+    getOverview: () => ipcRenderer.invoke(IpcChannel.subscriptionOverview),
+    configureApp: (input) => ipcRenderer.invoke(IpcChannel.subscriptionConfigureApp, input),
+    selectSource: (input) => ipcRenderer.invoke(IpcChannel.subscriptionSelectSource, input),
+    getObservation: (input) => ipcRenderer.invoke(IpcChannel.subscriptionObservation, input),
+    read: (input) => ipcRenderer.invoke(IpcChannel.subscriptionRead, input),
+    change: (input) => ipcRenderer.invoke(IpcChannel.subscriptionChange, input),
+    getOperations: () => ipcRenderer.invoke(IpcChannel.subscriptionOperations),
+    reconcile: (input) => ipcRenderer.invoke(IpcChannel.subscriptionReconcile, input),
+    cancel: (input) => ipcRenderer.invoke(IpcChannel.subscriptionCancel, input)
+  },
   reading: {
     loadDirectory: (input) => ipcRenderer.invoke(IpcChannel.loadDirectory, input),
     readFeedPage: (input) => ipcRenderer.invoke(IpcChannel.readFeedPage, input),

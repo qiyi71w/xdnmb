@@ -97,7 +97,8 @@ const PATHS = {
       <circle cx="8.5" cy="12" r="3.5" />
       <path d="M12 12h8.5M17.5 12v3M20.5 12v2.5" />
     </>
-  )
+  ),
+  bookmark: <path d="M7 4.5h10a1 1 0 0 1 1 1V19.5l-6-4-6 4V5.5a1 1 0 0 1 1-1Z" />
 } as const
 
 export type IconName = keyof typeof PATHS

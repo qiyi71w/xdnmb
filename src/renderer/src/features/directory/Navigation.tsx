@@ -1,17 +1,17 @@
 import { useLayoutEffect, useMemo, useRef, type CSSProperties, type Ref } from 'react'
-import type { BoardDirectory, FeedRef } from '../../../../shared/forum'
-import { Icon } from '../../components/Icon'
+import type { BoardDirectory } from '../../../../shared/forum'
+import { Icon, type IconName } from '../../components/Icon'
 import { FailureNotice, IdentitySettingsAction, Loading, SourceNotice } from '../../components/Notices'
 import { describeFailure, formatLocalTime } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { browseStatus } from '../identity/identityText'
 import type { IdentitiesState } from '../identity/useIdentities'
-import { feedKey } from './feeds'
+import { listKey, type ListRef } from '../tabs/tabsState'
 import type { DirectoryState } from './useDirectory'
 import './navigation.css'
 
 interface NavItem {
-  ref: FeedRef
+  ref: ListRef
   label: string
 }
 
@@ -21,9 +21,18 @@ interface NavSection {
   items: NavItem[]
 }
 
+/** The remote subscription list does not depend on the forum directory, so it is always offered. */
+const SUBSCRIPTION_SECTION: NavSection = {
+  id: 'subscriptions',
+  title: '订阅',
+  items: [{ ref: { kind: 'subscriptions' }, label: '订阅的串' }]
+}
+
+const NAV_ICON: Record<ListRef['kind'], IconName> = { subscriptions: 'bookmark', timeline: 'timeline', forum: 'forum' }
+
 function navSections(directory: BoardDirectory | null): NavSection[] {
-  if (directory === null) return []
-  const result: NavSection[] = []
+  const result: NavSection[] = [SUBSCRIPTION_SECTION]
+  if (directory === null) return result
   if (directory.timelines.length > 0) {
     result.push({
       id: 'timelines',
@@ -59,8 +68,8 @@ export function Navigation({
   onOpenSettings
 }: {
   state: DirectoryState
-  selected: FeedRef | null
-  onSelect: (ref: FeedRef) => void
+  selected: ListRef | null
+  onSelect: (ref: ListRef) => void
   onRetry: () => void
   variant: 'inline' | 'overlay'
   progress?: number
@@ -72,8 +81,8 @@ export function Navigation({
   const { directory } = state
   const sections = useMemo(() => navSections(directory), [directory])
 
-  const ids = useMemo(() => sections.flatMap((section) => section.items.map((item) => feedKey(item.ref))), [sections])
-  const selectedKey = selected === null ? null : feedKey(selected)
+  const ids = useMemo(() => sections.flatMap((section) => section.items.map((item) => listKey(item.ref))), [sections])
+  const selectedKey = selected === null ? null : listKey(selected)
   const roving = useRovingFocus(ids, selectedKey)
 
   return (
@@ -81,7 +90,7 @@ export function Navigation({
       ref={panelRef}
       id={id}
       className={variant === 'overlay' ? 'nav is-overlay' : 'nav'}
-      aria-label="时间线与版面"
+      aria-label="订阅、时间线与版面"
       style={{ '--nav-t': progress } as CSSProperties}
     >
       <div className="nav-brand">
@@ -90,6 +99,34 @@ export function Navigation({
       </div>
 
       <div className="nav-scroll" onKeyDown={roving.onKeyDown}>
+        {sections.map((section) => (
+          <section key={section.id} className="nav-section" aria-labelledby={`nav-${section.id}`}>
+            <h2 className="nav-heading" id={`nav-${section.id}`}>
+              {section.title}
+            </h2>
+            <ul className="nav-list">
+              {section.items.map((item) => {
+                const key = listKey(item.ref)
+                const current = key === selectedKey
+                return (
+                  <li key={key}>
+                    <button
+                      type="button"
+                      className={current ? 'nav-item is-current' : 'nav-item'}
+                      aria-current={current ? 'page' : undefined}
+                      onClick={() => onSelect(item.ref)}
+                      {...roving.itemProps(key)}
+                    >
+                      <Icon name={NAV_ICON[item.ref.kind]} className="nav-item-icon" />
+                      <span className="nav-item-label">{item.label}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </section>
+        ))}
+
         {directory === null && state.loading && (
           <div className="nav-placeholder">
             <Loading>正在读取版面目录…</Loading>
@@ -107,35 +144,7 @@ export function Navigation({
           </div>
         )}
 
-        {directory !== null && sections.length === 0 && <p className="nav-empty">目录中没有可浏览的版面或时间线。</p>}
-
-        {sections.map((section) => (
-          <section key={section.id} className="nav-section" aria-labelledby={`nav-${section.id}`}>
-            <h2 className="nav-heading" id={`nav-${section.id}`}>
-              {section.title}
-            </h2>
-            <ul className="nav-list">
-              {section.items.map((item) => {
-                const key = feedKey(item.ref)
-                const current = key === selectedKey
-                return (
-                  <li key={key}>
-                    <button
-                      type="button"
-                      className={current ? 'nav-item is-current' : 'nav-item'}
-                      aria-current={current ? 'page' : undefined}
-                      onClick={() => onSelect(item.ref)}
-                      {...roving.itemProps(key)}
-                    >
-                      <Icon name={item.ref.kind === 'timeline' ? 'timeline' : 'forum'} className="nav-item-icon" />
-                      <span className="nav-item-label">{item.label}</span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-          </section>
-        ))}
+        {directory !== null && sections.length === 1 && <p className="nav-empty">目录中没有可浏览的版面或时间线。</p>}
       </div>
 
       <DirectoryStatus state={state} />
@@ -151,7 +160,7 @@ const NAV_OUTER_MARGIN = 8
  * Invisible copy of the navigation at its compact padding, laid out at max-content width: the
  * narrowest column in which every heading and label stays complete on one line beside its icon.
  * Reports the width (including the column margin) whenever the content or font size changes;
- * reports nothing while there are no entries to measure.
+ * reports nothing while the directory has no entries to measure.
  */
 export function NavMeasure({ directory, onMeasure }: { directory: BoardDirectory | null; onMeasure: (width: number) => void }) {
   const sections = useMemo(() => navSections(directory), [directory])
@@ -161,7 +170,7 @@ export function NavMeasure({ directory, onMeasure }: { directory: BoardDirectory
     report.current = onMeasure
   })
 
-  const empty = sections.length === 0
+  const empty = sections.length <= 1
   useLayoutEffect(() => {
     const element = ref.current
     if (element === null || empty) return
@@ -184,8 +193,8 @@ export function NavMeasure({ directory, onMeasure }: { directory: BoardDirectory
           <div key={section.id} className="nav-section">
             <p className="nav-heading">{section.title}</p>
             {section.items.map((item) => (
-              <span key={feedKey(item.ref)} className="nav-item">
-                <Icon name={item.ref.kind === 'timeline' ? 'timeline' : 'forum'} className="nav-item-icon" />
+              <span key={listKey(item.ref)} className="nav-item">
+                <Icon name={NAV_ICON[item.ref.kind]} className="nav-item-icon" />
                 <span className="nav-item-label">{item.label}</span>
               </span>
             ))}

@@ -60,6 +60,16 @@ port.on('message', (request: StorageRequest) => {
       case 'deleteCredential': value = db.deleteCredential(...request.args); break
       case 'loadRoleSelections': value = db.loadRoleSelections(...request.args); break
       case 'setRoleSelection': value = db.setRoleSelection(...request.args); break
+      case 'loadSubscriptionConfiguration': value = db.loadSubscriptionConfiguration(...request.args); break
+      case 'setSubscriptionAppCredential': value = db.setSubscriptionAppCredential(...request.args); break
+      case 'loadSubscriptionAppCiphertext': value = db.loadSubscriptionAppCiphertext(...request.args); break
+      case 'setSubscriptionSource': value = db.setSubscriptionSource(...request.args); break
+      case 'loadSubscriptionObservation': value = db.loadSubscriptionObservation(...request.args); break
+      case 'loadSubscriptionObservationById': value = db.loadSubscriptionObservationById(...request.args); break
+      case 'saveSubscriptionObservation': value = db.saveSubscriptionObservation(...request.args); break
+      case 'saveSubscriptionOperation': value = db.saveSubscriptionOperation(...request.args); break
+      case 'loadSubscriptionOperations': value = db.loadSubscriptionOperations(...request.args); break
+      case 'recoverSubscriptionOperations': value = db.recoverSubscriptionOperations(...request.args); break
       case 'close': value = db.close(...request.args); break
       default: throw new Error('unknown storage method')
     }

@@ -485,17 +485,17 @@ describe('reading context', () => {
 
   it('upgrades a version 1 database without losing content and starts with empty reading state', () => {
     const path = databasePath()
-    const writer = open(path)
-    writer.saveThreadPage(threadPage(1, [post('1001')]), fetchedAt)
-    writer.close()
-    // Turn the file into what a version 1 build left behind: no reading-context, image or identity tables.
+    // Build the historical schema directly, independent of tables added by later versions.
+    const original = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version === 1))
+    original.close()
     const raw = new Database(path)
-    raw.exec(`
-      DROP TABLE thread_reading; DROP TABLE reading_positions; DROP TABLE post_reads;
-      DROP TABLE thread_attention; DROP TABLE end_observations; DROP TABLE thread_visits; DROP TABLE settings;
-      DROP TABLE image_holders; DROP TABLE image_resources; DROP TABLE credentials; DROP TABLE identity_roles;
-    `)
-    raw.pragma('user_version = 1')
+    const insertPost = raw.prepare('INSERT INTO posts (id, content_json, plain_text, fetched_at) VALUES (?, ?, ?, ?)')
+    for (const id of [threadId, '1001']) insertPost.run(id, JSON.stringify([{ type: 'text', text: '旧内容' }]), '旧内容', fetchedAt)
+    raw.prepare(`INSERT INTO thread_pages
+      (thread_id, mode, page, head_id, fetched_at, reply_ids_json, reply_count, skipped_items, end_candidate)
+      VALUES (?, 'all', 1, ?, ?, '["1001"]', NULL, 0, 0)`).run(threadId, threadId, fetchedAt)
+    raw.prepare(`INSERT INTO post_threads (post_id, thread_id, observed_as, mode, page, fetched_at)
+      VALUES ('1001', ?, 'thread-reply', 'all', 1, ?)`).run(threadId, fetchedAt)
     raw.close()
     expect(schema(path).version).toBe(1)
     const upgraded = open(path)
