@@ -12,7 +12,7 @@ import { QuoteEntryContext } from '../quote/QuoteContext'
 import { useSearchOpener } from '../search/SearchContext'
 import { useRegisterContent } from '../tabs/contentRegistry'
 import type { SourceFocus } from '../tabs/tabsState'
-import { CoverageLine, pageLabel } from './CoverageLine'
+import { CoverageLine, knownLastPage, pageLabel } from './CoverageLine'
 import { PostView } from './PostView'
 import { startPage, unreadInMode, type ReaderPosition } from './readingStart'
 import type { ThreadTask } from './threadState'
@@ -77,25 +77,27 @@ function parsePage(input: string): { page: number; valid: boolean; invalid: bool
 }
 
 /**
- * PROTOTYPE: 第 x 页 of the position control. Opens a small panel with the page input and the
- * coverage text (`children`); a valid jump closes it and focus returns to the button.
+ * PROTOTYPE: the `当前页/总页数` button of the position control. Opens a small panel with the page
+ * input; a valid jump closes it and focus returns to the button.
  */
 function PagePopover({
   inputId,
   mode,
   label,
+  name,
   placeholder,
   onJump,
-  onOpenChange,
-  children
+  onOpenChange
 }: {
   inputId: string
   mode: ReadingMode
+  /** Visible text, e.g. `1/5`. */
   label: string
+  /** Accessible name, e.g. `第 1 页，共 5 页`. */
+  name: string
   placeholder: string
   onJump: (page: number) => void
   onOpenChange: (open: boolean) => void
-  children: ReactNode
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -135,7 +137,7 @@ function PagePopover({
         className="btn btn-small btn-quiet position-page-trigger"
         aria-expanded={popover.open}
         aria-controls={popover.open ? panelId : undefined}
-        aria-label={`${label}：跳转页码与读取范围`}
+        aria-label={name}
         onClick={popover.toggle}
       >
         {label}
@@ -169,7 +171,6 @@ function PagePopover({
               </span>
             )}
           </form>
-          <div className="toolbar-coverage">{children}</div>
         </div>
       )}
     </span>
@@ -443,7 +444,7 @@ export function ThreadReader({
     if (pageValid) goTo({ kind: 'page', page: parsedPage }, () => thread.jump(parsedPage))
   }
 
-  /** PROTOTYPE: page of the post at the reading line, for the position control's 第 x 页. */
+  /** PROTOTYPE: page of the post at the reading line, for the position control's `当前页/总页数`. */
   const [readingPage, setReadingPage] = useState<number | null>(null)
   useEffect(() => {
     if (PROTOTYPE_ENABLED) setReadingPage(currentAnchor()?.page ?? null)
@@ -452,6 +453,10 @@ export function ThreadReader({
     onScroll()
     if (PROTOTYPE_ENABLED) setReadingPage(currentAnchor()?.page ?? null)
   }
+  const shownPage = readingPage ?? firstPage?.page ?? 1
+  const knownLast = knownLastPage(state.coverage)
+  /** Unknown (`?`) until an end candidate or a reported reply count tells it. */
+  const totalPages = knownLast === null ? null : Math.max(knownLast, shownPage)
 
   // PROTOTYPE: no unread marks (the read/unread surfaces are removed; only the position is kept).
   const unreadIds = useMemo(() => {
@@ -475,8 +480,10 @@ export function ThreadReader({
         : pageLabel(mode, `${firstPage.page}–${lastPage.page}`)
   const toolbarError =
     error !== null && error.task.type !== 'append' && error.task.type !== 'prepend' && error.task.type !== 'initial' ? error : null
-  // Initial, append and prepend progress is shown where the content will appear.
-  const toolbarTask = task !== null && (task.type === 'refresh' || task.type === 'jump' || task.type === 'locate') ? task : null
+  // Initial, append and prepend progress is shown where the content will appear. PROTOTYPE: only the
+  // cancellable 定位末尾 is shown; other loads stay quiet until they fail.
+  const toolbarTask =
+    task !== null && (task.type === 'locate' || (!PROTOTYPE_ENABLED && (task.type === 'refresh' || task.type === 'jump'))) ? task : null
 
   const backButton = onBackToList !== null && (
     <button type="button" className="btn" onClick={onBackToList}>
@@ -648,17 +655,12 @@ export function ThreadReader({
                   <PagePopover
                     inputId={`page-${entryKey}-${threadId}`}
                     mode={mode}
-                    label={pageLabel(mode, readingPage ?? firstPage?.page ?? 1)}
-                    placeholder={lastPage === undefined ? '1' : String(lastPage.page)}
+                    label={`${shownPage}/${totalPages ?? '?'}`}
+                    name={`${pageLabel(mode, shownPage)}，${totalPages === null ? '总页数未知' : `共 ${totalPages} 页`}`}
+                    placeholder={String(totalPages ?? lastPage?.page ?? 1)}
                     onJump={(page) => goTo({ kind: 'page', page }, () => thread.jump(page))}
                     onOpenChange={setPagePanelOpen}
-                  >
-                    {loadedRange !== null && <span className="loaded-range">当前显示{loadedRange}</span>}
-                    <CoverageLine coverage={state.coverage} mode={mode} />
-                    {task === null && state.endProbe?.status === 'located' && (
-                      <span>已定位末尾（探测{pageLabel(mode, formatPageList(state.endProbe.probedPages))}）</span>
-                    )}
-                  </PagePopover>
+                  />
                 </div>
               </div>
 
@@ -769,10 +771,16 @@ export function ThreadReader({
 
           {firstPage !== undefined && firstPage.page > 1 && (
             <div className="load-previous">
-              {task?.type === 'prepend' ? (
+              {task?.type === 'prepend' && !PROTOTYPE_ENABLED ? (
                 <Loading>{taskText(task, mode)}</Loading>
               ) : (
-                <button type="button" className="btn" onClick={thread.prependPrevious}>
+                // PROTOTYPE: the button stays (focus with it) and waits quietly while the page loads.
+                <button
+                  type="button"
+                  className="btn"
+                  aria-disabled={task?.type === 'prepend' ? true : undefined}
+                  onClick={task?.type === 'prepend' ? undefined : thread.prependPrevious}
+                >
                   <Icon name="arrowUp" />
                   加载上一页（{pageLabel(mode, firstPage.page - 1)}）
                 </button>
@@ -825,8 +833,8 @@ export function ThreadReader({
           <div className="reader-footer">
             <div ref={sentinelRef} className="scroll-sentinel" aria-hidden="true" />
             {state.pages.length === 0 && task?.type === 'initial' && (
-              <div className="reader-placeholder">
-                <Loading>{taskText(task, mode)}</Loading>
+              <div className="reader-placeholder" aria-busy={PROTOTYPE_ENABLED ? true : undefined}>
+                {!PROTOTYPE_ENABLED && <Loading>{taskText(task, mode)}</Loading>}
                 <div aria-hidden="true">
                   {Array.from({ length: 3 }, (_, index) => (
                     <div key={index} className="post-skeleton">
@@ -841,7 +849,7 @@ export function ThreadReader({
             {error?.task.type === 'initial' && (
               <FailureNotice title={failureTitle(error.task, mode)} failure={error.failure} onRetry={thread.retry} />
             )}
-            {task?.type === 'append' && <Loading>{taskText(task, mode)}</Loading>}
+            {!PROTOTYPE_ENABLED && task?.type === 'append' && <Loading>{taskText(task, mode)}</Loading>}
             {error?.task.type === 'append' && (
               <FailureNotice title={failureTitle(error.task, mode)} failure={error.failure} onRetry={thread.retry} compact />
             )}

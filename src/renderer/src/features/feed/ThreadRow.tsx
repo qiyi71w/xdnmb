@@ -7,9 +7,9 @@ import { RowThumbnail } from '../image/RowThumbnail'
 import { UncertainTag } from '../search/FilterFields'
 
 /**
- * One thread of a list: the head post's title (when it has a real one), then its byline (name,
- * cookie ID, tags, time), its excerpt and the thread's meta line. An image thread shows the head
- * post's thumbnail on the right in a fixed box.
+ * One thread of a list, in the shared row order: the head post's cookie ID (with tags) and time,
+ * then its title and its name in bold (each only when it has a real one), its excerpt and the
+ * thread's meta line. An image thread shows the head post's thumbnail on the right in a fixed box.
  */
 export function ThreadRow({
   thread,
@@ -39,15 +39,15 @@ export function ThreadRow({
   return (
     <button type="button" className={classes} aria-current={selected ? 'true' : undefined} onClick={onOpen} {...itemProps}>
       <span className="row-text">
-        {title !== null && <span className="row-title">{title}</span>}
         <span className="row-byline">
           <span className="row-author">
-            {name !== null && <span className="row-name">{name}</span>}
             {head.userHash !== null && <span className={head.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{head.userHash}</span>}
             {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
           </span>
           {head.createdAt !== null && <span className="row-time">{head.createdAt}</span>}
         </span>
+        {title !== null && <span className="row-title">{title}</span>}
+        {name !== null && <span className="row-name">{name}</span>}
         <Content nodes={head.content} mode="excerpt" className="row-excerpt" />
         <span className="row-meta">
           {forumName !== null && <span className="row-forum">{forumName}</span>}

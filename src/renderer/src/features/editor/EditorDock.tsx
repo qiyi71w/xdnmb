@@ -8,6 +8,7 @@ import { formatLocalTime } from '../../lib/format'
 import { formatBytes } from '../image/imageView'
 import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, ATTEMPT_STATE_LABEL, PROBLEM_TEXT } from '../publication/publicationText'
 import type { IdentitiesState } from '../identity/useIdentities'
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import {
   ATTACH_FAILURE_TEXT,
   choiceLine,
@@ -398,7 +399,7 @@ export function EditorPanel({
     <div className="editor-actions">
       {ended ? (
         <>
-          <button type="button" className="btn" aria-haspopup="dialog" onClick={openAttempts}>
+          <button type="button" className="btn" aria-haspopup={PROTOTYPE_ENABLED ? undefined : 'dialog'} onClick={openAttempts}>
             <Icon name="history" />
             查看发送记录
           </button>

@@ -87,6 +87,23 @@ describe('retained content storage', () => {
     expect(db.isFavorite('100')).toBe(false)
   })
 
+  it('returns only locally retained head metadata for list rows and keeps missing heads unknown', () => {
+    const { db } = fixture()
+    db.recordVisit('200', t0)
+    expect(db.listRetained('history')[0]).toMatchObject({ threadId: '200', head: null, excerpt: null })
+    const head: Post = { ...post('100', true, '保留正文'), userHash: 'AdminID', name: '名字',
+      createdAt: '2026-10-24 08:00', isAdmin: true, isSage: true, forumId: '4' }
+    db.saveThreadPage({ ...page(), head }, t0)
+    db.recordVisit('100', t1)
+    expect(db.listRetained('history')[0]).toMatchObject({
+      threadId: '100', excerpt: '保留正文', head: { forumId: '4', createdAt: '2026-10-24 08:00',
+        userHash: 'AdminID', name: '名字', title: '标题100', isAdmin: true, isSage: true,
+        image: { path: '2026-10-24/shared', ext: '.jpg' } }
+    })
+    clear(db)
+    expect(db.listRetained('history')[0]).toMatchObject({ threadId: '100', title: '标题100', head: null, excerpt: null })
+  })
+
   it('retains entry titles and unread observation evidence after clearing all cache', () => {
     const { db } = fixture()
     db.saveThreadPage(page(), t0)

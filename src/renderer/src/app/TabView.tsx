@@ -14,12 +14,13 @@ import { OnlineSearchPane } from '../features/search/OnlineSearchPane'
 import { SearchPage } from '../features/search/SearchPage'
 import { currentEntry, isLocalList, type EntryInit, type Tab, type ThreadOpen } from '../features/tabs/tabsState'
 import { ThreadPane } from '../features/thread/ThreadPane'
-import { FailureNotice, Loading } from '../components/Notices'
+import { FailureNotice } from '../components/Notices'
 import { Icon } from '../components/Icon'
 // PROTOTYPE (throwaway): D / E add to the list top and the empty tab page; the editor floats.
 import { ListHostContext, PROTOTYPE_ENABLED } from '../features/directory/prototype/prototypeStore'
 import { ComposeButton, ComposeFrame, ComposeSentNote, type ComposeTarget } from '../features/editor/ComposePanel'
 import type { PostTarget } from '../../../shared/drafts'
+import { ListDivider } from './ListDivider'
 
 type Region = 'list' | 'reader'
 
@@ -50,7 +51,8 @@ export function TabView({
   onOpenTarget,
   onOpenNav,
   onOpenFromOnlineSearch,
-  composeHidden = false
+  composeHidden = false,
+  onResizeList = null
 }: {
   tab: Tab
   active: boolean
@@ -78,6 +80,8 @@ export function TabView({
   onOpenFromOnlineSearch: (entryKey: number, init: EntryInit) => boolean
   /** PROTOTYPE: something covers the tab content (the settings page); its compose modal stays closed. */
   composeHidden?: boolean
+  /** PROTOTYPE: the list width divider of the split view changed the width (`done` at the end of a change). */
+  onResizeList?: ((width: number, done: boolean) => void) | null
 }) {
   const entry = currentEntry(tab)
   const listRef = useRef<HTMLDivElement>(null)
@@ -202,6 +206,7 @@ export function TabView({
       list = (
         <RetainedPane
           key={`${entry.key}:${feed.kind}`}
+          tabId={tab.id}
           entryKey={entry.key}
           kind={feed.kind}
           forumNames={forumNames}
@@ -254,7 +259,7 @@ export function TabView({
           </>
         )
       } else if (directory.directory === null) {
-        state = <Loading>正在读取版面目录…</Loading>
+        state = <div className="list-placeholder" aria-busy="true" />
       } else {
         state = (
           <>
@@ -294,6 +299,9 @@ export function TabView({
         <div className="list-column" ref={listRef} hidden={!listVisible} onFocus={() => (lastRegion.current = 'list')}>
           {list}
         </div>
+        {onResizeList !== null && active && !single && layout.listWidth > 0 && (
+          <ListDivider width={layout.listWidth} max={layout.listWidthMax} onResize={onResizeList} />
+        )}
         <main
           className="reader-wrap"
           ref={readerRef}

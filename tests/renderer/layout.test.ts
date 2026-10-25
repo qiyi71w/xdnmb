@@ -40,4 +40,11 @@ describe('responsive D layout order', () => {
     expect(at(1000, { view: 'reader' })).toMatchObject({ nav: 'full', listWidth: 0, textWidth: 672, singlePane: false })
     expect(at(900, { view: 'reader' })).toMatchObject({ nav: 'compact', textWidth: 672 })
   })
+
+  it('takes a widened list from the reading text only, keeping the navigation and the split minimum', () => {
+    expect(at(1500, { listGrow: 200 })).toMatchObject({ nav: 'full', listWidth: 540, listWidthMax: 772, textWidth: 672, gutter: 20 })
+    expect(at(1500, { listGrow: 1000 })).toMatchObject({ nav: 'full', navWidth: 232, listWidth: 772, textWidth: 440 })
+    expect(at(1000, { listGrow: 300 })).toMatchObject({ nav: 'overlay', listWidth: 504, textWidth: 440, singlePane: false })
+    expect(at(835, { listGrow: 300 })).toMatchObject({ singlePane: true, listWidth: 0, listWidthMax: 0 })
+  })
 })

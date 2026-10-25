@@ -255,14 +255,13 @@ export function OfflineDialog({
   return (
     <Modal className="offline-dialog" labelledBy={titleId} onClose={onClose} fallbackFocus={fallbackFocus}>
       <ModalHeader title="离线副本" titleId={titleId} closeLabel="关闭离线副本" onClose={onClose} />
-      <div className="modal-body offline-body">
+      <div className="modal-body offline-body" aria-busy={state.status === 'loading' || undefined}>
         <p className="offline-thread">
           {title}
           <span className="offline-thread-id">No.{threadId}</span>
         </p>
         <p className="offline-intro">离线副本保存在本机，不随普通缓存清理。</p>
 
-        {state.status === 'loading' && <Loading>正在读取离线副本状态…</Loading>}
         {state.status === 'failed' && (
           <div className="notice notice-error" role="alert">
             <Icon name="alert" className="notice-icon" />

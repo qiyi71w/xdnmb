@@ -341,8 +341,9 @@ export function ReminderPane({
           )}
         </div>
 
-        <div className="list-status">
-          {overview === null && failure === null && <Loading>正在读取提醒…</Loading>}
+        {/* Prototype: the first read is quiet; only a failure says anything. */}
+        <div className="list-status" aria-busy={PROTOTYPE_ENABLED && overview === null && failure === null ? true : undefined}>
+          {!PROTOTYPE_ENABLED && overview === null && failure === null && <Loading>正在读取提醒…</Loading>}
           {failure !== null && (
             <div className="notice notice-error is-compact" role="alert">
               <Icon name="alert" className="notice-icon" />

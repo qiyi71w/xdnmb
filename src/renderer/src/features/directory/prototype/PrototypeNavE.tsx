@@ -6,9 +6,9 @@
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import type { BoardDirectory } from '../../../../../shared/forum'
 import { Icon } from '../../../components/Icon'
-import { Loading } from '../../../components/Notices'
 import { usePopover } from '../../../lib/usePopover'
 import { listKey, type ListRef } from '../../tabs/tabsState'
+import { DirectorySkeleton } from '../Navigation'
 import { BoardPicker } from './PrototypeBoardPicker'
 import { useBoardView, type PrototypeNavProps } from './PrototypeNavParts'
 import { PrototypeRail, RAIL_WIDTH } from './PrototypeRail'
@@ -149,7 +149,7 @@ export function BoardChooserPage({ directory, onSelect }: { directory: BoardDire
           selectedKey={null}
           onSelect={onSelect}
           shape="list"
-          placeholder={directory === null ? <Loading>正在读取版面目录…</Loading> : undefined}
+          placeholder={directory === null ? <DirectorySkeleton /> : undefined}
         />
       </div>
     </div>

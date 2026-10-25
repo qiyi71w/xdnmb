@@ -16,8 +16,8 @@ import type { FeedPageRecord } from './feedState'
 import { ThreadRow } from './ThreadRow'
 import { useFeed } from './useFeed'
 import './feed.css'
-// PROTOTYPE (throwaway): D makes the board name open its board panel.
-import { ListHostContext } from '../directory/prototype/prototypeStore'
+// PROTOTYPE (throwaway): D makes the board name open its board panel; automatic loads stay quiet.
+import { ListHostContext, PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import type { ComposeEntry } from '../editor/ComposePanel'
 
 /** The first thread row reaching below the scroller top, and its row top's offset from that top. */
@@ -242,15 +242,17 @@ export function FeedPane({
         )}
 
         <div className="list-status">
-          {state.activity === 'refresh' && <Loading>正在刷新第 1 页…</Loading>}
+          {!PROTOTYPE_ENABLED && state.activity === 'refresh' && <Loading>正在刷新第 1 页…</Loading>}
           {error !== null && error.action === 'refresh' && (
             <FailureNotice title="刷新失败，仍显示之前的列表" failure={error.failure} onRetry={retry} compact />
           )}
         </div>
 
         {firstLoad && state.activity === 'initial' && (
-          <div className="list-placeholder">
-            <Loading>{restorePages !== null && restorePages > 1 ? `正在读取第 1–${restorePages} 页…` : '正在读取第 1 页…'}</Loading>
+          <div className="list-placeholder" aria-busy={PROTOTYPE_ENABLED ? true : undefined}>
+            {!PROTOTYPE_ENABLED && (
+              <Loading>{restorePages !== null && restorePages > 1 ? `正在读取第 1–${restorePages} 页…` : '正在读取第 1 页…'}</Loading>
+            )}
             <div aria-hidden="true">
               {Array.from({ length: 6 }, (_, index) => (
                 <div key={index} className="row-skeleton">
@@ -310,7 +312,7 @@ export function FeedPane({
 
         <div className="list-footer">
           <div ref={sentinelRef} className="scroll-sentinel" aria-hidden="true" />
-          {state.activity === 'append' && <Loading>正在读取第 {lastPage + 1} 页…</Loading>}
+          {!PROTOTYPE_ENABLED && state.activity === 'append' && <Loading>正在读取第 {lastPage + 1} 页…</Loading>}
           {error !== null && error.action === 'append' && (
             <FailureNotice title={`读取第 ${error.page} 页失败`} failure={error.failure} onRetry={retry} compact />
           )}

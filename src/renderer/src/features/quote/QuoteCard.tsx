@@ -110,17 +110,22 @@ export function QuoteCard({
   const openingThread = locate?.intent === 'open-thread'
   const locatable = canLocate(card)
 
+  // The quoted post loads on its own: a text-free skeleton until it arrives; only a failure is put into words.
+  const previewLoading = outcome === null && internal.previewSeq !== card.preview.seq
   let preview: ReactNode
   if (outcome === null) {
-    preview =
-      internal.previewSeq === card.preview.seq ? (
-        <Status tone="error">
-          <p className="quote-card-title">引用内容加载失败</p>
-          <p className="quote-card-detail">原因：应用内部请求失败</p>
-        </Status>
-      ) : (
-        <Loading>正在读取引用内容…</Loading>
-      )
+    preview = previewLoading ? (
+      <div aria-hidden="true">
+        <span className="skeleton-line is-short" />
+        <span className="skeleton-line" />
+        <span className="skeleton-line is-mid" />
+      </div>
+    ) : (
+      <Status tone="error">
+        <p className="quote-card-title">引用内容加载失败</p>
+        <p className="quote-card-detail">原因：应用内部请求失败</p>
+      </Status>
+    )
   } else if (outcome.status === 'failed') {
     const unavailable = unavailableText(outcome.error)
     preview = (
@@ -253,7 +258,9 @@ export function QuoteCard({
           <Icon name="close" size={14} />
         </button>
       </header>
-      <div className="quote-card-scroll">{preview}</div>
+      <div className="quote-card-scroll" aria-busy={previewLoading || undefined}>
+        {preview}
+      </div>
       {(located !== null || internalLocate !== null) && (
         <div className="quote-card-result">
           {internalLocate}

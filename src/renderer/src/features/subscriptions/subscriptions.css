@@ -298,7 +298,7 @@
   color: var(--warn-ink);
 }
 
-/* Where the automatic reading stopped (error or 取消): one line and its action. */
+/* Prototype: where the silent reading stopped on an error: one line and 重试. */
 .sub-stopped {
   display: flex;
   flex-wrap: wrap;
@@ -373,6 +373,11 @@
 
 .sub-row:has(> .thread-row.is-selected) .sub-row-action {
   color: var(--accent-ink);
+}
+
+/* Prototype: the row whose context menu is open keeps the hover layer while the pointer is on the menu. */
+.sub-row.is-menu-open > .thread-row:not(.is-selected) {
+  background: var(--hover);
 }
 
 /* ---------- Settings ---------- */

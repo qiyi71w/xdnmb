@@ -15,6 +15,8 @@ import {
 } from './subscriptionText'
 import { useSubscriptionsContext, type ActiveWrite, type WriteNotice } from './useSubscriptions'
 import { LinkageLine } from '../reminders/ReminderLinkage'
+// PROTOTYPE (throwaway): automatic reads are silent; only failures show.
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 
 function objectLine(write: Pick<ActiveWrite, 'source' | 'threadId' | 'label'>): string {
   const label = write.label.trim()
@@ -138,7 +140,7 @@ export function OperationJournal() {
             </button>
           </div>
         )}
-        {operations === null && !operationsFailed && <p className="settings-empty">正在读取操作记录…</p>}
+        {!PROTOTYPE_ENABLED && operations === null && !operationsFailed && <p className="settings-empty">正在读取操作记录…</p>}
         {operations !== null && operations.length === 0 && <p className="sub-journal-empty">还没有加入或取消订阅的记录。</p>}
         {operations !== null && operations.length > 0 && (
           <ul className="sub-journal-list" aria-labelledby={headingId}>

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { DraftId, SavedDraft } from '../../../../shared/drafts'
 import { Icon } from '../../components/Icon'
 import { Modal, ModalHeader } from '../../components/Modal'
-import { Loading } from '../../components/Notices'
 import { formatLocalTime } from '../../lib/format'
 import { editorForDraft } from '../editor/editorsState'
 import { credentialLine, excerpt, targetText } from '../editor/editorText'
@@ -126,8 +125,7 @@ export function DraftLibraryDialog({
       <div ref={closeRef}>
         <ModalHeader title="草稿" closeLabel="关闭草稿" onClose={onClose} />
       </div>
-      <div className="modal-body drafts-body">
-        {list.status === 'loading' && <Loading>正在读取草稿…</Loading>}
+      <div className="modal-body drafts-body" aria-busy={list.status === 'loading' || undefined}>
         {list.status === 'failed' && (
           <div className="notice notice-error" role="alert">
             <Icon name="alert" className="notice-icon" />

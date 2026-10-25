@@ -205,7 +205,8 @@
   background: var(--hover);
 }
 
-/* Selected row: tint, bold byline and darker excerpt (not colour alone); aria-current names it. */
+/* Selected row: tint, bold cookie/time line and darker name and excerpt (not colour alone);
+   aria-current names it. Title and name are bold in every row, so the cookie line carries the cue. */
 .thread-row.is-selected {
   background: var(--selected);
 }
@@ -271,10 +272,6 @@
   gap: 6px;
 }
 
-.row-name {
-  color: var(--ink-2);
-}
-
 .row-time {
   flex: none;
   color: var(--ink-3);
@@ -287,11 +284,18 @@
   overflow-wrap: anywhere;
 }
 
-/* Grows with the head post up to six lines; the post's line breaks are kept. */
+.row-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+/* Grows with the head post up to about twenty lines; the post's line breaks are kept. */
 .row-excerpt.content-excerpt {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 6;
+  -webkit-line-clamp: 20;
   overflow: hidden;
   white-space: normal;
   font-size: var(--text-sm);

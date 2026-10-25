@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { DEFAULT_CACHE_LIMIT, type ContentUsage } from '../../../../shared/content'
 import { Icon } from '../../components/Icon'
-import { Loading } from '../../components/Notices'
 import { attempt, contentFailureText, exactBytes, formatBytes, limitToGbText, parseLimitGb, type Refused } from './contentText'
 import './content.css'
 
@@ -107,12 +106,11 @@ export function CacheSection() {
   const invalid = limitText.trim() !== '' && parsed === null
 
   return (
-    <section className="settings-section" aria-labelledby={headingId}>
+    <section className="settings-section" aria-labelledby={headingId} aria-busy={state.status === 'loading' || undefined}>
       <h3 className="settings-section-title" id={headingId}>
         存储与缓存
       </h3>
 
-      {state.status === 'loading' && <Loading>正在统计本地占用…</Loading>}
       {state.status === 'failed' && (
         <div className="notice notice-error" role="alert">
           <Icon name="alert" className="notice-icon" />

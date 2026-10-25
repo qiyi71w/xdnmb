@@ -311,6 +311,43 @@
   border-right: 0;
 }
 
+/* PROTOTYPE: list width divider, centred over the list's border. Quiet until hovered, dragged or
+   focused: then a slim line (accent while dragging) or the focus ring. */
+.list-divider {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  width: 9px;
+  margin-inline: -5px -4px;
+  border-radius: var(--radius-s);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.list-divider::after {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  left: 3px;
+  width: 3px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background-color 0.15s;
+}
+
+.list-divider:hover::after {
+  background: var(--line);
+}
+
+.list-divider.is-dragging::after {
+  background: var(--accent);
+}
+
+.list-divider:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .reader-wrap {
   flex: 1;
   min-width: 0;

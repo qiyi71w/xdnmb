@@ -348,6 +348,64 @@
 
 /* ---------- PROTOTYPE: 历史 / 离线 pages ---------- */
 
+.history-page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  flex: none;
+}
+
+.history-view-switch {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  isolation: isolate;
+}
+
+.history-view-switch::before {
+  content: '';
+  position: absolute;
+  inset: 2px auto 2px 2px;
+  width: calc((100% - 4px) / 2);
+  border-radius: calc(var(--radius-m) - 2px);
+  background: var(--paper);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.1);
+  transition: transform 0.2s var(--ease-out);
+  z-index: -1;
+}
+
+.history-view-switch[data-view='attempts']::before {
+  transform: translateX(100%);
+}
+
+.history-view-switch .segmented-item[aria-pressed='true'] {
+  background: transparent;
+  box-shadow: none;
+}
+
+.history-page-view {
+  flex: 1;
+  min-height: 0;
+}
+
+.history-page-view[hidden] {
+  display: none;
+}
+
+.history-attempts-scroll {
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.history-page-view .list-title-row {
+  justify-content: flex-end;
+}
+
+.history-page-view .list-header:has(.list-title-row:empty) {
+  display: none;
+}
+
 .retained-page > .list-scroll > .history-confirm {
   margin: 8px 10px 0;
 }
@@ -389,12 +447,19 @@
   display: none;
 }
 
+.retained-row.is-selected .row-byline,
 .retained-row.is-selected .row-meta {
   font-weight: 600;
   color: var(--ink);
 }
 
 .retained-row.is-selected .retained-excerpt {
+  color: var(--ink);
+}
+
+.retained-row.is-selected .row-name,
+.retained-row.is-selected .row-time,
+.retained-row.is-selected .user-hash:not(.is-admin) {
   color: var(--ink);
 }
 
@@ -412,21 +477,22 @@
   cursor: pointer;
 }
 
+.retained-open:has(.row-thumb) {
+  --row-thumb: 64px;
+  grid-template-columns: minmax(0, 1fr) var(--row-thumb);
+  align-items: start;
+  column-gap: 12px;
+}
+
 .retained-open:focus-visible {
   outline-offset: -2px;
 }
 
-.retained-heading {
-  font-size: var(--text-md);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-/* The head post as in the thread lists: up to six lines, its line breaks kept. */
+/* Match the thread list's generous excerpt clamp and keep original line breaks. */
 .retained-excerpt {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 6;
+  -webkit-line-clamp: 20;
   overflow: hidden;
   white-space: pre-line;
   overflow-wrap: anywhere;

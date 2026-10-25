@@ -3,7 +3,7 @@ import type { RetainedList } from '../../../../shared/content'
 import type { BoardDirectory } from '../../../../shared/forum'
 import { formatReminderCount } from '../../../../shared/reminders'
 import { Icon, type IconName } from '../../components/Icon'
-import { FailureNotice, IdentitySettingsAction, Loading, SourceNotice } from '../../components/Notices'
+import { FailureNotice, IdentitySettingsAction, SourceNotice } from '../../components/Notices'
 import { describeFailure, formatLocalTime } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { browseStatus } from '../identity/identityText'
@@ -231,16 +231,7 @@ export function Navigation({
           </section>
         ))}
 
-        {directory === null && state.loading && (
-          <div className="nav-placeholder">
-            <Loading>正在读取版面目录…</Loading>
-            <div className="nav-skeleton" aria-hidden="true">
-              {Array.from({ length: 7 }, (_, index) => (
-                <span key={index} className="skeleton-line" />
-              ))}
-            </div>
-          </div>
-        )}
+        {directory === null && state.loading && <DirectorySkeleton />}
 
         {directory === null && state.failure !== null && (
           <div className="nav-placeholder">
@@ -359,11 +350,12 @@ export function NavMeasure({ directory, onMeasure }: { directory: BoardDirectory
 function IdentityFooter({ identities, onOpenSettings }: { identities: IdentitiesState; onOpenSettings: () => void }) {
   const { overview, failed } = identities
   const status = overview === null ? null : browseStatus(overview)
+  // Nothing is shown while the identities load; only a failure is named.
   const value =
     status === null
       ? failed
         ? '状态读取失败'
-        : '读取中…'
+        : null
       : status.state === 'none'
         ? '不使用饼干'
         : status.name
@@ -374,12 +366,25 @@ function IdentityFooter({ identities, onOpenSettings }: { identities: Identities
         type="button"
         className={warning ? 'nav-identity is-warning' : 'nav-identity'}
         onClick={onOpenSettings}
-        aria-label={`浏览饼干：${value}。打开设置`}
+        aria-label={value === null ? '浏览饼干。打开设置' : `浏览饼干：${value}。打开设置`}
       >
         {warning && <Icon name="alert" size={14} className="nav-identity-icon" />}
         <span className="nav-identity-label">浏览饼干</span>
-        <span className="nav-identity-value">{value}</span>
+        {value !== null && <span className="nav-identity-value">{value}</span>}
       </button>
+    </div>
+  )
+}
+
+/** First directory load: a text-free skeleton; only a failure is put into words. */
+export function DirectorySkeleton() {
+  return (
+    <div className="nav-placeholder" aria-busy="true">
+      <div className="nav-skeleton" aria-hidden="true">
+        {Array.from({ length: 7 }, (_, index) => (
+          <span key={index} className="skeleton-line" />
+        ))}
+      </div>
     </div>
   )
 }
@@ -387,10 +392,9 @@ function IdentityFooter({ identities, onOpenSettings }: { identities: Identities
 export function DirectoryStatus({ state }: { state: DirectoryState }) {
   const { source, refreshing, refreshFailure, directory } = state
   if (source === null) return null
+  // A background refresh is quiet; only its failure or a cached source is reported.
   let body = null
-  if (refreshing) {
-    body = <Loading>正在后台更新目录…</Loading>
-  } else if (refreshFailure !== null) {
+  if (!refreshing && refreshFailure !== null) {
     body = (
       <>
         <p className="nav-foot-text" role="status">
@@ -399,7 +403,7 @@ export function DirectoryStatus({ state }: { state: DirectoryState }) {
         <IdentitySettingsAction error={refreshFailure} />
       </>
     )
-  } else if (source.status === 'cached' || !source.saved) {
+  } else if (!refreshing && (source.status === 'cached' || !source.saved)) {
     body = <SourceNotice source={source} subject="目录" />
   }
   const skipped = directory?.skippedItems ?? 0

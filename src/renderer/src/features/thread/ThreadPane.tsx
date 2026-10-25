@@ -9,7 +9,7 @@ import type { ThreadOpen } from '../tabs/tabsState'
 import type { ComposeEntry } from '../editor/ComposePanel'
 import { decideView, markAllInChunks, savedStart, type ReaderStart } from './readingStart'
 import { ThreadReader } from './ThreadReader'
-// PROTOTYPE (throwaway): no read/unread surface, so read records are never mentioned.
+// PROTOTYPE (throwaway): no read/unread surface, so read records are never mentioned; loads stay quiet.
 import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import './thread.css'
 
@@ -229,7 +229,21 @@ export function ThreadPane({
       <section className="reader" aria-label={`串 No.${threadId}`}>
         <div className="reader-scroll">
           <div className="reader-column">
-            <Loading>正在读取阅读记录…</Loading>
+            {PROTOTYPE_ENABLED ? (
+              <div className="reader-placeholder" aria-busy="true">
+                <div aria-hidden="true">
+                  {Array.from({ length: 3 }, (_, index) => (
+                    <div key={index} className="post-skeleton">
+                      <span className="skeleton-line is-short" />
+                      <span className="skeleton-line" />
+                      <span className="skeleton-line is-mid" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <Loading>正在读取阅读记录…</Loading>
+            )}
           </div>
         </div>
       </section>

@@ -1,5 +1,5 @@
 import type { ReadError } from './api'
-import type { PostId, ThreadId } from './forum'
+import type { Post, PostId, ThreadId } from './forum'
 import type { ImageError } from './images'
 
 export const DEFAULT_CACHE_LIMIT = 2_000_000_000
@@ -27,6 +27,8 @@ export interface RetainedEntry {
   title: string | null
   /** Head post text while it is held locally; null once evicted or never fetched. */
   excerpt: string | null
+  /** Cached head metadata only; null after eviction or before the head was fetched. */
+  head: Pick<Post, 'forumId' | 'createdAt' | 'userHash' | 'name' | 'title' | 'isAdmin' | 'isSage' | 'image'> | null
   at: string
   offline: OfflineCopy | null
 }

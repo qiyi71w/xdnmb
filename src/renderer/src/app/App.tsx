@@ -10,6 +10,7 @@ import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/direct
 import { Navigation, NavMeasure } from '../features/directory/Navigation'
 import { useDirectory } from '../features/directory/useDirectory'
 import { RetainedDialog } from '../features/content/RetainedDialog'
+import { HistoryPageContext, type HistoryPageHost, type HistoryView } from '../features/content/RetainedPane'
 import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
 import { editorFor, editorForDraft, isUnsaved, unsavedInTab } from '../features/editor/editorsState'
 import { targetText } from '../features/editor/editorText'
@@ -72,6 +73,7 @@ import { BoardChooserPage, BoardStrip, PrototypeNavE } from '../features/directo
 import { PrototypeNavF } from '../features/directory/prototype/PrototypeNavF'
 import type { FeatureHost, PrototypeNavProps } from '../features/directory/prototype/PrototypeNavParts'
 import { RAIL_WIDTH } from '../features/directory/prototype/PrototypeRail'
+import { readListWidth, saveListWidth } from './ListDivider'
 import { PrototypeSettingsPage } from '../features/directory/prototype/PrototypeSettings'
 import {
   ListHostContext,
@@ -187,6 +189,7 @@ export function App() {
   const closeRetained = useCallback(() => setRetained(null), [])
   const [attemptsOpen, setAttemptsOpen] = useState(false)
   const closeAttempts = useCallback(() => setAttemptsOpen(false), [])
+  const [historyRequest, setHistoryRequest] = useState<HistoryPageHost['request']>(null)
   const [ownPostsOpen, setOwnPostsOpen] = useState(false)
   const closeOwnPosts = useCallback(() => setOwnPostsOpen(false), [])
   /** Tab whose close waits for its unsaved editors to be handled. */
@@ -241,6 +244,12 @@ export function App() {
   /** Width the reader scroller's vertical scrollbar takes from its content (0 for overlay scrollbars). */
   const [scrollbarWidth, setScrollbarWidth] = useState(0)
   const [navCompactMin, setNavCompactMin] = useState<number>(LAYOUT_DEFAULTS.navCompactReference)
+  /** PROTOTYPE: list width chosen with the split divider; the default outside the prototype. */
+  const [listPreference, setListPreference] = useState(() => (PROTOTYPE_ENABLED ? readListWidth() : LAYOUT_DEFAULTS.listWidth))
+  const resizeList = useCallback((next: number, done: boolean) => {
+    setListPreference(next)
+    if (done) saveListWidth(next)
+  }, [])
 
   useLayoutEffect(() => {
     const app = appRef.current
@@ -281,7 +290,9 @@ export function App() {
     view: current === null ? 'list' : viewOf(current),
     navFull,
     navCompactMin: protoNavFull ?? navCompactMin + (navVariant === 'B' ? RAIL_WIDTH : 0),
-    listWidth: LAYOUT_DEFAULTS.listWidth,
+    // Up to the default the list width is reserved like before; a wider one is granted from the reader.
+    listWidth: Math.min(listPreference, LAYOUT_DEFAULTS.listWidth),
+    listGrow: Math.max(0, listPreference - LAYOUT_DEFAULTS.listWidth),
     readingWidth,
     minGutter: LAYOUT_DEFAULTS.minGutter,
     minSplitText: LAYOUT_DEFAULTS.minSplitText,
@@ -814,12 +825,27 @@ export function App() {
     },
     [withActive, leave]
   )
-  /** 发送记录, also reachable from an editor and from a locked draft in the library. */
+  const openHistoryView = useCallback((view: HistoryView) => {
+    const state = stateRef.current.tabs
+    if (state === null) return
+    endSettings(false)
+    selectFeed({ kind: 'history' }, 'list')
+    dispatch({ type: 'show-pane', tabId: state.activeId, pane: 'list' })
+    setHistoryRequest((current) => ({ tabId: state.activeId, view, seq: (current?.seq ?? 0) + 1 }))
+  }, [endSettings, selectFeed])
+
+  /** Every prototype sender entry opens the history page's sending view; production keeps its modal. */
   const openAttempts = useCallback(() => {
     closeNav(false)
     setDraftsOpen(false)
-    setAttemptsOpen(true)
-  }, [closeNav])
+    if (PROTOTYPE_ENABLED) {
+      const tabId = stateRef.current.tabs?.activeId
+      for (const editor of currentEditors().editors) {
+        if (editor.tabId === tabId && editor.expanded) dispatchEditors({ type: 'set-expanded', editorId: editor.id, expanded: false })
+      }
+      openHistoryView('attempts')
+    } else setAttemptsOpen(true)
+  }, [closeNav, currentEditors, dispatchEditors, openHistoryView])
 
   const openOwnPosts = useCallback(() => {
     closeNav(false)
@@ -1080,7 +1106,8 @@ export function App() {
   const workspaceStyle = {
     '--nav-width': `${layout.navWidth}px`,
     '--nav-full': `${navFull}px`,
-    '--list-width': `${LAYOUT_DEFAULTS.listWidth}px`
+    // Hidden split tabs keep the chosen width while the active entry shows no list beside a reader.
+    '--list-width': `${layout.listWidth > 0 ? layout.listWidth : Math.min(listPreference, LAYOUT_DEFAULTS.listWidth)}px`
   } as CSSProperties
 
   const editorWorkspace = useMemo<EditorWorkspace>(
@@ -1110,15 +1137,15 @@ export function App() {
   /** Lists of the tab (订阅的串, 提醒, 历史, 离线) and 搜索 are pages; the rest open dialogs. */
   const openProtoFeature = useCallback(
     (id: FeatureId, focusTarget = false) => {
-      if (id === 'subscriptions' || id === 'reminders' || id === 'history' || id === 'offline') {
+      if (id === 'history') openHistoryView('browsing')
+      else if (id === 'subscriptions' || id === 'reminders' || id === 'offline') {
         protoSelect({ kind: id }, focusTarget ? 'list' : 'nav')
       } else if (id === 'search') {
         // The page focuses its search box itself.
         openSearchPage('shown')
       } else if (id === 'drafts') openDrafts()
-      else openAttempts()
     },
-    [protoSelect, openSearchPage, openDrafts, openAttempts]
+    [protoSelect, openSearchPage, openDrafts, openHistoryView]
   )
   const protoFeatures = useMemo<FeatureHost>(
     () => ({
@@ -1258,6 +1285,7 @@ export function App() {
       <SubscriptionsContext value={subscriptions}>
       <RemindersContext value={reminders}>
       <ListOpenerContext value={openList}>
+      <HistoryPageContext value={PROTOTYPE_ENABLED ? { request: historyRequest, tabTitle, onContinue: continueDraft, onOpenTarget: openTargetInTab } : null}>
         <div className="app" ref={appRef}>
           <StorageBanner storage={storage} />
           <LaunchNotice
@@ -1345,6 +1373,7 @@ export function App() {
                           tab={tab}
                           active={tab.id === tabs.activeId}
                           composeHidden={protoSettingsShown}
+                          onResizeList={PROTOTYPE_ENABLED ? resizeList : null}
                           layout={layout}
                           directory={directory.state}
                           onRetryDirectory={directory.retry}
@@ -1500,6 +1529,7 @@ export function App() {
             whenRestored={whenRestored}
           />
         </div>
+      </HistoryPageContext>
       </ListOpenerContext>
       </RemindersContext>
       </SubscriptionsContext>

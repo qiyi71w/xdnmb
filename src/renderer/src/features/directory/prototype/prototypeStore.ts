@@ -208,7 +208,6 @@ export type FeatureId =
   | 'history'
   | 'offline'
   | 'drafts'
-  | 'attempts'
 
 export const FEATURES: readonly { id: FeatureId; label: string; icon: IconName }[] = [
   { id: 'subscriptions', label: '订阅的串', icon: 'bookmark' },
@@ -216,8 +215,7 @@ export const FEATURES: readonly { id: FeatureId; label: string; icon: IconName }
   { id: 'search', label: '搜索', icon: 'search' },
   { id: 'history', label: '历史', icon: 'history' },
   { id: 'offline', label: '离线', icon: 'download' },
-  { id: 'drafts', label: '草稿', icon: 'draft' },
-  { id: 'attempts', label: '发送记录', icon: 'send' }
+  { id: 'drafts', label: '草稿', icon: 'draft' }
 ]
 
 /** FEATURES in the saved rail order; features missing from it keep their place after it. */

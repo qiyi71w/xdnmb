@@ -2,7 +2,6 @@ import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 
 import type { OwnPost } from '../../../../shared/publication'
 import { Icon } from '../../components/Icon'
 import { Modal, ModalHeader } from '../../components/Modal'
-import { Loading } from '../../components/Notices'
 import { formatLocalTime } from '../../lib/format'
 import { credentialLine } from '../editor/editorText'
 import { useEditorWorkspace } from '../editor/workspace'
@@ -181,11 +180,10 @@ export function OwnPostsDialog({
           </p>
         </form>
 
-        <section aria-labelledby={`${ids}-list`}>
+        <section aria-labelledby={`${ids}-list`} aria-busy={list.status === 'loading' || undefined}>
           <h3 className="attempts-heading" id={`${ids}-list`}>
             已记录{list.status === 'ready' ? `（${posts.length}）` : ''}
           </h3>
-          {list.status === 'loading' && <Loading>正在读取我的发言…</Loading>}
           {list.status === 'failed' && (
             <div className="notice notice-error" role="alert">
               <Icon name="alert" className="notice-icon" />

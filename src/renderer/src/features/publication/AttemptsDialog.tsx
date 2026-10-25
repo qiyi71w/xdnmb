@@ -8,6 +8,7 @@ import { formatLocalTime } from '../../lib/format'
 import { credentialLine, excerpt, targetText } from '../editor/editorText'
 import { useEditorWorkspace } from '../editor/workspace'
 import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, ATTEMPT_STATE_LABEL } from './publicationText'
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import './publication.css'
 
 type ListState = { status: 'loading' } | { status: 'failed' } | { status: 'ready'; attempts: PublicationAttempt[] }
@@ -24,23 +25,31 @@ function needsCheck(attempt: PublicationAttempt): boolean {
  * those still to be checked (sending / 结果待确认 / ID 未确认) come first. Nothing here sends: an
  * unresolved attempt can only be checked at its target, a failed one continues as its saved draft.
  */
-export function AttemptsDialog({
-  tabTitle,
-  onContinue,
-  onOpenTarget,
-  onClose,
-  fallbackFocus
-}: {
+export function AttemptsDialog({ onClose, fallbackFocus, ...body }: AttemptsBodyProps & {
+  onClose: () => void
+  fallbackFocus?: () => HTMLElement | null
+}) {
+  const titleId = useId()
+  return (
+    <Modal className="attempts-dialog" labelledBy={titleId} onClose={onClose} fallbackFocus={fallbackFocus}>
+      <ModalHeader title="发送记录" titleId={titleId} closeLabel="关闭发送记录" onClose={onClose} />
+      <AttemptsBody {...body} />
+    </Modal>
+  )
+}
+
+export interface AttemptsBodyProps {
   tabTitle: (tabId: number) => string
   onContinue: (draft: SavedDraft) => void
   /** Opens the attempt's thread (or forum for a new thread that has no ID) in a new tab. */
   onOpenTarget: (target: PostTarget) => void
-  onClose: () => void
-  fallbackFocus?: () => HTMLElement | null
-}) {
+}
+
+export function AttemptsBody({ tabTitle, onContinue, onOpenTarget, refreshRevision = 0 }: AttemptsBodyProps & { refreshRevision?: number }) {
   const { store, identities, forumName } = useEditorWorkspace()
   const titleId = useId()
   const [list, setList] = useState<ListState>({ status: 'loading' })
+  const [readFailed, setReadFailed] = useState(false)
   const [opening, setOpening] = useState<string | null>(null)
   const [openFailed, setOpenFailed] = useState<{ id: string; text: string } | null>(null)
   const alive = useRef(true)
@@ -53,9 +62,15 @@ export function AttemptsDialog({
       if (result.ok) {
         const attempts = [...result.attempts].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         setList({ status: 'ready', attempts })
-      } else if (!quiet) setList({ status: 'failed' })
+        setReadFailed(false)
+      } else {
+        if (!quiet) setList({ status: 'failed' })
+        else if (PROTOTYPE_ENABLED) setReadFailed(true)
+      }
     } catch {
-      if (alive.current && !quiet) setList({ status: 'failed' })
+      if (!alive.current) return
+      if (!quiet) setList({ status: 'failed' })
+      else if (PROTOTYPE_ENABLED) setReadFailed(true)
     }
   }, [])
 
@@ -73,7 +88,7 @@ export function AttemptsDialog({
     const quiet = loaded.current
     loaded.current = true
     void load(quiet)
-  }, [load, revision])
+  }, [load, revision, refreshRevision])
 
   const sending = list.status === 'ready' && list.attempts.some((attempt) => attempt.state === 'sending')
   useEffect(() => {
@@ -112,7 +127,7 @@ export function AttemptsDialog({
     const target = targetText(payload.target, forumName)
     const identity = credentialLine(payload.credentialId, identities.overview)
     const editing = store.state.editors.find((editor) => editor.publication?.phase === 'attempt' && editor.publication.attempt.id === attempt.id)
-    const rowId = `attempt-${attempt.id}`
+    const rowId = `${titleId}-attempt-${attempt.id}`
     const state = attempt.state
     const postThread = attempt.threadId ?? (payload.target.kind === 'reply' ? payload.target.threadId : null)
     return (
@@ -139,7 +154,9 @@ export function AttemptsDialog({
           {payload.fields.watermark && payload.attachmentId !== null && <span>水印开</span>}
         </p>
         <p className="attempt-excerpt">{excerpt(payload.fields, null, 80)}</p>
-        {state === 'sending' && <Loading live={false}>{ATTEMPT_STATE_DETAIL.sending}</Loading>}
+        {state === 'sending' && (PROTOTYPE_ENABLED
+          ? <p className="attempt-detail">{ATTEMPT_STATE_DETAIL.sending}</p>
+          : <Loading live={false}>{ATTEMPT_STATE_DETAIL.sending}</Loading>)}
         {(state === 'unknown' || state === 'unconfirmed') && (
           <p className="attempt-detail">
             {ATTEMPT_STATE_DETAIL[state]}
@@ -218,13 +235,11 @@ export function AttemptsDialog({
   }
 
   return (
-    <Modal className="attempts-dialog" labelledBy={titleId} onClose={onClose} fallbackFocus={fallbackFocus}>
-      <ModalHeader title="发送记录" titleId={titleId} closeLabel="关闭发送记录" onClose={onClose} />
-      <div className="modal-body attempts-body">
-        <p className="attempts-intro">每次发送都先记录在本机。汐岛不会自动重发；结果待确认或 ID 未确认的发送只能到目标处核对。</p>
-        {list.status === 'loading' && <Loading>正在读取发送记录…</Loading>}
-        {list.status === 'failed' && (
-          <div className="notice notice-error" role="alert">
+      <div className="modal-body attempts-body" aria-busy={list.status === 'loading' || undefined}>
+        {!PROTOTYPE_ENABLED && <p className="attempts-intro">每次发送都先记录在本机。汐岛不会自动重发；结果待确认或 ID 未确认的发送只能到目标处核对。</p>}
+        {list.status === 'loading' && !PROTOTYPE_ENABLED && <Loading>正在读取发送记录…</Loading>}
+        {(list.status === 'failed' || readFailed) && (
+          <div className={`notice notice-error${PROTOTYPE_ENABLED ? ' is-compact' : ''}`} role="alert">
             <Icon name="alert" className="notice-icon" />
             <div className="notice-text">
               <p className="notice-title">发送记录读取失败：本地存储不可用</p>
@@ -256,6 +271,5 @@ export function AttemptsDialog({
           </section>
         )}
       </div>
-    </Modal>
   )
 }

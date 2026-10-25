@@ -142,6 +142,26 @@
 
 /* ---------- 发送记录 ---------- */
 
+.history-attempts-scroll > .attempts-body {
+  max-width: 760px;
+  margin-inline: auto;
+  padding: 16px;
+}
+
+.history-attempts-scroll .attempts-list {
+  gap: 0;
+}
+
+.history-page .history-attempts-scroll .attempt-item {
+  border-radius: 0;
+  box-shadow: none;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.history-attempts-scroll .attempt-item:last-child {
+  border-bottom: 0;
+}
+
 .attempt-item {
   display: grid;
   gap: 4px;

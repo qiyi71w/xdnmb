@@ -13,6 +13,8 @@ import { FailureNotice, Loading } from '../../components/Notices'
 import { formatLocalTime } from '../../lib/format'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { WriteStatus } from './SubscriptionActivity'
+// PROTOTYPE (throwaway): automatic reads are silent; only failures show.
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import {
   countByAction,
   currentItemIndex,
@@ -111,7 +113,7 @@ export function ReconcileView({ headingRef, onBack }: { headingRef: RefObject<HT
       <div className="sub-recon">
         <WriteStatus />
         {overview === null ? (
-          <Loading>正在读取订阅设置…</Loading>
+          !PROTOTYPE_ENABLED && <Loading>正在读取订阅设置…</Loading>
         ) : task === null || task.phase === 'preview-failed' ? (
           <StartPanel overview={overview} task={task} />
         ) : task.phase === 'previewing' ? (
@@ -223,7 +225,7 @@ function StartPanel({ overview, task }: { overview: SubscriptionOverview; task: 
               </button>
             </div>
           )}
-          {mergeSources === null && !mergeSourcesFailed && <Loading>正在读取用过的 App UUID…</Loading>}
+          {!PROTOTYPE_ENABLED && mergeSources === null && !mergeSourcesFailed && <Loading>正在读取用过的 App UUID…</Loading>}
           {mergeSources !== null && !mergeSourcesFailed && sources.length === 0 && (
             <p className="sub-recon-empty">还没有其他用过的 App UUID。更换 UUID 后，之前的那个会出现在这里。</p>
           )}
@@ -888,7 +890,7 @@ function PlanHistory() {
             </button>
           </div>
         )}
-        {plans === null && !plansFailed && <p className="settings-empty">正在读取记录…</p>}
+        {!PROTOTYPE_ENABLED && plans === null && !plansFailed && <p className="settings-empty">正在读取记录…</p>}
         {plans !== null && plans.length === 0 && <p className="sub-journal-empty">还没有执行过同步或合并。</p>}
         {plans !== null && plans.length > 0 && (
           <ul className="sub-journal-list" aria-labelledby={headingId}>

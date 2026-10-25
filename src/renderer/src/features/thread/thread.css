@@ -280,11 +280,6 @@
   margin-left: 0;
 }
 
-.position-page-panel .toolbar-coverage {
-  display: grid;
-  gap: 2px;
-}
-
 .thread-more {
   position: relative;
   display: inline-flex;

@@ -1,0 +1,86 @@
+/* Context menu: a floating layer (strong glass, large radius, float shadow) at the pointer. */
+.context-menu {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  min-width: 12rem;
+  max-width: min(22rem, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: var(--radius-l);
+  background: var(--glass-strong);
+  backdrop-filter: blur(24px) saturate(1.5);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  text-align: start;
+}
+
+.context-menu-items {
+  display: grid;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.context-menu-item:hover,
+.context-menu-item:focus-visible {
+  background: var(--hover);
+}
+
+.context-menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* On: check mark plus 600 weight, not colour alone. */
+.context-menu-item.is-on {
+  font-weight: 600;
+}
+
+.context-menu-check {
+  display: inline-flex;
+  flex: none;
+  width: 14px;
+  color: var(--accent-ink);
+}
+
+.context-menu-item[aria-disabled='true'] {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.context-menu-item[aria-disabled='true']:hover {
+  background: transparent;
+}
+
+.context-menu-item[aria-busy='true'] {
+  cursor: progress;
+}
+
+.context-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line-soft);
+}
+
+.context-menu-footer {
+  font-size: var(--text-xs);
+}
+
+.context-menu-footer .form-message {
+  margin: 4px 10px 6px;
+}

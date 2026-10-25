@@ -10,6 +10,7 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type RefObject
 } from 'react'
 import type { ForumId, ThreadId, ThreadSummary } from '../../../../shared/forum'
@@ -20,6 +21,7 @@ import type {
   SubscriptionResult,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
+import { contextMenuPoint, isContextMenuKey, type ContextMenuPoint } from '../../components/ContextMenu'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, Loading } from '../../components/Notices'
 import { describeReadError, formatLocalTime } from '../../lib/format'
@@ -33,6 +35,7 @@ import { useThreadMetadata } from '../search/useThreadMetadata'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import { OperationJournal, WriteStatus } from './SubscriptionActivity'
 import { ReconcileView } from './SubscriptionReconcile'
+import { SubscriptionRowMenu } from './SubscriptionRowMenu'
 import {
   blocksNewWrite,
   displayedObservation,
@@ -103,9 +106,9 @@ export function changeDraft(overview: SubscriptionOverview | null, action: Subsc
 /**
  * Remote subscription list of the currently selected source (App / 网页), in the tab's list slot.
  * Reads when the user navigates here or switches source here: page 1 only, or (prototype) page
- * after page up to the end candidate, stopping at the first error, refusal or 取消 and never
- * retrying by itself. Old observations stay on screen (labelled) when a read fails, is cancelled or
- * is partial; results arriving for a previous source or identity combination are dropped.
+ * after page up to the end candidate, silently, stopping at the first error or refusal and never
+ * retrying by itself. Old observations stay on screen when a read fails, is cancelled or is
+ * partial; results arriving for a previous source or identity combination are dropped.
  */
 export function SubscriptionPane({
   entryKey,
@@ -198,25 +201,15 @@ export function SubscriptionPane({
   /**
    * Reads from `observationId` (null: a new observation from page 1). The prototype goes on page
    * after page until the end candidate and stops at the first error (rate limit and verification
-   * included), refusal, 取消 or source change; nothing is retried automatically.
+   * included), refusal, cancellation or source change; nothing is retried automatically.
    */
-  /** 取消 was asked during `readOn`: no further page starts, even when the current one completed. */
-  const stopAsked = useRef(false)
-  /** The last `readOn` ended because of 取消 (the page in flight may still have completed). */
-  const [halted, setHalted] = useState(false)
   const readOn = useCallback(
     async (observationId: string | null) => {
-      stopAsked.current = false
-      setHalted(false)
       let next = observationId
       for (;;) {
         const observation = await read(next)
         if (!PROTOTYPE_ENABLED || observation === null) return
         if (observation.error !== null || observation.cancelled || observation.nextPage === null) return
-        if (stopAsked.current) {
-          setHalted(true)
-          return
-        }
         next = observation.id
       }
     },
@@ -231,11 +224,10 @@ export function SubscriptionPane({
     window.xidao.subscriptions.cancel({ operationId: token.operationId }).catch(() => undefined)
   }, [])
 
-  /** 停止: cancels queued and later pages; the observation it ends with is still shown. */
+  /** 取消 (outside the prototype, whose reading is silent): cancels the page being read; the observation it ends with is still shown. */
   const stopRead = useCallback(() => {
     const token = reading.current
     if (token === null) return
-    stopAsked.current = true
     dispatch({ type: 'stop-requested' })
     window.xidao.subscriptions.cancel({ operationId: token.operationId }).catch(() => undefined)
   }, [])
@@ -434,15 +426,33 @@ export function SubscriptionPane({
     return thread === undefined ? `No.${threadId}` : threadLabel(thread)
   }
 
+  // ---------- Row context menu (prototype) ----------
+  /** The row whose context menu is open, where it opened and the row control focus returns to. */
+  const [rowMenu, setRowMenu] = useState<{ threadId: ThreadId; point: ContextMenuPoint; row: HTMLElement } | null>(null)
+  const openRowMenu = (threadId: ThreadId, event: ReactMouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
+    const row = event.currentTarget.querySelector<HTMLElement>('[data-roving-item]')
+    if (row === null) return
+    event.preventDefault()
+    // No scrolling into view: a scroll closes the menu that is about to open.
+    row.focus({ preventScroll: true })
+    setRowMenu({ threadId, point: contextMenuPoint(event, row), row })
+  }
+  const closeRowMenu = (returnFocus: boolean) => {
+    const row = rowMenu?.row
+    setRowMenu(null)
+    if (returnFocus && row?.isConnected === true) row.focus()
+  }
+  const menuThread = rowMenu === null ? undefined : threads.find((thread) => thread.head.id === rowMenu.threadId)
+
   // ---------- Render ----------
   if (overview === null) {
     return (
-      <section className="list-pane" aria-label="订阅">
+      <section className="list-pane" aria-label="订阅" aria-busy={PROTOTYPE_ENABLED && !overviewFailed ? true : undefined}>
         <div className="pane-empty">
           {overviewFailed ? (
             <FailureNotice title="订阅设置读取失败" failure={{ type: 'internal' }} onRetry={() => void refreshOverview()} />
           ) : (
-            <Loading>正在读取订阅设置…</Loading>
+            !PROTOTYPE_ENABLED && <Loading>正在读取订阅设置…</Loading>
           )}
         </div>
       </section>
@@ -454,10 +464,8 @@ export function SubscriptionPane({
   const readInFlight = state.activity === 'first' || state.activity === 'next'
   const endPage = displayed?.pages.find((page) => page.endCandidate)?.page ?? null
   const nextPage = shown !== null && shown.error === null && !readInFlight && blocker === null ? shown.nextPage : null
-  /** Page being read now (prototype: one line for every page). */
+  /** Page being read now. */
   const readingPage = state.activity === 'first' ? 1 : state.activity === 'next' ? (shown?.nextPage ?? null) : null
-  /** Prototype: the automatic reading stopped before the end candidate because of 取消. */
-  const stoppedByCancel = PROTOTYPE_ENABLED && shown !== null && !readInFlight && shown.error === null && shown.nextPage !== null && (shown.cancelled || halted)
   const readingLine = (
     <div className="sub-reading">
       <Loading>正在读取第 {readingPage ?? ''} 页…</Loading>
@@ -518,20 +526,33 @@ export function SubscriptionPane({
         </header>
 
         <div className="sub-tools">
-          {blocker !== null && (
-            <div className="notice notice-cached" role="status">
-              <Icon name="alert" className="notice-icon" />
-              <div className="notice-text">
-                <p className="notice-title">{SOURCE_NAME[source]}暂时不可用</p>
-                <p>{blocker}</p>
+          {blocker !== null &&
+            (PROTOTYPE_ENABLED ? (
+              <div className="notice notice-cached is-compact" role="status">
+                <Icon name="alert" className="notice-icon" />
+                <p className="notice-text">
+                  {SOURCE_NAME[source]}暂时不可用：{blocker}
+                </p>
+                {openSettings !== null && (
+                  <button type="button" className="btn btn-small" onClick={() => openSettings('subscriptions')}>
+                    打开设置
+                  </button>
+                )}
               </div>
-              {openSettings !== null && (
-                <button type="button" className="btn btn-small" onClick={() => openSettings('subscriptions')}>
-                  打开设置
-                </button>
-              )}
-            </div>
-          )}
+            ) : (
+              <div className="notice notice-cached" role="status">
+                <Icon name="alert" className="notice-icon" />
+                <div className="notice-text">
+                  <p className="notice-title">{SOURCE_NAME[source]}暂时不可用</p>
+                  <p>{blocker}</p>
+                </div>
+                {openSettings !== null && (
+                  <button type="button" className="btn btn-small" onClick={() => openSettings('subscriptions')}>
+                    打开设置
+                  </button>
+                )}
+              </div>
+            ))}
 
           <WriteStatus />
 
@@ -574,9 +595,10 @@ export function SubscriptionPane({
           <OperationJournal />
         </div>
 
-        <div className="list-status">
-          {state.activity === 'stored' && <Loading>正在读取本机保存的列表…</Loading>}
-          {PROTOTYPE_ENABLED ? readInFlight && readingLine : state.activity === 'first' && readingLine}
+        {/* Prototype: reading is silent (no progress, no coverage); only a failure shows, as one line. */}
+        <div className="list-status" aria-busy={PROTOTYPE_ENABLED && (readInFlight || state.activity === 'stored') ? true : undefined}>
+          {!PROTOTYPE_ENABLED && state.activity === 'stored' && <Loading>正在读取本机保存的列表…</Loading>}
+          {!PROTOTYPE_ENABLED && state.activity === 'first' && readingLine}
           {state.internalError !== null && (
             <FailureNotice
               title={state.internalError === 'stored' ? '本机保存的列表读取失败' : '订阅读取请求失败，仍显示之前的列表'}
@@ -599,21 +621,11 @@ export function SubscriptionPane({
             <p className="sub-stopped" role="alert">
               <Icon name="alert" size={14} />
               <span>
-                停在第 {shown.error.page} 页：{describeReadError(shown.error.detail)}
+                第 {shown.error.page} 页读取失败：{describeReadError(shown.error.detail)}
               </span>
               {blocker === null && !readInFlight && (
                 <button type="button" className="btn btn-small" onClick={() => void readOn(shown.id)}>
                   重试
-                </button>
-              )}
-            </p>
-          )}
-          {stoppedByCancel && shown !== null && (
-            <p className="sub-stopped" role="status">
-              <span>已取消，停在第 {shown.nextPage} 页</span>
-              {blocker === null && (
-                <button type="button" className="btn btn-small" onClick={() => void readOn(shown.id)}>
-                  继续读取
                 </button>
               )}
             </p>
@@ -627,7 +639,7 @@ export function SubscriptionPane({
               compact
             />
           )}
-          {displayed !== null && displayed !== shown && (
+          {!PROTOTYPE_ENABLED && displayed !== null && displayed !== shown && (
             <div className="notice notice-cached is-compact" role="status">
               <Icon name="archive" className="notice-icon" />
               <p className="notice-text">
@@ -635,13 +647,13 @@ export function SubscriptionPane({
               </p>
             </div>
           )}
-          {displayed !== null && displayed === shown && state.shownStored && (
+          {!PROTOTYPE_ENABLED && displayed !== null && displayed === shown && state.shownStored && (
             <p className="notice-inline" role="status">
               <Icon name="archive" size={14} />
               本机保存的列表，{formatLocalTime(displayed.startedAt)}
             </p>
           )}
-          {displayed !== null && (
+          {!PROTOTYPE_ENABLED && displayed !== null && (
             <p className={displayed.nextPage !== null ? 'sub-coverage is-partial' : 'sub-coverage'}>
               <Icon name={displayed.nextPage !== null ? 'alert' : 'info'} size={14} />
               <span>{coverageText(displayed)}</span>
@@ -675,7 +687,7 @@ export function SubscriptionPane({
             total={threads.length}
             result={filtered}
             metadata={filters.unreadOnly ? metadata : null}
-            coverage={displayed === null ? '已读取的订阅页' : `已读取的订阅页（${coverageText(displayed)}）`}
+            coverage={PROTOTYPE_ENABLED || displayed === null ? '已读取的订阅页' : `已读取的订阅页（${coverageText(displayed)}）`}
           />
         )}
 
@@ -683,17 +695,35 @@ export function SubscriptionPane({
           <ul className="thread-list sub-thread-list" aria-label={filtering ? '订阅的串（已筛选）' : '订阅的串'} onKeyDown={roving.onKeyDown}>
             {filtered.shown.map(({ item: thread }) => {
               const itemProps = roving.itemProps(thread.head.id)
+              const row = (
+                <ThreadRow
+                  thread={thread}
+                  forumName={thread.head.forumId !== null ? (forumNames.get(thread.head.forumId) ?? null) : null}
+                  selected={thread.head.id === selectedThreadId}
+                  uncertain={uncertainById.get(thread.head.id) === true}
+                  images={images}
+                  onOpen={() => onOpenThread(thread)}
+                  itemProps={itemProps}
+                />
+              )
+              // Prototype: 提醒 and 取消订阅 live in the row's context menu (right-click, ContextMenu, Shift+F10).
+              if (PROTOTYPE_ENABLED) {
+                return (
+                  <li
+                    key={thread.head.id}
+                    className={rowMenu?.threadId === thread.head.id ? 'sub-row is-menu-open' : 'sub-row'}
+                    onContextMenu={(event) => openRowMenu(thread.head.id, event)}
+                    onKeyDown={(event) => {
+                      if (isContextMenuKey(event)) openRowMenu(thread.head.id, event)
+                    }}
+                  >
+                    {row}
+                  </li>
+                )
+              }
               return (
                 <li key={thread.head.id} className="sub-row">
-                  <ThreadRow
-                    thread={thread}
-                    forumName={thread.head.forumId !== null ? (forumNames.get(thread.head.forumId) ?? null) : null}
-                    selected={thread.head.id === selectedThreadId}
-                    uncertain={uncertainById.get(thread.head.id) === true}
-                    images={images}
-                    onOpen={() => onOpenThread(thread)}
-                    itemProps={itemProps}
-                  />
+                  {row}
                   <div className="sub-row-actions">
                     <ReminderMenu
                       threadId={thread.head.id}
@@ -732,8 +762,8 @@ export function SubscriptionPane({
           {!PROTOTYPE_ENABLED && shown !== null && shown.cancelled && !readInFlight && (
             <p className="list-end">已停止，第 {shown.nextPage ?? ''} 页起没有读取</p>
           )}
-          {endPage !== null && endPage > 1 && <p className="list-end">第 {endPage} 页为空，已读完</p>}
-          {shown !== null && nextPage !== null && !stoppedByCancel && (
+          {!PROTOTYPE_ENABLED && endPage !== null && endPage > 1 && <p className="list-end">第 {endPage} 页为空，已读完</p>}
+          {shown !== null && nextPage !== null && (
             <button type="button" className="btn btn-quiet" onClick={() => void readOn(shown.id)}>
               {PROTOTYPE_ENABLED ? `继续读取（第 ${nextPage} 页起）` : `${shown.cancelled ? '继续读取' : '读取'}第 ${nextPage} 页`}
             </button>
@@ -744,6 +774,21 @@ export function SubscriptionPane({
         <div className="list-scroll" tabIndex={-1} data-pane-focus="">
           <ReconcileView headingRef={reconcileHeadingRef} onBack={() => showView('list')} />
         </div>
+      )}
+      {rowMenu !== null && menuThread !== undefined && (
+        <SubscriptionRowMenu
+          key={rowMenu.threadId}
+          point={rowMenu.point}
+          threadId={rowMenu.threadId}
+          label={threadLabel(menuThread)}
+          rules={rules.rulesOf(rowMenu.threadId)}
+          failure={rules.failure}
+          onRetry={rules.reload}
+          onUpdated={rules.updated}
+          removeBlocked={writeHint ?? (draft !== null ? '请先完成或返回当前的确认' : null)}
+          onRemove={() => openDraft('remove', rowMenu.threadId, threadLabel(menuThread))}
+          onClose={closeRowMenu}
+        />
       )}
     </section>
   )

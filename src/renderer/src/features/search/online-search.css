@@ -239,10 +239,11 @@
   color: var(--ink-3);
 }
 
+/* Same order as a thread row: kind and date, bold title, then the snippet (about twenty lines). */
 .online-search-hit-snippet {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 20;
   overflow: hidden;
   font-size: var(--text-sm);
   line-height: 1.55;

@@ -1,16 +1,19 @@
 // PROTOTYPE (throwaway): 历史 and 离线 as list pages of a tab, like 订阅 and 提醒. Choosing a row opens
 // the thread the way the thread lists do (beside the list when split, else a new step).
 
-import { useContext, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ForumId, ThreadId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
-import { Loading } from '../../components/Notices'
-import { formatLocalTime } from '../../lib/format'
+import { formatLocalTime, meaningfulName, meaningfulTitle } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ListFilterBar, UncertainTag } from '../search/FilterFields'
 import { filterList, listFilterCount, NO_LIST_FILTERS, type ListFilters } from '../search/listFilters'
 import { useThreadMetadata } from '../search/useThreadMetadata'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
+import { AttemptsBody, type AttemptsBodyProps } from '../publication/AttemptsDialog'
+import { RowThumbnail } from '../image/RowThumbnail'
+import { useImageScope } from '../image/useImageLoad'
 import { contentFailureText, retainedHeading } from './contentText'
 import { createReadingResets } from './readingResets'
 import { HistoryConfirm, useRetainedList } from './retainedList'
@@ -22,19 +25,74 @@ const PAGES = {
   offline: { title: '离线', at: '最近更新', empty: '还没有离线副本' }
 } as const
 
-export function RetainedPane({
-  entryKey,
-  kind,
-  forumNames,
-  selectedThreadId,
-  onOpenThread
-}: {
+export type HistoryView = 'browsing' | 'attempts'
+export interface HistoryPageHost extends AttemptsBodyProps {
+  request: { tabId: number; view: HistoryView; seq: number } | null
+}
+export const HistoryPageContext = createContext<HistoryPageHost | null>(null)
+
+interface RetainedPaneProps {
+  tabId: number
   entryKey: number
   kind: 'history' | 'offline'
   forumNames: ReadonlyMap<ForumId, string>
   /** The thread shown beside the list (split), highlighted. */
   selectedThreadId: ThreadId | null
   onOpenThread: (threadId: ThreadId) => void
+}
+
+export function RetainedPane(props: RetainedPaneProps) {
+  const host = useContext(HistoryPageContext)
+  if (!PROTOTYPE_ENABLED || props.kind !== 'history' || host === null) return <RetainedListPane {...props} />
+  return <HistoryPage {...props} host={host} />
+}
+
+function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPageHost }) {
+  const headingId = useId()
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const request = host.request?.tabId === props.tabId ? host.request : null
+  const [view, setView] = useState<HistoryView>(() => request?.view ?? 'browsing')
+  const [attemptsVisited, setAttemptsVisited] = useState(view === 'attempts')
+  const [attemptsRefresh, setAttemptsRefresh] = useState(0)
+  useLayoutEffect(() => {
+    if (request === null) return
+    setView(request.view)
+    if (request.view === 'attempts') setAttemptsVisited(true)
+    headingRef.current?.focus({ preventScroll: true })
+  }, [request])
+
+  return (
+    <section className="list-pane history-page" aria-labelledby={headingId}>
+      <header className="list-header history-page-header">
+        <h2 className="list-title" id={headingId} ref={headingRef} tabIndex={-1} data-history-heading="" data-pane-focus="">
+          <span className="list-name">历史</span>
+        </h2>
+        <div className="segmented history-view-switch" role="group" aria-label="历史记录类型" data-view={view}>
+          {(['browsing', 'attempts'] as const).map((item) => (
+            <button key={item} type="button" className="segmented-item" aria-pressed={view === item} onClick={() => {
+              setView(item)
+              if (item === 'attempts') setAttemptsVisited(true)
+            }}>
+              {item === 'browsing' ? '浏览记录' : '发送记录'}
+            </button>
+          ))}
+        </div>
+      </header>
+      <div className="history-page-view" hidden={view !== 'browsing'}>
+        <RetainedListPane {...props} showHeading={false} displayed={view === 'browsing'}
+          refreshOverride={view === 'attempts' ? () => setAttemptsRefresh((value) => value + 1) : undefined} />
+      </div>
+      <div className="history-page-view history-attempts-scroll" hidden={view !== 'attempts'}>
+        {attemptsVisited && <AttemptsBody tabTitle={host.tabTitle} onContinue={host.onContinue} onOpenTarget={host.onOpenTarget} refreshRevision={attemptsRefresh} />}
+      </div>
+    </section>
+  )
+}
+
+function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpenThread, showHeading = true, displayed = true, refreshOverride }: RetainedPaneProps & {
+  showHeading?: boolean
+  displayed?: boolean
+  refreshOverride?: () => void
 }) {
   const page = PAGES[kind]
   const headingId = useId()
@@ -45,7 +103,8 @@ export function RetainedPane({
   const filterMemory = registry?.retainedFilters ?? ownFilters
   const { list, entries, load, confirming, setConfirming, busy, failure, done, listRef, bodyRef, confirmRef, ask, clearHistory } =
     useRetainedList(kind, registry?.readingResets ?? ownResets)
-  useRegisterContent('lists', entryKey, { refresh: () => void load(kind) })
+  const images = useImageScope(bodyRef)
+  useRegisterContent('lists', entryKey, { refresh: refreshOverride ?? (() => void load(kind)) })
 
   // ---------- Scroll memory (runtime and restored after a quit) ----------
   const [initialScroll] = useState(() => {
@@ -58,11 +117,11 @@ export function RetainedPane({
   const ready = list.status === 'ready'
   useLayoutEffect(() => {
     const scroller = bodyRef.current
-    if (!ready || placed.current || scroller === null) return
+    if (!ready || !displayed || placed.current || scroller === null) return
     placed.current = true
     scroller.scrollTop = scrollTop.current
     registry?.savedLists.delete(entryKey)
-  }, [ready, registry, entryKey, bodyRef])
+  }, [ready, displayed, registry, entryKey, bodyRef])
   useLayoutEffect(() => {
     registry?.listMemory.set(entryKey, { kind: 'retained', scrollTop: scrollTop.current })
   })
@@ -97,13 +156,13 @@ export function RetainedPane({
   const confirmingAll = confirming !== null && confirming.threadId === null
 
   return (
-    <section className="list-pane retained-page" aria-labelledby={headingId}>
-      <div className="list-scroll" ref={bodyRef} onScroll={onScroll} tabIndex={-1} data-pane-focus="">
+    <section className="list-pane retained-page" aria-labelledby={showHeading ? headingId : undefined} aria-label={showHeading ? undefined : '浏览记录'} aria-busy={list.status === 'loading' || undefined}>
+      <div className="list-scroll" ref={bodyRef} onScroll={onScroll} tabIndex={-1} data-pane-focus={showHeading ? '' : undefined}>
         <header className="list-header">
           <div className="list-title-row">
-            <h2 className="list-title" id={headingId}>
+            {showHeading && <h2 className="list-title" id={headingId}>
               <span className="list-name">{page.title}</span>
-            </h2>
+            </h2>}
             {kind === 'history' && entries.length > 0 && !confirmingAll && (
               <button type="button" className="btn btn-small btn-danger" disabled={busy} onClick={(event) => ask(null, event.currentTarget)}>
                 <Icon name="trash" size={14} />
@@ -132,7 +191,6 @@ export function RetainedPane({
               {done}
             </p>
           )}
-          {list.status === 'loading' && <Loading>正在读取{page.title}…</Loading>}
           {list.status === 'failed' && (
             <div className="notice notice-error is-compact" role="alert">
               <Icon name="alert" className="notice-icon" />
@@ -182,8 +240,10 @@ export function RetainedPane({
             {filtered.shown.map(({ item: entry, uncertain }) => {
               const rowId = `retained-page-${entryKey}-${entry.threadId}`
               const heading = retainedHeading(entry)
-              // Like a thread row: the title when there is one, then the head post's excerpt (up to
-              // six lines, its line breaks kept); only a thread with neither is named by number.
+              const head = entry.head
+              const title = meaningfulTitle(head?.title ?? entry.title)
+              const name = meaningfulName(head?.name ?? null)
+              const hasImage = head?.image != null
               const excerpt = entry.excerpt?.trim() || null
               const selected = entry.threadId === selectedThreadId
               const rowConfirming = confirming !== null && confirming.threadId === entry.threadId
@@ -199,29 +259,29 @@ export function RetainedPane({
                     onClick={() => onOpenThread(entry.threadId)}
                     {...itemProps}
                   >
-                    {(heading.source !== 'excerpt' || excerpt === null) && (
-                      <span className="retained-heading" id={`${rowId}-title`}>
-                        {heading.text}
-                      </span>
-                    )}
-                    {excerpt !== null && (
-                      <span className="retained-excerpt" id={heading.source === 'excerpt' ? `${rowId}-title` : undefined}>
-                        {excerpt}
-                      </span>
-                    )}
-                    <span className="row-meta">
-                      {heading.source !== 'number' && <span>No.{entry.threadId}</span>}
-                      <span>
-                        {page.at} {formatLocalTime(entry.at)}
-                      </span>
-                      {kind === 'history' && entry.offline !== null && (
-                        <span className="retained-tag">
-                          <Icon name="download" size={13} />
-                          有离线副本
+                    <span className="row-text">
+                      {head !== null && <span className="row-byline">
+                        <span className="row-author">
+                          {head.userHash !== null && <span className={head.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{head.userHash}</span>}
+                          {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
                         </span>
-                      )}
-                      {uncertain && <UncertainTag />}
+                        {head.createdAt !== null && <span className="row-time">{head.createdAt}</span>}
+                      </span>}
+                      {title !== null && <span className="row-title">{title}</span>}
+                      {name !== null && <span className="row-name">{name}</span>}
+                      {excerpt !== null && <span className="retained-excerpt">{excerpt}</span>}
+                      <span className="visually-hidden" id={`${rowId}-title`}>{heading.text}</span>
+                      <span className="row-meta">
+                        <span>No.{entry.threadId}</span>
+                        <span>{page.at} {formatLocalTime(entry.at)}</span>
+                        {kind === 'history' && entry.offline !== null && (
+                          <span className="retained-tag"><Icon name="download" size={13} />有离线副本</span>
+                        )}
+                        {hasImage && <span className="visually-hidden">附图</span>}
+                        {uncertain && <UncertainTag />}
+                      </span>
                     </span>
+                    {hasImage && <RowThumbnail postId={entry.threadId} scope={images} />}
                   </button>
                   {kind === 'history' && !rowConfirming && (
                     <button

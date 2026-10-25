@@ -4,7 +4,7 @@
 import { useId, useRef, useState } from 'react'
 import type { BoardDirectory } from '../../../../../shared/forum'
 import { Icon } from '../../../components/Icon'
-import { Loading } from '../../../components/Notices'
+import { DirectorySkeleton } from '../Navigation'
 import { matches, matchingGroups } from './PrototypeBoardPicker'
 import { useBoardView } from './PrototypeNavParts'
 import { navActions, orderedFeatures, useNavPrefs, type Board, type BoardGroup, type NavPrefs } from './prototypeStore'
@@ -65,7 +65,7 @@ export function BoardManageSection({ directory }: { directory: BoardDirectory | 
       <h3 className="settings-section-title" id={headingId}>
         版块管理
       </h3>
-      {directory === null && <Loading>正在读取版面目录…</Loading>}
+      {directory === null && <DirectorySkeleton />}
       {directory !== null && (
         <>
           <div className="proto-picker-field proto-manage-filter">

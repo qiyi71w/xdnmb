@@ -11,7 +11,7 @@ import {
   type IdentityRole
 } from '../../../../shared/identity'
 import { Icon } from '../../components/Icon'
-import { FailureNotice, Loading } from '../../components/Notices'
+import { FailureNotice } from '../../components/Notices'
 import { formatLocalTime } from '../../lib/format'
 import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import {
@@ -48,12 +48,11 @@ export function CookieSection({ identities }: { identities: IdentitiesState }) {
   const headingId = useId()
 
   return (
-    <section className="settings-section" aria-labelledby={headingId}>
+    <section className="settings-section" aria-labelledby={headingId} aria-busy={(overview === null && !failed) || undefined}>
       <h3 className="settings-section-title" id={headingId}>
         饼干
       </h3>
 
-      {overview === null && !failed && <Loading>正在读取饼干信息…</Loading>}
       {overview === null && failed && (
         <FailureNotice title="饼干信息读取失败" failure={{ type: 'internal' }} onRetry={() => void refresh()} compact />
       )}

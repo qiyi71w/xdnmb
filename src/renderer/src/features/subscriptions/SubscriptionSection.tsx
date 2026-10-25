@@ -4,6 +4,8 @@ import { Icon } from '../../components/Icon'
 import { FailureNotice, Loading } from '../../components/Notices'
 import { failureText, webObjectText } from './subscriptionText'
 import type { SubscriptionsState } from './useSubscriptions'
+// PROTOTYPE (throwaway): automatic reads are silent; only failures show.
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import './subscriptions.css'
 
 interface Message {
@@ -37,7 +39,7 @@ export function SubscriptionSection({ subscriptions }: { subscriptions: Subscrip
       <h3 className="settings-section-title" id={headingId}>
         订阅
       </h3>
-      {overview === null && !overviewFailed && <Loading>正在读取订阅设置…</Loading>}
+      {!PROTOTYPE_ENABLED && overview === null && !overviewFailed && <Loading>正在读取订阅设置…</Loading>}
       {overview === null && overviewFailed && (
         <FailureNotice title="订阅设置读取失败" failure={{ type: 'internal' }} onRetry={() => void refreshOverview()} compact />
       )}

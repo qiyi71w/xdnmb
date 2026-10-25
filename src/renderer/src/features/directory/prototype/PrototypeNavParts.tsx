@@ -4,10 +4,10 @@
 import { useMemo, type Ref } from 'react'
 import type { BoardDirectory } from '../../../../../shared/forum'
 import { Icon } from '../../../components/Icon'
-import { FailureNotice, Loading } from '../../../components/Notices'
+import { FailureNotice } from '../../../components/Notices'
 import type { PendingAttempts } from '../../publication/usePendingAttempts'
 import type { ListRef } from '../../tabs/tabsState'
-import type { ReminderBadge } from '../Navigation'
+import { DirectorySkeleton, type ReminderBadge } from '../Navigation'
 import type { DirectoryState } from '../useDirectory'
 import {
   boardGroups,
@@ -71,17 +71,17 @@ export function featureTitle(id: FeatureId, host: FeatureHost): string | undefin
 
 /** Badge of a feature: sends to check. Reminders carry no unread count (read tracking removed). */
 export function featureBadge(id: FeatureId, host: FeatureHost): { text: string; tone: 'count' | 'warning'; spoken: string } | null {
-  if (id === 'attempts') {
+  if (id === 'history') {
     const count = host.pendingAttempts.count
     if (count === null || count <= 0) return null
-    return { text: `${count} 待核对`, tone: 'warning', spoken: `${count} 项需要留意` }
+    return { text: `${count} 待核对`, tone: 'warning', spoken: `${count} 项发送记录需要留意` }
   }
   return null
 }
 
 export function featureMarked(id: FeatureId, host: FeatureHost): boolean {
   if (id === 'reminders') return host.reminderBadge?.coverageProblem === true
-  if (id === 'attempts') return host.pendingAttempts.failed
+  if (id === 'history') return host.pendingAttempts.failed
   return false
 }
 
@@ -89,12 +89,12 @@ export function featureLabel(id: FeatureId, host: FeatureHost): string {
   const badge = featureBadge(id, host)
   const marked = featureMarked(id, host)
   const label = featureInfo(id).label
-  return `${label}${badge === null ? '' : `，${badge.spoken}`}${marked ? (id === 'attempts' ? '，状态读取失败' : '，部分串检查未完成') : ''}`
+  return `${label}${badge === null ? '' : `，${badge.spoken}`}${marked ? (id === 'history' ? '，发送记录状态读取失败' : '，部分串检查未完成') : ''}`
 }
 
-/** Opens a dialog (草稿, 发送记录) rather than a page of the tab. */
+/** Opens the draft dialog rather than a page of the tab. */
 export function featureIsDialog(id: FeatureId): boolean {
-  return id === 'drafts' || id === 'attempts'
+  return id === 'drafts'
 }
 
 /** Small count / warning dot for icon-only feature buttons. */
@@ -102,7 +102,7 @@ export function FeatureDot({ id, host }: { id: FeatureId; host: FeatureHost }) {
   const badge = featureBadge(id, host)
   const marked = featureMarked(id, host)
   if (badge === null && !marked) return null
-  const text = badge === null ? '' : id === 'attempts' ? String(host.pendingAttempts.count) : badge.text
+  const text = badge === null ? '' : id === 'history' ? String(host.pendingAttempts.count) : badge.text
   return (
     <span className={badge?.tone === 'count' ? 'proto-dot is-count' : 'proto-dot is-warning'} aria-hidden="true">
       {text}
@@ -229,21 +229,12 @@ export function BoardTree({
   )
 }
 
-/** Loading, failure and empty states of the directory part. */
+/** First-load skeleton, failure and empty states of the directory part. */
 export function DirectoryPlaceholder({ state, onRetry, empty }: { state: DirectoryState; onRetry: () => void; empty: boolean }) {
   const { directory } = state
   return (
     <>
-      {directory === null && state.loading && (
-        <div className="nav-placeholder">
-          <Loading>正在读取版面目录…</Loading>
-          <div className="nav-skeleton" aria-hidden="true">
-            {Array.from({ length: 7 }, (_, index) => (
-              <span key={index} className="skeleton-line" />
-            ))}
-          </div>
-        </div>
-      )}
+      {directory === null && state.loading && <DirectorySkeleton />}
       {directory === null && state.failure !== null && (
         <div className="nav-placeholder">
           <FailureNotice title="版面目录读取失败" failure={state.failure} onRetry={onRetry} compact />

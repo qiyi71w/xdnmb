@@ -545,24 +545,24 @@ function HitRow({
         onClick={onChoose}
         {...itemProps}
       >
-        <span className="search-hit-thread">
-          {hit.threadId === null ? '所属串未知' : threadTitle !== null ? `${threadTitle} · No.${hit.threadId}` : `串 No.${hit.threadId}`}
-        </span>
         <span className="search-hit-post">
           <span className="search-hit-kind">{isHead ? '主帖' : '回复'}</span>
           <span className="search-hit-no">No.{hit.postId}</span>
-          {title !== null && (
-            <span className="search-hit-title">
-              <Highlighted text={title} query={query} />
-            </span>
-          )}
+          {hit.createdAt !== null && <span className="search-hit-time">{hit.createdAt}</span>}
         </span>
+        {title !== null && (
+          <span className="search-hit-title">
+            <Highlighted text={title} query={query} />
+          </span>
+        )}
         <span className="search-hit-excerpt">
           <Highlighted text={hit.excerpt} query={query} />
         </span>
         <span className="search-hit-meta">
           {forumName !== null && <span>{forumName}</span>}
-          {hit.createdAt !== null && <span>{hit.createdAt}</span>}
+          <span className="search-hit-thread">
+            {hit.threadId === null ? '所属串未知' : threadTitle !== null ? `${threadTitle} · No.${hit.threadId}` : `串 No.${hit.threadId}`}
+          </span>
           <span>{imageText(hit.hasImage)}</span>
           <span className={hit.retention === 'cache' ? 'tag' : 'tag tag-po'}>{RETENTION_TEXT[hit.retention]}</span>
           <span className="search-hit-location">{locationText(hit.location)}</span>

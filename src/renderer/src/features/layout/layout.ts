@@ -7,6 +7,9 @@
 //      `minSplitText` while the list stays beside it;
 //   4. split that no longer fits shows a single pane (the entry decides list or reader).
 // The list width is never shrunk to make room, and font size / line height never change.
+// A list the user widened beyond `listWidth` (`listGrow`) takes its extra width from the reading
+// text only, down to `minSplitText`, once the steps above are settled: widening never moves the
+// navigation or forces the single pane, and narrowing the window gives that extra width back first.
 
 /** What the entry shows when there is room: list + reader, the list alone, or a whole-page reader. */
 export type LayoutView = 'split' | 'list' | 'reader'
@@ -23,6 +26,8 @@ export interface LayoutInput {
   navCompactMin: number
   /** Thread list width beside the reader; never shrunk first. */
   listWidth: number
+  /** Extra list width the user asked for beyond `listWidth`; granted only while the reader keeps `minSplitText`. */
+  listGrow?: number
   /** Preferred reading text width at the current font size (reader column max width). */
   readingWidth: number
   /** Minimum space left and right of the reading text. */
@@ -43,6 +48,8 @@ export interface LayoutResult {
   singlePane: boolean
   /** Width of the list shown beside the reader; 0 when it is not beside it. */
   listWidth: number
+  /** Widest list the reader currently leaves room for (`listWidth` at least); 0 when not beside it. */
+  listWidthMax: number
   /** Resulting reading text width (or list-only content width). */
   textWidth: number
   /** Resulting space on each side of the reading text. */
@@ -85,10 +92,14 @@ export function computeLayout(input: LayoutInput): LayoutResult {
   // A reading width preference below the split minimum never forces single pane before the overlay stage.
   const minSplitText = Math.min(input.minSplitText, input.readingWidth)
   const singlePane = sideBySide && content < input.listWidth + minSplitText + 2 * input.minGutter
-  const listWidth = sideBySide && !singlePane ? input.listWidth : 0
+  const beside = sideBySide && !singlePane
+  const listWidthMax = beside
+    ? input.listWidth + Math.max(0, Math.floor(content - input.listWidth - input.minSplitText - 2 * input.minGutter))
+    : 0
+  const listWidth = beside ? Math.min(listWidthMax, input.listWidth + Math.max(0, input.listGrow ?? 0)) : 0
   const pane = Math.max(0, content - listWidth)
   const textWidth = Math.max(0, Math.min(input.readingWidth, pane - 2 * input.minGutter))
   const navProgress = nav === 'full' ? 0 : nav === 'overlay' ? 1 : (navFull - navWidth) / (navFull - navMin)
 
-  return { nav, navWidth, navProgress, singlePane, listWidth, textWidth, gutter: (pane - textWidth) / 2 }
+  return { nav, navWidth, navProgress, singlePane, listWidth, listWidthMax, textWidth, gutter: (pane - textWidth) / 2 }
 }

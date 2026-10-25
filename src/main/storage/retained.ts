@@ -33,14 +33,27 @@ export class RetainedContentDatabase {
     const query = kind === 'favorites' ? 'SELECT thread_id, added_at AS at FROM favorites'
       : kind === 'history' ? 'SELECT thread_id, last_visited_at AS at FROM thread_visits'
         : 'SELECT thread_id, updated_at AS at FROM offline_copies'
-    // The excerpt is the head post's text while it is still held locally (cache or offline copy):
-    // enough for the six-line excerpt of a list row.
-    return db.transaction(() => db.prepare<[], { thread_id: string; at: string; title: string | null; excerpt: string | null }>(`
-      SELECT e.*, t.title, substr(p.plain_text, 1, 400) AS excerpt
+    // Read only the retained head fields needed by list rows; never fetch missing content.
+    return db.transaction(() => db.prepare<[], {
+      thread_id: string; at: string; title: string | null; excerpt: string | null
+      head_id: string | null; forum_id: string | null; created_at: string | null; user_hash: string | null
+      name: string | null; head_title: string | null; is_admin: number | null; is_sage: number | null
+      image_path: string | null; image_ext: string | null
+    }>(`
+      SELECT e.*, t.title, substr(p.plain_text, 1, 400) AS excerpt,
+        p.id AS head_id, p.forum_id, p.created_at, p.user_hash, p.name, p.title AS head_title,
+        p.is_admin, p.is_sage, p.image_path, p.image_ext
       FROM (${query}) e LEFT JOIN retained_titles t USING(thread_id) LEFT JOIN posts p ON p.id = e.thread_id
       ORDER BY e.at DESC, e.thread_id
     `).all().map((row) => ({ threadId: row.thread_id, at: row.at, title: row.title ?? null,
-      excerpt: row.excerpt === null || row.excerpt.trim() === '' ? null : row.excerpt, offline: this.getOfflineCopy(row.thread_id) })))()
+      excerpt: row.excerpt === null || row.excerpt.trim() === '' ? null : row.excerpt,
+      head: row.head_id === null ? null : {
+        forumId: row.forum_id, createdAt: row.created_at, userHash: row.user_hash, name: row.name, title: row.head_title,
+        isAdmin: row.is_admin === null ? null : row.is_admin !== 0,
+        isSage: row.is_sage === null ? null : row.is_sage !== 0,
+        image: row.image_path !== null && row.image_ext !== null ? { path: row.image_path, ext: row.image_ext } : null
+      },
+      offline: this.getOfflineCopy(row.thread_id) })))()
   }
 
   isFavorite(threadId: ThreadId): boolean {
