@@ -5,10 +5,12 @@ import type { CredentialId } from '../../../../shared/identity'
 import { isSendShortcut, saveAriaShortcut, sendAriaShortcut, sendShortcutLabel, shortcutLabel } from '../../app/shortcuts'
 import { Icon, Spinner } from '../../components/Icon'
 import { useSettingsOpener } from '../../lib/settingsOpener'
+import { usePopover } from '../../lib/usePopover'
 import { formatLocalTime } from '../../lib/format'
 import { formatBytes } from '../image/imageView'
 import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, ATTEMPT_STATE_LABEL, PROBLEM_TEXT } from '../publication/publicationText'
 import type { IdentitiesState } from '../identity/useIdentities'
+import { ROLE_INFO } from '../identity/identityText'
 import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import {
   ATTACH_FAILURE_TEXT,
@@ -1073,9 +1075,14 @@ function IdentityRow({
   )
 }
 
+/** Typed letters within this pause extend one typeahead search. */
+const TYPEAHEAD_PAUSE = 500
+
 /**
  * Float layout header: the 发言饼干 as a compact pill (`饼干 名称 ▾`, or `选择饼干` in warning ink).
- * A transparent native select covers the pill, so it opens, reads and keys like the select it is.
+ * The pill opens a listbox under it: the cookies in the user's order (the current one checked, the
+ * browsing and default ones tagged as in settings), then 管理饼干. Arrow keys, Home/End and typed
+ * letters move; Enter or Space chooses; Esc closes with focus back on the pill.
  */
 function CookiePill({ editor, onChoose }: { editor: Editor; onChoose: (credentialId: CredentialId) => void }) {
   const { identities } = useEditorWorkspace()
@@ -1086,6 +1093,26 @@ function CookiePill({ editor, onChoose }: { editor: Editor; onChoose: (credentia
   const value = status.state === 'selected' ? status.credentialId : ''
   const locked = editor.publication !== null
   const placeholder = identityPlaceholder(status, identities)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const menu = usePopover(triggerRef, panelRef)
+  const ids = useId()
+  const selectedIndex = credentials.findIndex((credential) => credential.id === value)
+  /** The option the keys act on (aria-activedescendant), by position. */
+  const [active, setActive] = useState(0)
+  const typeahead = useRef({ text: '', at: 0 })
+
+  const disabled = overview === null || credentials.length === 0 || locked
+  const { close: closeMenu } = menu
+  useEffect(() => {
+    if (disabled) closeMenu(false)
+  }, [disabled, closeMenu])
+
+  /** Opens or closes the list; each opening starts on the current cookie (else the first). */
+  const toggleList = () => {
+    if (!menu.open) setActive(Math.max(selectedIndex, 0))
+    menu.toggle()
+  }
 
   if (overview !== null && credentials.length === 0 && openSettings !== null && !locked) {
     return (
@@ -1103,52 +1130,178 @@ function CookiePill({ editor, onChoose }: { editor: Editor; onChoose: (credentia
     )
   }
 
-  const selected = credentials.find((credential) => credential.id === value)
+  const selected = selectedIndex < 0 ? undefined : credentials[selectedIndex]
   const loading = overview === null && !failed
   const warning = selected === undefined && !loading
-  const disabled = overview === null || credentials.length === 0 || locked
+  const browsingId = credentials[0]?.id
+  const defaultRole = overview?.roles['default-post']
+  const defaultId = defaultRole?.state === 'selected' ? defaultRole.credentialId : undefined
+  const current = Math.min(active, credentials.length - 1)
+  const optionId = (index: number) => `${ids}-option-${index}`
+
+  const choose = (index: number) => {
+    const credential = credentials[index]
+    if (credential === undefined) return
+    menu.close()
+    if (credential.id !== value) onChoose(credential.id)
+  }
+
+  const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.nativeEvent.isComposing || event.ctrlKey || event.metaKey || event.altKey) return
+    const last = credentials.length - 1
+    let next: number | null = null
+    if (event.key === 'ArrowDown') next = Math.min(current + 1, last)
+    else if (event.key === 'ArrowUp') next = Math.max(current - 1, 0)
+    else if (event.key === 'Home') next = 0
+    else if (event.key === 'End') next = last
+    else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      event.stopPropagation()
+      choose(current)
+      return
+    } else if (event.key.length === 1 && event.key !== ' ') {
+      // Typeahead: the next name starting with what was typed; one letter repeated cycles.
+      const now = event.timeStamp
+      const previous = typeahead.current
+      const text = (now - previous.at < TYPEAHEAD_PAUSE ? previous.text : '') + event.key.toLowerCase()
+      typeahead.current = { text, at: now }
+      const cycling = [...text].every((letter) => letter === text[0])
+      const search = cycling ? text[0]! : text
+      const start = cycling || text.length === 1 ? current + 1 : current
+      for (let step = 0; step < credentials.length; step++) {
+        const index = (start + step) % credentials.length
+        if (credentials[index]!.name.toLowerCase().startsWith(search)) {
+          next = index
+          break
+        }
+      }
+      if (next === null) return
+    } else return
+    event.preventDefault()
+    event.stopPropagation()
+    setActive(next)
+    document.getElementById(optionId(next))?.scrollIntoView({ block: 'nearest' })
+  }
+
+  const label = selected !== undefined ? `发言饼干：${selected.name}` : loading ? '发言饼干：读取中' : `发言饼干：${placeholder}`
   return (
     <span
-      className={`compose-cookie${warning ? ' is-warning' : ''}${disabled ? ' is-disabled' : ''}`}
-      data-tip={warning ? placeholder : '发言饼干'}
-      data-tip-place="below end"
+      className="compose-cookie-field"
+      onBlur={(event) => {
+        // Tab out of the list (past 管理饼干) closes it where focus went.
+        const next = event.relatedTarget as Node | null
+        if (next !== null && !event.currentTarget.contains(next)) menu.close(false)
+      }}
     >
-      <span className="compose-cookie-text" aria-hidden="true">
-        {selected !== undefined ? (
-          <>
-            <span className="compose-cookie-label">饼干</span>
-            <span className="compose-cookie-name">{selected.name}</span>
-          </>
-        ) : loading ? (
-          '读取中…'
-        ) : (
-          <>
-            <Icon name="alert" size={13} />
-            选择饼干
-          </>
-        )}
-      </span>
-      {!disabled && <Icon name="chevron" size={12} className="compose-cookie-chevron" />}
-      <select
-        aria-label="发言饼干"
-        value={value}
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`compose-cookie${warning ? ' is-warning' : ''}${disabled ? ' is-disabled' : ''}`}
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={menu.open}
+        aria-controls={menu.open ? `${ids}-list` : undefined}
         disabled={disabled}
-        aria-invalid={status.state === 'missing' || status.state === 'unknown' ? true : undefined}
-        onChange={(event) => {
-          if (event.target.value !== '') onChoose(event.target.value)
+        data-tip={warning ? placeholder : '发言饼干'}
+        data-tip-place="below end"
+        onClick={toggleList}
+        onKeyDown={(event) => {
+          // ↓ / ↑ open the list too, as a select does.
+          if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && !menu.open) {
+            event.preventDefault()
+            toggleList()
+          }
         }}
       >
-        {value === '' && (
-          <option value="" disabled>
-            {placeholder}
-          </option>
-        )}
-        {credentials.map((credential) => (
-          <option key={credential.id} value={credential.id}>
-            {credential.name}
-          </option>
-        ))}
-      </select>
+        <span className="compose-cookie-text" aria-hidden="true">
+          {selected !== undefined ? (
+            <>
+              <span className="compose-cookie-label">饼干</span>
+              <span className="compose-cookie-name">{selected.name}</span>
+            </>
+          ) : loading ? (
+            '读取中…'
+          ) : (
+            <>
+              <Icon name="alert" size={13} />
+              选择饼干
+            </>
+          )}
+        </span>
+        {!disabled && <Icon name="chevron" size={12} className="compose-cookie-chevron" />}
+      </button>
+      {menu.open && (
+        <div ref={panelRef} className="compose-cookie-pop">
+          {selected === undefined && (
+            <p className="compose-cookie-note" id={`${ids}-note`}>
+              <Icon name="alert" size={13} />
+              {placeholder}
+            </p>
+          )}
+          <div
+            id={`${ids}-list`}
+            className="compose-cookie-list"
+            role="listbox"
+            aria-label="发言饼干"
+            aria-describedby={selected === undefined ? `${ids}-note` : undefined}
+            aria-activedescendant={optionId(current)}
+            tabIndex={0}
+            data-autofocus=""
+            onKeyDown={onListKeyDown}
+          >
+            {credentials.map((credential, index) => {
+              const isSelected = credential.id === value
+              const tags = [credential.id === browsingId ? '浏览' : null, credential.id === defaultId ? ROLE_INFO['default-post'].label : null].filter(
+                (tag) => tag !== null
+              )
+              return (
+                <div
+                  key={credential.id}
+                  id={optionId(index)}
+                  role="option"
+                  aria-selected={isSelected}
+                  className={`compose-cookie-option${index === current ? ' is-active' : ''}`}
+                  onPointerMove={() => setActive(index)}
+                  // The list keeps focus: a press chooses without moving it first.
+                  onPointerDown={(event) => event.preventDefault()}
+                  onClick={() => choose(index)}
+                >
+                  <span className="compose-cookie-check" aria-hidden="true">
+                    {isSelected && <Icon name="check" size={14} />}
+                  </span>
+                  <span className="compose-cookie-option-name">{credential.name}</span>
+                  {tags.length > 0 && (
+                    <span className="compose-cookie-tags">
+                      <span className="visually-hidden">用于：</span>
+                      {tags.map((tag) => (
+                        <span key={tag} className="tag">
+                          {tag}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          {openSettings !== null && (
+            <>
+              <div role="separator" className="compose-cookie-separator" />
+              <button
+                type="button"
+                className="compose-cookie-manage"
+                onClick={() => {
+                  menu.close(false)
+                  openSettings('cookies')
+                }}
+              >
+                <Icon name="settings" size={14} />
+                管理饼干
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </span>
   )
 }

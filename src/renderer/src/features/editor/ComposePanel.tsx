@@ -191,10 +191,12 @@ export function ComposeButton({ tabId, target, className = 'btn' }: { tabId: num
   const { opening, expand } = useComposeOpen(tabId, target, editor)
   const key = focusKey(tabId, target)
   const resume = editor !== null && hasContent(editor)
+  const text = resume ? '继续编辑' : target.kind === 'reply' ? '回复' : '发新串'
   return (
     <button
       type="button"
       className={className}
+      title={text}
       data-compose-key={key}
       aria-haspopup="dialog"
       aria-expanded={editor?.expanded === true}
@@ -205,7 +207,7 @@ export function ComposeButton({ tabId, target, className = 'btn' }: { tabId: num
       }}
     >
       <Icon name={resume ? 'draft' : target.kind === 'reply' ? 'reply' : 'plus'} />
-      {resume ? '继续编辑' : target.kind === 'reply' ? '回复' : '发新串'}
+      <span className="btn-label">{text}</span>
     </button>
   )
 }

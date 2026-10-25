@@ -33,6 +33,9 @@ function composeEntry(tabId: number, target: PostTarget, className?: string) {
   }
 }
 
+/** PROTOTYPE: 回复 in the thread toolbar is its one emphasised action (thread.css `.tb-btn.is-primary`). */
+const READER_ENTRY = 'btn tb-btn is-primary'
+
 /**
  * Content of one tab: its current history entry. Inactive tabs stay mounted but hidden, keeping
  * their lists, readers and reading positions. In the single-pane fallback both panes stay
@@ -138,7 +141,7 @@ export function TabView({
           forumName={forumName}
           onBackToList={null}
           footer={PROTOTYPE_ENABLED ? null : <EditorDock tabId={tab.id} target={target} displayed={active} />}
-          compose={PROTOTYPE_ENABLED ? composeEntry(tab.id, target) : null}
+          compose={PROTOTYPE_ENABLED ? composeEntry(tab.id, target, READER_ENTRY) : null}
         />
       </main>
     )
@@ -332,7 +335,7 @@ export function TabView({
                   />
                 )
               }
-              compose={PROTOTYPE_ENABLED ? composeEntry(tab.id, { kind: 'reply', threadId: entry.thread.threadId }) : null}
+              compose={PROTOTYPE_ENABLED ? composeEntry(tab.id, { kind: 'reply', threadId: entry.thread.threadId }, READER_ENTRY) : null}
             />
           )}
         </main>

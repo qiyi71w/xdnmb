@@ -206,51 +206,174 @@
   font-weight: 600;
 }
 
-/* ---------- PROTOTYPE (throwaway): one-row toolbar, position control, 更多 ---------- */
+/* ---------- PROTOTYPE (throwaway): one-row toolbar, page control, 更多, 开头／末尾 pills ---------- */
 
-/* Under the toolbar row: what applies now on the left, the position control on the right. */
-.position-row {
+/* One row: reading mode and page on the left, actions on the right, all 30px high (26 compact).
+   The row is a size container: labels give way to icons before anything wraps. */
+.thread-bar {
+  container: thread-bar / inline-size;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
-  gap: 4px 12px;
+  justify-content: space-between;
+  gap: 6px 12px;
 }
 
-.position-row > .toolbar-status {
-  flex: 1 1 16em;
+.thread-bar-lead,
+.thread-bar-actions {
+  display: flex;
+  align-items: center;
   min-width: 0;
 }
 
-.position-control {
-  display: inline-flex;
+.thread-bar-lead {
+  gap: 8px;
+}
+
+.thread-bar-actions {
   flex-wrap: wrap;
-  align-items: center;
   justify-content: flex-end;
   gap: 2px;
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 
-.position-control .btn-count {
-  font-size: var(--text-xs);
+.thread-bar .segmented-item {
+  min-height: 26px;
 }
 
+/* Borderless toolbar button: a line of text with its icon; hover lays the hover overlay under it. */
+.thread-bar .tb-btn {
+  min-height: 30px;
+  padding: 4px 10px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.thread-bar .tb-btn:hover:not(:disabled, [aria-disabled='true']) {
+  background: var(--hover);
+}
+
+.thread-bar .tb-btn:active:not(:disabled, [aria-disabled='true']) {
+  background: color-mix(in oklch, var(--hover), var(--ink) 6%);
+}
+
+.thread-bar .tb-btn[aria-disabled='true']:hover,
+.thread-bar .tb-btn[aria-disabled='true']:active {
+  background: transparent;
+}
+
+.thread-bar .tb-btn:focus-visible {
+  outline-offset: 0;
+}
+
+.thread-bar .tb-btn[aria-busy='true'] {
+  cursor: progress;
+}
+
+/* 回复, the one emphasised action: a soft tide tint and tide ink, not a filled primary. */
+.thread-bar .tb-btn.is-primary {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.thread-bar .tb-btn.is-primary .icon {
+  color: var(--accent-ink);
+}
+
+.thread-bar .tb-btn.is-primary:hover:not(:disabled, [aria-disabled='true']) {
+  background: color-mix(in oklch, var(--accent-soft), var(--accent) 14%);
+}
+
+/* The page control: quiet secondary ink, numerals in fixed width, a small chevron. */
 .position-page {
   position: relative;
   display: inline-flex;
   max-width: 100%;
 }
 
-.position-page-trigger {
+.thread-bar .position-page-trigger {
+  gap: 4px;
+  padding-inline: 8px;
+  color: var(--ink-2);
   font-variant-numeric: tabular-nums;
+}
+
+.thread-bar .position-page-trigger:hover:not(:disabled, [aria-disabled='true']),
+.thread-bar .position-page-trigger[aria-expanded='true'] {
+  color: var(--ink);
 }
 
 .position-page-chevron {
   transform: rotate(90deg);
 }
 
+.thread-bar .position-page-chevron {
+  color: var(--ink-3);
+}
+
 .position-page-trigger[aria-expanded='true'] .position-page-chevron {
   transform: rotate(-90deg);
+}
+
+:root[data-density='compact'] .thread-bar {
+  gap: 4px 8px;
+}
+
+:root[data-density='compact'] .thread-bar-lead {
+  gap: 6px;
+}
+
+:root[data-density='compact'] .thread-bar .tb-btn {
+  min-height: 26px;
+  padding: 2px 8px;
+}
+
+:root[data-density='compact'] .thread-bar .segmented-item {
+  min-height: 24px;
+}
+
+/* Narrower: the secondary actions (and 返回串列表) show their icon only, as squares; the name stays
+   for assistive technology and in the tooltip. */
+@container thread-bar (max-width: 39rem) {
+  .thread-bar .tb-btn:not(.is-primary, .subscribe-btn, .position-page-trigger) {
+    padding-inline: 6px;
+  }
+
+  :root[data-density='compact'] .thread-bar .tb-btn:not(.is-primary, .subscribe-btn, .position-page-trigger) {
+    padding-inline: 4px;
+  }
+
+  .thread-bar .tb-btn:not(.is-primary, .subscribe-btn, .position-page-trigger) .btn-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* Narrower still: 回复 and 订阅 too. Only then may the row wrap. */
+@container thread-bar (max-width: 30rem) {
+  .thread-bar .tb-btn:not(.position-page-trigger) {
+    padding-inline: 6px;
+  }
+
+  :root[data-density='compact'] .thread-bar .tb-btn:not(.position-page-trigger) {
+    padding-inline: 4px;
+  }
+
+  .thread-bar .tb-btn:not(.position-page-trigger) .btn-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 .position-page-panel,
@@ -269,7 +392,9 @@
   white-space: normal;
 }
 
+/* The page control sits at the start of the row: its panel opens towards the actions. */
 .position-page-panel {
+  inset-inline: 0 auto;
   display: grid;
   gap: 10px;
   padding: 12px;
@@ -342,6 +467,12 @@
   cursor: progress;
 }
 
+.thread-more-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line-soft);
+}
+
 /* ---------- 订阅／已订阅 in the toolbar ---------- */
 
 .subscribe {
@@ -392,6 +523,80 @@
 .subscribe-note-close {
   width: 24px;
   height: 24px;
+}
+
+/* ---------- PROTOTYPE (throwaway): floating 开头 / 末尾 ---------- */
+
+/* A small paper pill, floating (navigation shadow), centred over the reading column: 开头 just under
+   the toolbar (inside it, so it follows the sticky bar), 末尾 near the bottom of the reader. Solid
+   paper, since the start pill sits inside the toolbar's own backdrop. Hidden pills are inert. They
+   fade and slide 6px in 0.15s; with reduced motion they simply appear. Under the toolbar's popovers. */
+.jump-pill {
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 14px 4px 11px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--paper);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.15s var(--ease-out),
+    translate 0.15s var(--ease-out),
+    visibility 0s linear 0.15s;
+}
+
+.jump-pill .icon {
+  flex: none;
+  color: var(--accent-ink);
+}
+
+.jump-pill.is-start {
+  top: calc(100% + 10px);
+  translate: -50% -6px;
+}
+
+.jump-pill.is-end {
+  z-index: 4;
+  bottom: 18px;
+  translate: -50% 6px;
+}
+
+.jump-pill[data-shown] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  translate: -50% 0;
+  transition:
+    opacity 0.15s var(--ease-out),
+    translate 0.15s var(--ease-out),
+    visibility 0s;
+}
+
+.jump-pill:hover {
+  background: color-mix(in oklch, var(--paper), var(--ink) 5%);
+}
+
+.jump-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+:root[data-density='compact'] .jump-pill {
+  min-height: 26px;
+  padding: 2px 12px 2px 9px;
 }
 
 /* Text width is --reading-width; side gutters are what is left, never below --gutter-min.

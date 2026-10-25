@@ -1,4 +1,5 @@
 import type {
+  SubscriptionAction,
   SubscriptionContext,
   SubscriptionFailure,
   SubscriptionObservation,
@@ -7,8 +8,8 @@ import type {
   SubscriptionSource
 } from '../../../../shared/subscriptions'
 import type { ThreadId } from '../../../../shared/forum'
-import { needsReconcile } from './subscriptionText'
-import type { ActiveWrite } from './useSubscriptions'
+import { needsReconcile, sourceBlocker } from './subscriptionText'
+import type { ActiveWrite, ChangeRequest } from './useSubscriptions'
 
 export type ListActivity = 'idle' | 'stored' | 'first' | 'next'
 
@@ -114,6 +115,48 @@ export function isRunningChange(operation: SubscriptionOperation, active: Active
 export function isReconcilable(operation: SubscriptionOperation, active: ActiveChange): boolean {
   if (operation.state === 'pending') return !isRunningChange(operation, active)
   return needsReconcile(operation)
+}
+
+/** What a press of 订阅／已订阅／取消订阅／加入 does now: the one write itself, or why it cannot start. */
+export type ChangeDecision = { kind: 'write'; request: ChangeRequest } | { kind: 'blocked'; reason: string }
+
+/**
+ * PROTOTYPE: a press writes at once, with no confirmation step. The request targets the source and
+ * identity combination shown at the press; it is sent once and never retried. Reminders of an
+ * unsubscribed thread stay as they are (nothing is asked). Blocked presses keep their reasons.
+ */
+export function decideChange({
+  overview,
+  operations,
+  busy,
+  action,
+  threadId,
+  label,
+  unresolved
+}: {
+  overview: SubscriptionOverview | null
+  operations: readonly SubscriptionOperation[] | null
+  /** A write, 核对, preview read or plan is running. */
+  busy: boolean
+  action: SubscriptionAction
+  threadId: ThreadId
+  label: string
+  /** Wording for an unresolved earlier write of this thread, which only 核对 may follow. */
+  unresolved: string
+}): ChangeDecision {
+  if (overview === null) return { kind: 'blocked', reason: '订阅设置尚未读取' }
+  const blocker = sourceBlocker(overview, overview.source)
+  if (blocker !== null) return { kind: 'blocked', reason: blocker }
+  if (!overview.writable) return { kind: 'blocked', reason: '本地存储不可写' }
+  if (busy) return { kind: 'blocked', reason: '另一项订阅操作正在进行' }
+  const objectRef = sourceObjectRef(overview.context, overview.source)
+  if (operations?.some((item) => blocksNewWrite(item, { source: overview.source, objectRef, threadId })) === true) {
+    return { kind: 'blocked', reason: unresolved }
+  }
+  return {
+    kind: 'write',
+    request: { source: overview.source, threadId, action, expectedGeneration: overview.context.generation, label, reminders: null }
+  }
 }
 
 export function subscriptionListReducer(state: SubscriptionListState, action: SubscriptionListAction): SubscriptionListState {

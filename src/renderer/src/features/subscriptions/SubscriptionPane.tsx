@@ -39,6 +39,7 @@ import { ReconcileView } from './SubscriptionReconcile'
 import { SubscriptionRowMenu } from './SubscriptionRowMenu'
 import {
   blocksNewWrite,
+  decideChange,
   displayedObservation,
   initialSubscriptionListState,
   selectionKey,
@@ -405,6 +406,20 @@ export function SubscriptionPane({
     })
   }
 
+  /**
+   * PROTOTYPE: 加入 and 取消订阅 write at once, with no confirmation and no reminder question
+   * (reminders stay as they are).
+   */
+  const decide = (action: SubscriptionAction, threadId: ThreadId, label: string) =>
+    decideChange({ overview, operations, busy, action, threadId, label, unresolved: '这个串有待核对的操作，请先打开这个串核对订阅' })
+  /** Sends the write; returns why the press could not start, or null once sent. */
+  const writeNow = (action: SubscriptionAction, threadId: ThreadId, label: string): string | null => {
+    const decision = decide(action, threadId, label)
+    if (decision.kind === 'blocked') return decision.reason
+    void change(decision.request)
+    return null
+  }
+
   const blocker = overview === null ? null : sourceBlocker(overview, overview.source)
   const writeBlocked = overview === null || blocker !== null || !overview.writable || busy
   const writeHint = busy
@@ -614,7 +629,11 @@ export function SubscriptionPane({
             disabled={writeBlocked || draft !== null}
             hint={writeHint}
             currentThreadId={selectedThreadId}
-            onAdd={(threadId) => openDraft('add', threadId, labelOf(threadId))}
+            onAdd={(threadId) => {
+              if (PROTOTYPE_ENABLED) return writeNow('add', threadId, labelOf(threadId))
+              openDraft('add', threadId, labelOf(threadId))
+              return null
+            }}
           />
 
           {!PROTOTYPE_ENABLED && <OperationJournal />}
@@ -827,8 +846,18 @@ export function SubscriptionPane({
           failure={rules.failure}
           onRetry={rules.reload}
           onUpdated={rules.updated}
-          removeBlocked={writeHint ?? (draft !== null ? '请先完成或返回当前的确认' : null)}
-          onRemove={() => openDraft('remove', rowMenu.threadId, threadLabel(menuThread))}
+          removeBlocked={
+            PROTOTYPE_ENABLED
+              ? (() => {
+                  const decision = decide('remove', rowMenu.threadId, threadLabel(menuThread))
+                  return decision.kind === 'blocked' ? decision.reason : null
+                })()
+              : (writeHint ?? (draft !== null ? '请先完成或返回当前的确认' : null))
+          }
+          onRemove={() => {
+            if (PROTOTYPE_ENABLED) writeNow('remove', rowMenu.threadId, threadLabel(menuThread))
+            else openDraft('remove', rowMenu.threadId, threadLabel(menuThread))
+          }}
           onClose={closeRowMenu}
         />
       )}
@@ -920,7 +949,8 @@ function AddForm({
   disabled: boolean
   hint: string | null
   currentThreadId: ThreadId | null
-  onAdd: (threadId: ThreadId) => void
+  /** Starts the write (prototype) or its confirmation; returns why it could not start, if it could not. */
+  onAdd: (threadId: ThreadId) => string | null
 }) {
   const [value, setValue] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -936,9 +966,13 @@ function AddForm({
       setError('请输入串号（只含数字，例如 50000001）')
       return
     }
+    const blocked = onAdd(threadId)
+    if (blocked !== null) {
+      setError(blocked)
+      return
+    }
     setError(null)
     setValue('')
-    onAdd(threadId)
   }
 
   const describedBy = [hint !== null ? hintId : null, error !== null ? errorId : null].filter(Boolean).join(' ') || undefined
@@ -968,7 +1002,15 @@ function AddForm({
           {PROTOTYPE_ENABLED ? '加入' : '加入…'}
         </button>
         {currentThreadId !== null && (
-          <button type="button" className="btn btn-small" disabled={disabled} onClick={() => onAdd(currentThreadId)}>
+          <button
+            type="button"
+            className="btn btn-small"
+            disabled={disabled}
+            onClick={() => {
+              const blocked = onAdd(currentThreadId)
+              setError(blocked)
+            }}
+          >
             {PROTOTYPE_ENABLED ? `加入当前串 No.${currentThreadId}` : `加入当前串 No.${currentThreadId}…`}
           </button>
         )}

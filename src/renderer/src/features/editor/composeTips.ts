@@ -2,8 +2,8 @@
 // tip on hover unless the control carries `data-tip-off`, and on focus only while the control carries
 // `data-tip-focus` and matches :focus-visible.
 //
-// - Pressing a control, a key on it, or changing its value (a cookie chosen from the native select)
-//   hides its tip until the pointer leaves it; the pointer may still rest on it, and focus stays.
+// - Pressing a control, a key on it, or changing its value (a select) hides its tip until the
+//   pointer leaves it; the pointer may still rest on it, and focus stays.
 // - A focus tip needs focus that arrived by Tab / Shift+Tab. Focus placed by code (after a choice,
 //   after closing a form) or by a press shows nothing.
 

@@ -30,8 +30,11 @@ export interface ReadingViewportOptions {
    * remembered anchor (snapshot, saved position) whose post is gone; `post`: an explicit post.
    */
   onNearby: (kind: 'anchor' | 'post') => void
-  /** The reader scrolled the content itself (not a position or anchor applied by this hook). */
-  onUserScroll: () => void
+  /**
+   * The reader scrolled the content itself (not a position or anchor applied by this hook), by
+   * `delta` px (positive downwards) from the last position, whoever set that one.
+   */
+  onUserScroll: (delta: number) => void
 }
 
 function sameAnchor(a: ReadingAnchor, b: ReadingAnchor | null): boolean {
@@ -70,6 +73,8 @@ export function useReadingViewport(options: ReadingViewportOptions) {
   const restoredRef = useRef(false)
   const pendingRef = useRef<ReaderPosition | null>(null)
   const expectedTopRef = useRef<number | null>(null)
+  /** scrollTop after the last scroll event or position set here: the base of a user scroll's delta. */
+  const baseTopRef = useRef(0)
   const judgeRef = useRef<ReadJudge | null>(null)
   const frame = useRef<{ id: number | null; capture: boolean }>({ id: null, capture: false })
   const saveTimer = useRef<number | undefined>(undefined)
@@ -112,6 +117,7 @@ export function useReadingViewport(options: ReadingViewportOptions) {
       if (scroller === null) return
       scroller.scrollTop = top
       expectedTopRef.current = scroller.scrollTop
+      baseTopRef.current = scroller.scrollTop
     },
     [scrollRef]
   )
@@ -278,12 +284,15 @@ export function useReadingViewport(options: ReadingViewportOptions) {
 
   const onScroll = useCallback(() => {
     const scroller = scrollRef.current
-    if (scroller === null || !restoredRef.current || !measurable()) return
+    if (scroller === null) return
+    const top = scroller.scrollTop
+    const base = baseTopRef.current
+    baseTopRef.current = top
+    if (!restoredRef.current || !measurable()) return
     // The last position we set stays recorded until the reader scrolls: separate scroll events for
     // our assignment and a later layout clamp are both recognised.
     const expected = expectedTopRef.current
     if (expected !== null) {
-      const top = scroller.scrollTop
       // Our own scroll (restore, anchor keeping): nothing moved under the reading line.
       if (Math.abs(top - expected) < 1) {
         schedule(false)
@@ -298,7 +307,7 @@ export function useReadingViewport(options: ReadingViewportOptions) {
       }
     }
     expectedTopRef.current = null
-    opts.current.onUserScroll()
+    opts.current.onUserScroll(top - base)
     schedule(true)
   }, [scrollRef, measurable, schedule])
 

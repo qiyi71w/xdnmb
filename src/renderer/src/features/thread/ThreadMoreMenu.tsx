@@ -1,6 +1,7 @@
-// PROTOTYPE (throwaway): 更多 of the one-row thread toolbar. Holds 提醒 and 离线保存; choosing one
-// opens its existing panel (the 提醒 panel anchored to 更多, the 离线副本 dialog) with its usual
-// behaviour. Built only with VITE_XIDAO_PROTOTYPE=1.
+// PROTOTYPE (throwaway): 更多 of the one-row thread toolbar. Holds 开头 / 末尾 (also Ctrl/⌘+Home /
+// End and the floating pills), 提醒 and 离线保存; choosing 提醒 or 离线保存 opens its existing panel
+// (the 提醒 panel anchored to 更多, the 离线副本 dialog) with its usual behaviour. Built only with
+// VITE_XIDAO_PROTOTYPE=1.
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import type { ReadingMode, ThreadId } from '../../../../shared/forum'
@@ -21,7 +22,9 @@ export function ThreadMoreMenu({
   onRetry,
   onUpdated,
   onReminderOpenChange,
-  onReport
+  onReport,
+  onToStart,
+  onToEnd
 }: {
   threadId: ThreadId
   mode: ReadingMode
@@ -34,6 +37,9 @@ export function ThreadMoreMenu({
   /** The 提醒 panel opened or closed (the reader stops judging reading while it covers posts). */
   onReminderOpenChange: (open: boolean) => void
   onReport?: (opener: HTMLElement | null) => void
+  /** The reader's 开头 and 末尾. */
+  onToStart: () => void
+  onToEnd: () => void
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const openInTab = useOpenThreadInTab()
@@ -99,18 +105,28 @@ export function ThreadMoreMenu({
       <button
         ref={triggerRef}
         type="button"
-        className={warn ? 'btn thread-more-trigger is-warning' : 'btn thread-more-trigger'}
+        className={warn ? 'btn tb-btn thread-more-trigger is-warning' : 'btn tb-btn thread-more-trigger'}
         aria-haspopup="menu"
         aria-expanded={expanded}
         aria-controls={menu.open ? menuId : reminder.open ? reminderId : undefined}
         aria-label={warn ? '更多（有需要注意的状态）' : '更多'}
+        title={warn ? '更多（有需要注意的状态）' : '更多'}
         onClick={() => (reminder.open ? reminder.close() : menu.toggle())}
       >
         <Icon name={warn ? 'alert' : 'more'} />
-        更多
+        <span className="btn-label">更多</span>
       </button>
       {menu.open && (
         <div ref={menuRef} id={menuId} className="thread-more-menu" role="menu" aria-label="更多操作" onKeyDown={onMenuKeyDown}>
+          <button type="button" role="menuitem" className="thread-more-item" aria-keyshortcuts="Control+Home Meta+Home" onClick={() => { menu.close(); onToStart() }}>
+            <Icon name="toTop" />
+            开头
+          </button>
+          <button type="button" role="menuitem" className="thread-more-item" aria-keyshortcuts="Control+End Meta+End" onClick={() => { menu.close(); onToEnd() }}>
+            <Icon name="toEnd" />
+            末尾
+          </button>
+          <div role="separator" className="thread-more-separator" />
           {openInTab !== null && <button type="button" role="menuitem" className="thread-more-item" onClick={() => { menu.close(); openInTab(threadId, null, mode) }}>在新标签页打开</button>}
           {onReport !== undefined && <button type="button" role="menuitem" className="thread-more-item" onClick={() => { menu.close(); onReport(triggerRef.current) }}>举报</button>}
           <button

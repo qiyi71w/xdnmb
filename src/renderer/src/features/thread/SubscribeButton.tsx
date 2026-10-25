@@ -6,9 +6,14 @@ import { useSettingsOpener } from '../../lib/settingsOpener'
 import { usePopover } from '../../lib/usePopover'
 import { askedThreads, useReminderAsk, type ReminderChoice } from '../reminders/ReminderLinkage'
 import { ChangeConfirm, changeDraft, SUBSCRIPTION_OBSERVED_EVENT, type ChangeDraft } from '../subscriptions/SubscriptionPane'
-import { blocksNewWrite, selectionKey, sourceObjectRef } from '../subscriptions/subscriptionListState'
+import { blocksNewWrite, decideChange, selectionKey, sourceObjectRef } from '../subscriptions/subscriptionListState'
 import { SOURCE_NAME, failureText, needsReconcile, sourceBlocker } from '../subscriptions/subscriptionText'
 import { useSubscriptionsContext } from '../subscriptions/useSubscriptions'
+// PROTOTYPE (throwaway): a press writes at once; the toolbar's borderless buttons.
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
+
+/** The thread toolbar's button class: borderless with a collapsible label in the prototype. */
+const BUTTON = PROTOTYPE_ENABLED ? 'btn tb-btn subscribe-btn' : 'btn subscribe-btn'
 
 type Membership =
   | { kind: 'loading' }
@@ -40,8 +45,9 @@ function membershipOf(
 }
 
 /**
- * 订阅／已订阅 in the thread toolbar. A press opens the same confirmation as the subscription list
- * (one explicit write, never retried); an unsettled result offers only the read-only 核对.
+ * 订阅／已订阅 in the thread toolbar: one explicit write, never retried; an unsettled result offers
+ * only the read-only 核对. A press writes at once in the prototype (`decideChange`); otherwise it
+ * opens the same confirmation as the subscription list.
  */
 export function SubscribeButton({
   threadId,
@@ -51,7 +57,7 @@ export function SubscribeButton({
   threadId: ThreadId
   label: string
   /** The confirmation opened or closed (it covers posts: the reader stops judging reading). */
-  onOpenChange: (open: boolean) => void
+  onOpenChange?: (open: boolean) => void
 }) {
   const { overview, operations, active, busy, change, reconcile } = useSubscriptionsContext()
   const openSettings = useSettingsOpener()
@@ -66,9 +72,10 @@ export function SubscribeButton({
     report.current = onOpenChange
   })
   useEffect(() => {
-    report.current(popover.open)
+    report.current?.(popover.open)
   }, [popover.open])
-  useEffect(() => () => report.current(false), [])
+  useEffect(() => () => report.current?.(false), [])
+  const reasonId = useId()
 
   const source = overview?.source ?? null
   const selection = overview === null ? null : selectionKey(overview)
@@ -147,10 +154,19 @@ export function SubscribeButton({
   }
 
   if (membership.kind === 'pending' || reconciling) {
+    const text = reconciling ? '核对中…' : membership.kind === 'pending' && membership.action === 'remove' ? '取消中…' : '订阅中…'
+    // The prototype's press turns this same button pending: aria-disabled keeps the focus on it.
     return (
-      <button type="button" className="btn subscribe-btn" disabled aria-busy="true">
+      <button
+        type="button"
+        className={BUTTON}
+        disabled={!PROTOTYPE_ENABLED}
+        aria-disabled={PROTOTYPE_ENABLED || undefined}
+        aria-busy="true"
+        title={PROTOTYPE_ENABLED ? text : undefined}
+      >
         <Spinner />
-        {reconciling ? '核对中…' : membership.kind === 'pending' && membership.action === 'remove' ? '取消中…' : '订阅中…'}
+        <span className="btn-label">{text}</span>
       </button>
     )
   }
@@ -159,18 +175,57 @@ export function SubscribeButton({
     return (
       <button
         type="button"
-        className="btn subscribe-btn is-warning"
-        disabled={busy}
+        className={`${BUTTON} is-warning`}
+        disabled={!PROTOTYPE_ENABLED && busy}
+        aria-disabled={(PROTOTYPE_ENABLED && busy) || undefined}
         title="上次操作的结果未确认；核对只读取，不会再次写入"
-        onClick={() => void reconcile(membership.operation)}
+        onClick={() => {
+          if (!busy) void reconcile(membership.operation)
+        }}
       >
         <Icon name="alert" />
-        核对订阅
+        <span className="btn-label">核对订阅</span>
       </button>
     )
   }
 
   const subscribed = membership.kind === 'in'
+
+  if (PROTOTYPE_ENABLED) {
+    const decision = decideChange({
+      overview,
+      operations,
+      busy,
+      action: subscribed ? 'remove' : 'add',
+      threadId,
+      label,
+      unresolved: '这个串有待核对的操作，请先在订阅页核对'
+    })
+    const blockedReason = decision.kind === 'blocked' ? decision.reason : null
+    const text = subscribed ? '已订阅' : '订阅'
+    return (
+      <button
+        type="button"
+        className={subscribed ? `${BUTTON} is-on` : BUTTON}
+        aria-pressed={subscribed}
+        aria-disabled={membership.kind === 'loading' || blockedReason !== null || undefined}
+        aria-describedby={blockedReason !== null ? reasonId : undefined}
+        title={blockedReason ?? `${SOURCE_NAME[overview.source]}：${subscribed ? '已加入，按下取消订阅' : '按下加入订阅'}`}
+        onClick={() => {
+          if (membership.kind !== 'loading' && decision.kind === 'write') void change(decision.request)
+        }}
+      >
+        <Icon name={subscribed ? 'check' : 'bookmark'} />
+        <span className="btn-label">{text}</span>
+        {blockedReason !== null && (
+          <span id={reasonId} className="visually-hidden">
+            {blockedReason}
+          </span>
+        )}
+      </button>
+    )
+  }
+
   const stale = draft !== null && draft.selection !== selection
   const blockedReason =
     blocker ??
@@ -229,7 +284,11 @@ export function SubscribeButton({
   )
 }
 
-/** One line for the last write of this thread made anywhere in the app; nothing once it is dismissed. */
+/**
+ * One line for the last write of this thread made anywhere in the app; nothing once it is dismissed.
+ * PROTOTYPE: a confirmed result is the button itself (已订阅／订阅); only failures and unknown
+ * outcomes leave a line, whose 核对 is the button's 核对订阅.
+ */
 export function SubscribeNote({ threadId }: { threadId: ThreadId }) {
   const { lastWrite, active, dismissLastWrite } = useSubscriptionsContext()
   if (active !== null || lastWrite === null || lastWrite.write.threadId !== threadId) return null
@@ -242,6 +301,7 @@ export function SubscribeNote({ threadId }: { threadId: ThreadId }) {
       if (outcome.operation.reportError?.kind === 'rate-limited') text = `${what}结果未确认：限流或需要验证`
       else if (needsReconcile(outcome.operation)) text = `${what}结果未确认`
       else {
+        if (PROTOTYPE_ENABLED) return null
         text = `${what}完成`
         warn = false
       }

@@ -15,7 +15,8 @@ import {
 } from './subscriptionText'
 import { useSubscriptionsContext, type ActiveWrite, type WriteNotice } from './useSubscriptions'
 import { LinkageLine } from '../reminders/ReminderLinkage'
-// PROTOTYPE (throwaway): automatic reads are silent; only failures show.
+// PROTOTYPE (throwaway): automatic reads are silent; only failures show. A write and its result
+// are one line each (the press itself wrote, without a confirmation that explained it first).
 import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 
 function objectLine(write: Pick<ActiveWrite, 'source' | 'threadId' | 'label'>): string {
@@ -38,9 +39,11 @@ export function WriteStatus() {
             <p className="sub-write-title">
               {active.kind === 'change' ? `正在${ACTION_NAME[active.action]}` : '正在核对'}：{objectLine(active)}
             </p>
-            <p className="sub-write-detail">
-              {active.kind === 'change' ? '等待服务端报告，之后回读核对。' : '只读核对，不会再次写入。'}
-            </p>
+            {!PROTOTYPE_ENABLED && (
+              <p className="sub-write-detail">
+                {active.kind === 'change' ? '等待服务端报告，之后回读核对。' : '只读核对，不会再次写入。'}
+              </p>
+            )}
             {active.reminders !== null && <LinkageLine linkage={active.reminders} className="sub-write-detail" />}
             {active.stopRequested && <p className="sub-write-detail">已停止读取；已发出的写入不会撤回。</p>}
           </div>
@@ -56,6 +59,26 @@ export function WriteStatus() {
 
 /** Prototype: there is no 操作记录 list; 核对 runs from the thread's 核对订阅 or from the result itself. */
 const RECHECK_ELSEWHERE = '请打开这个串核对订阅，不要直接重复操作。'
+
+/** Prototype: the result as one line; details stay with 核对. */
+function resultLine(notice: WriteNotice): { tone: 'done' | 'warn' | 'error'; text: string } {
+  const { write, outcome } = notice
+  const what = write.kind === 'change' ? ACTION_NAME[write.action] : '核对'
+  const object = objectLine(write)
+  switch (outcome.type) {
+    case 'done':
+      if (outcome.operation.reportError?.kind === 'rate-limited') return { tone: 'warn', text: `${what}结果未确认（限流或需要验证）：${object}` }
+      if (needsReconcile(outcome.operation)) return { tone: 'warn', text: `${what}结果未确认：${object}` }
+      return { tone: 'done', text: write.kind === 'change' ? `已${what}：${object}` : `核对完成：${object}` }
+    case 'refused':
+      if (outcome.reason === 'result-storage') return { tone: 'warn', text: `${what}结果未知：${object}。${RECHECK_ELSEWHERE}` }
+      return { tone: 'error', text: `${what}未执行：${failureText(outcome.reason)}` }
+    case 'failed':
+      return write.kind === 'change'
+        ? { tone: 'error', text: `${what}结果未知：${object}。${RECHECK_ELSEWHERE}` }
+        : { tone: 'error', text: '核对请求失败，没有发出写入' }
+  }
+}
 
 function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: () => void }) {
   const { operations, active, busy, reconcile } = useSubscriptionsContext()
@@ -73,10 +96,10 @@ function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: ()
       lines = [`服务端报告：${reportSummary(operation)}`, `回读核对：${verificationText(operation)}`]
       if (operation.reportError?.kind === 'rate-limited') {
         tone = 'warn'
-        lines.push(PROTOTYPE_ENABLED ? '因限流或需要验证，已停止回读。' : '因限流或需要验证，已停止回读；可在操作记录中手动核对。')
+        lines.push('因限流或需要验证，已停止回读；可在操作记录中手动核对。')
       } else if (needsReconcile(operation)) {
         tone = 'warn'
-        lines.push(PROTOTYPE_ENABLED ? '结果未确认。' : '结果未确认，可在操作记录中手动核对。')
+        lines.push('结果未确认，可在操作记录中手动核对。')
       }
       if (PROTOTYPE_ENABLED && tone === 'warn') {
         const current = operations?.find((item) => item.id === operation.id) ?? operation
@@ -89,7 +112,7 @@ function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: ()
         // The write was dispatched; only its local record failed. Never present this as 未执行.
         tone = 'warn'
         title = `${what}的结果未知：${failureText(outcome.reason)}`
-        lines = [objectLine(write), PROTOTYPE_ENABLED ? RECHECK_ELSEWHERE : '请在操作记录中核对，不要直接重复操作。']
+        lines = [objectLine(write), '请在操作记录中核对，不要直接重复操作。']
         break
       }
       tone = 'error'
@@ -101,9 +124,15 @@ function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: ()
       title = write.kind === 'change' ? `${what}的结果未知：应用内部请求失败` : '核对请求失败：应用内部请求失败'
       lines =
         write.kind === 'change'
-          ? [objectLine(write), PROTOTYPE_ENABLED ? `写入可能已发出。${RECHECK_ELSEWHERE}` : '写入可能已发出，请在操作记录中核对。']
+          ? [objectLine(write), '写入可能已发出，请在操作记录中核对。']
           : [objectLine(write), '没有发出写入，可以稍后再核对。']
       break
+  }
+  if (PROTOTYPE_ENABLED) {
+    const line = resultLine(notice)
+    tone = line.tone
+    title = line.text
+    lines = []
   }
   const recheck = reconcilable
   return (

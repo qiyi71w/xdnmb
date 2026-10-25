@@ -1,14 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type PointerEvent,
-  type ReactNode
-} from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { PostId } from '../../../../shared/forum'
 import type { ImageViewId, LoadedImage } from '../../../../shared/images'
 import { Icon } from '../../components/Icon'
@@ -16,69 +6,9 @@ import { Loading } from '../../components/Notices'
 import { useCover } from '../../lib/appCovered'
 import { openLayer } from '../../lib/layers'
 import { describeImageError, formatBytes, SAVE_TEXT, UNDECODABLE_TEXT } from './imageView'
+import { useImageZoom, ZoomControls, type Size } from './imageZoom'
 import { useImageLoad } from './useImageLoad'
 import './image.css'
-
-const MAX_SCALE = 8
-const MIN_SCALE = 0.1
-const STEP = 1.25
-/** Free space kept around the image when it is fitted to the stage. */
-const FIT_PADDING = 16
-const PAN_STEP = 60
-const PAN_STEP_LARGE = 240
-
-interface Size {
-  w: number
-  h: number
-}
-
-/** `fit` follows the stage size; `manual` keeps a scale and the image's top-left corner on the stage. */
-type Zoom = { mode: 'fit' } | { mode: 'manual'; scale: number; x: number; y: number }
-
-interface Placement {
-  scale: number
-  x: number
-  y: number
-}
-
-function fitScale(natural: Size, stage: Size): number {
-  return Math.max(Math.min(1, (stage.w - 2 * FIT_PADDING) / natural.w, (stage.h - 2 * FIT_PADDING) / natural.h), 0.01)
-}
-
-function minScale(natural: Size, stage: Size): number {
-  return Math.min(MIN_SCALE, fitScale(natural, stage))
-}
-
-/** A dimension smaller than the stage is centred; a larger one may not leave a gap at either edge. */
-function clampOffset(offset: number, length: number, stageLength: number): number {
-  if (length <= stageLength) return (stageLength - length) / 2
-  return Math.min(0, Math.max(stageLength - length, offset))
-}
-
-function place(zoom: Zoom, natural: Size, stage: Size): Placement {
-  if (zoom.mode === 'fit') {
-    const scale = fitScale(natural, stage)
-    return { scale, x: (stage.w - natural.w * scale) / 2, y: (stage.h - natural.h * scale) / 2 }
-  }
-  return {
-    scale: zoom.scale,
-    x: clampOffset(zoom.x, natural.w * zoom.scale, stage.w),
-    y: clampOffset(zoom.y, natural.h * zoom.scale, stage.h)
-  }
-}
-
-/** Scale around a stage point (the pointer, or the stage centre), keeping that point of the image under it. */
-function zoomAround(zoom: Zoom, scale: number, point: { x: number; y: number }, natural: Size, stage: Size): Zoom {
-  const current = place(zoom, natural, stage)
-  const next = Math.min(MAX_SCALE, Math.max(minScale(natural, stage), scale))
-  const ratio = next / current.scale
-  return {
-    mode: 'manual',
-    scale: next,
-    x: point.x - (point.x - current.x) * ratio,
-    y: point.y - (point.y - current.y) * ratio
-  }
-}
 
 const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'
 
@@ -107,12 +37,7 @@ export function ImageViewer({
   const titleId = useId()
   const hintId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
-  const stageRef = useRef<HTMLDivElement>(null)
-  const [stage, setStage] = useState<Size | null>(null)
   const [natural, setNatural] = useState<Size | null>(null)
-  const [zoom, setZoom] = useState<Zoom>({ mode: 'fit' })
-  const [dragging, setDragging] = useState(false)
-  const drag = useRef<{ pointerId: number; startX: number; startY: number; x: number; y: number } | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   /** “原图尚未取得” no longer holds once the original is shown or fetched again; other outcomes stay. */
@@ -144,31 +69,8 @@ export function ImageViewer({
   const originalState = original.state
   const originalImage = originalState.status === 'ready' ? originalState.image : null
   const originalShown = originalState.status === 'ready' && originalState.decoded && natural !== null
-  const placement = originalShown && stage !== null && natural !== null ? place(zoom, natural, stage) : null
-  const canPan =
-    placement !== null &&
-    stage !== null &&
-    natural !== null &&
-    (natural.w * placement.scale > stage.w + 0.5 || natural.h * placement.scale > stage.h + 0.5)
-
-  // Latest geometry for event handlers registered outside React (wheel).
-  const geometry = useRef({ stage, natural, originalShown })
-  useLayoutEffect(() => {
-    geometry.current = { stage, natural, originalShown }
-  })
-
-  useLayoutEffect(() => {
-    const element = stageRef.current
-    if (element === null) return
-    const measure = () => {
-      const { width, height } = element.getBoundingClientRect()
-      if (width > 0 && height > 0) setStage((previous) => (previous?.w === width && previous.h === height ? previous : { w: width, h: height }))
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [])
+  const view = useImageZoom(dialogRef, natural, originalShown)
+  const { stageRef } = view
 
   // Focus moves into the viewer when it opens. Afterwards, whenever focus that was inside falls to
   // the body — the focused control unmounted (重试 once the original loads), or the reader was hidden
@@ -184,46 +86,6 @@ export function ImageViewer({
       stageRef.current?.focus({ preventScroll: true })
     }
   })
-
-  const zoomBy = useCallback((factor: number, point?: { x: number; y: number }) => {
-    const { stage, natural, originalShown } = geometry.current
-    if (!originalShown || stage === null || natural === null) return
-    setZoom((previous) => {
-      const current = place(previous, natural, stage)
-      return zoomAround(previous, current.scale * factor, point ?? { x: stage.w / 2, y: stage.h / 2 }, natural, stage)
-    })
-  }, [])
-
-  const zoomTo = useCallback((scale: number) => {
-    const { stage, natural, originalShown } = geometry.current
-    if (!originalShown || stage === null || natural === null) return
-    setZoom((previous) => zoomAround(previous, scale, { x: stage.w / 2, y: stage.h / 2 }, natural, stage))
-  }, [])
-
-  const fit = useCallback(() => setZoom({ mode: 'fit' }), [])
-
-  const panBy = (dx: number, dy: number) => {
-    if (!canPan || placement === null) return
-    setZoom({ mode: 'manual', scale: placement.scale, x: placement.x + dx, y: placement.y + dy })
-  }
-
-  // Wheel over the stage zooms around the pointer; nothing under the viewer scrolls. Registered
-  // natively: React's wheel listener is passive.
-  useEffect(() => {
-    const dialog = dialogRef.current
-    const element = stageRef.current
-    if (dialog === null || element === null) return
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault()
-      const { stage } = geometry.current
-      if (stage === null || !element.contains(event.target as Node | null)) return
-      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.h : 1
-      const rect = element.getBoundingClientRect()
-      zoomBy(Math.exp(-event.deltaY * unit * 0.0015), { x: event.clientX - rect.left, y: event.clientY - rect.top })
-    }
-    dialog.addEventListener('wheel', onWheel, { passive: false })
-    return () => dialog.removeEventListener('wheel', onWheel)
-  }, [zoomBy])
 
   const save = async () => {
     if (saving) return
@@ -279,76 +141,8 @@ export function ImageViewer({
     }
     // Plain keys only: modified ones stay with the app (Alt+←/→ history, Ctrl+Tab, …).
     if (command || event.altKey) return
-    switch (key) {
-      case '+':
-      case '=':
-        handled()
-        zoomBy(STEP)
-        return
-      case '-':
-      case '_':
-        handled()
-        zoomBy(1 / STEP)
-        return
-      case '0':
-        handled()
-        fit()
-        return
-      case '1':
-        handled()
-        zoomTo(1)
-        return
-      case 'ArrowLeft':
-      case 'ArrowRight':
-      case 'ArrowUp':
-      case 'ArrowDown': {
-        handled()
-        const step = event.shiftKey ? PAN_STEP_LARGE : PAN_STEP
-        // Arrows move the view like scrolling: → shows more of the right side.
-        if (key === 'ArrowLeft') panBy(step, 0)
-        else if (key === 'ArrowRight') panBy(-step, 0)
-        else if (key === 'ArrowUp') panBy(0, step)
-        else panBy(0, -step)
-        return
-      }
-      case 'PageUp':
-      case 'PageDown':
-      case 'Home':
-      case 'End':
-        // Nothing underneath may scroll.
-        event.preventDefault()
-        return
-    }
+    view.onZoomKey(event)
   }
-
-  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || !canPan || placement === null) return
-    event.preventDefault()
-    event.currentTarget.setPointerCapture(event.pointerId)
-    event.currentTarget.focus({ preventScroll: true })
-    drag.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: placement.x, y: placement.y }
-    setDragging(true)
-  }
-
-  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    const current = drag.current
-    if (current === null || current.pointerId !== event.pointerId || placement === null) return
-    setZoom({
-      mode: 'manual',
-      scale: placement.scale,
-      x: current.x + event.clientX - current.startX,
-      y: current.y + event.clientY - current.startY
-    })
-  }
-
-  const endDrag = (event: PointerEvent<HTMLDivElement>) => {
-    if (drag.current?.pointerId !== event.pointerId) return
-    drag.current = null
-    setDragging(false)
-  }
-
-  const scaleMin = stage !== null && natural !== null ? minScale(natural, stage) : MIN_SCALE
-  const percent = placement === null ? null : Math.round(placement.scale * 100)
 
   let status: ReactNode = null
   if (originalState.status === 'idle' || originalState.status === 'loading' || (originalState.status === 'ready' && !originalShown)) {
@@ -392,6 +186,8 @@ export function ImageViewer({
     <div
       ref={dialogRef}
       className="image-viewer"
+      // Colours the window's title-bar controls whenever it reaches them (useAppearance).
+      data-titlebar-cover=""
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
@@ -413,46 +209,7 @@ export function ImageViewer({
           加号放大，减号缩小，0 适应窗口，1 原始大小，方向键或拖动移动图片，Ctrl 或 Command 加 S 保存原图，Esc 关闭
         </p>
         <div className="image-viewer-tools">
-          <div className="image-viewer-group" role="group" aria-label="缩放">
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label="缩小"
-              title="缩小（-）"
-              onClick={() => zoomBy(1 / STEP)}
-              disabled={placement === null || placement.scale <= scaleMin + 1e-6}
-            >
-              <Icon name="minus" />
-            </button>
-            <span className="image-viewer-zoom">
-              <span className="visually-hidden">缩放比例 </span>
-              {percent === null ? '—' : `${percent}%`}
-            </span>
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label="放大"
-              title="放大（+）"
-              onClick={() => zoomBy(STEP)}
-              disabled={placement === null || placement.scale >= MAX_SCALE - 1e-6}
-            >
-              <Icon name="plus" />
-            </button>
-            <button
-              type="button"
-              className="btn btn-small"
-              title="适应窗口（0）"
-              aria-pressed={placement === null ? undefined : zoom.mode === 'fit'}
-              onClick={fit}
-              disabled={placement === null}
-            >
-              <Icon name="fit" size={14} />
-              适应窗口
-            </button>
-            <button type="button" className="btn btn-small" title="原始大小（1）" onClick={() => zoomTo(1)} disabled={placement === null}>
-              原始大小
-            </button>
-          </div>
+          <ZoomControls zoom={view} />
           <div className="image-viewer-group">
             <button
               type="button"
@@ -476,14 +233,11 @@ export function ImageViewer({
 
       <div
         ref={stageRef}
-        className={`image-viewer-stage${canPan ? ' is-pannable' : ''}${dragging ? ' is-dragging' : ''}`}
+        className={`image-viewer-stage${view.stageClass}`}
         tabIndex={0}
         role="group"
         aria-label={originalShown ? '原图' : thumb !== null ? '缩略图（原图未显示）' : '图片尚未显示'}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
+        {...view.stageHandlers}
       >
         {!originalShown && thumb !== null && (
           <img className="image-viewer-thumb" src={thumb.url} alt="" draggable={false} />
@@ -510,15 +264,7 @@ export function ImageViewer({
             src={originalImage.url}
             alt=""
             draggable={false}
-            style={
-              placement === null || natural === null
-                ? undefined
-                : {
-                    width: natural.w * placement.scale,
-                    height: natural.h * placement.scale,
-                    transform: `translate(${placement.x}px, ${placement.y}px)`
-                  }
-            }
+            style={view.imageStyle}
             onLoad={(event) => {
               // Shown (and savable) only once the whole image decodes, not just its header.
               const image = event.currentTarget
@@ -526,7 +272,7 @@ export function ImageViewer({
               image.decode().then(
                 () => {
                   setNatural({ w: image.naturalWidth || originalImage.width, h: image.naturalHeight || originalImage.height })
-                  setZoom({ mode: 'fit' })
+                  view.fit()
                   original.markDecoded(url)
                   clearNotLoaded()
                 },

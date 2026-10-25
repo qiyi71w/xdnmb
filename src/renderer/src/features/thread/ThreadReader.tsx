@@ -22,7 +22,7 @@ import { useThread } from './useThread'
 import { FavoriteButton, OfflineButton } from '../content/ThreadRetention'
 import { ReminderMenu } from '../reminders/ReminderMenu'
 import { useThreadRules } from '../reminders/useReminders'
-// PROTOTYPE (throwaway): one-row toolbar, position control and the 回复 entry.
+// PROTOTYPE (throwaway): one-row toolbar, position control, the 回复 entry and the 开头 / 末尾 pills.
 import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import type { ComposeEntry } from '../editor/ComposePanel'
 import { usePopover } from '../../lib/usePopover'
@@ -31,6 +31,8 @@ import { SubscribeButton, SubscribeNote } from './SubscribeButton'
 import { isPostBlocked } from '../../../../shared/blocks'
 import { useBlocks } from './useBlocks'
 import { usePostActions } from './usePostActions'
+import { JumpPillButton, useJumpPills } from './JumpPills'
+import type { JumpPill, PillEnds } from './jumpPills'
 
 const MODE_NAMES: Record<ReadingMode, string> = { all: '全部回复', po: '只看 PO' }
 /** How long a quote target stays marked after the jump. */
@@ -142,10 +144,11 @@ function PagePopover({
       <button
         ref={triggerRef}
         type="button"
-        className="btn btn-small btn-quiet position-page-trigger"
+        className="btn tb-btn position-page-trigger"
         aria-expanded={popover.open}
         aria-controls={popover.open ? panelId : undefined}
         aria-label={name}
+        title={name}
         onClick={popover.toggle}
       >
         {label}
@@ -320,7 +323,9 @@ export function ThreadReader({
    * never loads the page before it by itself.
    */
   const [prependArmed, setPrependArmed] = useState(false)
-  const lastScrollTop = useRef(0)
+  /** PROTOTYPE: the floating 开头 / 末尾 pills, fed only by scrolls that follow the user's own input. */
+  const { shown: pillShown, scrolled: pillScrolled, gesture: pillGesture, pressed: pillPressed, hide: hidePills, hold: holdPill } =
+    useJumpPills()
 
   const [near] = useState(() => new NearViewport(() => scrollRef.current))
   const [viewer, setViewer] = useState<ViewerRequest | null>(null)
@@ -370,8 +375,10 @@ export function ThreadReader({
     onRead,
     onSave: (anchor) => onSavePosition(mode, anchor),
     onNearby: setNearby,
-    onUserScroll: () => {
-      if ((scrollRef.current?.scrollTop ?? 0) < lastScrollTop.current) setPrependArmed(true)
+    onUserScroll: (delta) => {
+      if (delta < 0) setPrependArmed(true)
+      const scroller = scrollRef.current
+      if (PROTOTYPE_ENABLED && scroller !== null) pillScrolled(delta, scroller.clientHeight, pillEnds(scroller))
     }
   })
 
@@ -392,11 +399,12 @@ export function ThreadReader({
   useLayoutEffect(() => {
     if (state.rangeVersion === 0) return
     setPrependArmed(false)
+    hidePills()
     const target: ReaderPosition = nextPosition.current ?? { kind: 'top' }
     nextPosition.current = null
     // A capped tail still goes to the readable page's end; a capped page jump goes to its top.
     position(state.pageCap !== null && target.kind !== 'last' ? { kind: 'top' } : target)
-  }, [state.rangeVersion, position])
+  }, [state.rangeVersion, position, hidePills])
 
   // Every observed page can change unread posts and coverage.
   useEffect(() => {
@@ -484,6 +492,7 @@ export function ThreadReader({
   /** Explicit entry: place directly when the range already holds it, otherwise load and place. */
   const goTo = (position: ReaderPosition, load: () => void) => {
     setNearby(null)
+    hidePills()
     nextPosition.current = position
     load()
   }
@@ -492,6 +501,7 @@ export function ThreadReader({
   const placeHere = (target: ReaderPosition) => {
     setNearby(null)
     setPrependArmed(false)
+    hidePills()
     position(target)
   }
 
@@ -500,20 +510,48 @@ export function ThreadReader({
     else goTo({ kind: 'top' }, () => thread.jump(1))
   }
 
+  const toEnd = () => goTo({ kind: 'last' }, thread.locateEnd)
+
   /**
-   * PROTOTYPE: keys on the reading content. Home goes to the start of page 1 like 开头 (the top of a
-   * range opened further in is not the start of the thread); moving up lets the page before follow.
+   * PROTOTYPE: keys on the reading content. Home and Ctrl/⌘+Home go to the start of page 1 like 开头
+   * (the top of a range opened further in is not the start of the thread); Ctrl/⌘+End is 末尾, while
+   * a plain End keeps the browser's move to the bottom of what is loaded. Moving up lets the page
+   * before follow.
    */
   const onReaderKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!PROTOTYPE_ENABLED || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return
+    if (!PROTOTYPE_ENABLED) return
+    // Any key may scroll the reader (arrows, space, Tab to a post below); the pills may follow it.
+    pillGesture()
+    if (event.defaultPrevented || event.altKey) return
     const target = event.target as HTMLElement
     if (toolbarRef.current?.contains(target) || target.isContentEditable || target.closest('input, textarea, select') !== null) return
+    const modified = event.ctrlKey || event.metaKey
     if (event.key === 'Home' && !event.shiftKey) {
       event.preventDefault()
       toStart()
-    } else if (event.key === 'ArrowUp' || event.key === 'PageUp' || (event.key === ' ' && event.shiftKey)) {
+    } else if (event.key === 'End' && modified && !event.shiftKey) {
+      event.preventDefault()
+      toEnd()
+    } else if (!modified && (event.key === 'ArrowUp' || event.key === 'PageUp' || (event.key === ' ' && event.shiftKey))) {
       setPrependArmed(true)
     }
+  }
+
+  /** PROTOTYPE: which ends of the thread are on screen, for the pills. */
+  const pillEnds = (scroller: HTMLElement): PillEnds => {
+    const near = scroller.clientHeight / 2
+    const realEnd = lastPage !== undefined && (lastPage.endCandidate || (totalPages !== null && lastPage.page >= totalPages))
+    return {
+      atStart: firstPage?.page === 1 && scroller.scrollTop < near,
+      atEnd: realEnd && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < near
+    }
+  }
+  const pillFocusBack = useCallback(() => scrollRef.current?.focus({ preventScroll: true }), [])
+  const onPill = (pill: JumpPill) => {
+    // The pill hides as it acts: focus it had goes back to the content, never elsewhere.
+    if (document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('jump-pill')) pillFocusBack()
+    if (pill === 'start') toStart()
+    else toEnd()
   }
 
   const unreadHere = useMemo(() => unreadInMode(readingState, mode, readNow), [readingState, mode, readNow])
@@ -540,7 +578,6 @@ export function ThreadReader({
   }, [state.rangeVersion, state.pages, currentAnchor])
   const onReaderScroll = () => {
     onScroll()
-    lastScrollTop.current = scrollRef.current?.scrollTop ?? 0
     if (PROTOTYPE_ENABLED) setReadingPage(currentAnchor()?.page ?? null)
   }
   const shownPage = readingPage ?? firstPage?.page ?? 1
@@ -580,10 +617,14 @@ export function ThreadReader({
   const toolbarTask =
     task !== null && (task.type === 'locate' || (!PROTOTYPE_ENABLED && (task.type === 'refresh' || task.type === 'jump'))) ? task : null
 
+  // PROTOTYPE: the toolbar's borderless buttons; their labels give way to icons (with the name kept
+  // for assistive technology and the tooltip) when the row gets narrow.
+  const barButton = PROTOTYPE_ENABLED ? 'btn tb-btn' : 'btn'
+
   const backButton = onBackToList !== null && (
-    <button type="button" className="btn" onClick={onBackToList}>
+    <button type="button" className={barButton} onClick={onBackToList} title="返回串列表">
       <Icon name="arrowLeft" />
-      返回串列表
+      <span className="btn-label">返回串列表</span>
     </button>
   )
 
@@ -600,20 +641,25 @@ export function ThreadReader({
   const searchButton = openSearch !== null && (
     <button
       type="button"
-      className="btn"
+      className={barButton}
       aria-haspopup="dialog"
-      title="在这个串已取得的内容中搜索"
+      title={PROTOTYPE_ENABLED ? '串内搜索' : '在这个串已取得的内容中搜索'}
       onClick={() => openSearch({ view: 'thread', entryKey, threadId, mode, title })}
     >
       <Icon name="search" />
-      串内搜索
+      <span className="btn-label">串内搜索</span>
     </button>
   )
 
   const refreshButton = (
-    <button type="button" className="btn" onClick={thread.refresh} title="重新读取已加载的最后一页并合并">
+    <button
+      type="button"
+      className={barButton}
+      onClick={thread.refresh}
+      title={PROTOTYPE_ENABLED ? '刷新' : '重新读取已加载的最后一页并合并'}
+    >
       <Icon name="refresh" />
-      刷新
+      <span className="btn-label">刷新</span>
     </button>
   )
 
@@ -639,25 +685,22 @@ export function ThreadReader({
     next?.focus()
   }, [state.task, state.pages])
 
-  // The prototype's position control uses the small quiet form of the same buttons.
-  const positionButton = PROTOTYPE_ENABLED ? 'btn btn-small btn-quiet' : 'btn'
-  const positionIcon = PROTOTYPE_ENABLED ? 14 : 16
   const startButton = (
-    <button type="button" className={positionButton} onClick={toStart} title="回到第 1 页的开头">
-      <Icon name="toTop" size={positionIcon} />
+    <button type="button" className="btn" onClick={toStart} title="回到第 1 页的开头">
+      <Icon name="toTop" />
       开头
     </button>
   )
   const endButton = (
-    <button type="button" className={positionButton} onClick={() => goTo({ kind: 'last' }, thread.locateEnd)} title={totalPages === null ? '有限探测并定位到末尾附近' : `跳到第 ${totalPages} 页`}>
-      <Icon name="toEnd" size={positionIcon} />
+    <button type="button" className="btn" onClick={toEnd} title={totalPages === null ? '有限探测并定位到末尾附近' : `跳到第 ${totalPages} 页`}>
+      <Icon name="toEnd" />
       末尾
     </button>
   )
   const unreadButton = (
     <button
       type="button"
-      className={positionButton}
+      className="btn"
       onClick={toFirstUnread}
       disabled={firstUnread === undefined}
       title={`跳到${MODE_NAMES[mode]}中已获取的第一条未读发言`}
@@ -740,10 +783,13 @@ export function ThreadReader({
         onWheel={
           PROTOTYPE_ENABLED
             ? (event) => {
+                pillGesture()
                 if (event.deltaY < 0) setPrependArmed(true)
               }
             : undefined
         }
+        onTouchMove={PROTOTYPE_ENABLED ? pillGesture : undefined}
+        onPointerDown={PROTOTYPE_ENABLED ? pillPressed : undefined}
         onKeyDown={onReaderKeyDown}
         tabIndex={-1}
         data-pane-focus=""
@@ -752,14 +798,25 @@ export function ThreadReader({
         <div className="reader-toolbar" ref={toolbarRef}>
           {PROTOTYPE_ENABLED ? (
             <div className="reader-toolbar-inner">
-              <div className="toolbar-row">
-                <div className="toolbar-group">
+              {/* One row: reading mode and page on the left, actions on the right. */}
+              <div className="thread-bar">
+                <div className="thread-bar-lead">
                   {backButton}
                   {modeSwitch}
+                  <PagePopover
+                    inputId={`page-${entryKey}-${threadId}`}
+                    mode={mode}
+                    label={`${shownPage}/${totalPages ?? '?'}`}
+                    name={`${pageLabel(mode, shownPage)}，${totalPages === null ? '总页数未知' : `共 ${totalPages} 页`}`}
+                    placeholder={String(totalPages ?? lastPage?.page ?? 1)}
+                    max={totalPages}
+                    onJump={(page) => goTo({ kind: 'page', page }, () => thread.jump(page))}
+                    onOpenChange={setPagePanelOpen}
+                  />
                 </div>
-                <div className="toolbar-group">
+                <div className="thread-bar-actions">
                   {compose?.entry}
-                  <SubscribeButton threadId={threadId} label={title ?? `No.${threadId}`} onOpenChange={setSubscribePanelOpen} />
+                  <SubscribeButton threadId={threadId} label={title ?? `No.${threadId}`} />
                   {searchButton}
                   {refreshButton}
                   <ThreadMoreMenu
@@ -772,28 +829,13 @@ export function ThreadReader({
                     onUpdated={rules.updated}
                     onReminderOpenChange={setReminderPanelOpen}
                     onReport={head === null || postActions.ownIds.has(head.id) ? undefined : (opener) => postActions.report(head.id, opener)}
+                    onToStart={toStart}
+                    onToEnd={toEnd}
                   />
                 </div>
               </div>
 
-              <div className="position-row">
-                {status}
-                <div className="position-control" role="group" aria-label="阅读位置">
-                  {startButton}
-                  {endButton}
-                  <PagePopover
-                    inputId={`page-${entryKey}-${threadId}`}
-                    mode={mode}
-                    label={`${shownPage}/${totalPages ?? '?'}`}
-                    name={`${pageLabel(mode, shownPage)}，${totalPages === null ? '总页数未知' : `共 ${totalPages} 页`}`}
-                    placeholder={String(totalPages ?? lastPage?.page ?? 1)}
-                    max={totalPages}
-                    onJump={(page) => goTo({ kind: 'page', page }, () => thread.jump(page))}
-                    onOpenChange={setPagePanelOpen}
-                  />
-                </div>
-              </div>
-
+              {status}
               {notes}
               {failure}
             </div>
@@ -879,6 +921,16 @@ export function ThreadReader({
           )}
           {/* PROTOTYPE: the page before the range loads quietly; a thin bar under the toolbar, no text. */}
           {PROTOTYPE_ENABLED && task?.type === 'prepend' && <div className="prepend-progress" aria-hidden="true" />}
+          {/* PROTOTYPE: after moving up a while, 开头 floats just under the toolbar. */}
+          {PROTOTYPE_ENABLED && (
+            <JumpPillButton
+              pill="start"
+              shown={pillShown === 'start' && viewer === null}
+              onActivate={() => onPill('start')}
+              onHold={holdPill}
+              onFocusLost={pillFocusBack}
+            />
+          )}
         </div>
 
         <QuoteEntryContext.Provider value={entryKey}>
@@ -1013,6 +1065,16 @@ export function ThreadReader({
         </div>
         </QuoteEntryContext.Provider>
       </div>
+      {/* PROTOTYPE: after moving down a while, 末尾 floats near the bottom of the reader. */}
+      {PROTOTYPE_ENABLED && (
+        <JumpPillButton
+          pill="end"
+          shown={pillShown === 'end' && viewer === null}
+          onActivate={() => onPill('end')}
+          onHold={holdPill}
+          onFocusLost={pillFocusBack}
+        />
+      )}
       <div className="reader-dock" inert={viewer !== null}>
         {footer}
       </div>

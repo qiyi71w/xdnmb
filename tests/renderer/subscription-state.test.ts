@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { SubscriptionContext, SubscriptionOperation } from '../../src/shared/subscriptions'
+import type { SubscriptionContext, SubscriptionOperation, SubscriptionOverview } from '../../src/shared/subscriptions'
 import {
   blocksNewWrite,
+  decideChange,
   isReconcilable,
   isRunningChange
 } from '../../src/renderer/src/features/subscriptions/subscriptionListState'
@@ -67,5 +68,53 @@ describe('pending journal entries', () => {
   it('keeps resolved entries unaffected', () => {
     expect(isReconcilable({ ...pending, state: 'settled', report: 'success', verification: 'present' }, null)).toBe(false)
     expect(isReconcilable({ ...pending, state: 'needs-reconciliation', report: 'unknown' }, null)).toBe(true)
+  })
+})
+
+describe('a press of 订阅／取消订阅 (prototype: no confirmation)', () => {
+  const overview: SubscriptionOverview = {
+    context: context(2, '7', null),
+    source: 'app',
+    appConfigured: true,
+    webSelection: { state: 'none' },
+    webName: null,
+    protection: 'available',
+    writable: true
+  }
+  const press = (overrides: Partial<Parameters<typeof decideChange>[0]> = {}) =>
+    decideChange({
+      overview,
+      operations: [],
+      busy: false,
+      action: 'add',
+      threadId: '1003',
+      label: 'No.1003',
+      unresolved: '待核对',
+      ...overrides
+    })
+
+  it('is the write itself, for the shown source and identity generation, with reminders left alone', () => {
+    expect(press()).toEqual({
+      kind: 'write',
+      request: { source: 'app', threadId: '1003', action: 'add', expectedGeneration: 2, label: 'No.1003', reminders: null }
+    })
+    expect(press({ action: 'remove' })).toMatchObject({ kind: 'write', request: { action: 'remove', reminders: null } })
+  })
+
+  it('keeps the existing reasons when it cannot write', () => {
+    expect(press({ overview: null })).toEqual({ kind: 'blocked', reason: '订阅设置尚未读取' })
+    expect(press({ overview: { ...overview, appConfigured: false } })).toEqual({ kind: 'blocked', reason: '尚未设置 App 订阅 UUID' })
+    expect(press({ overview: { ...overview, protection: 'unavailable' } })).toEqual({
+      kind: 'blocked',
+      reason: '系统凭据保护不可用，订阅身份暂时无法使用'
+    })
+    expect(press({ overview: { ...overview, writable: false } })).toEqual({ kind: 'blocked', reason: '本地存储不可写' })
+    expect(press({ busy: true })).toEqual({ kind: 'blocked', reason: '另一项订阅操作正在进行' })
+  })
+
+  it('never writes over an unresolved earlier write of the same thread; only 核对 may follow', () => {
+    expect(press({ operations: [unresolvedAppAdd(context(2, '7', null))] })).toEqual({ kind: 'blocked', reason: '待核对' })
+    // Another App collection's unresolved entry does not block this one.
+    expect(press({ operations: [unresolvedAppAdd(context(1, '6', null))] }).kind).toBe('write')
   })
 })
