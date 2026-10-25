@@ -26,6 +26,7 @@ import { formatLocalTime } from '../../lib/format'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
+import { useImageScope } from '../image/useImageLoad'
 import { ListFilterBar } from '../search/FilterFields'
 import { filterList, headMeta, listFilterCount, NO_LIST_FILTERS, type ListFilters } from '../search/listFilters'
 import { useThreadMetadata } from '../search/useThreadMetadata'
@@ -251,6 +252,7 @@ export function SubscriptionPane({
 
   // ---------- Scroll memory (same approach as the forum list) ----------
   const scrollRef = useRef<HTMLDivElement>(null)
+  const images = useImageScope(scrollRef)
   const scrollTop = useRef(remembered?.scrollTop ?? saved?.scrollTop ?? 0)
   useLayoutEffect(() => {
     filtersRef.current = filters
@@ -622,6 +624,7 @@ export function SubscriptionPane({
                     forumName={thread.head.forumId !== null ? (forumNames.get(thread.head.forumId) ?? null) : null}
                     selected={thread.head.id === selectedThreadId}
                     uncertain={uncertainById.get(thread.head.id) === true}
+                    images={images}
                     onOpen={() => onOpenThread(thread)}
                     itemProps={itemProps}
                   />

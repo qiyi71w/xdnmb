@@ -163,10 +163,15 @@
   padding: 0 4px;
 }
 
+/* Text column, plus a fixed thumbnail column on image threads: the text width is set by the row,
+   never by the image arriving. */
 .thread-row {
+  --row-thumb: 64px;
   position: relative;
   display: grid;
-  gap: 3px;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  column-gap: 12px;
   width: 100%;
   padding: 10px 12px;
   border: 0;
@@ -174,6 +179,16 @@
   background: transparent;
   text-align: left;
   cursor: pointer;
+}
+
+.thread-row.has-thumb {
+  grid-template-columns: minmax(0, 1fr) var(--row-thumb);
+}
+
+.row-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
 .thread-list li + li > .thread-row::before {
@@ -190,12 +205,12 @@
   background: var(--hover);
 }
 
-/* Selected row: tint, bold author line and darker excerpt (not colour alone); aria-current names it. */
+/* Selected row: tint, bold byline and darker excerpt (not colour alone); aria-current names it. */
 .thread-row.is-selected {
   background: var(--selected);
 }
 
-.thread-row.is-selected .row-top {
+.thread-row.is-selected .row-byline {
   font-weight: 600;
   color: var(--ink);
 }
@@ -216,21 +231,25 @@
   outline-offset: -2px;
 }
 
-/* Compact density: row and list padding only; text sizes and line clamps stay. */
+/* Compact density: row and list padding and the thumbnail only; text sizes and line clamps stay. */
 :root[data-density='compact'] .thread-list {
   padding: 4px 6px 0;
 }
 
 :root[data-density='compact'] .thread-row {
-  gap: 2px;
+  --row-thumb: 48px;
   padding: 6px 10px;
+}
+
+:root[data-density='compact'] .row-text {
+  gap: 2px;
 }
 
 :root[data-density='compact'] .list-header {
   padding: 8px 8px 7px 14px;
 }
 
-.row-top {
+.row-byline {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -262,15 +281,54 @@
   overflow-wrap: anywhere;
 }
 
+/* Grows with the head post up to six lines; the post's line breaks are kept. */
 .row-excerpt.content-excerpt {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 6;
   overflow: hidden;
   white-space: normal;
   font-size: var(--text-sm);
   line-height: 1.55;
   color: var(--ink-2);
+}
+
+/* Head post thumbnail: fixed box, cropped to fill; a placeholder while loading or after a failure. */
+.row-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--row-thumb);
+  height: var(--row-thumb);
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-s);
+  background: var(--pane);
+  color: var(--ink-3);
+}
+
+.row-thumb[data-state='loading'] {
+  background: var(--skeleton);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+.row-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.2s var(--ease-out);
+}
+
+.row-thumb img.is-shown {
+  opacity: 1;
+}
+
+.row-thumb-placeholder {
+  display: grid;
+  place-items: center;
 }
 
 .row-meta {

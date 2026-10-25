@@ -11,6 +11,7 @@ import { filterList, headMeta, listFilterCount, NO_LIST_FILTERS, type ListFilter
 import type { FeedInfo } from '../directory/feeds'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import type { WorkspaceList } from '../tabs/workspaceSnapshot'
+import { useImageScope } from '../image/useImageLoad'
 import type { FeedPageRecord } from './feedState'
 import { ThreadRow } from './ThreadRow'
 import { useFeed } from './useFeed'
@@ -79,6 +80,7 @@ export function FeedPane({
   const [filters, setFilters] = useState<ListFilters>(() => remembered?.filters ?? NO_LIST_FILTERS)
   const filtering = listFilterCount(filters) > 0
   const scrollRef = useRef<HTMLDivElement>(null)
+  const images = useImageScope(scrollRef)
   const sentinelRef = useRef<HTMLDivElement>(null)
   // While filtering, more pages are read only on request: a filter never scans the feed by itself.
   useNearEnd(scrollRef, sentinelRef, canAppend && !filtering, state.pages.length, loadMore)
@@ -288,6 +290,7 @@ export function FeedPane({
                         forumName={isTimeline && thread.head.forumId !== null ? (forumNames.get(thread.head.forumId) ?? null) : null}
                         selected={thread.head.id === selectedThreadId}
                         uncertain={uncertain}
+                        images={images}
                         onOpen={() => onOpenThread(thread)}
                         itemProps={roving.itemProps(thread.head.id)}
                       />

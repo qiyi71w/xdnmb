@@ -130,7 +130,7 @@ export function OperationJournal() {
         <span className="sub-journal-label" id={headingId}>
           操作记录
         </span>
-        {unresolved > 0 && <span className="tag tag-sage">{unresolved} 条待核对</span>}
+        {unresolved > 0 && <span className="tag tag-warn">{unresolved} 条待核对</span>}
       </summary>
       <div className="sub-journal-body">
         {operationsFailed && (
@@ -158,9 +158,9 @@ export function OperationJournal() {
 
 const STATE_TAG: Record<SubscriptionOperation['state'], { text: string; className: string }> = {
   // A pending entry is only shown as running while its own change is active; see isRunningChange.
-  pending: { text: '待核对', className: 'tag tag-sage' },
+  pending: { text: '待核对', className: 'tag tag-warn' },
   settled: { text: '已记录', className: 'tag' },
-  'needs-reconciliation': { text: '待核对', className: 'tag tag-sage' }
+  'needs-reconciliation': { text: '待核对', className: 'tag tag-warn' }
 }
 const RUNNING_TAG = { text: '进行中', className: 'tag' }
 

@@ -214,8 +214,11 @@ ul {
   opacity: 0.7;
 }
 
-/* On/off switch: state is spoken (role=switch) and written (开／关), not color alone. */
+/* On/off switch: state is spoken (role=switch) and written (开／关), not color alone. The thumb
+   keeps a fixed slot of thumb + travel at the start, so the label after it never moves: off it
+   sits at the slot's start, on it slides to the slot's end. */
 .switch {
+  --switch-travel: 14px;
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -228,13 +231,28 @@ ul {
   font-size: var(--text-xs);
   color: var(--ink-2);
   cursor: pointer;
+  transition:
+    background-color 0.15s var(--ease-out),
+    border-color 0.15s var(--ease-out),
+    color 0.15s var(--ease-out);
 }
 
 .switch-thumb {
+  flex: none;
   width: 18px;
   height: 18px;
+  margin-inline-end: var(--switch-travel);
   border-radius: 50%;
   background: var(--ink-3);
+  transition:
+    transform 0.15s var(--ease-out),
+    background-color 0.15s var(--ease-out);
+}
+
+/* 开 and 关 are one character wide; “…” (state not read yet) takes the same room. */
+.switch-state {
+  min-width: 1em;
+  text-align: center;
 }
 
 .switch[aria-checked='true'] {
@@ -246,6 +264,7 @@ ul {
 
 .switch[aria-checked='true'] .switch-thumb {
   background: var(--accent);
+  transform: translateX(var(--switch-travel));
 }
 
 .visually-hidden {
@@ -285,6 +304,12 @@ ul {
 }
 
 .tag-sage {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+
+/* Needs attention, not an error (unresolved or unfinished records). */
+.tag-warn {
   background: var(--warn-bg);
   color: var(--warn-ink);
 }

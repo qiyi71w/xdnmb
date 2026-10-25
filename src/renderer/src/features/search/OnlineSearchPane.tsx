@@ -117,19 +117,23 @@ function Status({ tone, children }: { tone: 'info' | 'error'; children: ReactNod
  * notice, plain-text results with paging over the session's chain, and result opening through the
  * existing reader navigation. Its query, pages and view live in the entry's OnlineSearchSession, so
  * leaving and coming back restores them without any request. Nothing here marks posts read.
+ * `embedded`: the 联网 side of the PROTOTYPE 搜索 page, which carries the title; only the line
+ * about the third-party service is kept of the explanations.
  */
 export function OnlineSearchPane({
   entryKey,
   displayed,
   directory,
-  onOpen
+  onOpen,
+  embedded = false
 }: {
   entryKey: number
-  /** The page is on screen (its tab is active). */
+  /** The page is on screen (its tab is active, and in a 搜索 page the 联网 side is shown). */
   displayed: boolean
   directory: BoardDirectory | null
   /** Opens a result in this entry's tab as a new `online-search` step; false when the entry is no longer current. */
   onOpen: (entryKey: number, init: EntryInit) => boolean
+  embedded?: boolean
 }) {
   const registry = useContext(ContentRegistryContext)
   const [session] = useState<OnlineSearchSession>(() => {
@@ -408,7 +412,7 @@ export function OnlineSearchPane({
     <section className="online-search-page" aria-label="联网搜索">
       <div className="online-search-scroll" ref={scrollRef} onScroll={onScroll}>
         <header className="online-search-header">
-          <h2 className="online-search-title">联网搜索</h2>
+          {!embedded && <h2 className="online-search-title">联网搜索</h2>}
           <form className="online-search-form" role="search" onSubmit={submit}>
             <label className="visually-hidden" htmlFor={`online-search-input-${entryKey}`}>
               搜索词
@@ -439,24 +443,42 @@ export function OnlineSearchPane({
           )}
         </header>
 
-        <div className="online-search-about" id={`online-search-about-${entryKey}`}>
-          <p>
-            搜索词会交给第三方服务 nmb-search（4get／Google CSE 代理）及其上游搜索引擎。收录可能不全或过时；结果不代表论坛当前状态，摘要也不是帖子正文。
-          </p>
-          <div className="online-search-about-site">
-            <button type="button" className="btn btn-small" onClick={openSite}>
-              <Icon name="external" size={14} />
-              打开搜索网站
-            </button>
-            <span>在系统浏览器中打开同一服务的网站，不是故障时的备用来源；在浏览器里完成的验证不会传回汐岛。</span>
-          </div>
-          {siteFailed && (
-            <p className="notice-inline is-warning" role="status">
-              <Icon name="alert" size={14} />
-              无法在系统浏览器中打开搜索网站
+        {embedded ? (
+          <div className="online-search-about is-brief" id={`online-search-about-${entryKey}`}>
+            <p className="online-search-about-site">
+              <span>搜索词会发给第三方服务 nmb-search，收录可能不全或过时</span>
+              <button type="button" className="btn btn-small btn-quiet" title="在系统浏览器中打开同一服务的网站" onClick={openSite}>
+                <Icon name="external" size={14} />
+                打开搜索网站
+              </button>
             </p>
-          )}
-        </div>
+            {siteFailed && (
+              <p className="notice-inline is-warning" role="status">
+                <Icon name="alert" size={14} />
+                无法在系统浏览器中打开搜索网站
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="online-search-about" id={`online-search-about-${entryKey}`}>
+            <p>
+              搜索词会交给第三方服务 nmb-search（4get／Google CSE 代理）及其上游搜索引擎。收录可能不全或过时；结果不代表论坛当前状态，摘要也不是帖子正文。
+            </p>
+            <div className="online-search-about-site">
+              <button type="button" className="btn btn-small" onClick={openSite}>
+                <Icon name="external" size={14} />
+                打开搜索网站
+              </button>
+              <span>在系统浏览器中打开同一服务的网站，不是故障时的备用来源；在浏览器里完成的验证不会传回汐岛。</span>
+            </div>
+            {siteFailed && (
+              <p className="notice-inline is-warning" role="status">
+                <Icon name="alert" size={14} />
+                无法在系统浏览器中打开搜索网站
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="online-search-status" role="status">
           {pending?.kind === 'run' && (
@@ -483,7 +505,7 @@ export function OnlineSearchPane({
           )}
         </div>
 
-        {results === null && pending === null && notice === null && (
+        {results === null && pending === null && notice === null && !embedded && (
           <div className="online-search-idle">
             <p className="list-empty-title">输入搜索词开始搜索</p>
             <p className="list-empty-text">只有按 Enter 或点击“搜索”时才会联网；输入过程中不发送任何内容。</p>
@@ -502,7 +524,7 @@ export function OnlineSearchPane({
             {hits.length === 0 && (
               <div className="list-empty" role="status">
                 <p className="list-empty-title">{shownPage.pageNumber === 1 ? '没有找到结果' : '这一页没有结果'}</p>
-                <p className="list-empty-text">第三方服务的收录可能不全，没有结果不代表论坛中没有相关内容。</p>
+                {!embedded && <p className="list-empty-text">第三方服务的收录可能不全，没有结果不代表论坛中没有相关内容。</p>}
               </div>
             )}
 

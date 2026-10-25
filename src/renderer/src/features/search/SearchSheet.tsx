@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react'
 import type { AppPlatform } from '../../../../shared/api'
 import type { ForumId } from '../../../../shared/forum'
 import type { SearchHit } from '../../../../shared/search'
@@ -23,6 +23,7 @@ import {
 import type { HitLocate, RebuildState, SearchRun, SearchView, TabSearch } from './searchState'
 import { filtersSearchable, MAX_QUERY_LENGTH, type SearchCommands } from './useSearch'
 import { shortcutLabel } from '../../app/shortcuts'
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import './search.css'
 
 const VIEW_TEXT: Record<SearchView, string> = { local: '本机内容', thread: '当前串' }
@@ -32,7 +33,8 @@ const VIEW_TEXT: Record<SearchView, string> = { local: '本机内容', thread: '
  * (normal cache, offline copies, subscription records); 当前串 searches the thread on screen in
  * either mode without changing how it is read, and can fetch the whole thread on request. The
  * sheet is modal: the reader below judges nothing read while it is open, and results shown here
- * never count as reading. Esc cancels a running locate first, then closes.
+ * never count as reading. Esc cancels a running locate first, then closes. PROTOTYPE: 本机内容 is
+ * the 搜索 page instead, so the sheet is 串内搜索 only.
  */
 export function SearchSheet({
   tabId,
@@ -59,20 +61,133 @@ export function SearchSheet({
   fallbackFocus: () => HTMLElement | null
 }) {
   const titleId = useId()
-  const inputId = useId()
-  const filtersId = useId()
-  const hintId = useId()
   const view = tab.view
-  const session = tab[view]
-  const run = session.run
   const scope = tab.thread.scope
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
+
+  // Opening (or asking again) puts focus on the query, or back on the hit that was opened. Runs
+  // after the dialog's own layout effect has shown it.
+  useLayoutEffect(() => {
+    focusSearch({ input: inputRef, list: listRef }, tab, view, focus)
+    // Only a new request moves focus, not every update of the results.
+  }, [focusSeq])
+
+  const onEscape = () => {
+    if (commands.cancelLocate(tabId)) return
+    commands.close()
+  }
+
+  return (
+    <Modal className="search-sheet" labelledBy={titleId} onClose={onEscape} fallbackFocus={fallbackFocus}>
+      <header className="modal-header search-header">
+        <h2 className="modal-title" id={titleId}>
+          {PROTOTYPE_ENABLED ? '串内搜索' : '搜索'}
+        </h2>
+        {!PROTOTYPE_ENABLED && (
+          <div className="segmented" role="group" aria-label="搜索什么">
+            {(['local', 'thread'] as const).map((item) => (
+              <button
+                key={item}
+                type="button"
+                className="segmented-item"
+                aria-pressed={view === item}
+                disabled={item === 'thread' && scope === null}
+                title={
+                  item === 'thread'
+                    ? scope === null
+                      ? '先打开一个串，再搜索它的内容'
+                      : `搜索 No.${scope.threadId}（${shortcutLabel('search-thread', platform)}）`
+                    : `搜索本机保有的全部内容（${shortcutLabel('search-local', platform)}）`
+                }
+                onClick={() => commands.setView(tabId, item)}
+              >
+                {VIEW_TEXT[item]}
+              </button>
+            ))}
+          </div>
+        )}
+        <button type="button" className="icon-btn search-close" onClick={() => commands.close()} aria-label="关闭搜索" title="关闭（Esc）">
+          <Icon name="close" />
+        </button>
+      </header>
+
+      <SearchBody
+        className="modal-body search-body"
+        tabId={tabId}
+        tab={tab}
+        view={view}
+        rebuild={rebuild}
+        restoreSeq={restoreSeq}
+        commands={commands}
+        forums={forums}
+        focusRefs={{ input: inputRef, list: listRef }}
+      />
+    </Modal>
+  )
+}
+
+/** Where a search body's owner moves focus: its query field and its hit list. */
+export interface SearchFocusRefs {
+  input: RefObject<HTMLInputElement | null>
+  list: RefObject<HTMLUListElement | null>
+}
+
+/** Focus on the query (text selected), or with `hit` back on the hit last chosen in `view` if listed. */
+export function focusSearch(refs: SearchFocusRefs, tab: TabSearch, view: SearchView, focus: 'input' | 'hit'): void {
+  const last = tab.lastHit
+  if (focus === 'hit' && last !== null && last.view === view) {
+    const hit = refs.list.current?.querySelector<HTMLElement>(`[data-hit="${CSS.escape(last.postId)}"]`)
+    if (hit != null) {
+      hit.focus()
+      return
+    }
+  }
+  refs.input.current?.focus()
+  refs.input.current?.select()
+}
+
+/**
+ * What one view of a tab's search shows: query, filters, coverage, index state, run status and
+ * hits. The sheet shows it for either view; the PROTOTYPE 搜索 page shows its 本机 side with it.
+ * Typing stays here (the shell does not re-render per key); the text is handed to the tab's search
+ * on submit, on switching views and on unmount. Its owner moves focus (`focusSearch`).
+ */
+export function SearchBody({
+  className,
+  tabId,
+  tab,
+  view,
+  rebuild,
+  restoreSeq,
+  commands,
+  forums,
+  focusRefs,
+  brief = false
+}: {
+  className: string
+  tabId: number
+  tab: TabSearch
+  view: SearchView
+  rebuild: RebuildState
+  /** Text writes are dropped after a later restore; none: this body is never replaced by one. */
+  restoreSeq?: number
+  commands: SearchCommands
+  forums: ReadonlyMap<ForumId, string>
+  focusRefs: SearchFocusRefs
+  /** Only what is needed to search (PROTOTYPE page): no hint or explanatory sentences. */
+  brief?: boolean
+}) {
+  const inputId = useId()
+  const filtersId = useId()
+  const hintId = useId()
+  const session = tab[view]
+  const run = session.run
+  const scope = tab.thread.scope
+  const { input: inputRef, list: listRef } = focusRefs
   const filterCount = contentFilterCount(session.filters)
   const [filtersOpen, setFiltersOpen] = useState(filterCount > 0)
 
-  // Typing stays inside the sheet (the shell does not re-render per key); the text is handed to the
-  // tab's search on submit, on switching views and when the sheet closes.
   const [draft, setDraft] = useState({ view, text: session.input })
   if (draft.view !== view) setDraft({ view, text: session.input })
   const text = draft.view === view ? draft.text : session.input
@@ -91,26 +206,6 @@ export function SearchSheet({
     [commands, tabId, restoreSeq]
   )
 
-  // Opening (or asking again) puts focus on the query, or back on the hit that was opened.
-  useLayoutEffect(() => {
-    const last = tab.lastHit
-    if (focus === 'hit' && last !== null && last.view === view) {
-      const hit = listRef.current?.querySelector<HTMLElement>(`[data-hit="${CSS.escape(last.postId)}"]`)
-      if (hit != null) {
-        hit.focus()
-        return
-      }
-    }
-    inputRef.current?.focus()
-    inputRef.current?.select()
-    // Only a new request moves focus, not every update of the results.
-  }, [focusSeq])
-
-  const onEscape = () => {
-    if (commands.cancelLocate(tabId)) return
-    commands.close()
-  }
-
   const query = text.trim()
   const searchable = query !== '' && query.length <= MAX_QUERY_LENGTH && filtersSearchable(session.filters)
   const running = run !== null && (run.status === 'running' || run.waiting) && run.status !== 'stopped'
@@ -128,161 +223,135 @@ export function SearchSheet({
   const showRebuild = indexMissing || rebuild.status === 'running'
 
   return (
-    <Modal className="search-sheet" labelledBy={titleId} onClose={onEscape} fallbackFocus={fallbackFocus}>
-      <header className="modal-header search-header">
-        <h2 className="modal-title" id={titleId}>
-          搜索
-        </h2>
-        <div className="segmented" role="group" aria-label="搜索什么">
-          {(['local', 'thread'] as const).map((item) => (
-            <button
-              key={item}
-              type="button"
-              className="segmented-item"
-              aria-pressed={view === item}
-              disabled={item === 'thread' && scope === null}
-              title={
-                item === 'thread'
-                  ? scope === null
-                    ? '先打开一个串，再搜索它的内容'
-                    : `搜索 No.${scope.threadId}（${shortcutLabel('search-thread', platform)}）`
-                  : `搜索本机保有的全部内容（${shortcutLabel('search-local', platform)}）`
-              }
-              onClick={() => commands.setView(tabId, item)}
-            >
-              {VIEW_TEXT[item]}
-            </button>
-          ))}
+    <div className={className}>
+      <form className="search-form" role="search" onSubmit={onSubmit}>
+        <label className="visually-hidden" htmlFor={inputId}>
+          {view === 'local' ? '在本机内容中搜索' : '在当前串中搜索'}
+        </label>
+        <div className="search-field">
+          <Icon name="search" className="search-field-icon" />
+          <input
+            ref={inputRef}
+            id={inputId}
+            type="search"
+            className="search-input"
+            value={text}
+            maxLength={MAX_QUERY_LENGTH}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={view === 'local' ? '标题或正文中的文字' : '这个串里的文字'}
+            aria-describedby={brief ? undefined : hintId}
+            onChange={(event) => setDraft({ view, text: event.target.value })}
+          />
         </div>
-        <button type="button" className="icon-btn search-close" onClick={() => commands.close()} aria-label="关闭搜索" title="关闭（Esc）">
-          <Icon name="close" />
-        </button>
-      </header>
-
-      <div className="modal-body search-body">
-        <form className="search-form" role="search" onSubmit={onSubmit}>
-          <label className="visually-hidden" htmlFor={inputId}>
-            {view === 'local' ? '在本机内容中搜索' : '在当前串中搜索'}
-          </label>
-          <div className="search-field">
-            <Icon name="search" className="search-field-icon" />
-            <input
-              ref={inputRef}
-              id={inputId}
-              type="search"
-              className="search-input"
-              value={text}
-              maxLength={MAX_QUERY_LENGTH}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={view === 'local' ? '标题或正文中的文字' : '这个串里的文字'}
-              aria-describedby={hintId}
-              onChange={(event) => setDraft({ view, text: event.target.value })}
-            />
-          </div>
-          {running ? (
-            <button type="button" className="btn" onClick={() => commands.stop(tabId, view)}>
-              <Icon name="close" size={14} />
-              停止
-            </button>
-          ) : (
-            <button type="submit" className="btn btn-primary" disabled={!searchable}>
-              搜索
-            </button>
-          )}
-          <button
-            type="button"
-            className={filterCount > 0 ? 'btn filter-toggle is-active' : 'btn filter-toggle'}
-            aria-expanded={filtersOpen}
-            aria-controls={filtersId}
-            aria-label={filterCount > 0 ? `筛选（已启用 ${filterCount} 项）` : '筛选'}
-            onClick={() => setFiltersOpen((value) => !value)}
-          >
-            <Icon name="filter" size={14} />
-            筛选
-            {filterCount > 0 && <span className="btn-count">{filterCount}</span>}
+        {running ? (
+          <button type="button" className="btn" onClick={() => commands.stop(tabId, view)}>
+            <Icon name="close" size={14} />
+            停止
           </button>
-        </form>
+        ) : (
+          <button type="submit" className="btn btn-primary" disabled={!searchable}>
+            搜索
+          </button>
+        )}
+        <button
+          type="button"
+          className={filterCount > 0 ? 'btn filter-toggle is-active' : 'btn filter-toggle'}
+          aria-expanded={filtersOpen}
+          aria-controls={filtersId}
+          aria-label={filterCount > 0 ? `筛选（已启用 ${filterCount} 项）` : '筛选'}
+          onClick={() => setFiltersOpen((value) => !value)}
+        >
+          <Icon name="filter" size={14} />
+          筛选
+          {filterCount > 0 && <span className="btn-count">{filterCount}</span>}
+        </button>
+      </form>
+      {!brief && (
         <p className="search-hint" id={hintId}>
           按字面文字查找（不区分大小写，引号、星号等符号也按原样），提交后才搜索。不搜索草稿和饼干。
         </p>
+      )}
 
-        <div className="search-filters" id={filtersId} hidden={!filtersOpen}>
-          <FilterFields value={session.filters} onChange={(filters) => commands.setFilters(tabId, view, filters)} forums={forums} />
-          <FilterRules />
-          <p className="filter-rules">筛选按命中的那条发言自己的版面、日期和图片判断。</p>
-        </div>
-
-        {view === 'thread' && scope !== null && (
-          <section className="search-scope" aria-label="搜索的串">
-            <p className="search-scope-title">
-              <span className="search-scope-name">{scope.title ?? `No.${scope.threadId}`}</span>
-              {scope.title !== null && <span className="search-scope-no">No.{scope.threadId}</span>}
-            </p>
-            <div className="search-scope-row">
-              <div className="segmented" role="group" aria-label="搜索的回复">
-                {(['all', 'po'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className="segmented-item"
-                    aria-pressed={scope.mode === mode}
-                    onClick={() => commands.setThreadMode(tabId, mode)}
-                  >
-                    {MODE_TEXT[mode]}
-                  </button>
-                ))}
-              </div>
-              <span className="search-scope-note">只改变搜索范围，不改变阅读模式</span>
-            </div>
-            {run?.coverage?.thread != null && (
-              <p className="search-coverage">
-                <Icon name="info" size={14} />
-                <span>{coverageText(run.coverage.thread)}。只搜索这些已取得的页，不代表整串。</span>
-              </p>
-            )}
-            <FetchBlock tab={tab} tabId={tabId} commands={commands} />
-          </section>
-        )}
-
-        {view === 'local' && run?.coverage != null && (
-          <p className="search-coverage">
-            <Icon name="info" size={14} />
-            <span>
-              在本机保有的 {run.coverage.retainedThreads} 个串、{run.coverage.retainedPosts} 条发言中搜索：普通缓存、离线副本和订阅记录中的标题与正文。普通缓存被清理后，其中的内容就搜不到了。
-            </span>
-          </p>
-        )}
-
-        {showRebuild && <RebuildBlock rebuild={rebuild} indexMissing={indexMissing} commands={commands} />}
-        {!showRebuild && rebuild.status !== 'idle' && <RebuildResult rebuild={rebuild} />}
-
-        {run !== null && <RunStatus run={run} onMore={() => commands.more(tabId, view)} onRerun={() => commands.submit(tabId, view, run.query)} />}
-
-        {run !== null && run.hits.length > 0 && (
-          <ul className="search-hits" ref={listRef} aria-label={`搜索结果，已显示 ${run.hits.length} 条`} onKeyDown={roving.onKeyDown}>
-            {run.hits.map((hit) => (
-              <HitRow
-                key={hit.postId}
-                hit={hit}
-                query={run.query}
-                forumName={hit.forumId === null ? null : (forums.get(hit.forumId) ?? `版面 ${hit.forumId}`)}
-                locate={tab.locate !== null && tab.locate.view === view && tab.locate.postId === hit.postId ? tab.locate : null}
-                itemProps={roving.itemProps(hit.postId)}
-                onChoose={() => commands.chooseHit(tabId, view, hit, 'navigate')}
-                onRetry={() => commands.chooseHit(tabId, view, hit, 'resolve')}
-                onOpenThread={() => commands.openHitThread(tabId)}
-                onDismiss={() => commands.dismissLocate(tabId)}
-              />
-            ))}
-          </ul>
-        )}
+      <div className="search-filters" id={filtersId} hidden={!filtersOpen}>
+        <FilterFields value={session.filters} onChange={(filters) => commands.setFilters(tabId, view, filters)} forums={forums} />
+        <FilterRules />
+        {!brief && <p className="filter-rules">筛选按命中的那条发言自己的版面、日期和图片判断。</p>}
       </div>
-    </Modal>
+
+      {view === 'thread' && scope !== null && (
+        <section className="search-scope" aria-label="搜索的串">
+          <p className="search-scope-title">
+            <span className="search-scope-name">{scope.title ?? `No.${scope.threadId}`}</span>
+            {scope.title !== null && <span className="search-scope-no">No.{scope.threadId}</span>}
+          </p>
+          <div className="search-scope-row">
+            <div className="segmented" role="group" aria-label="搜索的回复">
+              {(['all', 'po'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className="segmented-item"
+                  aria-pressed={scope.mode === mode}
+                  onClick={() => commands.setThreadMode(tabId, mode)}
+                >
+                  {MODE_TEXT[mode]}
+                </button>
+              ))}
+            </div>
+            <span className="search-scope-note">只改变搜索范围，不改变阅读模式</span>
+          </div>
+          {run?.coverage?.thread != null && (
+            <p className="search-coverage">
+              <Icon name="info" size={14} />
+              <span>{coverageText(run.coverage.thread)}。只搜索这些已取得的页，不代表整串。</span>
+            </p>
+          )}
+          <FetchBlock tab={tab} tabId={tabId} commands={commands} />
+        </section>
+      )}
+
+      {view === 'local' && run?.coverage != null && (
+        <p className="search-coverage">
+          <Icon name="info" size={14} />
+          <span>
+            {brief
+              ? `在本机保有的 ${run.coverage.retainedThreads} 个串、${run.coverage.retainedPosts} 条发言中搜索`
+              : `在本机保有的 ${run.coverage.retainedThreads} 个串、${run.coverage.retainedPosts} 条发言中搜索：普通缓存、离线副本和订阅记录中的标题与正文。普通缓存被清理后，其中的内容就搜不到了。`}
+          </span>
+        </p>
+      )}
+
+      {showRebuild && <RebuildBlock rebuild={rebuild} indexMissing={indexMissing} commands={commands} />}
+      {!showRebuild && rebuild.status !== 'idle' && <RebuildResult rebuild={rebuild} />}
+
+      {run !== null && (
+        <RunStatus run={run} brief={brief} onMore={() => commands.more(tabId, view)} onRerun={() => commands.submit(tabId, view, run.query)} />
+      )}
+
+      {run !== null && run.hits.length > 0 && (
+        <ul className="search-hits" ref={listRef} aria-label={`搜索结果，已显示 ${run.hits.length} 条`} onKeyDown={roving.onKeyDown}>
+          {run.hits.map((hit) => (
+            <HitRow
+              key={hit.postId}
+              hit={hit}
+              query={run.query}
+              forumName={hit.forumId === null ? null : (forums.get(hit.forumId) ?? `版面 ${hit.forumId}`)}
+              locate={tab.locate !== null && tab.locate.view === view && tab.locate.postId === hit.postId ? tab.locate : null}
+              itemProps={roving.itemProps(hit.postId)}
+              onChoose={() => commands.chooseHit(tabId, view, hit, 'navigate')}
+              onRetry={() => commands.chooseHit(tabId, view, hit, 'resolve')}
+              onOpenThread={() => commands.openHitThread(tabId)}
+              onDismiss={() => commands.dismissLocate(tabId)}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
-function RunStatus({ run, onMore, onRerun }: { run: SearchRun; onMore: () => void; onRerun: () => void }) {
+function RunStatus({ run, brief, onMore, onRerun }: { run: SearchRun; brief: boolean; onMore: () => void; onRerun: () => void }) {
   const count = run.hits.length
   let body: ReactNode
   switch (run.status) {
@@ -304,7 +373,7 @@ function RunStatus({ run, onMore, onRerun }: { run: SearchRun; onMore: () => voi
         count === 0 ? (
           <span className="search-empty">
             <strong>没有找到「{run.query}」</strong>
-            <span>只说明本机目前保有的内容里没有，不代表论坛上没有。</span>
+            {!brief && <span>只说明本机目前保有的内容里没有，不代表论坛上没有。</span>}
           </span>
         ) : (
           <span>共找到 {count} 条</span>

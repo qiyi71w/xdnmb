@@ -1,8 +1,8 @@
-import { useEffect, useId, useLayoutEffect, useRef } from 'react'
+import { useId, useRef } from 'react'
 import type { PostId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
 import { describeImageError, UNDECODABLE_TEXT, type ImageView } from './imageView'
-import { useImageLoad } from './useImageLoad'
+import { useImageLoad, useLoadWhenNear } from './useImageLoad'
 import './image.css'
 
 /**
@@ -17,21 +17,7 @@ export function PostThumbnail({ postId, images: view }: { postId: PostId; images
   const buttonRef = useRef<HTMLButtonElement>(null)
   const statusId = useId()
 
-  const latest = useRef({ status: state.status, load: thumb.load, abort: thumb.abort })
-  useLayoutEffect(() => {
-    latest.current = { status: state.status, load: thumb.load, abort: thumb.abort }
-  })
-
-  const { near } = view
-  useEffect(() => {
-    const button = buttonRef.current
-    if (button === null) return
-    return near.observe(button, (isNear) => {
-      const { status, load, abort } = latest.current
-      if (isNear && status === 'idle') load()
-      else if (!isNear && status === 'loading') abort()
-    })
-  }, [near])
+  useLoadWhenNear(thumb, view.near, buttonRef)
 
   const shown = state.status === 'ready' && state.decoded ? state.image : null
   const failure =

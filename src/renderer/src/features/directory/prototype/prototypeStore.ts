@@ -205,7 +205,6 @@ export type FeatureId =
   | 'subscriptions'
   | 'reminders'
   | 'search'
-  | 'onlineSearch'
   | 'history'
   | 'offline'
   | 'drafts'
@@ -215,7 +214,6 @@ export const FEATURES: readonly { id: FeatureId; label: string; icon: IconName }
   { id: 'subscriptions', label: '订阅的串', icon: 'bookmark' },
   { id: 'reminders', label: '提醒', icon: 'bell' },
   { id: 'search', label: '搜索', icon: 'search' },
-  { id: 'onlineSearch', label: '联网搜索', icon: 'globe' },
   { id: 'history', label: '历史', icon: 'history' },
   { id: 'offline', label: '离线', icon: 'download' },
   { id: 'drafts', label: '草稿', icon: 'draft' },

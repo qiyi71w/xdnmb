@@ -40,7 +40,7 @@ export interface FeatureHost {
    * the 全部功能 panel); dialogs always take focus themselves.
    */
   open: (id: FeatureId, focusTarget?: boolean) => void
-  /** The feature the active tab shows (订阅的串, 提醒, 历史, 离线, 联网搜索 pages), if any. */
+  /** The feature the active tab shows (订阅的串, 提醒, 搜索, 历史, 离线 pages), if any. */
   current: FeatureId | null
   reminderBadge: ReminderBadge | null
   pendingAttempts: PendingAttempts
@@ -99,9 +99,9 @@ export function featureLabel(id: FeatureId, host: FeatureHost): string {
   return `${label}${badge === null ? '' : `，${badge.spoken}`}${marked ? (id === 'attempts' ? '，状态读取失败' : '，部分串检查未完成') : ''}`
 }
 
-/** Opens a dialog (搜索, 草稿, 发送记录) rather than a page of the tab. */
+/** Opens a dialog (草稿, 发送记录) rather than a page of the tab. */
 export function featureIsDialog(id: FeatureId): boolean {
-  return id === 'search' || id === 'drafts' || id === 'attempts'
+  return id === 'drafts' || id === 'attempts'
 }
 
 /** Small count / warning dot for icon-only feature buttons. */

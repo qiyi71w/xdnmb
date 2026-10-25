@@ -338,8 +338,8 @@
   margin: 8px 4px 0 2px;
 }
 
-/* Identity and time wrap onto two lines instead of drawing over each other when the row is narrow. */
-.sub-row .row-top {
+/* Byline and time wrap onto two lines instead of drawing over each other when the row is narrow. */
+.sub-row .row-byline {
   flex-wrap: wrap;
 }
 

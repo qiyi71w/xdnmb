@@ -34,6 +34,21 @@ export interface OnlineSearchPaneHandle {
   focusInput(): void
 }
 
+/** PROTOTYPE 搜索 page: which search it shows. */
+export type SearchPageSide = 'local' | 'online'
+
+/** What the shell can ask of a mounted PROTOTYPE 搜索 page. */
+export interface SearchPageHandle {
+  /** Shows that side and focuses its search box (搜索 chosen while already on the page). */
+  show(side: SearchPageSide): void
+}
+
+/** PROTOTYPE 搜索 page while mounted or in navigation history: the side shown, where 本机 was scrolled. */
+export interface SearchPageMemory {
+  side: SearchPageSide
+  localScrollTop: number
+}
+
 /**
  * What a list entry has while mounted or in navigation history, discriminated by its source, with
  * the filters of the feed and subscription lists.
@@ -53,10 +68,11 @@ export type ListMemory =
   | { kind: 'retained'; scrollTop: number }
 
 /**
- * Mounted readers, lists and online search pages, keyed by the history entry key that shows them,
- * plus the runtime memory of lists that are not mounted (split toggled, single pane, back/forward)
- * and the sessions of online search entries (query, obtained pages, view). Memory lives only while
- * the app runs; the shell drops it when its entry leaves every tab's history.
+ * Mounted readers, lists, online search pages and PROTOTYPE 搜索 pages, keyed by the history entry
+ * key that shows them, plus the runtime memory of lists that are not mounted (split toggled, single
+ * pane, back/forward), the sessions of online search entries (query, obtained pages, view) and the
+ * side and 本机 scroll of 搜索 pages. Memory lives only while the app runs; the shell drops it when
+ * its entry leaves every tab's history.
  * `readingResets` tells open readers that their thread's reading data was cleared; `favorites`
  * keeps every mounted 收藏 entry point on the last successfully written state; `retainedFilters`
  * keeps the filters of each 收藏／历史／离线 list while the app runs.
@@ -67,6 +83,8 @@ export interface ContentRegistry {
   readers: Map<number, { current: ReaderHandle }>
   lists: Map<number, { current: ListHandle }>
   onlineSearchPanes: Map<number, { current: OnlineSearchPaneHandle }>
+  searchPages: Map<number, { current: SearchPageHandle }>
+  searchPageMemory: Map<number, SearchPageMemory>
   listMemory: Map<number, ListMemory>
   readingResets: ReadingResets
   favorites: FavoriteWrites
@@ -80,6 +98,8 @@ export function createContentRegistry(): ContentRegistry {
     readers: new Map(),
     lists: new Map(),
     onlineSearchPanes: new Map(),
+    searchPages: new Map(),
+    searchPageMemory: new Map(),
     listMemory: new Map(),
     readingResets: createReadingResets(),
     favorites: createFavoriteWrites(),
@@ -122,7 +142,7 @@ export function captureLists(tabs: TabsState, registry: ContentRegistry): Worksp
 export const ContentRegistryContext = createContext<ContentRegistry | null>(null)
 
 /** Registers the latest `handle` under `entryKey` for as long as the component is mounted. */
-export function useRegisterContent<K extends 'readers' | 'lists' | 'onlineSearchPanes'>(
+export function useRegisterContent<K extends 'readers' | 'lists' | 'onlineSearchPanes' | 'searchPages'>(
   kind: K,
   entryKey: number,
   handle: ContentRegistry[K] extends Map<number, { current: infer H }> ? H : never

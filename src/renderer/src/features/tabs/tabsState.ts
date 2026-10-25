@@ -55,8 +55,9 @@ export interface ThreadOpen {
 
 /**
  * `quote`: the entry was produced by a located quote or by 打开原串, so the back control reads
- * 返回引用处. `local-search`: produced by a located hit of the local / thread search sheet; back
- * reads 返回搜索结果 and shows that tab's search sheet again with the search the source entry had.
+ * 返回引用处. `local-search`: produced by a located hit of the local / thread search sheet (PROTOTYPE:
+ * or of the 搜索 page's 本机 side); back reads 返回搜索结果 and shows that tab's search sheet (or
+ * page) again with the search the source entry had.
  * `online-search`: opened from a result of an `online-search` page; back reads 返回搜索结果 and the
  * page comes back from its session (query, obtained pages, scroll, focused result) without any new
  * request. Choosing another list item in the entry clears the origin; history is kept either way.
@@ -89,7 +90,8 @@ export function listKey(ref: ListRef): string {
  *   single-pane fallback shows.
  * - `thread`: a thread opened as a whole page (split off).
  * - `online-search`: an online search page. Its session (query chain, obtained pages) belongs to
- *   this entry and is released when the entry leaves every tab's history.
+ *   this entry and is released when the entry leaves every tab's history. PROTOTYPE: the 搜索 page,
+ *   with the tab's local search as its 本机 side and this session as its 联网 side.
  */
 export type TabEntry =
   | { kind: 'list'; key: number; feed: ListRef | null; thread: ThreadOpen | null; pane: 'list' | 'reader'; origin: EntryOrigin }

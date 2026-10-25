@@ -860,8 +860,8 @@ function PlanItems({ plan }: { plan: SubscriptionPlan }) {
 const HISTORY_TAG: Record<SubscriptionPlan['state'], string> = {
   running: 'tag',
   completed: 'tag',
-  stopped: 'tag tag-sage',
-  interrupted: 'tag tag-sage'
+  stopped: 'tag tag-warn',
+  interrupted: 'tag tag-warn'
 }
 
 /** Durable plans, including ones interrupted by a restart; there is no resume, only a new preview. */
@@ -876,7 +876,7 @@ function PlanHistory() {
         <span className="sub-journal-label" id={headingId}>
           同步与合并记录
         </span>
-        {attention > 0 && <span className="tag tag-sage">{attention} 份未完成</span>}
+        {attention > 0 && <span className="tag tag-warn">{attention} 份未完成</span>}
       </summary>
       <div className="sub-journal-body">
         {plansFailed && (

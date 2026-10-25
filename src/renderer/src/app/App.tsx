@@ -30,11 +30,11 @@ import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/lay
 import { QuoteCard } from '../features/quote/QuoteCard'
 import { QuoteActiveContext, QuoteControllerContext } from '../features/quote/QuoteContext'
 import { useQuoteNavigation } from '../features/quote/useQuoteNavigation'
-import { SearchOpenerContext, type SearchRequest } from '../features/search/SearchContext'
+import { LocalSearchContext, SearchOpenerContext, type LocalSearchHost, type SearchRequest } from '../features/search/SearchContext'
 import { SearchSheet } from '../features/search/SearchSheet'
 import { tabSearchOf } from '../features/search/searchState'
 import { useSearch } from '../features/search/useSearch'
-import { captureLists, ContentRegistryContext, createContentRegistry } from '../features/tabs/contentRegistry'
+import { captureLists, ContentRegistryContext, createContentRegistry, type SearchPageSide } from '../features/tabs/contentRegistry'
 import {
   activeTab,
   currentEntry,
@@ -259,6 +259,8 @@ export function App() {
   }, [])
 
   const current = tabs === null ? null : activeTab(tabs)
+  /** PROTOTYPE: the active tab shows a 搜索 page (its `online-search` entry); it holds the tab's local search open. */
+  const searchPageTab = PROTOTYPE_ENABLED && current !== null && currentEntry(current).kind === 'online-search' ? current.id : null
   /** PROTOTYPE: the navigation variant; `null` (the regular navigation and settings dialog) unless built in. */
   const navVariant = useNavVariant()
   const protoColumnCollapsed = useBoardColumnCollapsed()
@@ -310,7 +312,8 @@ export function App() {
   const stateRef = useRef({ tabs, settings, singlePane: layout.singlePane, closing, covered: coverage.covered, searchOpen: false })
   useLayoutEffect(() => {
     // `search` is created below (it reads this ref); this runs after the render that created it.
-    const searchOpen = tabs !== null && search.state.openTab === tabs.activeId
+    // A 搜索 page holding the local search open is no dialog.
+    const searchOpen = tabs !== null && search.state.openTab === tabs.activeId && searchPageTab === null
     stateRef.current = { tabs, settings, singlePane: layout.singlePane, closing, covered: coverage.covered, searchOpen }
   })
   const pendingTabFocus = useRef(false)
@@ -476,6 +479,25 @@ export function App() {
     }
   })
   const { commands: searchCommands } = search
+
+  // PROTOTYPE: a hit chosen on a 搜索 page's 本机 side opens only while the tab's local search is
+  // open, as from the sheet. The page holds it open while shown and lets go when left (a hit
+  // opened from the page has already closed it).
+  const openSearchTab = search.state.openTab
+  const heldSearch = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    const held = heldSearch.current
+    heldSearch.current = searchPageTab
+    if (searchPageTab !== null) {
+      if (openSearchTab !== searchPageTab) searchCommands.open(searchPageTab, { view: 'local' })
+    } else if (held !== null && openSearchTab === held) {
+      searchCommands.close()
+    }
+  }, [searchPageTab, openSearchTab, searchCommands])
+  const localSearchHost = useMemo<LocalSearchHost | null>(
+    () => (PROTOTYPE_ENABLED ? { state: search.state, commands: searchCommands, forums: names } : null),
+    [search.state, searchCommands, names]
+  )
 
   /** Before leaving an entry that shows a thread, remember its mode and anchor in the entry. */
   const leave = useCallback(
@@ -880,15 +902,16 @@ export function App() {
     [withActive, registry]
   )
 
-  // List memory, restored list context and online search sessions live only as long as their entry
-  // is in some tab's history (forward branch replaced, tab closed → dropped; a dropped online search
-  // session is closed).
+  // List memory, restored list context, online search sessions and PROTOTYPE 搜索 page memory live
+  // only as long as their entry is in some tab's history (forward branch replaced, tab closed →
+  // dropped; a dropped online search session is closed).
   useEffect(() => {
     if (tabs === null) return
     const live = new Set<number>()
     for (const tab of tabs.tabs) for (const item of tab.entries) live.add(item.key)
     for (const key of registry.listMemory.keys()) if (!live.has(key)) registry.listMemory.delete(key)
     for (const key of registry.savedLists.keys()) if (!live.has(key)) registry.savedLists.delete(key)
+    for (const key of registry.searchPageMemory.keys()) if (!live.has(key)) registry.searchPageMemory.delete(key)
     registry.onlineSearches.retain(live)
   }, [tabs, registry])
 
@@ -912,12 +935,41 @@ export function App() {
   }, [tabs])
 
   /**
+   * PROTOTYPE: the 搜索 page as a new step of the active tab, on 本机 and focused there. On such a
+   * page already: `local` shows 本机, `shown` keeps the side; that side's search box takes focus.
+   */
+  const openSearchPage = useCallback(
+    (side: 'local' | 'shown') => {
+      closeNav(false)
+      if (protoSettingsShown) endSettings(false)
+      withActive((tab) => {
+        const entry = currentEntry(tab)
+        if (entry.kind === 'online-search') {
+          const shown: SearchPageSide = side === 'local' ? 'local' : (registry.searchPageMemory.get(entry.key)?.side ?? 'local')
+          registry.searchPages.get(entry.key)?.current.show(shown)
+          return
+        }
+        leave(tab)
+        // The page takes the tab's local search, with focus on its query (also over an open sheet).
+        searchCommands.open(tab.id, { view: 'local' })
+        dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'online-search' } })
+      })
+    },
+    [closeNav, protoSettingsShown, endSettings, withActive, registry, leave, searchCommands]
+  )
+
+  /**
    * Search of the active tab. `thread` searches the thread its reader shows, starting in the mode
-   * it is shown in; `local` everything retained. Its entry points are inert or skipped (shortcuts)
-   * while another modal dialog covers the app; with the sheet itself open it switches its view.
+   * it is shown in; `local` everything retained (PROTOTYPE: the 搜索 page). Its entry points are
+   * inert or skipped (shortcuts) while another modal dialog covers the app; with the sheet itself
+   * open it switches its view.
    */
   const openSearch = useCallback(
     (request: SearchRequest) => {
+      if (PROTOTYPE_ENABLED && request.view === 'local') {
+        openSearchPage('local')
+        return
+      }
       closeNav(false)
       withActive((tab) => {
         if (request.view === 'local') {
@@ -928,7 +980,7 @@ export function App() {
         searchCommands.open(tab.id, { view: 'thread', scope: { threadId: request.threadId, mode: request.mode, title: request.title } })
       })
     },
-    [closeNav, withActive, searchCommands]
+    [openSearchPage, closeNav, withActive, searchCommands]
   )
 
   const openLocalSearch = useCallback(() => openSearch({ view: 'local' }), [openSearch])
@@ -992,7 +1044,7 @@ export function App() {
     (tab: Tab) => {
       const entry = currentEntry(tab)
       if (entry.kind === 'thread') return threadTitle(entry.thread)
-      if (entry.kind === 'online-search') return registry.onlineSearches.title(entry.key)
+      if (entry.kind === 'online-search') return PROTOTYPE_ENABLED ? '搜索' : registry.onlineSearches.title(entry.key)
       if (entry.feed === null) return '新标签'
       const feed = entry.feed
       const name =
@@ -1042,20 +1094,18 @@ export function App() {
     },
     [protoSettingsShown, endSettings, selectFeed]
   )
-  /** Lists of the tab (订阅的串, 提醒, 历史, 离线) and 联网搜索 are pages; the rest open dialogs. */
+  /** Lists of the tab (订阅的串, 提醒, 历史, 离线) and 搜索 are pages; the rest open dialogs. */
   const openProtoFeature = useCallback(
     (id: FeatureId, focusTarget = false) => {
       if (id === 'subscriptions' || id === 'reminders' || id === 'history' || id === 'offline') {
         protoSelect({ kind: id }, focusTarget ? 'list' : 'nav')
-      } else if (id === 'onlineSearch') {
-        // The page focuses its search box when it mounts.
-        if (protoSettingsShown) endSettings(false)
-        openOnlineSearch()
-      } else if (id === 'search') openLocalSearch()
-      else if (id === 'drafts') openDrafts()
+      } else if (id === 'search') {
+        // The page focuses its search box itself.
+        openSearchPage('shown')
+      } else if (id === 'drafts') openDrafts()
       else openAttempts()
     },
-    [protoSelect, protoSettingsShown, endSettings, openOnlineSearch, openLocalSearch, openDrafts, openAttempts]
+    [protoSelect, openSearchPage, openDrafts, openAttempts]
   )
   const protoFeatures = useMemo<FeatureHost>(
     () => ({
@@ -1063,7 +1113,7 @@ export function App() {
       current: protoSettingsShown
         ? null
         : onlineSearchCurrent
-          ? 'onlineSearch'
+          ? 'search'
           : selectedFeed !== null && isLocalList(selectedFeed)
             ? selectedFeed.kind
             : null,
@@ -1206,6 +1256,7 @@ export function App() {
             <QuoteControllerContext.Provider value={quote.controller}>
             <QuoteActiveContext.Provider value={quote.activeKey}>
             <SearchOpenerContext value={openSearch}>
+            <LocalSearchContext value={localSearchHost}>
             <ListHostContext value={protoListHost}>
             <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
               {!navOverlay && (
@@ -1326,14 +1377,16 @@ export function App() {
               )}
             </div>
             </ListHostContext>
+            </LocalSearchContext>
             </SearchOpenerContext>
             </QuoteActiveContext.Provider>
             </QuoteControllerContext.Provider>
           </ContentRegistryContext.Provider>
           {/* Outside every reader's content: showing a quote card never counts as reading. */}
           {quote.cardProps !== null && <QuoteCard {...quote.cardProps} />}
-          {/* Modal: readers below judge nothing read while it is open, and hits shown here never count as reading. */}
-          {tabs !== null && search.state.openTab === tabs.activeId && (
+          {/* Modal: readers below judge nothing read while it is open, and hits shown here never count as reading.
+              PROTOTYPE: not while a 搜索 page holds the local search open; the page shows it. */}
+          {tabs !== null && search.state.openTab === tabs.activeId && searchPageTab === null && (
             <SearchSheet
               key={`${tabs.activeId}:${search.state.restoreSeq}`}
               tabId={tabs.activeId}

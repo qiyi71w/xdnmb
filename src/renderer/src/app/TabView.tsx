@@ -11,6 +11,7 @@ import { forumLabel } from '../features/editor/editorText'
 import { FeedPane } from '../features/feed/FeedPane'
 import type { LayoutResult } from '../features/layout/layout'
 import { OnlineSearchPane } from '../features/search/OnlineSearchPane'
+import { SearchPage } from '../features/search/SearchPage'
 import { currentEntry, isLocalList, type EntryInit, type Tab, type ThreadOpen } from '../features/tabs/tabsState'
 import { ThreadPane } from '../features/thread/ThreadPane'
 import { FailureNotice, Loading } from '../components/Notices'
@@ -134,8 +135,18 @@ export function TabView({
       </main>
     )
   } else if (entry.kind === 'online-search') {
-    // The board directory recognizes board results of the page.
-    body = (
+    // The board directory recognizes board results of the page. PROTOTYPE: the 搜索 page, whose
+    // 联网 side this entry's online search is.
+    body = PROTOTYPE_ENABLED ? (
+      <SearchPage
+        key={entry.key}
+        tabId={tab.id}
+        entryKey={entry.key}
+        displayed={active}
+        directory={directory.directory}
+        onOpen={onOpenFromOnlineSearch}
+      />
+    ) : (
       <OnlineSearchPane
         key={entry.key}
         entryKey={entry.key}
@@ -158,7 +169,12 @@ export function TabView({
           </button>
         )}
         {openSearch !== null && (
-          <button type="button" className="btn pane-empty-action" aria-haspopup="dialog" onClick={() => openSearch({ view: 'local' })}>
+          <button
+            type="button"
+            className="btn pane-empty-action"
+            aria-haspopup={PROTOTYPE_ENABLED ? undefined : 'dialog'}
+            onClick={() => openSearch({ view: 'local' })}
+          >
             <Icon name="search" />
             搜索本机内容
           </button>

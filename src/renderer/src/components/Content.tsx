@@ -5,7 +5,7 @@ import './content.css'
 type Mode =
   /** Full post body: links are activatable and open in the system browser. */
   | 'body'
-  /** Excerpt inside another control (list row): nothing interactive, line breaks become spaces. */
+  /** Excerpt inside another control (list row): nothing interactive; line breaks kept. */
   | 'excerpt'
 
 const EMPHASIS_TAG: Record<EmphasisStyle, 'strong' | 'em' | 'u' | 's' | 'small' | 'sup' | 'sub'> = {
@@ -39,7 +39,7 @@ function renderNodes(nodes: readonly ContentNode[], ctx: RenderContext, path: st
       case 'text':
         return node.text
       case 'lineBreak':
-        return mode === 'excerpt' ? ' ' : <br key={key} />
+        return <br key={key} />
       case 'quoteRef': {
         const quoteIndex = ctx.quoteCount++
         if (ctx.renderQuote !== undefined) return <Fragment key={key}>{ctx.renderQuote(node, quoteIndex)}</Fragment>
@@ -105,7 +105,7 @@ export function Content({
   const base = mode === 'body' ? 'content-body' : 'content-excerpt'
   const classes = className === undefined ? base : `${base} ${className}`
   const ctx: RenderContext = { mode, renderQuote: mode === 'body' ? renderQuote : undefined, quoteCount: 0 }
-  // Excerpts sit inside buttons, which only allow phrasing content.
+  // Excerpts sit inside buttons, which only allow phrasing content (`<br>` included).
   if (mode === 'excerpt') return <span className={classes}>{renderNodes(nodes, ctx, 'n')}</span>
   return <div className={classes}>{renderNodes(nodes, ctx, 'n')}</div>
 }

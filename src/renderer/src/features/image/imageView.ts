@@ -1,12 +1,12 @@
 import type { PostId } from '../../../../shared/forum'
 import type { ImageError, ImageSaveOutcome, ImageViewId, LoadedImage } from '../../../../shared/images'
 
-/** Thumbnails start loading this far outside the reader viewport (above and below). */
+/** Thumbnails start loading this far outside the scroller viewport (above and below). */
 const NEAR_MARGIN = '800px 0px'
 
 /**
- * One IntersectionObserver for every thumbnail of a reader, rooted at the reader scroller.
- * Created on first use, when the scroller is mounted.
+ * One IntersectionObserver for every thumbnail of a view (reader or thread list), rooted at its
+ * scroller. Created on first use, when the scroller is mounted.
  */
 export class NearViewport {
   private observer: IntersectionObserver | null = null
@@ -47,10 +47,14 @@ export interface ViewerRequest {
   trigger: HTMLElement
 }
 
-/** Images of one mounted reader: its view ID, lazy-load observer and the viewer it owns. */
-export interface ImageView {
+/** Where images of one mounted view load: its view ID and lazy-load observer. */
+export interface ImageScope {
   viewId: ImageViewId
   near: NearViewport
+}
+
+/** Images of one mounted reader: its scope and the viewer it owns. */
+export interface ImageView extends ImageScope {
   openViewer: (request: ViewerRequest) => void
 }
 

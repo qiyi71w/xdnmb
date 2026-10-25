@@ -423,6 +423,70 @@
   min-width: 0;
 }
 
+/* ---------- PROTOTYPE 搜索 page ----------
+   One centred column as wide as the online search page: the 本机｜联网 switch on top, then the
+   chosen side with its own scroller and frosted sticky search bar (the 联网 side's header). */
+
+.search-page {
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  background: var(--pane);
+}
+
+.search-page-column {
+  width: min(100%, calc(var(--reading-width) + 2 * var(--gutter-min)));
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-inline: 1px solid var(--line-soft);
+}
+
+.search-page-bar {
+  flex: none;
+  padding: 12px 12px 0 16px;
+}
+
+.search-page-side {
+  flex: 1;
+  min-height: 0;
+}
+
+.search-page-scroll {
+  height: 100%;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.search-page-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 12px;
+  padding: 0 12px 28px 16px;
+}
+
+.search-page-body > .search-form {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -12px 0 -16px;
+  padding: 12px 12px 10px 16px;
+  background: color-mix(in oklch, var(--pane) 78%, transparent);
+  backdrop-filter: blur(18px) saturate(1.5);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/* The 联网 side fills the column instead of centring its own. */
+.search-page .online-search-page {
+  background: none;
+}
+
+.search-page .online-search-scroll {
+  width: 100%;
+  border-inline: 0;
+}
+
 /* ---------- List filter bars ---------- */
 
 .list-filters {
