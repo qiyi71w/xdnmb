@@ -36,6 +36,34 @@ function safeLink(href: string | undefined): string | null {
   }
 }
 
+const threadHosts: Readonly<Record<string, true>> = {
+  'www.nmbxd.com': true, 'www.nmbxd1.com': true, 'nmbxd.com': true, 'nmbxd1.com': true
+}
+
+function threadLinkId(href: string): string | null {
+  try {
+    const url = new URL(href)
+    if (!['http:', 'https:'].includes(url.protocol) || !Object.hasOwn(threadHosts, url.hostname) || url.username || url.password || url.port || url.hash) return null
+    const match = /^\/t\/(\d{1,20})$/.exec(url.pathname)
+    if (match === null) return null
+    for (const key of url.searchParams.keys()) {
+      if (key !== 'page' && key !== 'r') return null
+    }
+    return match[1]!
+  } catch {
+    return null
+  }
+}
+
+function visibleText(nodes: readonly ContentNode[]): string {
+  return nodes.map((node) => {
+    if (node.type === 'text') return node.text
+    if (node.type === 'quoteRef') return node.raw
+    if (node.type === 'lineBreak') return '\n'
+    return visibleText(node.children)
+  }).join('')
+}
+
 /** Convert untrusted forum HTML into the closed, attribute-free content vocabulary. */
 export function parseContent(html: string): { nodes: ContentNode[]; plainText: string } {
   const nodes: ContentNode[] = []
@@ -86,17 +114,28 @@ export function parseContent(html: string): { nodes: ContentNode[]; plainText: s
     const list = pending.pop()!
     const converted: ContentNode[] = []
     for (const node of list) {
+      if (node.type === 'link') {
+        const postId = threadLinkId(node.href)
+        if (postId !== null) {
+          converted.push({ type: 'quoteRef', postId, raw: visibleText(node.children) || node.href })
+          continue
+        }
+      }
       if (node.type !== 'text') {
         converted.push(node)
         if ('children' in node) pending.push(node.children)
         continue
       }
-      const references = /(?:[>＞]{2}(?:No\.)?|[>＞]No\.)(\d{1,20})(?!\d)/g
+      const references = /(?:[>＞]{2}(?:No\.)?|[>＞]No\.)(\d{1,20})(?!\d)|https?:\/\/[^\s<>"'，。！？；、（）【】]+/g
       let offset = 0
       for (const match of node.text.matchAll(references)) {
+        // Prose punctuation is not part of a bare URL; anchors retain their visible label verbatim.
+        const raw = match[1] === undefined ? match[0].replace(/[.,!;:)\]}]+$/, '') : match[0]
+        const postId = match[1] ?? threadLinkId(raw)
+        if (postId === null) continue
         appendText(converted, node.text.slice(offset, match.index))
-        converted.push({ type: 'quoteRef', postId: match[1]!, raw: match[0] })
-        offset = match.index + match[0].length
+        converted.push({ type: 'quoteRef', postId, raw })
+        offset = match.index + raw.length
       }
       appendText(converted, node.text.slice(offset))
     }

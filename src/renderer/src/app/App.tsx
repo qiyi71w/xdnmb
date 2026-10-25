@@ -63,6 +63,7 @@ import { TabView } from './TabView'
 import { TopBar } from './TopBar'
 import { SettingsOpenerContext, type SettingsSectionId } from '../lib/settingsOpener'
 import { ListOpenerContext } from '../features/reminders/openList'
+import { ThreadTabOpenerContext, type ThreadTabOpener } from '../features/tabs/openThreadInTab'
 import { useSettingsWriter } from './useSettingsWriter'
 import './layout.css'
 // PROTOTYPE (throwaway): navigation variants, active only with VITE_XIDAO_PROTOTYPE=1.
@@ -907,6 +908,18 @@ export function App() {
     dispatch({ type: 'open-tab', entry: entryFor(target), split: stateRef.current.settings.newTabSplitDefault, background: false })
   }, [])
 
+  /** Opens a thread from a list row / thread menu in a new active tab (global split default). */
+  const openThreadInTab = useCallback<ThreadTabOpener>((threadId, head = null, fromStartIn) => {
+    // From the start: the main post (page 1 in either mode) as an explicit target, over any saved position.
+    const target = fromStartIn === undefined ? null : { postId: threadId, page: 1, mode: fromStartIn }
+    dispatch({
+      type: 'open-tab',
+      entry: { kind: 'thread', thread: { threadId, head, target, snapshot: null, unlocatedPostId: null } },
+      split: stateRef.current.settings.newTabSplitDefault,
+      background: false
+    })
+  }, [])
+
   /**
    * Ctrl/Cmd+S: the editor holding focus, else the expanded editor the active tab shows (reader
    * before list). Nothing while the active tab's image viewer is open (the dispatcher already skips
@@ -1285,6 +1298,7 @@ export function App() {
       <SubscriptionsContext value={subscriptions}>
       <RemindersContext value={reminders}>
       <ListOpenerContext value={openList}>
+      <ThreadTabOpenerContext value={PROTOTYPE_ENABLED ? openThreadInTab : null}>
       <HistoryPageContext value={PROTOTYPE_ENABLED ? { request: historyRequest, tabTitle, onContinue: continueDraft, onOpenTarget: openTargetInTab } : null}>
         <div className="app" ref={appRef}>
           <StorageBanner storage={storage} />
@@ -1530,6 +1544,7 @@ export function App() {
           />
         </div>
       </HistoryPageContext>
+      </ThreadTabOpenerContext>
       </ListOpenerContext>
       </RemindersContext>
       </SubscriptionsContext>

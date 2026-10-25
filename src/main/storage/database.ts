@@ -1,3 +1,4 @@
+import type { LocalBlock } from '../../shared/blocks'
 import Database from 'better-sqlite3'
 import type { StorageStatus } from '../../shared/api'
 import type {
@@ -28,7 +29,7 @@ import { StorageWriteRefusedError } from './contract'
 import type {
   AppStore, DraftAttachmentRecord, DraftRecord, DraftWriteOutcome, ImageHolder, ImageResourceRecord, NewImageResource, PostThreadRelation, Stored
 } from './contract'
-import { computeCoverage } from './coverage'
+import { assertReadablePage, computeCoverage } from './coverage'
 import { buildReadingState, emptyReadingState, endObservation, type AttentionRecord } from './reading-state'
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
@@ -344,6 +345,16 @@ class SqliteReadingDatabase implements ReadingDatabase {
       coverageUnknown: metadata.coverageUnknown || (reading.attention?.uncertainUnreadIds.length ?? 0) > 0 }
   })
 
+  listBlocks: ReadingDatabase['listBlocks'] = () => this.publicationDatabase()
+    .prepare('SELECT kind, value, created_at AS createdAt FROM local_blocks ORDER BY created_at DESC, kind, value')
+    .all() as LocalBlock[]
+
+  setBlock: ReadingDatabase['setBlock'] = (kind, value, blocked, at) => {
+    const db = this.writable()
+    if (blocked) db.prepare('INSERT OR IGNORE INTO local_blocks (kind, value, created_at) VALUES (?, ?, ?)').run(kind, value, at)
+    else db.prepare('DELETE FROM local_blocks WHERE kind = ? AND value = ?').run(kind, value)
+  }
+
   get status(): StorageStatus {
     return this.currentStatus
   }
@@ -499,6 +510,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
   saveThreadPage(page: ThreadPage, fetchedAt: string): ThreadCoverage {
     const db = this.writable()
     return db.transaction(() => {
+      assertReadablePage(page, this.getThreadCoverage(page.threadId, page.mode))
       const writePost = this.postWriter(db, fetchedAt)
       const source = { feedKind: null, feedId: null, mode: page.mode, page: page.page }
       writePost(page.head, page.threadId, { ...source, observedAs: 'head' })

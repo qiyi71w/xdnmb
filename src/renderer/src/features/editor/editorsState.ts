@@ -1,3 +1,4 @@
+import { parseReportContent, reportDraftContent, type ReportFields } from '../../../../shared/report'
 import {
   EMPTY_FIELDS,
   sameTarget,
@@ -59,6 +60,7 @@ export interface Editor {
   expanded: boolean
   publication: EditorPublication | null
   sendNotice: SendNotice | null
+  report?: ReportFields
 }
 
 export interface EditorsState {
@@ -84,6 +86,9 @@ export type EditorsAction =
    * that editor is only expanded. Never picks up a saved draft.
    */
   | { type: 'open'; tabId: number; target: PostTarget; identity: IdentityChoice }
+  | { type: 'open-quote'; tabId: number; target: PostTarget; identity: IdentityChoice; postId: string }
+  | { type: 'open-report'; tabId: number; identity: IdentityChoice; postId: string }
+  | { type: 'edit-report'; editorId: EditorId; patch: Partial<ReportFields> }
   /** Continues a saved draft in a tab. Ignored when any editor already continues it. */
   | { type: 'open-draft'; tabId: number; draft: SavedDraft }
   | { type: 'edit'; editorId: EditorId; patch: Partial<PostFields> }
@@ -134,8 +139,9 @@ function update(state: EditorsState, editorId: EditorId, change: (editor: Editor
   return changed ? { ...state, editors } : state
 }
 
-function fromDraft(draft: SavedDraft): Pick<Editor, 'target' | 'credentialId' | 'fields' | 'attachment'> {
-  return { target: draft.target, credentialId: draft.credentialId, fields: { ...draft.fields }, attachment: draft.attachment }
+function fromDraft(draft: SavedDraft): Pick<Editor, 'target' | 'credentialId' | 'fields' | 'attachment' | 'report'> {
+  const report = draft.target.kind === 'thread' && draft.target.forumId === '18' ? parseReportContent(draft.fields.content) : undefined
+  return { target: draft.target, credentialId: draft.credentialId, fields: { ...draft.fields }, attachment: draft.attachment, report }
 }
 
 /** Applies `change` only to an editor no send has locked. */
@@ -150,6 +156,25 @@ function locked(change: (editor: Editor, publication: EditorPublication) => Edit
 
 export function editorsReducer(state: EditorsState, action: EditorsAction): EditorsState {
   switch (action.type) {
+    case 'open-quote': {
+      const opened = editorsReducer(state, { type: 'open', tabId: action.tabId, target: action.target, identity: action.identity })
+      const editor = editorFor(opened, action.tabId, action.target)!
+      return update(opened, editor.id, unlocked((item) => ({ ...item, fields: { ...item.fields,
+        content: `${item.fields.content}${item.fields.content !== '' && !item.fields.content.endsWith('\n') ? '\n' : ''}>>No.${action.postId}\n` } })))
+    }
+    case 'open-report': {
+      const target: PostTarget = { kind: 'thread', forumId: '18' }
+      const opened = editorsReducer(state, { type: 'open', tabId: action.tabId, target, identity: action.identity })
+      const editor = editorFor(opened, action.tabId, target)!
+      const report = { postId: action.postId, reason: editor.report?.reason ?? '', customReason: editor.report?.customReason ?? '', text: editor.report?.text ?? editor.fields.content }
+      return update(opened, editor.id, unlocked((item) => ({ ...item, report, fields: { ...item.fields, content: reportDraftContent(report) } })))
+    }
+    case 'edit-report':
+      return update(state, action.editorId, unlocked((item) => {
+        if (item.report === undefined) return item
+        const report = { ...item.report, ...action.patch }
+        return { ...item, report, fields: { ...item.fields, content: reportDraftContent(report) } }
+      }))
     case 'open': {
       const existing = editorFor(state, action.tabId, action.target)
       if (existing !== null) return update(state, existing.id, (editor) => (editor.expanded ? editor : { ...editor, expanded: true }))

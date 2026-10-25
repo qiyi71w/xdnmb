@@ -37,6 +37,59 @@ describe('safe forum content', () => {
     ])
   })
 
+  it.each(['www.nmbxd.com', 'www.nmbxd1.com', 'nmbxd.com', 'nmbxd1.com'])(
+    'recognizes thread links on %s in bare text and anchors without rewriting their visible text',
+    (host) => {
+      for (const protocol of ['http', 'https']) {
+        for (const suffix of ['', '?page=2', '?r=68810622', '?r=0.584561', '?page=2&r=68810622', '?r=68810622&page=2']) {
+          const url = `${protocol}://${host}/t/68810621${suffix}`
+          const expected = { type: 'quoteRef', postId: '68810621', raw: url }
+          expect(parseContent(url)).toEqual({ nodes: [expected], plainText: url })
+          expect(parseContent(`<a href="${url.replaceAll('&', '&amp;')}">${url.replaceAll('&', '&amp;')}</a>`))
+            .toEqual({ nodes: [expected], plainText: url })
+        }
+      }
+    }
+  )
+
+  it('keeps anchor labels and counts each thread link as one reference even with styled quote text', () => {
+    expect(parseContent('>>No.1 <a href="https://www.nmbxd.com/t/68810621"><b>&gt;&gt;No.68810621</b></a> >>No.2').nodes)
+      .toEqual([
+        { type: 'quoteRef', postId: '1', raw: '>>No.1' },
+        { type: 'text', text: ' ' },
+        { type: 'quoteRef', postId: '68810621', raw: '>>No.68810621' },
+        { type: 'text', text: ' ' },
+        { type: 'quoteRef', postId: '2', raw: '>>No.2' }
+      ])
+    expect(parseContent('<a href="https://nmbxd.com/t/68810621">点这里</a>').nodes)
+      .toEqual([{ type: 'quoteRef', postId: '68810621', raw: '点这里' }])
+  })
+
+  it('preserves prose punctuation around bare thread URLs', () => {
+    const url = 'https://www.nmbxd.com/t/68810621?page=2'
+    expect(parseContent(`串号（${url}），和 (${url}).`).nodes).toEqual([
+      { type: 'text', text: '串号（' },
+      { type: 'quoteRef', postId: '68810621', raw: url },
+      { type: 'text', text: '），和 (' },
+      { type: 'quoteRef', postId: '68810621', raw: url },
+      { type: 'text', text: ').' }
+    ])
+  })
+
+  it.each([
+    'https://www.nmbxd.com/f/4', 'https://www.nmbxd.com/t/68810621/extra',
+    'https://www.nmbxd.com/t/68810621/', 'https://www.nmbxd.com/t/not-a-number',
+    'https://www.nmbxd.com/t/123456789012345678901',
+    'https://www.nmbxd.com/t/68810621?foo=2', 'https://www.nmbxd.com/t/68810621#other',
+    'https://www.nmbxd.com.evil.example/t/68810621', 'https://example.com/t/68810621',
+    'https://user@www.nmbxd.com/t/68810621', 'https://www.nmbxd.com:8080/t/68810621'
+  ])('leaves non-thread URL %s as an external link', (url) => {
+    expect(parseContent(`<a href="${url}">链接</a>`).nodes).toEqual([
+      { type: 'link', href: url, children: [{ type: 'text', text: '链接' }] }
+    ])
+    expect(parseContent(url).nodes).toEqual([{ type: 'text', text: url }])
+  })
+
   it('drops executable and embedded content, including its text', () => {
     const html = 'before<script>alert(1)</script><style>secret</style>' +
       '<iframe>hidden</iframe><svg><text>hidden</text></svg><template>hidden</template>' +

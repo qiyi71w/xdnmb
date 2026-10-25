@@ -3,7 +3,7 @@ import type { ContentNode, EmphasisStyle } from '../../../shared/forum'
 import './content.css'
 
 type Mode =
-  /** Full post body: links are activatable and open in the system browser. */
+  /** Full body: quote references may preview/jump; other links open in the system browser. */
   | 'body'
   /** Excerpt inside another control (list row): nothing interactive; line breaks kept. */
   | 'excerpt'
@@ -20,7 +20,7 @@ const EMPHASIS_TAG: Record<EmphasisStyle, 'strong' | 'em' | 'u' | 's' | 'small' 
 
 /**
  * Renders an interactive quote reference; `quoteIndex` is its document order in this body, from 0.
- * Without it (excerpts, previews, other bodies) quote references are static text.
+ * Without it (excerpts or bodies without a quote controller) references are static text.
  */
 export type RenderQuote = (node: Extract<ContentNode, { type: 'quoteRef' }>, quoteIndex: number) => ReactNode
 
@@ -99,7 +99,7 @@ export function Content({
   nodes: readonly ContentNode[]
   mode?: Mode
   className?: string
-  /** Body mode only: makes quote references interactive (reader posts). */
+  /** Body mode only: makes quote references interactive in a navigable content entry. */
   renderQuote?: RenderQuote
 }) {
   const base = mode === 'body' ? 'content-body' : 'content-excerpt'

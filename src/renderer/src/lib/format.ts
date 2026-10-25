@@ -7,6 +7,7 @@ const KIND_TEXT: Record<ReadError['kind'], string> = {
   'rate-limited': '被论坛限流，或需要验证',
   network: '网络失败',
   'unknown-structure': '返回内容无法识别',
+  'page-cap': '论坛返回了较早的页面',
   identity: '浏览饼干无法使用'
 }
 
@@ -19,6 +20,7 @@ const DETAIL_TEXT: Partial<Record<ReadError['detail'], string>> = {
 
 /** One-line reason for a read error, including the forum's own short message when present. */
 export function describeReadError(error: ReadError): string {
+  if (error.kind === 'page-cap' && error.highestReadablePage !== undefined) return `论坛只返回到第 ${error.highestReadablePage} 页`
   const detailText = error.kind === 'identity' ? DETAIL_TEXT[error.detail] : undefined
   let text =
     detailText ?? (error.kind === 'network' && error.detail === 'timeout' ? '网络超时' : KIND_TEXT[error.kind])

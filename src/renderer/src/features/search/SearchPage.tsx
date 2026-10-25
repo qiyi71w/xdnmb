@@ -132,6 +132,7 @@ export function SearchPage({
               forums={host.forums}
               focusRefs={{ input: localInputRef, list: localListRef }}
               brief
+              tabMenu
             />
           </div>
         </div>

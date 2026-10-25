@@ -7,7 +7,7 @@ import { openLayer } from '../../lib/layers'
 import type { ContentRegistry } from '../tabs/contentRegistry'
 import { backgroundTabEntry, currentEntry, entryThread, type Tab, type TabEntry, type TabsAction, type TabsState, type ThreadOpen, type ThreadSnapshot } from '../tabs/tabsState'
 import { readResumePage } from '../thread/readingStart'
-import { findQuoteElement, quoteKey, type QuoteController, type QuoteRefInfo } from './QuoteContext'
+import { findQuoteElement, quoteHostId, quoteKey, type QuoteController, type QuoteRefInfo } from './QuoteContext'
 import {
   initialQuoteState,
   isCurrentLocate,
@@ -35,7 +35,7 @@ function cancelOperation(operationId: string): void {
 }
 
 function triggerOf(source: QuoteSource): HTMLElement | null {
-  return findQuoteElement(source.entryKey, source.focus.postId, source.focus.quoteIndex)
+  return findQuoteElement(source.entryKey, quoteHostId(source.focus), source.focus.quoteIndex)
 }
 
 function tabbables(root: ParentNode): HTMLElement[] {
@@ -106,8 +106,9 @@ export function useQuoteNavigation(options: Options) {
 
   const cardRef = useRef<HTMLDivElement>(null)
   /** Thread shown by the source entry when each card opened: a locate commits only while it still is. */
-  const threadOf = useRef(new Map<number, ThreadId>())
+  const threadOf = useRef(new Map<number, ThreadId | null>())
   const pointer = useRef({ trigger: false, card: false })
+  const restoringFocus = useRef(false)
   const openTimer = useRef<number | undefined>(undefined)
   const leaveTimer = useRef<number | undefined>(undefined)
 
@@ -132,7 +133,7 @@ export function useQuoteNavigation(options: Options) {
     (card: QuoteCard): { tab: Tab; entry: TabEntry } | null => {
       const shown = shownEntry(card.source.entryKey)
       if (shown === null || shown.tab.id !== card.source.tabId) return null
-      return entryThread(shown.entry)?.threadId === threadOf.current.get(card.id) ? shown : null
+      return (entryThread(shown.entry)?.threadId ?? null) === threadOf.current.get(card.id) ? shown : null
     },
     [shownEntry]
   )
@@ -152,7 +153,12 @@ export function useQuoteNavigation(options: Options) {
   )
 
   const focusTrigger = useCallback((source: QuoteSource) => {
-    triggerOf(source)?.focus({ preventScroll: true })
+    restoringFocus.current = true
+    try {
+      triggerOf(source)?.focus({ preventScroll: true })
+    } finally {
+      restoringFocus.current = false
+    }
   }, [])
 
   /** Commits a quote navigation from the card's source entry (located target or 打开原串). */
@@ -161,7 +167,8 @@ export function useQuoteNavigation(options: Options) {
       const { registry, dispatch, getTabs } = opts.current
       const { tab, entry } = shown
       const captured = registry.readers.get(entry.key)?.current.capture() ?? null
-      const source: ThreadSnapshot | null = captured === null ? null : { ...captured, focus: card.source.focus }
+      const focus = 'postId' in card.source.focus ? card.source.focus : captured?.focus ?? null
+      const source: ThreadSnapshot | null = captured === null ? null : { ...captured, focus }
       // The split list beside the target keeps its loaded pages and scroll position.
       if (entry.kind === 'list' && entry.feed !== null && tab.split) {
         const memory = registry.listMemory.get(entry.key)
@@ -234,25 +241,31 @@ export function useQuoteNavigation(options: Options) {
     (info: QuoteRefInfo, trigger: QuoteTrigger): QuoteCard | null => {
       const shown = shownEntry(info.entryKey)
       const shownThread = shown === null ? null : entryThread(shown.entry)
-      if (shown === null || shownThread === null) return null
+      if (shown === null) return null
+      const before = stateRef.current.card
+      if ('previewId' in info.host && info.host.previewId !== `${before?.id}:${before?.source.postId}`) return null
       const source: QuoteSource = {
         tabId: shown.tab.id,
         entryKey: info.entryKey,
         postId: info.postId,
-        focus: { postId: info.hostPostId, quoteIndex: info.quoteIndex }
+        focus: info.origin ?? { ...info.host, quoteIndex: info.quoteIndex },
+        reference: info.origin === undefined ? undefined : { ...info.host, quoteIndex: info.quoteIndex }
       }
-      const before = stateRef.current.card
-      const card = apply({ type: 'open', source, trigger }).card
-      if (card === null || card.source.focus.postId !== info.hostPostId || card.source.focus.quoteIndex !== info.quoteIndex || card.source.entryKey !== info.entryKey) {
+      if (info.origin !== undefined && trigger !== 'hover' && cardRef.current?.contains(document.activeElement)) focusTrigger(source)
+      // Following a reference in the card is a deliberate preview choice, even if its parent was pinned.
+      const card = apply({ type: 'open', source, trigger: info.origin !== undefined && trigger === 'hover' ? 'preview' : trigger }).card
+      const reference = card === null ? null : card.source.reference ?? card.source.focus
+      if (card === null || reference === null || quoteHostId(reference) !== quoteHostId(info.host) || reference.quoteIndex !== info.quoteIndex || card.source.entryKey !== info.entryKey || card.source.postId !== info.postId) {
         return null
       }
       if (card.id !== before?.id) {
-        threadOf.current.set(card.id, shownThread.threadId)
+        if (info.origin !== undefined) pointer.current.trigger = false
+        threadOf.current.set(card.id, shownThread?.threadId ?? null)
         runPreview(card)
       }
       return card
     },
-    [apply, shownEntry, runPreview]
+    [apply, shownEntry, runPreview, focusTrigger]
   )
 
   const startLocate = useCallback(
@@ -305,7 +318,8 @@ export function useQuoteNavigation(options: Options) {
         window.clearTimeout(leaveTimer.current)
         window.clearTimeout(openTimer.current)
         const card = stateRef.current.card
-        if (card !== null && card.source.entryKey === info.entryKey && card.source.focus.postId === info.hostPostId && card.source.focus.quoteIndex === info.quoteIndex) {
+        const reference = card === null ? null : card.source.reference ?? card.source.focus
+        if (card !== null && reference !== null && card.source.entryKey === info.entryKey && quoteHostId(reference) === quoteHostId(info.host) && reference.quoteIndex === info.quoteIndex && card.source.postId === info.postId) {
           return
         }
         openTimer.current = window.setTimeout(() => {
@@ -319,6 +333,11 @@ export function useQuoteNavigation(options: Options) {
       },
       blur() {
         scheduleLeave()
+      },
+      focus(info) {
+        if (restoringFocus.current) return
+        window.clearTimeout(openTimer.current)
+        open(info, 'preview')
       },
       preview(info) {
         window.clearTimeout(openTimer.current)
@@ -353,7 +372,7 @@ export function useQuoteNavigation(options: Options) {
     cancelOperation(previewOperation(previous))
     cancelOperation(locateOperation(previous))
     threadOf.current.delete(previous)
-    pointer.current.card = false
+    pointer.current.card = cardRef.current?.matches(':hover') ?? false
   }, [cardId])
 
   // Another tab, another entry or thread in the source tab, or the quote no longer displayed: the
@@ -417,7 +436,8 @@ export function useQuoteNavigation(options: Options) {
   }, [])
 
   const card = state.card
-  const activeKey = card === null ? null : quoteKey(card.source.entryKey, card.source.focus.postId, card.source.focus.quoteIndex)
+  const reference = card === null ? null : card.source.reference ?? card.source.focus
+  const activeKey = card === null || reference === null ? null : quoteKey(card.source.entryKey, quoteHostId(reference), reference.quoteIndex)
 
   const cardProps: QuoteCardProps | null =
     card === null

@@ -1,3 +1,5 @@
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
+import { reportContent } from '../../../../shared/report'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { targetKey, type AttachmentId, type EditorId, type PostTarget, type SavedDraft } from '../../../../shared/drafts'
 import type { PublicationAttempt, SubmitResult } from '../../../../shared/publication'
@@ -313,6 +315,7 @@ export function useEditorsStore(): EditorsStore {
     async (editorId: EditorId) => {
       const editor = find(editorId)
       if (editor === undefined || editor.publication !== null || handling.current.has(editorId)) return
+      if (PROTOTYPE_ENABLED && editor.report !== undefined && reportContent(editor.report) === null) return
       handling.current.add(editorId)
       const requestId = crypto.randomUUID()
       try {

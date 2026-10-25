@@ -12,6 +12,8 @@ import type { FeedInfo } from '../directory/feeds'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import type { WorkspaceList } from '../tabs/workspaceSnapshot'
 import { useImageScope } from '../image/useImageLoad'
+import { QuoteEntryContext } from '../quote/QuoteContext'
+import { QuoteRef } from '../quote/QuoteRef'
 import type { FeedPageRecord } from './feedState'
 import { ThreadRow } from './ThreadRow'
 import { useFeed } from './useFeed'
@@ -19,6 +21,8 @@ import './feed.css'
 // PROTOTYPE (throwaway): D makes the board name open its board panel; automatic loads stay quiet.
 import { ListHostContext, PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import type { ComposeEntry } from '../editor/ComposePanel'
+import { isPostBlocked } from '../../../../shared/blocks'
+import { useBlocks } from '../thread/useBlocks'
 
 /** The first thread row reaching below the scroller top, and its row top's offset from that top. */
 function firstVisible(scroller: HTMLElement): WorkspaceList['anchor'] {
@@ -165,7 +169,9 @@ export function FeedPane({
     remember()
   }
 
-  const filtered = useMemo(() => filterList(state.threads, (thread) => headMeta(thread.head), filters), [state.threads, filters])
+  const { blocks } = useBlocks()
+  const visibleThreads = useMemo(() => state.threads.filter((thread) => !isPostBlocked(thread.head, blocks)), [state.threads, blocks])
+  const filtered = useMemo(() => filterList(visibleThreads, (thread) => headMeta(thread.head), filters), [visibleThreads, filters])
   const uncertainById = useMemo(() => new Map(filtered.shown.map(({ item, uncertain }) => [item.head.id, uncertain])), [filtered])
   const ids = useMemo(() => filtered.shown.map(({ item }) => item.head.id), [filtered])
   const roving = useRovingFocus(ids, selectedThreadId)
@@ -223,7 +229,15 @@ export function FeedPane({
               <span className="feed-description-label">{descriptionLabel}</span>
               <span className="feed-description-preview">{contentText(info.description).trim()}</span>
             </summary>
-            <Content nodes={info.description} className="feed-description-body" />
+            <QuoteEntryContext.Provider value={entryKey}>
+              <Content
+                nodes={info.description}
+                className="feed-description-body"
+                renderQuote={PROTOTYPE_ENABLED ? (node, quoteIndex) => (
+                  <QuoteRef host={{ descriptionId: `${info.ref.kind}:${info.ref.id}` }} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} />
+                ) : undefined}
+              />
+            </QuoteEntryContext.Provider>
           </details>
         )}
 
@@ -234,7 +248,7 @@ export function FeedPane({
             forums={isTimeline ? forumNames : null}
             unreadOffered={false}
             noun="串"
-            total={state.threads.length}
+            total={visibleThreads.length}
             result={filtered}
             metadata={null}
             coverage={`已加载的第 ${formatPageList(state.pages.map((record) => record.page))} 页`}
@@ -295,6 +309,7 @@ export function FeedPane({
                         images={images}
                         onOpen={() => onOpenThread(thread)}
                         itemProps={roving.itemProps(thread.head.id)}
+                        tabMenu
                       />
                     </li>
                   )}
@@ -304,10 +319,13 @@ export function FeedPane({
             {renderPageNotices(state.threads.length)}
           </ul>
         )}
-        {filtering && state.threads.length > 0 && filtered.shown.length === 0 && (
+        {filtering && visibleThreads.length > 0 && filtered.shown.length === 0 && (
           <p className="list-filters-empty" role="status">
             已加载的串都不符合筛选。可以读取下一页，或清除筛选。
           </p>
+        )}
+        {!firstLoad && state.threads.length > 0 && visibleThreads.length === 0 && (
+          <p className="list-filters-empty" role="status">已加载的串均已屏蔽</p>
         )}
 
         <div className="list-footer">

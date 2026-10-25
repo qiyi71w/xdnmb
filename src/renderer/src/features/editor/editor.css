@@ -718,3 +718,18 @@
 .list-compose-sent:empty {
   display: none;
 }
+
+.report-reasons {
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.report-reasons legend { margin-bottom: 8px; font-weight: 600; }
+.report-reason-options { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 10px; }
+.report-reason-options label { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; }
+.report-reasons input[type="radio"] { accent-color: var(--accent); }
+.report-reasons input[type="text"], .report-reasons input:not([type]) { margin-left: 8px; max-width: 100%; }
+.blocked-post { padding: 12px 0; color: var(--ink-2); font-size: var(--text-sm); }

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import type { Post } from '../../../../shared/forum'
 import { Content } from '../../components/Content'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
@@ -7,6 +7,9 @@ import { PostThumbnail } from '../image/PostThumbnail'
 import { QuoteRef } from '../quote/QuoteRef'
 // PROTOTYPE (throwaway): posts take the list-row order (meta → title → name), the head's title as the page h1.
 import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
+import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
+import { setBlocked } from './useBlocks'
+import { useCover } from '../../lib/appCovered'
 
 export function PostView({
   post,
@@ -14,7 +17,8 @@ export function PostView({
   poHash,
   unread,
   images,
-  highlighted = false
+  highlighted = false,
+  actions
 }: {
   post: Post
   isHead: boolean
@@ -25,7 +29,25 @@ export function PostView({
   images: ImageView
   /** Target of a quote jump, briefly marked. Purely visual: never a read. */
   highlighted?: boolean
+  actions?: { own: boolean; reply: (opener: HTMLElement | null) => void; report: (opener: HTMLElement | null) => void }
 }) {
+  const articleRef = useRef<HTMLElement>(null)
+  const [menu, setMenu] = useState<ContextMenuPoint | null>(null)
+  useCover(menu !== null, 'app')
+  const block = (kind: 'post' | 'cookie', value: string) => {
+    const reader = articleRef.current?.closest('.reader')
+    void setBlocked(kind, value, true).then(() => requestAnimationFrame(() => {
+      reader?.querySelector<HTMLElement>(`[data-blocked-post-id="${CSS.escape(post.id)}"]`)?.focus({ preventScroll: true })
+    }))
+  }
+  const items: ContextMenuItem[] = actions === undefined ? [] : [
+    { type: 'action', key: 'reply', label: '回复', onSelect: () => actions.reply(articleRef.current) },
+    ...(!actions.own ? [
+      { type: 'action' as const, key: 'report', label: '举报', onSelect: () => actions.report(articleRef.current) },
+      { type: 'action' as const, key: 'block-post', label: '屏蔽串号', onSelect: () => block('post', post.id) },
+      ...(post.userHash ? [{ type: 'action' as const, key: 'block-cookie', label: '屏蔽饼干', onSelect: () => block('cookie', post.userHash!) }] : [])
+    ] : [])
+  ]
   const name = meaningfulName(post.name)
   const isPo = !isHead && poHash !== null && post.userHash === poHash
   const classes = `${isHead ? 'post is-head' : 'post'}${highlighted ? ' is-highlighted' : ''}`
@@ -83,14 +105,17 @@ export function PostView({
   }
 
   return (
-    <article className={classes} data-post-id={post.id} aria-label={`${isHead ? '主帖' : '回复'} No.${post.id}`}>
+    <article ref={articleRef} className={classes} data-post-id={post.id} tabIndex={PROTOTYPE_ENABLED ? 0 : undefined} aria-label={`${isHead ? '主帖' : '回复'} No.${post.id}`}
+      onContextMenu={PROTOTYPE_ENABLED && actions !== undefined ? (event) => { event.preventDefault(); event.stopPropagation(); setMenu(contextMenuPoint(event, event.currentTarget)) } : undefined}
+      onKeyDown={PROTOTYPE_ENABLED && actions !== undefined ? (event) => { if (isContextMenuKey(event)) { event.preventDefault(); event.stopPropagation(); setMenu(contextMenuPoint(event, event.currentTarget)) } } : undefined}>
       {header}
       {post.image !== null && <PostThumbnail postId={post.id} images={images} />}
       <Content
         nodes={post.content}
         className="post-body"
-        renderQuote={(node, quoteIndex) => <QuoteRef hostPostId={post.id} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} />}
+        renderQuote={(node, quoteIndex) => <QuoteRef host={{ postId: post.id }} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} />}
       />
+      {menu !== null && <ContextMenu point={menu} label={`No.${post.id} 操作`} items={items} onClose={(restore) => { setMenu(null); if (restore) articleRef.current?.focus({ preventScroll: true }) }} />}
     </article>
   )
 }

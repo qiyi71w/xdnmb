@@ -6,24 +6,6 @@ export function pageLabel(mode: ReadingMode, pages: string | number): string {
   return mode === 'po' ? `只看 PO 第 ${pages} 页` : `第 ${pages} 页`
 }
 
-/** Replies on a full thread page of the forum (the same figure the tail probe estimates with). */
-const REPLIES_PER_PAGE = 19
-
-/**
- * Best known last page with replies in the coverage's mode: the later of the page before the end
- * candidate and the page the reported reply count reaches; never below a page seen with replies.
- * `null` when neither is known.
- */
-export function knownLastPage(coverage: ThreadCoverage | null): number | null {
-  if (coverage === null) return null
-  const end = coverage.endCandidatePage
-  const reported = coverage.reportedReplyCount
-  if (end === null && reported === null) return null
-  let last = Math.max(end === null ? 1 : end - 1, reported === null ? 1 : Math.ceil(reported / REPLIES_PER_PAGE), 1)
-  for (const page of coverage.pages) if (!page.endCandidate && page.page > last) last = page.page
-  return last
-}
-
 /**
  * What has actually been observed for this thread in the mode being read. ReplyCount is never
  * shown as completeness; PO pages are labelled as PO pages.

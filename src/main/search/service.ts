@@ -5,7 +5,7 @@ import type { SearchScan } from '../storage/search-contract'
 import { normalizeSearchText } from '../storage/search'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
 import type { RequestScheduler } from '../reading/scheduler'
-import { computeCoverage } from '../storage/coverage'
+import { assertReadablePage, computeCoverage } from '../storage/coverage'
 import type { CoveragePage } from '../../shared/forum'
 
 interface Task {
@@ -101,6 +101,8 @@ export function createSearchService(deps: {
         const result = await scheduler.run('background', task.controller.signal,
           (signal) => client.getThreadPage(fetch.threadId, 'all', page, signal))
         if (!live(id, task)) break
+        assertReadablePage(result, fetch.coverage)
+        assertReadablePage(result, await store.getThreadCoverage(result.threadId, result.mode))
         const fetchedAt = now()
         await store.saveThreadPage(result, fetchedAt)
         observed.push({ page, fetchedAt, replyIds: result.replies.map((post) => post.id), endCandidate: result.endCandidate, skippedItems: result.skippedItems })

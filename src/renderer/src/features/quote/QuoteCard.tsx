@@ -5,6 +5,8 @@ import { Icon } from '../../components/Icon'
 import { Loading, SourceNotice } from '../../components/Notices'
 import { describeReadError, meaningfulName } from '../../lib/format'
 import { canLocate } from './quoteState'
+import { QuoteEntryContext } from './QuoteContext'
+import { QuoteRef } from './QuoteRef'
 import type { QuoteCardProps } from './useQuoteNavigation'
 import './quote.css'
 
@@ -166,7 +168,14 @@ export function QuoteCard({
           </Status>
         )}
         <div className="quote-card-content">
-          <Content nodes={post.content} />
+          <QuoteEntryContext.Provider value={card.source.entryKey}>
+            <Content
+              nodes={post.content}
+              renderQuote={(node, quoteIndex) => (
+                <QuoteRef host={{ previewId: `${card.id}:${post.id}` }} origin={card.source.focus} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} />
+              )}
+            />
+          </QuoteEntryContext.Provider>
         </div>
       </>
     )

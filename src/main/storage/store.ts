@@ -156,6 +156,8 @@ export async function openReadingStore(options: {
     establishAttention: (threadId, source, at) => request('establishAttention', threadId, source, at),
     loadSettings: () => request('loadSettings'),
     saveSettings: (settings) => request('saveSettings', settings),
+    listBlocks: () => request('listBlocks'),
+    setBlock: (kind, value, blocked, at) => request('setBlock', kind, value, blocked, at),
     getPostImage: (postId) => request('getPostImage', postId),
     findImageResource: (kind, sourceUrl, holder) => request('findImageResource', kind, sourceUrl, holder),
     commitImageResource: (resource, holders) => request('commitImageResource', resource, holders),

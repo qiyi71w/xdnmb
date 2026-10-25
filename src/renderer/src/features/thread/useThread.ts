@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react'
-import type { ThreadEndResult, ThreadPageResult } from '../../../../shared/api'
+import type { ReadError, ThreadEndResult, ThreadPageResult } from '../../../../shared/api'
 import type { Post, ReadingMode, ThreadId } from '../../../../shared/forum'
+import { threadTotalPages } from '../../../../shared/threadPages'
 import { OperationScope } from '../../lib/operations'
 import { initialThreadState, threadReducer, type ThreadTask } from './threadState'
 
@@ -28,6 +29,33 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     holdRef.current = hold
   })
 
+  const showCap = useCallback(async (highestReadablePage: number, task: ThreadTask, observed: ReadError['readablePage']) => {
+    if (task.type !== 'locate' && task.type !== 'jump' && task.type !== 'initial') {
+      dispatch({ type: 'page-cap', highestReadablePage })
+      return
+    }
+    const settled = observed === undefined
+      ? await scope.current.run<ThreadPageResult>(async (operationId) => {
+          await holdRef.current()
+          if (!scope.current.isActive(operationId)) return { status: 'cancelled' }
+          return window.xidao.reading.readThreadPage({ operationId, threadId: threadRef.current, mode: modeRef.current, page: highestReadablePage })
+        })
+      : { type: 'ok' as const, data: observed.data, source: { status: 'fresh' as const, fetchedAt: observed.fetchedAt, saved: observed.saved } }
+    switch (settled.type) {
+      case 'stale':
+        return
+      case 'cancelled':
+        dispatch({ type: 'cancelled' })
+        return
+      case 'failed':
+        dispatch({ type: 'page-cap', highestReadablePage })
+        dispatch({ type: 'failed', task, failure: settled.failure })
+        return
+      case 'ok':
+        dispatch({ type: 'cap-loaded', highestReadablePage, page: settled.data.page, coverage: settled.data.coverage, source: settled.source })
+    }
+  }, [])
+
   const readPage = useCallback(async (task: PageTask) => {
     const page = task.type === 'initial' ? (task.page ?? 1) : task.page
     dispatch({ type: 'start', task })
@@ -43,12 +71,16 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
         dispatch({ type: 'cancelled' })
         return
       case 'failed':
+        if (settled.failure.type === 'read' && settled.failure.error.kind === 'page-cap' && settled.failure.error.highestReadablePage !== undefined) {
+          await showCap(settled.failure.error.highestReadablePage, task, settled.failure.error.readablePage)
+          return
+        }
         dispatch({ type: 'failed', task, failure: settled.failure })
         return
       case 'ok':
         dispatch({ type: 'page-loaded', task, page: settled.data.page, coverage: settled.data.coverage, source: settled.source })
     }
-  }, [])
+  }, [showCap])
 
   const locate = useCallback(async () => {
     const task: ThreadTask = { type: 'locate' }
@@ -65,6 +97,10 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
         dispatch({ type: 'cancelled' })
         return
       case 'failed':
+        if (settled.failure.type === 'read' && settled.failure.error.kind === 'page-cap' && settled.failure.error.highestReadablePage !== undefined) {
+          await showCap(settled.failure.error.highestReadablePage, task, settled.failure.error.readablePage)
+          return
+        }
         dispatch({ type: 'failed', task, failure: settled.failure })
         return
       case 'ok': {
@@ -91,7 +127,7 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
         }
       }
     }
-  }, [])
+  }, [showCap])
 
   /** Explicit action: supersede whatever is running, then read. */
   const supersede = useCallback(
@@ -111,13 +147,13 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
   const lastPage = state.pages.at(-1)
   const loadedFirst = state.pages[0]
   const canAppend =
-    state.task === null && state.error?.task.type !== 'append' && lastPage !== undefined && !lastPage.endCandidate
+    state.task === null && state.pageCap === null && state.error?.task.type !== 'append' && lastPage !== undefined && !lastPage.endCandidate
 
   /** Automatic next page; never interrupts another read. */
   const appendNext = useCallback(() => {
     const current = stateRef.current
     const last = current.pages.at(-1)
-    if (scope.current.busy || current.task !== null || current.error?.task.type === 'append') return
+    if (scope.current.busy || current.task !== null || current.pageCap !== null || current.error?.task.type === 'append') return
     if (last === undefined || last.endCandidate) return
     void readPage({ type: 'append', page: last.page + 1 })
   }, [readPage])
@@ -134,7 +170,11 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     supersede(last === undefined ? { type: 'initial', page: firstPageRef.current } : { type: 'refresh', page: last.page })
   }, [supersede])
 
-  const jump = useCallback((page: number) => supersede({ type: 'jump', page }), [supersede])
+  const jump = useCallback((page: number) => {
+    const total = threadTotalPages(stateRef.current.coverage?.reportedReplyCount ?? null)
+    if (!Number.isSafeInteger(page) || page < 1 || (total !== null && page > total)) return
+    supersede({ type: 'jump', page })
+  }, [supersede])
   const locateEnd = useCallback(() => supersede({ type: 'locate' }), [supersede])
 
   const cancel = useCallback(() => {

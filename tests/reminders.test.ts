@@ -77,6 +77,20 @@ afterEach(() => {
 })
 
 describe('reminder rules and durable events', () => {
+  it('does not store a capped tail as new content or an end observation', async () => {
+    const s = fixture()
+    s.db.saveThreadPage(page('100', 100, [post('9000'), post('9001')], 2194), t0)
+    await s.enable()
+    s.setRead(async (threadId, mode, number) => page(threadId, number, [post('9000'), post('9001')], 2194, mode))
+    await s.run()
+    expect(s.requests.map((request) => request.page)).toEqual([116])
+    expect(s.db.loadThreadPage('100', 'all', 116)).toBeNull()
+    expect(s.db.getThreadCoverage('100', 'all').endCandidatePage).toBeNull()
+    expect(s.db.getReminderCoverage('100', 'all')).toMatchObject({ state: 'failed', lastError: { kind: 'page-cap', highestReadablePage: 100 } })
+    expect(s.raw('SELECT * FROM reminder_events')).toEqual([])
+    expect(s.notifications).toEqual([])
+  })
+
   it('enables independent starts and generations, re-enables from a new watermark, and never moves a start on failure', async () => {
     const s = fixture()
     await s.enable('all')
@@ -375,9 +389,10 @@ describe('effective triggers and bounded catch-up', () => {
     await s.enable()
     proof(s.db)
     let variant: 'initial' | 'unchanged' | 'shifted' = 'initial'
+    let shiftedTailReads = 0
     s.setRead(async (threadId, mode, number) => {
-      const values = number === 1 ? [post('101'), post('200')] : number === 2 ? variant === 'shifted' ? [post('250'), post('999')] : [post('201')]
-        : number === 3 ? [post('202')] : []
+      const values = number === 1 ? [post('101'), post('200')] : number === 2 ? variant === 'shifted' ? [post('250'), post('260')] : [post('201')]
+        : number === 3 ? [post('300'), ...(variant === 'shifted' && ++shiftedTailReads > 1 ? [post('999')] : [])] : []
       return page(threadId, number, values, 57, mode)
     })
     await s.run()

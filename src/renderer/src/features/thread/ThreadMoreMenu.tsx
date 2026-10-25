@@ -3,24 +3,28 @@
 // behaviour. Built only with VITE_XIDAO_PROTOTYPE=1.
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
-import type { ThreadId } from '../../../../shared/forum'
+import type { ReadingMode, ThreadId } from '../../../../shared/forum'
 import type { ReminderKind, ReminderRule, ThreadReminders } from '../../../../shared/reminders'
 import { Icon } from '../../components/Icon'
 import { usePopover } from '../../lib/usePopover'
 import { OfflineDialog, useOfflineEntry } from '../content/ThreadRetention'
 import { ReminderPanel, reminderSummary, useReminderToggle } from '../reminders/ReminderMenu'
 import type { LoadFailure } from '../reminders/useReminders'
+import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 
 export function ThreadMoreMenu({
   threadId,
+  mode,
   label,
   rules,
   failure,
   onRetry,
   onUpdated,
-  onReminderOpenChange
+  onReminderOpenChange,
+  onReport
 }: {
   threadId: ThreadId
+  mode: ReadingMode
   /** Thread title or `No.x`. */
   label: string
   rules: Record<ReminderKind, ReminderRule> | undefined
@@ -29,8 +33,10 @@ export function ThreadMoreMenu({
   onUpdated: (thread: ThreadReminders) => void
   /** The 提醒 panel opened or closed (the reader stops judging reading while it covers posts). */
   onReminderOpenChange: (open: boolean) => void
+  onReport?: (opener: HTMLElement | null) => void
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const openInTab = useOpenThreadInTab()
   const menuRef = useRef<HTMLDivElement>(null)
   const reminderRef = useRef<HTMLDivElement>(null)
   const menu = usePopover(triggerRef, menuRef)
@@ -105,6 +111,8 @@ export function ThreadMoreMenu({
       </button>
       {menu.open && (
         <div ref={menuRef} id={menuId} className="thread-more-menu" role="menu" aria-label="更多操作" onKeyDown={onMenuKeyDown}>
+          {openInTab !== null && <button type="button" role="menuitem" className="thread-more-item" onClick={() => { menu.close(); openInTab(threadId, null, mode) }}>在新标签页打开</button>}
+          {onReport !== undefined && <button type="button" role="menuitem" className="thread-more-item" onClick={() => { menu.close(); onReport(triggerRef.current) }}>举报</button>}
           <button
             type="button"
             role="menuitem"

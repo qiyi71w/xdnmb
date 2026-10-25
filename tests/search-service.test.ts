@@ -199,6 +199,18 @@ describe('owned search service over real SQLite and controlled HTTP', () => {
     expect(db.getReadingState('100').readPostIds).toEqual([])
   })
 
+  it('stops a repeated lower page without saving it or reporting an end candidate', async () => {
+    const { api, requests, db } = await setup((_page, _request, reply) => {
+      reply.setHeader('Content-Type', 'application/json')
+      reply.end(JSON.stringify({ id: '100', content: 'head', ReplyCount: 2194, Replies: [{ id: '101', content: 'same lower page' }] }))
+    })
+    await api.fetchThread({ operationId: 'fetch', threadId: '100' })
+    expect(await settled(api)).toMatchObject({ state: 'failed', pages: [1], failedPage: 2,
+      error: { kind: 'page-cap', highestReadablePage: 1 }, coverage: { endCandidatePage: null, obtainedReplyCount: 1 } })
+    expect(requests).toEqual([1, 2])
+    expect(db.loadThreadPage('100', 'all', 2)).toBeNull()
+  })
+
   it('stops without retries on rate limits and retains partial pages with the failed page', async () => {
     const { api, requests, db } = await setup((page, _request, reply) => {
       if (page === 2) { reply.writeHead(429); reply.end(); return }

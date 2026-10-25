@@ -2,6 +2,7 @@ import type { ReadErrorKind } from '../../shared/api'
 import type {
   BoardDirectory, FeedPage, Forum, ForumGroup, Post, ThreadPage, ThreadSummary, Timeline
 } from '../../shared/forum'
+import { pageCapFor } from '../../shared/threadPages'
 import { ForumReadError } from './contract'
 import type { ForumClient, ForumTransport } from './contract'
 import { parseContent } from './content'
@@ -222,27 +223,39 @@ export function createForumClient(options: {
     },
     async getThreadPage(threadId, mode, page, signal): Promise<ThreadPage> {
       if (mode !== 'all' && mode !== 'po') throw new Error('Invalid reading mode')
-      const value = await read(mode === 'po' ? '/api/po' : '/api/thread', signal, { id: threadId, page })
-      if (!isObject(value) || value.id !== threadId || !Array.isArray(value.Replies)) throw shapeError()
-      const head = normalizePost(value)
-      if (head === null) throw shapeError()
-      const replies: Post[] = []
-      const seen = new Set<string>()
-      let skippedItems = 0
-      for (const raw of value.Replies as unknown[]) {
-        if (isTips(raw)) continue
-        const reply = normalizePost(raw)
-        if (reply === null) { skippedItems++; continue }
-        if (seen.has(reply.id)) continue
-        seen.add(reply.id)
-        replies.push(reply)
+      const fetchPage = async (number: number): Promise<ThreadPage> => {
+        const value = await read(mode === 'po' ? '/api/po' : '/api/thread', signal, { id: threadId, page: number })
+        if (!isObject(value) || value.id !== threadId || !Array.isArray(value.Replies)) throw shapeError()
+        const head = normalizePost(value)
+        if (head === null) throw shapeError()
+        const replies: Post[] = []
+        const seen = new Set<string>()
+        let skippedItems = 0
+        for (const raw of value.Replies as unknown[]) {
+          if (isTips(raw)) continue
+          const reply = normalizePost(raw)
+          if (reply === null) { skippedItems++; continue }
+          if (seen.has(reply.id)) continue
+          seen.add(reply.id)
+          replies.push(reply)
+        }
+        return {
+          threadId, mode, page: number, head, replies,
+          replyCount: nonNegativeNumber(value.ReplyCount),
+          skippedItems,
+          endCandidate: replies.length === 0 && skippedItems === 0
+        }
       }
-      return {
-        threadId, mode, page, head, replies,
-        replyCount: finiteNumber(value.ReplyCount),
-        skippedItems,
-        endCandidate: replies.length === 0 && skippedItems === 0
+      const result = await fetchPage(page)
+      // Public reads above 100 have been observed to return page 100. Verify content rather than
+      // hard-coding a cap: a selected cookie may allow later pages. This also covers direct jumps
+      // without an earlier local page-100 observation. Empty (Tips-only) pages remain end candidates.
+      if (page > 100 && result.replies.length > 0) {
+        const lower = await fetchPage(100)
+        const highestReadablePage = pageCapFor(result, [{ page: 100, replyIds: lower.replies.map((reply) => reply.id) }])
+        if (highestReadablePage !== null) throw new ForumReadError({ kind: 'page-cap', detail: 'shape', highestReadablePage }, lower)
       }
+      return result
     },
     async getRef(postId, signal): Promise<Post> {
       const value = await read('/api/ref', signal, { id: postId })

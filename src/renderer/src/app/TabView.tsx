@@ -27,6 +27,7 @@ type Region = 'list' | 'reader'
 /** PROTOTYPE: a target's entry (回复 / 发新串) and its confirmed-send note, placed by the pane. */
 function composeEntry(tabId: number, target: PostTarget, className?: string) {
   return {
+    tabId,
     entry: <ComposeButton tabId={tabId} target={target} className={className} />,
     note: <ComposeSentNote tabId={tabId} target={target} />
   }

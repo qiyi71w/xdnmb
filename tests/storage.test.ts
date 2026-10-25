@@ -139,16 +139,26 @@ describe('reading database', () => {
     expect(db.saveThreadPage({ ...second, skippedItems: 1 }, latest).countMismatch).toBeNull()
   })
 
-  it('replaces page observations and deduplicates IDs across pages instead of accumulating stale replies', () => {
+  it('replaces page observations and deduplicates retained IDs read out of order instead of accumulating stale replies', () => {
     const db = open(databasePath())
-    db.saveThreadPage(threadPage(1, [post('1001'), post('1002')], { replyCount: 3 }), fetchedAt)
     db.saveThreadPage(threadPage(2, [post('1002'), post('1003')]), fetchedAt)
+    db.saveThreadPage(threadPage(1, [post('1001'), post('1002')], { replyCount: 3 }), fetchedAt)
     expect(db.getThreadCoverage(threadId, 'all').obtainedReplyCount).toBe(3)
     const refreshed = threadPage(1, [post('1002')], { replyCount: null })
     db.saveThreadPage(refreshed, later)
     expect(db.getThreadCoverage(threadId, 'all').obtainedReplyCount).toBe(2)
     expect(db.getThreadCoverage(threadId, 'all').reportedReplyCount).toBe(3)
     expect(db.loadThreadPage(threadId, 'all', 1)?.value).toEqual(refreshed)
+  })
+
+  it('refuses repeated lower-page content before writing posts, relations or end observations', () => {
+    const db = open(databasePath())
+    db.saveThreadPage(threadPage(100, [post('1001'), post('1002')], { replyCount: 2194 }), fetchedAt)
+    expect(() => db.saveThreadPage(threadPage(116, [post('1001'), post('1002')], { replyCount: 2194 }), later))
+      .toThrow('forum read failed: page-cap/shape')
+    expect(db.loadThreadPage(threadId, 'all', 116)).toBeNull()
+    expect(db.getThreadCoverage(threadId, 'all')).toMatchObject({ obtainedReplyCount: 2, endCandidatePage: null })
+    expect(db.findPostThread('1002')?.pages.all).toBe(100)
   })
 
   it('selects the latest fetched non-null count, including zero, not the highest page or save order', () => {
@@ -221,7 +231,8 @@ describe('reading database', () => {
       threads: [{ head: post(threadId), replyCount: null, recentReplies: [reply], remainReplies: null }]
     }, fetchedAt)
     db.saveThreadPage(threadPage(1, [{ ...reply, name: 'new', isAdmin: false }]), latest)
-    db.saveThreadPage(threadPage(2, [{ ...reply, name: 'older' }]), later)
+    // Another mode's page: in one mode, a later page repeating page 1's replies is a page cap.
+    db.saveThreadPage(threadPage(2, [{ ...reply, name: 'older' }], { mode: 'po' }), later)
     const other = threadPage(1, [reply], { threadId: '3000', head: post('3000') })
     db.saveThreadPage(other, fetchedAt)
     expect(db.loadThreadPage(threadId, 'all', 1)?.value.replies[0]?.name).toBe('new')

@@ -33,6 +33,7 @@ import { ListFilterBar } from '../search/FilterFields'
 import { filterList, headMeta, listFilterCount, NO_LIST_FILTERS, type ListFilters } from '../search/listFilters'
 import { useThreadMetadata } from '../search/useThreadMetadata'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
+import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 import { OperationJournal, WriteStatus } from './SubscriptionActivity'
 import { ReconcileView } from './SubscriptionReconcile'
 import { SubscriptionRowMenu } from './SubscriptionRowMenu'
@@ -124,6 +125,7 @@ export function SubscriptionPane({
   const subscriptions = useSubscriptionsContext()
   const { overview, overviewFailed, refreshOverview, applyOverview, operations, change, busy, task, refreshPlans } = subscriptions
   const openSettings = useSettingsOpener()
+  const openInTab = useOpenThreadInTab()
   const registry = useContext(ContentRegistryContext)
   const [remembered] = useState(() => {
     const memory = registry?.listMemory.get(entryKey)
@@ -490,32 +492,51 @@ export function SubscriptionPane({
             <h2 className="list-title">
               <span className="list-name">订阅</span>
             </h2>
-            <div className="segmented sub-source" role="group" aria-label="订阅来源">
-              {(['app', 'web'] as const).map((item) => (
+            <div className="sub-header-tools">
+              {PROTOTYPE_ENABLED && (
                 <button
-                  key={item}
                   type="button"
-                  className="segmented-item"
-                  aria-pressed={source === item}
-                  aria-busy={switching === item ? true : undefined}
-                  aria-label={SOURCE_NAME[item]}
-                  disabled={!overview.writable}
-                  onClick={() => void switchSource(item)}
+                  className="btn btn-small btn-quiet sub-recon-open"
+                  ref={reconcileButtonRef}
+                  onClick={() => showView('reconcile')}
+                  title={taskHint ?? undefined}
                 >
-                  {SOURCE_SHORT[item]}
+                  同步与合并
+                  {taskHint !== null && (
+                    <>
+                      <span className="sub-recon-mark" aria-hidden="true" />
+                      <span className="visually-hidden">（{taskHint}）</span>
+                    </>
+                  )}
                 </button>
-              ))}
+              )}
+              <div className="segmented sub-source" role="group" aria-label="订阅来源">
+                {(['app', 'web'] as const).map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    className="segmented-item"
+                    aria-pressed={source === item}
+                    aria-busy={switching === item ? true : undefined}
+                    aria-label={SOURCE_NAME[item]}
+                    disabled={!overview.writable}
+                    onClick={() => void switchSource(item)}
+                  >
+                    {SOURCE_SHORT[item]}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={refresh}
+                disabled={blocker !== null}
+                aria-label="刷新订阅（从第 1 页重新读取）"
+                title="刷新订阅"
+              >
+                <Icon name="refresh" />
+              </button>
             </div>
-            <button
-              type="button"
-              className="icon-btn"
-              onClick={refresh}
-              disabled={blocker !== null}
-              aria-label="刷新订阅（从第 1 页重新读取）"
-              title="刷新订阅"
-            >
-              <Icon name="refresh" />
-            </button>
           </div>
           {switchError !== null && (
             <p className="form-message is-error" role="status">
@@ -556,12 +577,14 @@ export function SubscriptionPane({
 
           <WriteStatus />
 
-          <div className="sub-recon-entry">
-            <button type="button" className="btn btn-small" ref={reconcileButtonRef} onClick={() => showView('reconcile')}>
-              同步与合并…
-            </button>
-            {taskHint !== null && <span className="field-hint">{taskHint}</span>}
-          </div>
+          {!PROTOTYPE_ENABLED && (
+            <div className="sub-recon-entry">
+              <button type="button" className="btn btn-small" ref={reconcileButtonRef} onClick={() => showView('reconcile')}>
+                同步与合并…
+              </button>
+              {taskHint !== null && <span className="field-hint">{taskHint}</span>}
+            </div>
+          )}
 
           {draft !== null && (
             <ChangeConfirm
@@ -573,7 +596,9 @@ export function SubscriptionPane({
                   : operations?.some((item) =>
                         blocksNewWrite(item, { source: draft.source, objectRef: draft.objectRef, threadId: draft.threadId })
                       )
-                    ? '这个串有待核对的操作，请先在操作记录中核对'
+                    ? PROTOTYPE_ENABLED
+                      ? '这个串有待核对的操作，请先打开这个串核对订阅'
+                      : '这个串有待核对的操作，请先在操作记录中核对'
                     : null
               }
               cancelRef={confirmCancelRef}
@@ -592,7 +617,7 @@ export function SubscriptionPane({
             onAdd={(threadId) => openDraft('add', threadId, labelOf(threadId))}
           />
 
-          <OperationJournal />
+          {!PROTOTYPE_ENABLED && <OperationJournal />}
         </div>
 
         {/* Prototype: reading is silent (no progress, no coverage); only a failure shows, as one line. */}
@@ -706,7 +731,8 @@ export function SubscriptionPane({
                   itemProps={itemProps}
                 />
               )
-              // Prototype: 提醒 and 取消订阅 live in the row's context menu (right-click, ContextMenu, Shift+F10).
+              // Prototype: 在新标签页打开, 提醒 and 取消订阅 live in the row's context menu (right-click,
+              // ContextMenu, Shift+F10); middle-click or Ctrl/Cmd+click opens a new tab, as in a forum list.
               if (PROTOTYPE_ENABLED) {
                 return (
                   <li
@@ -715,6 +741,21 @@ export function SubscriptionPane({
                     onContextMenu={(event) => openRowMenu(thread.head.id, event)}
                     onKeyDown={(event) => {
                       if (isContextMenuKey(event)) openRowMenu(thread.head.id, event)
+                    }}
+                    onClickCapture={(event) => {
+                      if (openInTab === null || (!event.ctrlKey && !event.metaKey)) return
+                      event.preventDefault()
+                      event.stopPropagation()
+                      openInTab(thread.head.id, thread.head)
+                    }}
+                    // Middle press: no autoscroll; the release opens the tab.
+                    onMouseDown={(event) => {
+                      if (openInTab !== null && event.button === 1) event.preventDefault()
+                    }}
+                    onAuxClick={(event) => {
+                      if (openInTab === null || event.button !== 1) return
+                      event.preventDefault()
+                      openInTab(thread.head.id, thread.head)
                     }}
                   >
                     {row}
@@ -780,6 +821,7 @@ export function SubscriptionPane({
           key={rowMenu.threadId}
           point={rowMenu.point}
           threadId={rowMenu.threadId}
+          head={menuThread.head}
           label={threadLabel(menuThread)}
           rules={rules.rulesOf(rowMenu.threadId)}
           failure={rules.failure}
@@ -923,11 +965,11 @@ function AddForm({
           aria-describedby={describedBy}
         />
         <button type="submit" className="btn btn-small" disabled={disabled}>
-          加入…
+          {PROTOTYPE_ENABLED ? '加入' : '加入…'}
         </button>
         {currentThreadId !== null && (
           <button type="button" className="btn btn-small" disabled={disabled} onClick={() => onAdd(currentThreadId)}>
-            加入当前串 No.{currentThreadId}…
+            {PROTOTYPE_ENABLED ? `加入当前串 No.${currentThreadId}` : `加入当前串 No.${currentThreadId}…`}
           </button>
         )}
       </div>

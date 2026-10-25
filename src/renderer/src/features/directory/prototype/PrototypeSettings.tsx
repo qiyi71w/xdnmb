@@ -29,6 +29,7 @@ import type { IdentitiesState } from '../../identity/useIdentities'
 import { SubscriptionSection } from '../../subscriptions/SubscriptionSection'
 import type { SubscriptionsState } from '../../subscriptions/useSubscriptions'
 import { BoardManageSection, FeatureVisibilitySection } from './PrototypeNavSettings'
+import { useBlocks } from '../../thread/useBlocks'
 import './prototype.css'
 
 type SectionId = SettingsSectionId
@@ -52,7 +53,8 @@ const CATEGORIES: readonly { id: string; title: string; sections: readonly { id:
     sections: [
       { id: 'features', title: '功能显示' },
       { id: 'boards', title: '版块管理' },
-      { id: 'tabs', title: '标签' }
+      { id: 'tabs', title: '标签' },
+      { id: 'blocks', title: '屏蔽' }
     ]
   },
   {
@@ -387,6 +389,8 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
       return <BoardManageSection directory={directory} />
     case 'tabs':
       return <TabsSection settings={settings} write={write} />
+    case 'blocks':
+      return <BlocksSection />
     case 'cookies':
       return <CookieSection identities={identities} />
     case 'subscriptions':
@@ -398,4 +402,18 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
     case 'cache':
       return <CacheSection />
   }
+}
+
+function BlocksSection() {
+  const { blocks, failure, reload, setBlocked } = useBlocks()
+  const headingId = useId()
+  return <section className="settings-section" aria-labelledby={headingId}>
+    <h3 className="settings-section-title" id={headingId}>屏蔽</h3>
+    {failure !== null && <p role="alert">{failure} <button type="button" className="btn btn-small" onClick={() => void reload()}>重试</button></p>}
+    {blocks.length === 0 && failure === null && <p className="settings-empty">暂无屏蔽</p>}
+    <ul className="proto-manage-list">{blocks.map((block) => <li className="proto-manage-row" key={`${block.kind}:${block.value}`}>
+      <span>{block.kind === 'post' ? `No.${block.value}` : `饼干 ${block.value}`}</span>
+      <span className="proto-manage-actions"><button type="button" className="btn btn-small" aria-label={`取消屏蔽${block.kind === 'post' ? ` No.${block.value}` : `饼干 ${block.value}`}`} onClick={() => void setBlocked(block.kind, block.value, false)}>取消屏蔽</button></span>
+    </li>)}</ul>
+  </section>
 }

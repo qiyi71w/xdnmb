@@ -14,38 +14,46 @@
   color: var(--greentext);
 }
 
-/* Static in excerpts and previews; interactive (preview / locate) in reader post bodies. */
+/* References read as part of the sentence, not as chips. Excerpts stay non-interactive. */
 .quote-ref {
-  padding: 0 3px;
-  border-radius: 4px;
-  background: var(--quote-ref-bg);
-  color: var(--quote-ref-ink);
-  font-variant-numeric: tabular-nums;
+  padding: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent-ink);
+  font-family: var(--font-reading);
+  font-variant-numeric: normal;
 }
 
-/* Same box as the static span: becoming interactive or active never reflows the text. */
+/* State changes never alter the reference's size or move surrounding text. */
 .quote-ref.is-interactive {
   display: inline;
   margin: 0;
   border: 0;
   font: inherit;
+  font-family: var(--font-reading);
   line-height: inherit;
   text-align: inherit;
   white-space: inherit;
+  overflow-wrap: anywhere;
   cursor: pointer;
-  text-decoration: underline dotted;
+  text-decoration: none;
   text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
+  text-underline-offset: 0.18em;
 }
 
 .quote-ref.is-interactive:hover,
+.quote-ref.is-interactive:focus-visible,
 .quote-ref.is-active {
-  background: color-mix(in oklch, var(--quote-ref-bg), var(--quote-ref-ink) 12%);
-  text-decoration-style: solid;
+  text-decoration-line: underline;
+}
+
+.quote-ref.is-active {
+  text-decoration-thickness: 2px;
 }
 
 .quote-ref.is-interactive:focus-visible {
-  outline-offset: 1px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .content-link {

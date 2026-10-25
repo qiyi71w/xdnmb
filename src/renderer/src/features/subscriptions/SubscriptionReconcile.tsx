@@ -700,7 +700,12 @@ function PlanOutcome({ task }: { task: Extract<ReconcileTask, { phase: 'finished
     notice = {
       tone: 'warn',
       title: '执行请求失败，结果未知',
-      detail: plan === null ? '本机没有找到这次计划的记录；若之后出现，以记录为准。请在操作记录中核对，不要直接重复执行。' : '下面是本机保存的逐项结果，以它为准。'
+      detail:
+        plan !== null
+          ? '下面是本机保存的逐项结果，以它为准。'
+          : PROTOTYPE_ENABLED
+            ? '本机没有找到这次计划的记录；若之后出现，以记录为准。请打开相关的串核对订阅，不要直接重复执行。'
+            : '本机没有找到这次计划的记录；若之后出现，以记录为准。请在操作记录中核对，不要直接重复执行。'
     }
   } else if (outcome.type === 'refused') {
     switch (outcome.reason) {
@@ -711,7 +716,13 @@ function PlanOutcome({ task }: { task: Extract<ReconcileTask, { phase: 'finished
         notice = { tone: 'warn', title: '已在第一次写入前停止', detail: '没有发出任何写入。' }
         break
       case 'result-storage':
-        notice = { tone: 'warn', title: `结果未知：${failureText(outcome.reason)}`, detail: '请在操作记录中核对（只读，不会重发写入），不要直接重复执行。' }
+        notice = {
+          tone: 'warn',
+          title: `结果未知：${failureText(outcome.reason)}`,
+          detail: PROTOTYPE_ENABLED
+            ? '请打开相关的串核对订阅（只读，不会重发写入），不要直接重复执行。'
+            : '请在操作记录中核对（只读，不会重发写入），不要直接重复执行。'
+        }
         break
       default:
         notice = { tone: 'error', title: `没有执行：${failureText(outcome.reason)}`, detail: '这份预览已用过；如需继续，请重新预览。' }

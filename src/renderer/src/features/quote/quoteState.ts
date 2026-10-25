@@ -1,6 +1,6 @@
 import type { QuoteLocation, QuotePreview, ReadError, ReadOutcome } from '../../../../shared/api'
 import type { PostId } from '../../../../shared/forum'
-import type { SourceFocus } from '../tabs/tabsState'
+import { quoteHostId, type QuoteAnchor } from './QuoteContext'
 
 /**
  * What a locate request is for. `navigate` (click / Enter) and `background` (Ctrl/Cmd + click or
@@ -25,7 +25,9 @@ export interface QuoteSource {
   /** The quoted post. */
   postId: PostId
   /** Where the quote reference sits, for returning focus to it. */
-  focus: SourceFocus
+  focus: QuoteAnchor
+  /** Selected reference inside a preview; `focus` remains the original, persistent trigger. */
+  reference?: QuoteAnchor
 }
 
 /**
@@ -85,8 +87,8 @@ function sameSource(a: QuoteSource, b: QuoteSource): boolean {
     a.tabId === b.tabId &&
     a.entryKey === b.entryKey &&
     a.postId === b.postId &&
-    a.focus.postId === b.focus.postId &&
-    a.focus.quoteIndex === b.focus.quoteIndex
+    quoteHostId(a.reference ?? a.focus) === quoteHostId(b.reference ?? b.focus) &&
+    (a.reference ?? a.focus).quoteIndex === (b.reference ?? b.focus).quoteIndex
   )
 }
 

@@ -505,6 +505,17 @@ export const MIGRATIONS: readonly Migration[] = [
         expires_at TEXT NOT NULL
       );`)
     }
+  },
+  {
+    version: 13,
+    up(db) {
+      db.exec(`CREATE TABLE local_blocks (
+        kind TEXT NOT NULL CHECK (kind IN ('post', 'cookie')),
+        value TEXT NOT NULL CHECK (length(value) BETWEEN 1 AND 128),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (kind, value)
+      );`)
+    }
   }
 ]
 

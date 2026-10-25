@@ -1,3 +1,4 @@
+import { REPORT_REASONS, reportReason } from '../../../../shared/report'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
 import { sameTarget, targetKey, type IdentityChoice, type PostFields, type PostTarget } from '../../../../shared/drafts'
 import type { CredentialId } from '../../../../shared/identity'
@@ -208,6 +209,7 @@ export function EditorPanel({
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [retargeting, setRetargeting] = useState(false)
   const [identityNotice, setIdentityNotice] = useState<string | null>(null)
+  const [reportError, setReportError] = useState(false)
   const hasExtraFields = editor.fields.title !== '' || editor.fields.name !== '' || editor.fields.email !== ''
   /** Float layout: 更多字段 is open whenever one of its fields holds something. */
   const [moreOpen, setMoreOpen] = useState(hasExtraFields)
@@ -252,7 +254,9 @@ export function EditorPanel({
     void store.save(editorId)
   }
 
+  const report = PROTOTYPE_ENABLED ? editor.report : undefined
   const send = () => {
+    if (report !== undefined && reportReason(report) === null) { setReportError(true); return }
     if (!locked) void store.send(editorId)
   }
 
@@ -291,7 +295,7 @@ export function EditorPanel({
   const saveShortcut = shortcutLabel('save', platform)
   const sendShortcut = sendShortcutLabel(platform)
   const statusText = saving ? '正在保存…' : editorStateText(editor)
-  const sendLabel = editor.target.kind === 'reply' ? '发送回复' : '发布新串'
+  const sendLabel = report !== undefined ? '发送' : editor.target.kind === 'reply' ? '发送回复' : '发布新串'
 
   const retargetButton = (
     <button
@@ -320,19 +324,35 @@ export function EditorPanel({
 
   const content = (
     <>
+      {report !== undefined && <fieldset className="report-reasons" disabled={locked}>
+        <legend>举报 &gt;&gt;No.{report.postId}</legend>
+        <div className="report-reason-options">{REPORT_REASONS.map((reason) => <label key={reason}>
+          <input type="radio" name={`${ids}-reason`} checked={report.reason === reason} onChange={() => {
+            setReportError(false)
+            store.dispatch({ type: 'edit-report', editorId, patch: { reason } })
+          }} />{reason}
+        </label>)}</div>
+        {report.reason === '其他' && <label>理由<input type="text" required maxLength={80} aria-invalid={reportError || undefined} value={report.customReason} onChange={(event) => {
+          setReportError(false)
+          store.dispatch({ type: 'edit-report', editorId, patch: { customReason: event.target.value } })
+        }} /></label>}
+        {reportError && <p role="alert">请选择举报理由{report.reason === '其他' ? '并填写理由' : ''}</p>}
+      </fieldset>}
       <label className="visually-hidden" htmlFor={`${ids}-content`}>
-        正文
+        {report !== undefined ? '举报内容' : '正文'}
       </label>
       <textarea
         ref={textareaRef}
         id={`${ids}-content`}
         className="editor-content"
         rows={layout === 'float' ? 10 : 5}
-        placeholder="正文"
-        value={editor.fields.content}
+        placeholder={report !== undefined ? '举报内容' : '正文'}
+        value={report?.text ?? editor.fields.content}
         readOnly={locked}
         aria-keyshortcuts={sendAriaShortcut(platform)}
-        onChange={(event) => edit({ content: event.target.value })}
+        onChange={(event) => report !== undefined
+          ? store.dispatch({ type: 'edit-report', editorId, patch: { text: event.target.value } })
+          : edit({ content: event.target.value })}
       />
     </>
   )
@@ -482,7 +502,7 @@ export function EditorPanel({
           </h2>
           {identityRow}
           <div className="editor-head-actions">
-            {retargetButton}
+            {report === undefined && retargetButton}
             <button type="button" className="icon-btn" aria-label="收起（内容保留）" title="收起（Esc）" onClick={collapse}>
               <Icon name="close" />
             </button>

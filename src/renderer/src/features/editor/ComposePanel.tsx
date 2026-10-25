@@ -23,6 +23,7 @@ export interface ComposeTarget {
 
 /** A target's entry button and its confirmed-send note, for the pane that places them. */
 export interface ComposeEntry {
+  tabId: number
   entry: ReactNode
   note: ReactNode
 }
@@ -36,6 +37,9 @@ export function ComposeFrame({ tabId, targets, children }: { tabId: number; targ
       {targets.map(({ target, displayed }) => (
         <ComposePanel key={targetKey(target)} tabId={tabId} target={target} displayed={displayed} />
       ))}
+      {!targets.some(({ target }) => target.kind === 'thread' && target.forumId === '18') && (
+        <ComposePanel tabId={tabId} target={{ kind: 'thread', forumId: '18' }} displayed={targets.some(({ displayed }) => displayed)} />
+      )}
     </div>
   )
 }

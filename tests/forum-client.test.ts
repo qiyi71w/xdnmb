@@ -61,6 +61,25 @@ describe('forum JSON normalization', () => {
     expect(result.endCandidate).toBe(true)
   })
 
+  it.each([101, 116])('detects a direct capped jump to page %i by comparing page 100 without assuming a cookie cap', async (page) => {
+    const requests: number[] = []
+    const client = createForumClient({ transport: { async get(url) {
+      requests.push(Number(url.searchParams.get('page')))
+      return { mediaType: 'application/json', text: JSON.stringify(thread([tips, { id: '9000', content: 'page 100' }], { ReplyCount: 2194 })) }
+    } } })
+    await expect(client.getThreadPage('100', 'all', page, signal)).rejects.toMatchObject({ error: { kind: 'page-cap', highestReadablePage: 100 } })
+    expect(requests).toEqual([page, 100])
+  })
+
+  it('accepts distinct later content and leaves a Tips-only successor as an end candidate', async () => {
+    const client = createForumClient({ transport: { async get(url) {
+      const page = Number(url.searchParams.get('page'))
+      return { mediaType: 'application/json', text: JSON.stringify(thread(page === 117 ? [tips] : [tips, { id: String(9000 + page), content: 'reply' }], { ReplyCount: 2194 })) }
+    } } })
+    expect(await client.getThreadPage('100', 'all', 116, signal)).toMatchObject({ page: 116, endCandidate: false })
+    expect(await client.getThreadPage('100', 'all', 117, signal)).toMatchObject({ page: 117, replies: [], endCandidate: true })
+  })
+
   it('deduplicates reply IDs in server order and keeps ordinary admin replies', async () => {
     const result = await fixture(thread([
       { id: '201', content: 'first', admin: true },

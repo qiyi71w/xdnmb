@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react'
 import type { AppPlatform } from '../../../../shared/api'
-import type { ForumId } from '../../../../shared/forum'
+import type { ForumId, ThreadId } from '../../../../shared/forum'
 import type { SearchHit } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
@@ -24,6 +24,7 @@ import type { HitLocate, RebuildState, SearchRun, SearchView, TabSearch } from '
 import { filtersSearchable, MAX_QUERY_LENGTH, type SearchCommands } from './useSearch'
 import { shortcutLabel } from '../../app/shortcuts'
 import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
+import { useThreadTabMenu, type ThreadTabMenu } from '../tabs/ThreadTabMenu'
 import './search.css'
 
 const VIEW_TEXT: Record<SearchView, string> = { local: '本机内容', thread: '当前串' }
@@ -163,7 +164,8 @@ export function SearchBody({
   commands,
   forums,
   focusRefs,
-  brief = false
+  brief = false,
+  tabMenu = false
 }: {
   className: string
   tabId: number
@@ -177,6 +179,8 @@ export function SearchBody({
   focusRefs: SearchFocusRefs
   /** Only what is needed to search (PROTOTYPE page): no hint or explanatory sentences. */
   brief?: boolean
+  /** Hits offer 在新标签页打开 (not in the modal sheet, whose top layer would hide the menu). */
+  tabMenu?: boolean
 }) {
   const inputId = useId()
   const filtersId = useId()
@@ -218,6 +222,7 @@ export function SearchBody({
 
   const hitIds = useMemo(() => (run?.hits ?? []).map((hit) => hit.postId), [run])
   const roving = useRovingFocus(hitIds, tab.lastHit?.view === view ? tab.lastHit.postId : null)
+  const inTab = useThreadTabMenu()
 
   const indexMissing = run?.failure === 'index-unavailable'
   const showRebuild = indexMissing || rebuild.status === 'running'
@@ -339,6 +344,8 @@ export function SearchBody({
               forumName={hit.forumId === null ? null : (forums.get(hit.forumId) ?? `版面 ${hit.forumId}`)}
               locate={tab.locate !== null && tab.locate.view === view && tab.locate.postId === hit.postId ? tab.locate : null}
               itemProps={roving.itemProps(hit.postId)}
+              inTab={inTab}
+              tabThreadId={tabMenu ? hit.threadId : null}
               onChoose={() => commands.chooseHit(tabId, view, hit, 'navigate')}
               onRetry={() => commands.chooseHit(tabId, view, hit, 'resolve')}
               onOpenThread={() => commands.openHitThread(tabId)}
@@ -347,6 +354,7 @@ export function SearchBody({
           ))}
         </ul>
       )}
+      {inTab.menu}
     </div>
   )
 }
@@ -516,6 +524,8 @@ function HitRow({
   forumName,
   locate,
   itemProps,
+  inTab,
+  tabThreadId,
   onChoose,
   onRetry,
   onOpenThread,
@@ -526,6 +536,9 @@ function HitRow({
   forumName: string | null
   locate: HitLocate | null
   itemProps: { 'data-roving-item': string; tabIndex: number; onFocus: () => void }
+  inTab: ThreadTabMenu
+  /** The thread 在新标签页打开 opens; null: not offered. */
+  tabThreadId: ThreadId | null
   onChoose: () => void
   onRetry: () => void
   onOpenThread: () => void
@@ -542,7 +555,10 @@ function HitRow({
         className="search-hit-main"
         data-hit={hit.postId}
         aria-describedby={locate !== null ? statusId : undefined}
-        onClick={onChoose}
+        onClick={(event) => {
+          if (!inTab.openFromClick(event, tabThreadId)) onChoose()
+        }}
+        {...inTab.rowProps(tabThreadId)}
         {...itemProps}
       >
         <span className="search-hit-post">

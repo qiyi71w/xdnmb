@@ -1,3 +1,4 @@
+import type { BlockKind, LocalBlock } from '../../shared/blocks'
 import type { StorageStatus } from '../../shared/api'
 import type {
   BoardDirectory,
@@ -107,6 +108,8 @@ export interface ReadingStore {
    */
   establishAttention(threadId: ThreadId, source: AttentionSource, at: string): Promise<AttentionState>
   loadSettings(): Promise<AppSettings>
+  listBlocks(): Promise<LocalBlock[]>
+  setBlock(kind: BlockKind, value: string, blocked: boolean, at: string): Promise<void>
   saveSettings(settings: AppSettings): Promise<void>
 
   /** Image location of a stored post; null when the post is not stored or has no image. */

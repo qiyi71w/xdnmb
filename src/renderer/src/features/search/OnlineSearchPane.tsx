@@ -10,6 +10,7 @@ import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegis
 import { useAppCovered } from '../../lib/appCovered'
 import { readResumePage } from '../thread/readingStart'
 import type { EntryInit } from '../tabs/tabsState'
+import { useThreadTabMenu, type ThreadTabMenu } from '../tabs/ThreadTabMenu'
 import type { OnlineSearchNotice, OnlineSearchResults, OnlineSearchSession } from './onlineSearchSession'
 import './online-search.css'
 
@@ -59,6 +60,26 @@ function targetLabel(target: ForumLinkTarget | null): string {
   if (target.kind === 'board') return `版面 ${target.boardName}`
   if (target.replyId === null) return `串 No.${target.threadId}`
   return target.replyId === target.threadId ? `主帖 No.${target.threadId}` : `回复 No.${target.replyId}（串 No.${target.threadId}）`
+}
+
+/**
+ * The thread a hit opens, when known without asking: a thread / PO / main-post link, or a reply
+ * link once its row located it. Otherwise null (no 在新标签页打开).
+ */
+function knownThreadOf(target: ForumLinkTarget | null, status: RowStatus | null): { threadId: ThreadId; head: Post | null } | null {
+  if (target === null || target.kind !== 'thread') return null
+  if (target.replyId === null || target.replyId === target.threadId) return { threadId: target.threadId, head: null }
+  if (status === null) return null
+  switch (status.kind) {
+    case 'located':
+      return { threadId: status.location.threadId, head: status.location.head }
+    case 'thread-known':
+    case 'opening':
+    case 'open-failed':
+      return { threadId: status.known.threadId, head: status.known.head }
+    default:
+      return null
+  }
 }
 
 /** Host and path of a result URL, shortened; the raw text when it does not parse. */
@@ -407,6 +428,7 @@ export function OnlineSearchPane({
   const ids = useMemo(() => (shownPage === null ? [] : shownPage.hits.map((_, index) => `${shownPage.pageNumber}-${index}`)), [shownPage])
   const focusedKey = session.view.focus === null ? null : `${session.view.focus.page}-${session.view.focus.index}`
   const roving = useRovingFocus(ids, focusedKey)
+  const inTab = useThreadTabMenu()
 
   return (
     <section className="online-search-page" aria-label="联网搜索">
@@ -547,6 +569,7 @@ export function OnlineSearchPane({
                             session.view.focus = { page: shownPage.pageNumber, index }
                           }
                         }}
+                        inTab={inTab}
                         onActivate={() => activate(hit, shownPage.pageNumber, index)}
                         onBrowser={url === null ? null : () => openInBrowser(url, shownPage.pageNumber, index)}
                         onCancel={() => cancelLocate(true)}
@@ -563,6 +586,7 @@ export function OnlineSearchPane({
                 })}
               </ul>
             )}
+            {inTab.menu}
 
             <Pager results={results} session={session} pendingPage={pending?.kind === 'page' ? pending.page : null} />
             {notice !== null && notice.kind !== 'closed' && notice.request.kind === 'page' && <RequestNotice notice={notice} onRetry={null} />}
@@ -659,6 +683,7 @@ function HitRow({
   hitKey,
   status,
   itemProps,
+  inTab,
   onActivate,
   onBrowser,
   onCancel,
@@ -670,6 +695,7 @@ function HitRow({
   hitKey: string
   status: RowStatus | null
   itemProps: { 'data-roving-item': string; tabIndex: number; onFocus: () => void }
+  inTab: ThreadTabMenu
   onActivate: () => void
   onBrowser: (() => void) | null
   onCancel: () => void
@@ -679,6 +705,7 @@ function HitRow({
 }) {
   const target = hit.target
   const unusable = target === null && hit.url === null
+  const tabThread = knownThreadOf(target, status)
   // The row's own controls are reachable with Tab from the row that holds the list's tab stop.
   const tabIndex = itemProps.tabIndex
   const statusId = `online-search-hit-status-${hitKey}`
@@ -690,7 +717,11 @@ function HitRow({
         data-hit-key={hitKey}
         aria-disabled={unusable}
         aria-describedby={status === null ? undefined : statusId}
-        onClick={unusable ? undefined : onActivate}
+        onClick={(event) => {
+          if (unusable || inTab.openFromClick(event, tabThread?.threadId ?? null, tabThread?.head)) return
+          onActivate()
+        }}
+        {...inTab.rowProps(tabThread?.threadId ?? null, tabThread?.head)}
         {...itemProps}
       >
         <span className="online-search-hit-top">

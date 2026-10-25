@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { QuoteLocation, ThreadEndResult } from '../src/shared/api'
 import type { Post, ReadingMode, ThreadPage } from '../src/shared/forum'
+import { threadTotalPages } from '../src/shared/threadPages'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../src/main/forum/contract'
+import { createForumClient } from '../src/main/forum/client'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { asStore } from './helpers/store'
 import { createReadingService } from '../src/main/reading/service'
@@ -79,39 +81,40 @@ async function locate(sizes: number[], replyCount: number | null) {
   return { result: outcome.data as ThreadEndResult, requested: f.requested }
 }
 
-describe('locateThreadEnd (bounded tail probe)', () => {
-  it('verifies the estimated last page by observing the following empty page', async () => {
-    const { result, requested } = await locate([19, 19, 7], 45)
+describe('locateThreadEnd (mode-specific count or bounded unknown-count probe)', () => {
+  it.each([[0, 1], [1, 1], [19, 1], [20, 2], [2194, 116]])('targets the count-based page for %i replies', async (count, total) => {
+    const sizes = Array.from({ length: total }, () => count === 0 ? 0 : 1)
+    const { result, requested } = await locate(sizes, count)
+    expect(threadTotalPages(count)).toBe(total)
     expect(result.status).toBe('located')
     if (result.status === 'located') {
-      expect(result.lastPage.page.page).toBe(3)
-      expect(result.endCandidatePage).toBe(4)
-      expect(result.lastPage.coverage.endCandidatePage).toBe(4)
-      expect(result.lastPage.coverage.gaps).toEqual([2])
+      expect(result.lastPage.page.page).toBe(total)
+      expect(result.endCandidatePage).toBe(count === 0 ? 1 : null)
+      expect(result.lastPage.coverage.countMismatch).toBe(count === 0 ? false : null)
     }
-    expect(requested).toEqual([1, 3, 4])
+    expect(requested).toEqual(total === 1 ? [1] : [1, total])
   })
 
-  it('does not trust a short page or an under-reported ReplyCount and stops after two forward probes', async () => {
-    const { result, requested } = await locate([19, 5, 19, 19, 3], 10)
-    expect(result.status).toBe('insufficient')
+  it('uses the PO count rather than a stored all-mode count', async () => {
+    const f = forum([7], 7)
+    db.saveThreadPage({ threadId: THREAD, mode: 'all', page: 1, head: post(THREAD), replies: [post('60000000')],
+      replyCount: 2194, skippedItems: 0, endCandidate: false }, '2026-10-24T00:00:00.000Z')
+    const outcome = await service(f.client).locateThreadEnd(THREAD, 'po', new AbortController().signal)
+    expect(outcome).toMatchObject({ status: 'fresh', data: { status: 'located', lastPage: { page: { page: 1, mode: 'po', replyCount: 7 } } } })
+    expect(f.requested).toEqual([1])
+  })
+
+  it('retains observed-end probing when the count is unknown', async () => {
+    const { result, requested } = await locate([19, 7], null)
+    expect(threadTotalPages(null)).toBeNull()
+    expect(result).toMatchObject({ status: 'located', lastPage: { page: { page: 2 } }, endCandidatePage: 3 })
     expect(requested).toEqual([1, 2, 3])
   })
 
-  it('walks back from an over-reported estimate to the last page with replies', async () => {
-    const { result, requested } = await locate([19, 19, 19, 4], 100)
-    expect(result.status).toBe('located')
-    if (result.status === 'located') {
-      expect(result.lastPage.page.page).toBe(4)
-      expect(result.endCandidatePage).toBe(5)
-    }
-    expect(requested).toEqual([1, 6, 5, 4])
-  })
-
-  it('reports insufficient coverage when the backward bound is exhausted', async () => {
-    const { result } = await locate([19, 19], 200)
+  it('stops after two forward probes without a count or observed end', async () => {
+    const { result, requested } = await locate([19, 5, 19, 19, 3], null)
     expect(result.status).toBe('insufficient')
-    if (result.status === 'insufficient') expect(result.probedPages).toEqual([1, 11, 10, 9])
+    expect(requested).toEqual([1, 2, 3])
   })
 
   it('treats an empty first page as the end of a thread without replies', async () => {
@@ -155,6 +158,85 @@ describe('locateThreadEnd (bounded tail probe)', () => {
 })
 
 describe('readThreadPage', () => {
+  it('keeps the real total when a direct tail jump is capped without a stored page 100', async () => {
+    const requested: number[] = []
+    const client = createForumClient({ transport: { async get(url) {
+      const page = Number(url.searchParams.get('page'))
+      requested.push(page)
+      return { mediaType: 'application/json', text: JSON.stringify({ id: THREAD, content: 'head', ReplyCount: 2194,
+        Replies: [{ id: page === 1 ? '60000100' : '60010000', content: 'reply' }] }) }
+    } } })
+    const reading = service(client)
+    const signal = new AbortController().signal
+    expect(await reading.readThreadPage(THREAD, 'all', 1, signal)).toMatchObject({ status: 'fresh', data: { coverage: { reportedReplyCount: 2194 } } })
+    expect(await reading.locateThreadEnd(THREAD, 'all', signal)).toMatchObject({ status: 'failed', error: {
+      kind: 'page-cap', highestReadablePage: 100, readablePage: { data: { page: { page: 100 }, coverage: { reportedReplyCount: 2194 } } }
+    } })
+    expect(db.loadThreadPage(THREAD, 'all', 100)?.value.replies[0]?.id).toBe('60010000')
+    expect(requested).toEqual([1, 116, 100])
+    expect(db.getThreadCoverage(THREAD, 'all')).toMatchObject({ pages: [{ page: 1 }, { page: 100 }], reportedReplyCount: 2194, endCandidatePage: null })
+    expect(db.loadThreadPage(THREAD, 'all', 116)).toBeNull()
+  })
+
+  it('retains a Tips-only successor as observed end evidence after the real last page', async () => {
+    const client = createForumClient({ transport: { async get(url) {
+      const page = Number(url.searchParams.get('page'))
+      return { mediaType: 'application/json', text: JSON.stringify({ id: THREAD, content: 'head', ReplyCount: 20,
+        Replies: [{ id: '9999999', user_hash: 'Tips', content: 'tip' }, ...(page <= 2 ? [{ id: String(60000000 + page), content: 'reply' }] : [])] }) }
+    } } })
+    const reading = service(client)
+    const signal = new AbortController().signal
+    await reading.readThreadPage(THREAD, 'all', 2, signal)
+    expect(await reading.readThreadPage(THREAD, 'all', 3, signal)).toMatchObject({
+      status: 'fresh', data: { page: { replies: [], endCandidate: true }, coverage: { endCandidatePage: 3 } }
+    })
+  })
+
+  it.each([101, 116])('rejects page 100 repeated as page %i before persistence or end evidence', async (requested) => {
+    const f = forum(Array.from({ length: 116 }, () => 19), 2194)
+    const read = f.client.getThreadPage.bind(f.client)
+    f.client.getThreadPage = async (threadId, mode, page, signal) => ({ ...await read(threadId, mode, page > 100 ? 100 : page, signal), page })
+    const reading = service(f.client)
+    const signal = new AbortController().signal
+    await reading.readThreadPage(THREAD, 'all', 100, signal)
+    expect(await reading.readThreadPage(THREAD, 'all', requested, signal)).toMatchObject({
+      status: 'failed', error: { kind: 'page-cap', highestReadablePage: 100 }
+    })
+    expect(db.loadThreadPage(THREAD, 'all', requested)).toBeNull()
+    expect(db.getThreadCoverage(THREAD, 'all')).toMatchObject({ pages: [{ page: 100 }], endCandidatePage: null, obtainedReplyCount: 19 })
+    expect(await reading.locateThreadEnd(THREAD, 'all', signal)).toMatchObject({
+      status: 'failed', error: { kind: 'page-cap', highestReadablePage: 100 }
+    })
+    expect(db.getReadingState(THREAD).readPostIds).toEqual([])
+  })
+
+  it('rejects an overlapping predecessor even when the response is not an exact duplicate', async () => {
+    const f = forum([19, 19], 38)
+    const reading = service(f.client)
+    const signal = new AbortController().signal
+    await reading.readThreadPage(THREAD, 'all', 1, signal)
+    f.client.getThreadPage = async (threadId, mode, page) => ({ threadId, mode, page, head: post(threadId),
+      replies: [post('60000118'), post('60000200')], replyCount: 38, skippedItems: 0, endCandidate: false })
+    expect(await reading.readThreadPage(THREAD, 'all', 2, signal)).toMatchObject({ status: 'failed', error: { kind: 'page-cap', highestReadablePage: 1 } })
+    expect(db.loadThreadPage(THREAD, 'all', 2)).toBeNull()
+  })
+
+  it('updates the mode count on append and refresh without turning it into completeness proof', async () => {
+    const f = forum([19, 1], 20)
+    const read = f.client.getThreadPage.bind(f.client)
+    let count = 20
+    f.client.getThreadPage = async (...args) => ({ ...await read(...args), replyCount: count })
+    const reading = service(f.client)
+    const signal = new AbortController().signal
+    await reading.readThreadPage(THREAD, 'all', 1, signal)
+    count = 2194
+    const appended = await reading.readThreadPage(THREAD, 'all', 2, signal)
+    expect(appended).toMatchObject({ status: 'fresh', data: { coverage: { reportedReplyCount: 2194, countMismatch: null } } })
+    count = 19
+    const refreshed = await reading.readThreadPage(THREAD, 'all', 2, signal)
+    expect(refreshed).toMatchObject({ status: 'fresh', data: { coverage: { reportedReplyCount: 19, countMismatch: null } } })
+  })
+
   it('serves the stored page with the failure reason when the network read fails, and fails when nothing is stored', async () => {
     const f = forum([19, 3], 22)
     const reading = service(f.client)

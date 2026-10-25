@@ -1,9 +1,11 @@
 import type { ReadError } from '../../shared/api'
 import { comparePostIds, type ThreadPage } from '../../shared/forum'
+import { threadTotalPages } from '../../shared/threadPages'
 import type { CheckRound, RoundStopReason } from '../../shared/reminders'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
 import type { RequestScheduler } from '../reading/scheduler'
 import type { AppStore } from '../storage/contract'
+import { assertReadablePage } from '../storage/coverage'
 import type { ReminderCoverage, RuleSnapshot } from './contract'
 
 interface ModeWork {
@@ -96,6 +98,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     budget.remaining--
     const value = await deps.scheduler.run('background', input.signal,
       (signal) => deps.client.getThreadPage(work.coverage.threadId, work.coverage.mode, number, signal))
+    assertReadablePage(value, await store.getThreadCoverage(value.threadId, value.mode))
     // Even when cancellation races a completed read, save its observation, but never continue work.
     await store.saveThreadPage(value, deps.now())
     work.fetched.set(number, value)
@@ -118,7 +121,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       // an older verified end, so a thread that grew is not crawled two pages per trigger.
       const old = work.coverage.probe
       const known = old ? null : await store.getThreadCoverage(work.coverage.threadId, work.coverage.mode)
-      const estimate = known?.reportedReplyCount == null ? null : Math.max(1, Math.ceil(known.reportedReplyCount / 19))
+      const estimate = threadTotalPages(known?.reportedReplyCount ?? null)
       const checkpoint = work.coverage.checkpoint
       if (old) {
         work.probeStart = old.page
@@ -128,7 +131,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       else {
         const first = await page(work, 1, budget)
         if (!first) return false
-        work.probeStart = Math.max(1, Math.ceil((first.replyCount ?? 0) / 19))
+        work.probeStart = threadTotalPages(first.replyCount) ?? 1
       }
       work.probePage = work.probeStart
     }
@@ -137,7 +140,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     if (!value) return false
     if (!work.reanchored && work.forward === 0 && work.backward === 0 && value.replyCount !== null && value.replies.length > 0) {
       // Bounded: at most one move per round, then the usual two pages forward / backward.
-      const fresh = Math.max(1, Math.ceil(value.replyCount / 19))
+      const fresh = threadTotalPages(value.replyCount)!
       work.reanchored = true
       if (fresh > number + 2) {
         work.probePage = fresh

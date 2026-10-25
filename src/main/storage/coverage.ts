@@ -1,4 +1,14 @@
-import type { CoveragePage, ReadingMode, ThreadCoverage, ThreadId } from '../../shared/forum'
+import type { CoveragePage, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from '../../shared/forum'
+import { pageCapFor } from '../../shared/threadPages'
+import { ForumReadError } from '../forum/contract'
+
+/** Check before writing posts, page relations or end observations (including unsaved UI fallbacks). */
+export function assertReadablePage(page: ThreadPage, coverage: ThreadCoverage): void {
+  const highestReadablePage = pageCapFor(page, coverage.pages)
+  if (highestReadablePage !== null) {
+    throw new ForumReadError({ kind: 'page-cap', detail: 'shape', highestReadablePage })
+  }
+}
 
 export function computeCoverage(
   threadId: ThreadId,

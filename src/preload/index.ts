@@ -17,6 +17,10 @@ ipcRenderer.on(REMINDERS_OPEN_CHANNEL, () => {
 
 // Named operations only: no generic invoke/send, no Electron objects, URLs, SQL or file access.
 const api: XidaoApi = {
+  blocks: {
+    list: () => ipcRenderer.invoke(IpcChannel.listBlocks),
+    set: (input) => ipcRenderer.invoke(IpcChannel.setBlock, input)
+  },
   reminders: {
     getRules: (input) => ipcRenderer.invoke(IpcChannel.reminderGetRules, input),
     setRule: (input) => ipcRenderer.invoke(IpcChannel.reminderSetRule, input),

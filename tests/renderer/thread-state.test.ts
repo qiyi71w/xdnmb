@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Post, ThreadCoverage, ThreadPage } from '../../src/shared/forum'
 import { initialThreadState, threadReducer } from '../../src/renderer/src/features/thread/threadState'
+import { threadTotalPages } from '../../src/shared/threadPages'
 
 const head: Post = {
   id: '100', forumId: '4', createdAt: null, userHash: null, name: null, title: null,
@@ -21,6 +22,40 @@ const coverage: ThreadCoverage = {
 }
 
 describe('thread reading state: located end', () => {
+  it('shows 1/116 initially and keeps the range in place when automatic appending hits the cap', () => {
+    const counted = { ...coverage, reportedReplyCount: 2194 }
+    const loaded = threadReducer(initialThreadState(null), { type: 'page-loaded', task: { type: 'initial' }, page: page(1, 19), coverage: counted, source })
+    expect(`${loaded.pages[0]?.page}/${threadTotalPages(loaded.coverage?.reportedReplyCount ?? null)}`).toBe('1/116')
+    const capped = threadReducer(loaded, { type: 'page-cap', highestReadablePage: 100 })
+    expect(capped.pages).toBe(loaded.pages)
+    expect(capped.coverage).toBe(counted)
+    expect(capped.rangeVersion).toBe(loaded.rangeVersion)
+    expect(capped.pageCap).toBe(100)
+    expect(capped.error).toBeNull()
+  })
+
+  it.each([{ type: 'locate' } as const, { type: 'jump', page: 101 } as const, { type: 'jump', page: 116 } as const])('shows 100/116 after a capped $type and requests new range positioning', (task) => {
+    const counted = { ...coverage, reportedReplyCount: 2194 }
+    const loaded = threadReducer(initialThreadState(null), { type: 'page-loaded', task: { type: 'initial' }, page: page(1, 19), coverage: counted, source })
+    const started = threadReducer(loaded, { type: 'start', task })
+    const capped = threadReducer(started, { type: 'cap-loaded', highestReadablePage: 100, page: page(100, 19), coverage: counted, source })
+    expect(`${capped.pages[0]?.page}/${threadTotalPages(capped.coverage?.reportedReplyCount ?? null)}`).toBe('100/116')
+    expect(capped.pages.map((item) => [item.page, item.endCandidate])).toEqual([[100, false]])
+    expect(capped.rangeVersion).toBe(loaded.rangeVersion + 1)
+    expect(capped.coverage).toBe(counted)
+    expect(capped.pageCap).toBe(100)
+    expect(capped.endProbe).toBeNull()
+    expect(capped.task).toBeNull()
+    expect(capped.error).toBeNull()
+  })
+
+  it('does not invent an end-candidate observation for a count-based tail', () => {
+    const state = threadReducer(initialThreadState(null), {
+      type: 'end-located', page: page(116, 9), endCandidatePage: null, coverage, probedPages: [116], source
+    })
+    expect(state.pages.map((p) => [p.page, p.endCandidate])).toEqual([[116, false]])
+  })
+
   it('shows only observed pages when an empty page 1 is the end candidate', () => {
     const state = threadReducer(initialThreadState(null), {
       type: 'end-located', page: page(1, 0), endCandidatePage: 1, coverage, probedPages: [1], source

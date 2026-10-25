@@ -198,6 +198,26 @@ describe('quote card requests', () => {
   }
   const network = { kind: 'network', detail: 'timeout' } as const
 
+  it('keeps description quotes distinct from post quotes and preserves their real source on nested previews', () => {
+    const description: QuoteSource = {
+      tabId: 1, entryKey: 2, postId: '50000002',
+      focus: { descriptionId: 'forum:4', quoteIndex: 0 }
+    }
+    let state = apply(initialQuoteState, { type: 'open', source: description, trigger: 'preview' })
+    const first = state.card!
+    expect(first.source.focus).toEqual({ descriptionId: 'forum:4', quoteIndex: 0 })
+    const nested: QuoteSource = {
+      ...description, postId: '68810621', reference: { previewId: `${first.id}:50000002`, quoteIndex: 1 }
+    }
+    state = apply(state, { type: 'open', source: nested, trigger: 'preview' })
+    expect(state.card!.id).not.toBe(first.id)
+    expect(state.card!.source.focus).toEqual(description.focus)
+    expect(state.card!.source.reference).toEqual(nested.reference)
+    const second = state.card!
+    state = apply(state, { type: 'open', source: { ...nested, reference: { previewId: `${first.id}:50000002`, quoteIndex: 2 } }, trigger: 'preview' })
+    expect(state.card!.id).not.toBe(second.id)
+  })
+
   it('drops preview and locate results of a card replaced by choosing another quote', () => {
     let state = apply(initialQuoteState, { type: 'open', source: source('150'), trigger: 'activate' })
     const first = state.card!

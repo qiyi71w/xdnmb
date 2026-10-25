@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { Post, PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
+import { threadTotalPages } from '../../../../shared/threadPages'
 import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, IdentitySettingsAction, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
@@ -12,7 +13,7 @@ import { QuoteEntryContext } from '../quote/QuoteContext'
 import { useSearchOpener } from '../search/SearchContext'
 import { useRegisterContent } from '../tabs/contentRegistry'
 import type { SourceFocus } from '../tabs/tabsState'
-import { CoverageLine, knownLastPage, pageLabel } from './CoverageLine'
+import { CoverageLine, pageLabel } from './CoverageLine'
 import { PostView } from './PostView'
 import { startPage, unreadInMode, type ReaderPosition } from './readingStart'
 import type { ThreadTask } from './threadState'
@@ -27,6 +28,9 @@ import type { ComposeEntry } from '../editor/ComposePanel'
 import { usePopover } from '../../lib/usePopover'
 import { ThreadMoreMenu } from './ThreadMoreMenu'
 import { SubscribeButton, SubscribeNote } from './SubscribeButton'
+import { isPostBlocked } from '../../../../shared/blocks'
+import { useBlocks } from './useBlocks'
+import { usePostActions } from './usePostActions'
 
 const MODE_NAMES: Record<ReadingMode, string> = { all: '全部回复', po: '只看 PO' }
 /** How long a quote target stays marked after the jump. */
@@ -69,10 +73,10 @@ function failureTitle(task: ThreadTask, mode: ReadingMode): string {
 }
 
 /** A page number typed by the user: whole digits only, 1 or more. */
-function parsePage(input: string): { page: number; valid: boolean; invalid: boolean } {
+function parsePage(input: string, max: number | null): { page: number; valid: boolean; invalid: boolean } {
   const trimmed = input.trim()
   const page = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN
-  const valid = Number.isSafeInteger(page) && page >= 1
+  const valid = Number.isSafeInteger(page) && page >= 1 && (max === null || page <= max)
   return { page, valid, invalid: trimmed !== '' && !valid }
 }
 
@@ -86,6 +90,7 @@ function PagePopover({
   label,
   name,
   placeholder,
+  max,
   onJump,
   onOpenChange
 }: {
@@ -96,6 +101,7 @@ function PagePopover({
   /** Accessible name, e.g. `第 1 页，共 5 页`. */
   name: string
   placeholder: string
+  max: number | null
   onJump: (page: number) => void
   onOpenChange: (open: boolean) => void
 }) {
@@ -104,7 +110,7 @@ function PagePopover({
   const popover = usePopover(triggerRef, panelRef)
   const panelId = useId()
   const [input, setInput] = useState('')
-  const { page, valid, invalid } = parsePage(input)
+  const { page, valid, invalid } = parsePage(input, max)
 
   const report = useRef(onOpenChange)
   useEffect(() => {
@@ -153,6 +159,8 @@ function PagePopover({
               id={inputId}
               className="page-input"
               inputMode="numeric"
+              min={1}
+              max={max ?? undefined}
               autoComplete="off"
               data-autofocus=""
               placeholder={placeholder}
@@ -167,7 +175,7 @@ function PagePopover({
             {invalid && (
               <span className="page-jump-error" id={`${inputId}-error`}>
                 <Icon name="alert" size={13} />
-                页码须为 1 以上的整数
+                {max === null ? '页码须为 1 以上的整数' : `页码须为 1–${max} 的整数`}
               </span>
             )}
           </form>
@@ -248,6 +256,10 @@ export function ThreadReader({
   compose
 }: ThreadReaderProps) {
   const startRef = useRef(start)
+  const blocks = useBlocks()
+  const postActions = usePostActions(compose?.tabId ?? null, threadId)
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(new Set())
+  useLayoutEffect(() => { setRevealed(new Set()) }, [blocks.blocks])
   // One view ID per mounted reader: it protects the images it loaded and, through the content
   // hold, its thread from cache eviction. Both are released on unmount.
   const [viewId] = useState(() => crypto.randomUUID())
@@ -326,7 +338,8 @@ export function ThreadReader({
     if (state.rangeVersion === 0) return
     const target: ReaderPosition = nextPosition.current ?? { kind: 'top' }
     nextPosition.current = null
-    position(target)
+    // A capped tail still goes to the readable page's end; a capped page jump goes to its top.
+    position(state.pageCap !== null && target.kind !== 'last' ? { kind: 'top' } : target)
   }, [state.rangeVersion, position])
 
   // Every observed page can change unread posts and coverage.
@@ -438,7 +451,8 @@ export function ThreadReader({
     } else goTo(target, () => thread.jump(page))
   }
 
-  const { page: parsedPage, valid: pageValid, invalid: pageInvalid } = parsePage(pageInput)
+  const totalPages = threadTotalPages(state.coverage?.reportedReplyCount ?? null)
+  const { page: parsedPage, valid: pageValid, invalid: pageInvalid } = parsePage(pageInput, totalPages)
   const onJump = (event: FormEvent) => {
     event.preventDefault()
     if (pageValid) goTo({ kind: 'page', page: parsedPage }, () => thread.jump(parsedPage))
@@ -454,9 +468,6 @@ export function ThreadReader({
     if (PROTOTYPE_ENABLED) setReadingPage(currentAnchor()?.page ?? null)
   }
   const shownPage = readingPage ?? firstPage?.page ?? 1
-  const knownLast = knownLastPage(state.coverage)
-  /** Unknown (`?`) until an end candidate or a reported reply count tells it. */
-  const totalPages = knownLast === null ? null : Math.max(knownLast, shownPage)
 
   // PROTOTYPE: no unread marks (the read/unread surfaces are removed; only the position is kept).
   const unreadIds = useMemo(() => {
@@ -532,7 +543,7 @@ export function ThreadReader({
     </button>
   )
   const endButton = (
-    <button type="button" className={positionButton} onClick={() => goTo({ kind: 'last' }, thread.locateEnd)} title="有限探测并定位到末尾附近">
+    <button type="button" className={positionButton} onClick={() => goTo({ kind: 'last' }, thread.locateEnd)} title={totalPages === null ? '有限探测并定位到末尾附近' : `跳到第 ${totalPages} 页`}>
       <Icon name="toEnd" size={positionIcon} />
       末尾
     </button>
@@ -576,9 +587,11 @@ export function ThreadReader({
     <div className="toolbar-status">
       <div role="status" className="toolbar-status-text">
         {toolbarTask !== null && <Loading live={false}>{taskText(toolbarTask, mode)}</Loading>}
+        {task === null && state.pageCap !== null && <span>论坛只返回到第 {state.pageCap} 页</span>}
         {nearby === 'anchor' && task === null && <span>原位置已变化，已返回附近</span>}
         {nearby === 'post' && task === null && <span>原位置的发言不在已读取的页面中，已显示附近</span>}
         {notice !== null && <span className="toolbar-warning">{notice}</span>}
+        {PROTOTYPE_ENABLED && blocks.failure !== null && <span role="alert">{blocks.failure}</span>}
         {task === null && state.endProbe?.status === 'insufficient' && (
           <span className="toolbar-warning">
             <Icon name="alert" size={14} />
@@ -637,12 +650,14 @@ export function ThreadReader({
                   {refreshButton}
                   <ThreadMoreMenu
                     threadId={threadId}
+                    mode={mode}
                     label={title ?? `No.${threadId}`}
                     rules={rules.rulesOf(threadId)}
                     failure={rules.failure}
                     onRetry={rules.reload}
                     onUpdated={rules.updated}
                     onReminderOpenChange={setReminderPanelOpen}
+                    onReport={head === null || postActions.ownIds.has(head.id) ? undefined : (opener) => postActions.report(head.id, opener)}
                   />
                 </div>
               </div>
@@ -658,6 +673,7 @@ export function ThreadReader({
                     label={`${shownPage}/${totalPages ?? '?'}`}
                     name={`${pageLabel(mode, shownPage)}，${totalPages === null ? '总页数未知' : `共 ${totalPages} 页`}`}
                     placeholder={String(totalPages ?? lastPage?.page ?? 1)}
+                    max={totalPages}
                     onJump={(page) => goTo({ kind: 'page', page }, () => thread.jump(page))}
                     onOpenChange={setPagePanelOpen}
                   />
@@ -705,6 +721,8 @@ export function ThreadReader({
                       id={`page-${entryKey}-${threadId}`}
                       className="page-input"
                       inputMode="numeric"
+                      min={1}
+                      max={totalPages ?? undefined}
                       autoComplete="off"
                       placeholder={lastPage === undefined ? '1' : String(lastPage.page)}
                       value={pageInput}
@@ -718,7 +736,7 @@ export function ThreadReader({
                     {pageInvalid && (
                       <span className="page-jump-error" id={`page-${entryKey}-${threadId}-error`}>
                         <Icon name="alert" size={13} />
-                        页码须为 1 以上的整数
+                        {totalPages === null ? '页码须为 1 以上的整数' : `页码须为 1–${totalPages} 的整数`}
                       </span>
                     )}
                   </form>
@@ -771,6 +789,7 @@ export function ThreadReader({
               unread={unreadIds.has(head.id)}
               images={imageView}
               highlighted={highlighted === head.id}
+              actions={PROTOTYPE_ENABLED ? { own: postActions.ownIds.has(head.id), reply: (opener) => postActions.reply(head.id, opener), report: (opener) => postActions.report(head.id, opener) } : undefined}
             />
           )}
 
@@ -808,7 +827,9 @@ export function ThreadReader({
                 <h2 className="page-divider">{label}</h2>
                 <SourceNotice source={page.source} subject={label} />
                 <PartialNotice skipped={page.skippedItems} subject={label} />
-                {replies.map((reply) => (
+                {replies.map((reply) => PROTOTYPE_ENABLED && isPostBlocked(reply, blocks.blocks) && !revealed.has(reply.id) ? (
+                  <div className="blocked-post" data-blocked-post-id={reply.id} tabIndex={-1} key={reply.id}>已屏蔽 No.{reply.id} <button type="button" className="btn btn-small btn-quiet" onClick={() => { setRevealed((previous) => new Set(previous).add(reply.id)); requestAnimationFrame(() => contentRef.current?.querySelector<HTMLElement>(`[data-post-id="${CSS.escape(reply.id)}"]`)?.focus({ preventScroll: true })) }}>显示</button></div>
+                ) : (
                   <PostView
                     key={reply.id}
                     post={reply}
@@ -817,6 +838,7 @@ export function ThreadReader({
                     unread={unreadIds.has(reply.id)}
                     images={imageView}
                     highlighted={highlighted === reply.id}
+                    actions={PROTOTYPE_ENABLED ? { own: postActions.ownIds.has(reply.id), reply: (opener) => postActions.reply(reply.id, opener), report: (opener) => postActions.report(reply.id, opener) } : undefined}
                   />
                 ))}
                 {page.endCandidate && (

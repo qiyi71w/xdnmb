@@ -15,6 +15,7 @@ export type SettingsSectionId =
   | 'publication'
   | 'window'
   | 'cache'
+  | 'blocks'
 
 /**
  * Opens settings from anywhere below the app shell, at the section the entry is about (the top

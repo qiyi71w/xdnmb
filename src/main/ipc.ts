@@ -333,6 +333,16 @@ export function registerIpc({
     })
   }
 
+  handle(IpcChannel.listBlocks, async () => store.listBlocks())
+  handle(IpcChannel.setBlock, async (_event, raw) => {
+    const input = record(raw)
+    if (input.kind !== 'post' && input.kind !== 'cookie') throw new InvalidRequestError()
+    if (typeof input.blocked !== 'boolean' || typeof input.value !== 'string' || input.value.length === 0 || input.value.length > 128 || input.value.includes('\0')) throw new InvalidRequestError()
+    const value = input.kind === 'post' ? forumId(input.value) : input.value
+    const { kind, blocked } = input
+    return { saved: await attempt(() => store.setBlock(kind, value, blocked, new Date().toISOString())) }
+  })
+
   handle(IpcChannel.searchStart, async (event, raw) => {
     const input = searchRecord(raw, ['operationId', 'query', 'scope', 'filters'])
     if (typeof input.query !== 'string' || input.query.length === 0 || input.query.length > 512 || input.query.includes('\0')) throw new InvalidRequestError()

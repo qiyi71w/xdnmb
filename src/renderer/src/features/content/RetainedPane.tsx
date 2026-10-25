@@ -14,6 +14,7 @@ import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import { AttemptsBody, type AttemptsBodyProps } from '../publication/AttemptsDialog'
 import { RowThumbnail } from '../image/RowThumbnail'
 import { useImageScope } from '../image/useImageLoad'
+import { useThreadTabMenu } from '../tabs/ThreadTabMenu'
 import { contentFailureText, retainedHeading } from './contentText'
 import { createReadingResets } from './readingResets'
 import { HistoryConfirm, useRetainedList } from './retainedList'
@@ -104,6 +105,7 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
   const { list, entries, load, confirming, setConfirming, busy, failure, done, listRef, bodyRef, confirmRef, ask, clearHistory } =
     useRetainedList(kind, registry?.readingResets ?? ownResets)
   const images = useImageScope(bodyRef)
+  const inTab = useThreadTabMenu()
   useRegisterContent('lists', entryKey, { refresh: refreshOverride ?? (() => void load(kind)) })
 
   // ---------- Scroll memory (runtime and restored after a quit) ----------
@@ -256,7 +258,10 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
                     type="button"
                     className="retained-open"
                     aria-current={selected ? 'true' : undefined}
-                    onClick={() => onOpenThread(entry.threadId)}
+                    onClick={(event) => {
+                      if (!inTab.openFromClick(event, entry.threadId)) onOpenThread(entry.threadId)
+                    }}
+                    {...inTab.rowProps(entry.threadId)}
                     {...itemProps}
                   >
                     <span className="row-text">
@@ -325,6 +330,7 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
             })}
           </ul>
         )}
+        {inTab.menu}
         <div className="list-footer" />
       </div>
     </section>

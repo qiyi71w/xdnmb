@@ -1,22 +1,25 @@
 // PROTOTYPE (throwaway): a subscription row's actions live in its context menu instead of buttons
 // on the row. Built only with VITE_XIDAO_PROTOTYPE=1.
 
-import type { ThreadId } from '../../../../shared/forum'
+import type { Post, ThreadId } from '../../../../shared/forum'
 import { REMINDER_KINDS, type ReminderKind, type ReminderRule, type ThreadReminders } from '../../../../shared/reminders'
 import { ContextMenu, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { Icon } from '../../components/Icon'
 import { useReminderToggle } from '../reminders/ReminderMenu'
 import { KIND_NAME } from '../reminders/reminderText'
 import { failureText, type LoadFailure } from '../reminders/useReminders'
+import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 
 /**
- * Context menu of one subscription row: the three 提醒 kinds as checkable items (saved like the
- * 提醒 panel: one rule at a time, never starting a check) and 取消订阅, which opens the usual
- * confirmation. While the rules are unknown the kinds cannot be toggled; a failed read offers a retry.
+ * Context menu of one subscription row: 在新标签页打开, then the three 提醒 kinds as checkable items
+ * (saved like the 提醒 panel: one rule at a time, never starting a check) and 取消订阅, which opens
+ * the usual confirmation. While the rules are unknown the kinds cannot be toggled; a failed read
+ * offers a retry.
  */
 export function SubscriptionRowMenu({
   point,
   threadId,
+  head,
   label,
   rules,
   failure,
@@ -28,6 +31,8 @@ export function SubscriptionRowMenu({
 }: {
   point: ContextMenuPoint
   threadId: ThreadId
+  /** Main post already on screen, shown in the new tab until page 1 arrives. */
+  head: Post
   /** Thread title or `No.x`. */
   label: string
   rules: Record<ReminderKind, ReminderRule> | undefined
@@ -40,8 +45,15 @@ export function SubscriptionRowMenu({
   onClose: (returnFocus: boolean) => void
 }) {
   const saving = useReminderToggle(threadId, onUpdated, true)
+  const openInTab = useOpenThreadInTab()
   const unknownFailed = rules === undefined && failure !== null
   const items: ContextMenuItem[] = [
+    ...(openInTab === null
+      ? []
+      : [
+          { type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => openInTab(threadId, head) } satisfies ContextMenuItem,
+          { type: 'separator', key: 'open-separator' } satisfies ContextMenuItem
+        ]),
     ...REMINDER_KINDS.map((kind): ContextMenuItem => ({
       type: 'check',
       key: kind,

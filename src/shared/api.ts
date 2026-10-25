@@ -1,3 +1,4 @@
+import type { BlocksApi } from './blocks'
 import type { AccountApi } from './account'
 import type { ContentApi } from './content'
 import type { BoardDirectory, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
@@ -27,6 +28,7 @@ export type ReadErrorKind =
   | 'rate-limited'
   | 'network'
   | 'unknown-structure'
+  | 'page-cap'
   /** The browse identity cannot be used; the read was not sent. Never means the forum rejected it. */
   | 'identity'
 
@@ -52,6 +54,10 @@ export interface ReadError {
   kind: ReadErrorKind
   detail: ReadErrorDetail
   httpStatus?: number
+  /** Lower page identified by a repeated response; present for page-cap failures. */
+  highestReadablePage?: number
+  /** `page-cap`: verified lower page already read during validation; reuse without another request. */
+  readablePage?: { data: ThreadPageResult; fetchedAt: string; saved: boolean }
   /** Short forum-provided business message, at most 200 characters. */
   serverMessage?: string
 }
@@ -75,15 +81,12 @@ export interface ThreadPageResult {
 }
 
 /**
- * Bounded tail probe: estimate from ReplyCount, then verify by probing at most two pages forward
- * and two backward.
- * - `located`: `lastPage` is the last page with replies (or an empty page 1) and `endCandidatePage`
- *   is the observed end-candidate page that proves it (equal to `lastPage` for an empty page 1).
- * - `insufficient`: the bound was exhausted without a verifiable end.
- * - `interrupted`: a probe failed after earlier probes succeeded; carries what was observed.
+ * Locate the last page using this mode's latest ReplyCount when known. This is navigation, not
+ * completeness proof. Without a count, probe at most two pages from page 1.
+ * `endCandidatePage` is null for a count-based target, unless an empty end was actually observed.
  */
 export type ThreadEndResult =
-  | { status: 'located'; lastPage: ThreadPageResult; endCandidatePage: number; probedPages: number[] }
+  | { status: 'located'; lastPage: ThreadPageResult; endCandidatePage: number | null; probedPages: number[] }
   | { status: 'insufficient'; probedPages: number[]; coverage: ThreadCoverage }
   | { status: 'interrupted'; probedPages: number[]; coverage: ThreadCoverage; failedPage: number; error: ReadError }
 
@@ -194,6 +197,7 @@ export type ThemeExportResult = { status: 'exported' } | { status: 'cancelled' }
 
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
+  blocks: BlocksApi
   content: ContentApi
   subscriptions: SubscriptionsApi
   search: SearchApi
@@ -206,7 +210,7 @@ export interface XidaoApi {
      * falls back to the stored page of the same mode on failure. Modes never stand in for each other.
      */
     readThreadPage(input: { operationId: OperationId; threadId: ThreadId; mode: ReadingMode; page: number }): Promise<ReadOutcome<ThreadPageResult>>
-    /** Bounded tail probe of one mode in the foreground lane; cancellable between and during page reads. */
+    /** Locate the count-based last page, or use a bounded probe if the mode's count is unknown. */
     locateThreadEnd(input: { operationId: OperationId; threadId: ThreadId; mode: ReadingMode }): Promise<ReadOutcome<ThreadEndResult>>
     /** Cancels queued and in-flight reads of the operation. Unknown IDs are ignored. */
     cancel(input: { operationId: OperationId }): Promise<void>
@@ -361,6 +365,8 @@ export interface XidaoApi {
 
 /** IPC channel names. Each maps 1:1 to an XidaoApi method; there is no generic channel. */
 export const IpcChannel = {
+  listBlocks: 'blocks:list',
+  setBlock: 'blocks:set',
   searchStart: 'search:start',
   searchNext: 'search:next',
   searchCancel: 'search:cancel',

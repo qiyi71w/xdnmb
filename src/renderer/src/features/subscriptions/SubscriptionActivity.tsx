@@ -54,12 +54,18 @@ export function WriteStatus() {
   )
 }
 
+/** Prototype: there is no 操作记录 list; 核对 runs from the thread's 核对订阅 or from the result itself. */
+const RECHECK_ELSEWHERE = '请打开这个串核对订阅，不要直接重复操作。'
+
 function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: () => void }) {
+  const { operations, active, busy, reconcile } = useSubscriptionsContext()
   const { write, outcome } = notice
   const what = write.kind === 'change' ? ACTION_NAME[write.action] : '核对'
   let tone: 'done' | 'warn' | 'error' = 'done'
   let title: string
   let lines: string[] = []
+  /** The journal entry this result can be 核对'd against (prototype only). */
+  let reconcilable: SubscriptionOperation | null = null
   switch (outcome.type) {
     case 'done': {
       const operation = outcome.operation
@@ -67,10 +73,14 @@ function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: ()
       lines = [`服务端报告：${reportSummary(operation)}`, `回读核对：${verificationText(operation)}`]
       if (operation.reportError?.kind === 'rate-limited') {
         tone = 'warn'
-        lines.push('因限流或需要验证，已停止回读；可在操作记录中手动核对。')
+        lines.push(PROTOTYPE_ENABLED ? '因限流或需要验证，已停止回读。' : '因限流或需要验证，已停止回读；可在操作记录中手动核对。')
       } else if (needsReconcile(operation)) {
         tone = 'warn'
-        lines.push('结果未确认，可在操作记录中手动核对。')
+        lines.push(PROTOTYPE_ENABLED ? '结果未确认。' : '结果未确认，可在操作记录中手动核对。')
+      }
+      if (PROTOTYPE_ENABLED && tone === 'warn') {
+        const current = operations?.find((item) => item.id === operation.id) ?? operation
+        if (isReconcilable(current, active)) reconcilable = current
       }
       break
     }
@@ -79,7 +89,7 @@ function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: ()
         // The write was dispatched; only its local record failed. Never present this as 未执行.
         tone = 'warn'
         title = `${what}的结果未知：${failureText(outcome.reason)}`
-        lines = [objectLine(write), '请在操作记录中核对，不要直接重复操作。']
+        lines = [objectLine(write), PROTOTYPE_ENABLED ? RECHECK_ELSEWHERE : '请在操作记录中核对，不要直接重复操作。']
         break
       }
       tone = 'error'
@@ -91,10 +101,11 @@ function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: ()
       title = write.kind === 'change' ? `${what}的结果未知：应用内部请求失败` : '核对请求失败：应用内部请求失败'
       lines =
         write.kind === 'change'
-          ? [objectLine(write), '写入可能已发出，请在操作记录中核对。']
+          ? [objectLine(write), PROTOTYPE_ENABLED ? `写入可能已发出。${RECHECK_ELSEWHERE}` : '写入可能已发出，请在操作记录中核对。']
           : [objectLine(write), '没有发出写入，可以稍后再核对。']
       break
   }
+  const recheck = reconcilable
   return (
     <div className={`sub-write is-${tone}`}>
       <Icon name={tone === 'done' ? 'check' : 'alert'} className="sub-write-icon" />
@@ -107,6 +118,13 @@ function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: ()
         ))}
         {/* The local reminder choice is its own statement, true whatever the remote outcome was. */}
         {write.reminders !== null && <LinkageLine linkage={write.reminders} className="sub-write-detail" />}
+        {recheck !== null && (
+          <div className="sub-write-actions">
+            <button type="button" className="btn btn-small" onClick={() => void reconcile(recheck)} disabled={busy}>
+              核对
+            </button>
+          </div>
+        )}
       </div>
       <button type="button" className="icon-btn" onClick={onDismiss} aria-label="关闭这条结果">
         <Icon name="close" size={14} />

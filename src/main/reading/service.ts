@@ -1,13 +1,12 @@
 import type { DirectoryStrategy, LocateHint, QuoteLocation, QuotePreview, ReadError, ReadOutcome, ThreadEndResult, ThreadPageResult } from '../../shared/api'
 import type { BoardDirectory, CoveragePage, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from '../../shared/forum'
+import { threadTotalPages } from '../../shared/threadPages'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
 import type { ReadingStore, Stored } from '../storage/contract'
-import { computeCoverage } from '../storage/coverage'
+import { assertReadablePage, computeCoverage } from '../storage/coverage'
 import type { Lane, RequestScheduler } from './scheduler'
 
-/** Replies per normal thread page observed on the forum; used only to estimate a tail probe start. */
-const REPLIES_PER_PAGE = 19
-/** Bounded tail verification: at most this many pages forward and backward from the estimate. */
+/** With no ReplyCount, look at at most two more pages from page 1. */
 const MAX_PROBE_STEPS = 2
 
 export interface ReadingService {
@@ -37,7 +36,20 @@ export function createReadingService({ client, store, scheduler, now = () => new
       return { ok: true, value, fetchedAt: now().toISOString() }
     } catch (error) {
       if (error instanceof ReadCancelledError || signal.aborted) return { ok: false, outcome: { status: 'cancelled' } }
-      if (error instanceof ForumReadError) return { ok: false, outcome: { status: 'failed', error: error.error } }
+      if (error instanceof ForumReadError) {
+        let problem = error.error
+        if (problem.kind === 'page-cap' && error.readablePage !== undefined) {
+          const fetchedAt = now().toISOString()
+          try {
+            const persisted = await persistThreadPage(error.readablePage, fetchedAt)
+            problem = { ...problem, readablePage: { data: persisted.result, fetchedAt, saved: persisted.saved } }
+          } catch (lowerError) {
+            if (lowerError instanceof ForumReadError) problem = lowerError.error
+            else throw lowerError
+          }
+        }
+        return { ok: false, outcome: { status: 'failed', error: problem } }
+      }
       // A defect while normalizing a response must not surface as success or crash the IPC call.
       console.error('[reading] unexpected read failure', error instanceof Error ? error.name : typeof error)
       return { ok: false, outcome: { status: 'failed', error: { kind: 'unknown-structure', detail: 'shape' } } }
@@ -71,13 +83,26 @@ export function createReadingService({ client, store, scheduler, now = () => new
   ): Promise<ReadOutcome<R>> {
     const fetched = await fetchOnce(lane, signal, fetch)
     if (fetched.ok) {
-      const { saved, result } = await persist(fetched.value, fetched.fetchedAt)
-      return { status: 'fresh', data: result, fetchedAt: fetched.fetchedAt, saved }
+      try {
+        const { saved, result } = await persist(fetched.value, fetched.fetchedAt)
+        return { status: 'fresh', data: result, fetchedAt: fetched.fetchedAt, saved }
+      } catch (error) {
+        if (error instanceof ForumReadError) return { status: 'failed', error: error.error }
+        throw error
+      }
     }
     if (fetched.outcome.status === 'cancelled') return fetched.outcome
+    if (fetched.outcome.error.kind === 'page-cap') return fetched.outcome
     const cached = await tryLoad(loadCached)
     if (cached) return { status: 'cached', data: cached.value, fetchedAt: cached.fetchedAt, networkError: fetched.outcome.error }
     return fetched.outcome
+  }
+
+  async function fetchThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal): Promise<ThreadPage> {
+    const value = await client.getThreadPage(threadId, mode, page, signal)
+    const coverage = await store.getThreadCoverage(threadId, mode).catch(() => computeCoverage(threadId, mode, [], null))
+    assertReadablePage(value, coverage)
+    return value
   }
 
   /** Saves the page and returns coverage; if storage refuses, coverage still reflects this observation. */
@@ -86,6 +111,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
       return { saved: true, result: { page, coverage: await store.saveThreadPage(page, fetchedAt) } }
     } catch {
       const stored = await store.getThreadCoverage(page.threadId, page.mode).catch(() => null)
+      if (stored !== null) assertReadablePage(page, stored)
       const observation: CoveragePage = {
         page: page.page,
         fetchedAt,
@@ -103,6 +129,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
     const stored = await store.loadThreadPage(threadId, mode, page)
     if (!stored) return null
     const coverage: ThreadCoverage = await store.getThreadCoverage(threadId, mode)
+    assertReadablePage(stored.value, coverage)
     return { value: { page: stored.value, coverage }, fetchedAt: stored.fetchedAt }
   }
 
@@ -110,7 +137,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
     return readWithFallback(
       'foreground',
       signal,
-      (s) => client.getThreadPage(threadId, mode, page, s),
+      (s) => fetchThreadPage(threadId, mode, page, s),
       persistThreadPage,
       () => loadStoredThreadPage(threadId, mode, page)
     )
@@ -273,8 +300,8 @@ export function createReadingService({ client, store, scheduler, now = () => new
       let saved = true
 
       const done = (data: ThreadEndResult): ReadOutcome<ThreadEndResult> => ({ status: 'fresh', data, fetchedAt, saved })
-      // Coverage is reported as of the last probe, so it includes the end-candidate page that proved `lastPage`.
-      const located = (lastPage: ThreadPageResult, endCandidatePage: number): ReadOutcome<ThreadEndResult> =>
+      // Count-based navigation does not manufacture an empty-page/completeness observation.
+      const located = (lastPage: ThreadPageResult, endCandidatePage: number | null): ReadOutcome<ThreadEndResult> =>
         done({ status: 'located', lastPage: { page: lastPage.page, coverage }, endCandidatePage, probedPages })
       const insufficient = (): ReadOutcome<ThreadEndResult> => done({ status: 'insufficient', probedPages, coverage })
 
@@ -284,21 +311,27 @@ export function createReadingService({ client, store, scheduler, now = () => new
       ): Promise<{ ok: true; value: ThreadPageResult } | { ok: false; outcome: ReadOutcome<ThreadEndResult> }> => {
         const known = probed.get(page)
         if (known) return { ok: true, value: known }
-        const fetched = await fetchOnce('foreground', signal, (s) => client.getThreadPage(threadId, mode, page, s))
+        const fetched = await fetchOnce('foreground', signal, (s) => fetchThreadPage(threadId, mode, page, s))
         if (!fetched.ok) {
           const { outcome } = fetched
+          if (outcome.status === 'failed' && outcome.error.kind === 'page-cap') return { ok: false, outcome }
           if (outcome.status === 'failed' && probedPages.length > 0) {
             return { ok: false, outcome: done({ status: 'interrupted', probedPages, coverage, failedPage: page, error: outcome.error }) }
           }
           return { ok: false, outcome }
         }
-        const persisted = await persistThreadPage(fetched.value, fetched.fetchedAt)
-        probed.set(page, persisted.result)
-        probedPages.push(page)
-        fetchedAt = fetched.fetchedAt
-        saved &&= persisted.saved
-        coverage = persisted.result.coverage
-        return { ok: true, value: persisted.result }
+        try {
+          const persisted = await persistThreadPage(fetched.value, fetched.fetchedAt)
+          probed.set(page, persisted.result)
+          probedPages.push(page)
+          fetchedAt = fetched.fetchedAt
+          saved &&= persisted.saved
+          coverage = persisted.result.coverage
+          return { ok: true, value: persisted.result }
+        } catch (error) {
+          if (error instanceof ForumReadError) return { ok: false, outcome: { status: 'failed', error: error.error } }
+          throw error
+        }
       }
 
       let reported = stored?.reportedReplyCount ?? null
@@ -308,9 +341,21 @@ export function createReadingService({ client, store, scheduler, now = () => new
         reported = first.value.page.replyCount
       }
 
-      // ReplyCount only picks where to start looking; the end must be verified by actual pages:
-      // a page with replies followed by an observed end-candidate page (or an empty page 1).
-      const estimate = Math.max(1, Math.ceil((reported ?? 0) / REPLIES_PER_PAGE))
+      const total = threadTotalPages(reported)
+      if (total !== null) {
+        let target = total
+        while (true) {
+          const last = await probe(target)
+          if (!last.ok) return last.outcome
+          const freshTarget = threadTotalPages(last.value.page.replyCount) ?? target
+          if (freshTarget === target) return located(last.value, last.value.page.endCandidate ? target : null)
+          if (probed.has(freshTarget)) return insufficient()
+          target = freshTarget
+        }
+      }
+
+      // Without ReplyCount retain the bounded observed-end search, starting at page 1.
+      const estimate = 1
       const start = await probe(estimate)
       if (!start.ok) return start.outcome
 
@@ -327,15 +372,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
       }
 
       if (!start.value.page.endCandidate) return insufficient()
-      if (estimate === 1) return located(start.value, 1)
-      for (let step = 1; step <= MAX_PROBE_STEPS && estimate - step >= 1; step++) {
-        const previous = await probe(estimate - step)
-        if (!previous.ok) return previous.outcome
-        if (previous.value.page.replies.length > 0) return located(previous.value, estimate - step + 1)
-        if (!previous.value.page.endCandidate) return insufficient()
-        if (estimate - step === 1) return located(previous.value, 1)
-      }
-      return insufficient()
+      return located(start.value, 1)
     }
   }
 }

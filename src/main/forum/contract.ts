@@ -1,10 +1,10 @@
 import type { ReadError } from '../../shared/api'
 import type { BoardDirectory, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadId, ThreadPage } from '../../shared/forum'
 
-/** A classified forum read failure. Never carries raw bodies, URLs with secrets or full server pages. */
+/** A classified failure; an optional verified lower page is normalized content, never a raw response. */
 export class ForumReadError extends Error {
   override readonly name = 'ForumReadError'
-  constructor(readonly error: ReadError) {
+  constructor(readonly error: ReadError, readonly readablePage?: ThreadPage) {
     super(`forum read failed: ${error.kind}/${error.detail}`)
   }
 }

@@ -36,6 +36,8 @@ export interface ThreadState {
   error: { task: ThreadTask; failure: Failure } | null
   /** Result of the last 末尾 probe. */
   endProbe: EndProbe | null
+  /** A lower page was returned; retain the real mode-specific total and show the readable limit. */
+  pageCap: number | null
   /**
    * Bumped whenever the loaded range is replaced (first load, jump, located end), so the reader
    * positions its reading line for the new range.
@@ -49,7 +51,7 @@ export type ThreadAction =
   | {
       type: 'end-located'
       page: ThreadPage
-      endCandidatePage: number
+      endCandidatePage: number | null
       coverage: ThreadCoverage
       probedPages: number[]
       source: Source
@@ -57,10 +59,12 @@ export type ThreadAction =
   | { type: 'end-insufficient'; coverage: ThreadCoverage; probedPages: number[] }
   | { type: 'end-interrupted'; coverage: ThreadCoverage; probedPages: number[]; failedPage: number; error: ReadError }
   | { type: 'failed'; task: ThreadTask; failure: Failure }
+  | { type: 'page-cap'; highestReadablePage: number }
+  | { type: 'cap-loaded'; highestReadablePage: number; page: ThreadPage; coverage: ThreadCoverage; source: Source }
   | { type: 'cancelled' }
 
 export function initialThreadState(head: Post | null): ThreadState {
-  return { head, pages: [], coverage: null, task: null, error: null, endProbe: null, rangeVersion: 0 }
+  return { head, pages: [], coverage: null, task: null, error: null, endProbe: null, pageCap: null, rangeVersion: 0 }
 }
 
 function toLoaded(page: ThreadPage, source: Source): LoadedPage {
@@ -108,6 +112,20 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
       return { ...state, task: null }
     case 'failed':
       return { ...state, task: null, error: { task: action.task, failure: action.failure } }
+    case 'page-cap':
+      return { ...state, task: null, error: null, pageCap: action.highestReadablePage }
+    case 'cap-loaded':
+      return {
+        ...state,
+        head: action.page.head,
+        pages: [toLoaded(action.page, action.source)],
+        coverage: action.coverage,
+        task: null,
+        error: null,
+        endProbe: null,
+        pageCap: action.highestReadablePage,
+        rangeVersion: state.rangeVersion + 1
+      }
     case 'page-loaded': {
       const replaces = action.task.type === 'initial' || action.task.type === 'jump'
       return {
@@ -117,6 +135,7 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
         pages: placePage(state.pages, action.task, toLoaded(action.page, action.source)),
         task: null,
         error: null,
+        pageCap: null,
         rangeVersion: replaces ? state.rangeVersion + 1 : state.rangeVersion
       }
     }
@@ -124,7 +143,7 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
       // The last page with replies (or an empty page 1, which is itself the end candidate) and,
       // when it lies beyond that page, the observed empty end-candidate page.
       const pages = [toLoaded(action.page, action.source)]
-      if (action.endCandidatePage > action.page.page) {
+      if (action.endCandidatePage !== null && action.endCandidatePage > action.page.page) {
         pages.push({ page: action.endCandidatePage, replies: [], skippedItems: 0, endCandidate: true, source: action.source })
       }
       return {
@@ -134,6 +153,7 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
         pages,
         task: null,
         error: null,
+        pageCap: null,
         endProbe: { status: 'located', probedPages: action.probedPages },
         rangeVersion: state.rangeVersion + 1
       }

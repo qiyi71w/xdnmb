@@ -4,9 +4,51 @@
 
 /* ---------- Header ---------- */
 
-/* The source switch sits in the title row, between the title and 刷新. */
+/* The title row: title, (prototype) 同步与合并, the source switch, 刷新. When the column is too
+   narrow for all of them, the controls wrap below the title as one group, never squeezing it. */
+.sub-pane .list-title-row {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.sub-pane .list-title {
+  flex: 1 0 auto;
+}
+
+.sub-header-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 8px;
+  margin-left: auto;
+}
+
 .sub-source {
   flex: none;
+}
+
+/* Prototype: a quiet text control, same weight as the header's icon buttons. */
+.sub-recon-open {
+  flex: none;
+  min-height: 30px;
+  color: var(--ink-2);
+}
+
+.sub-recon-open:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+/* An unfinished 同步与合并 task: a dot (shape, not only hue) plus hidden text and the tooltip. */
+.sub-recon-mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+:root[data-density='compact'] .sub-recon-open {
+  min-height: 26px;
 }
 
 .list-header .form-message {
@@ -92,6 +134,10 @@
   align-self: center;
 }
 
+.sub-write-actions {
+  margin-top: 4px;
+}
+
 .sub-write > .icon-btn {
   width: 24px;
   height: 24px;
@@ -145,6 +191,11 @@
 .sub-add-row .text-input {
   flex: 1 1 8em;
   width: auto;
+}
+
+/* Buttons share the field's height so the row reads as one control line. */
+.sub-add-row .btn {
+  min-height: 30px;
 }
 
 /* ---------- Journal ---------- */
