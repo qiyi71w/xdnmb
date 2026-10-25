@@ -1,9 +1,9 @@
 // PROTOTYPE (throwaway): where the boards go beside B's icon rail — B (board column, the reference),
 // D (board panel from the rail), E (boards switched at the top of the list), F (collapsible board
 // column) — switchable in the running app with the floating bar (components/PrototypeSwitcher.tsx).
-// Built only with VITE_XIDAO_PROTOTYPE=1. Feature visibility, board favorites / hiding / order /
-// collapsing and F's column state live in memory only; a restart forgets them on purpose. The
-// chosen navigation variant is kept in localStorage.
+// Built only with VITE_XIDAO_PROTOTYPE=1. The chosen navigation variant, the rail's feature order and
+// collapsed board groups are kept in localStorage; feature visibility, board favorites / hiding /
+// order and F's column state live in memory only.
 
 import { createContext, useSyncExternalStore, type ReactNode } from 'react'
 import type { BoardDirectory } from '../../../../../shared/forum'
@@ -220,23 +220,67 @@ export const FEATURES: readonly { id: FeatureId; label: string; icon: IconName }
   { id: 'attempts', label: '发送记录', icon: 'send' }
 ]
 
-// ---------- In-memory navigation state ----------
+/** FEATURES in the saved rail order; features missing from it keep their place after it. */
+export function orderedFeatures(order: readonly FeatureId[]): (typeof FEATURES)[number][] {
+  const rank = new Map(order.map((id, index) => [id, index]))
+  return [...FEATURES].sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity))
+}
+
+// ---------- Navigation state ----------
 
 export interface NavPrefs {
   hiddenFeatures: readonly FeatureId[]
+  /** Rail order of every feature, hidden ones included (saved). */
+  featureOrder: readonly FeatureId[]
   /** Favorite board keys (`listKey`) in their own order. */
   favorites: readonly string[]
   hiddenBoards: readonly string[]
   /** Custom board order per group id; boards missing from it keep the directory order after it. */
   order: Readonly<Record<string, readonly string[]>>
+  /** Collapsed board group ids (saved). */
   collapsed: readonly string[]
 }
 
-let prefs: NavPrefs = { hiddenFeatures: [], favorites: [], hiddenBoards: [], order: {}, collapsed: [] }
+const PREFS_KEY = 'xidao.prototype.navPrefs'
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+/** The saved part: rail order and collapsed groups. */
+function readSaved(): Pick<NavPrefs, 'featureOrder' | 'collapsed'> {
+  const known = new Set<string>(FEATURES.map((feature) => feature.id))
+  try {
+    const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as { featureOrder?: unknown; collapsed?: unknown }
+    return {
+      featureOrder: stringList(saved.featureOrder).filter((id): id is FeatureId => known.has(id)),
+      collapsed: stringList(saved.collapsed)
+    }
+  } catch {
+    return { featureOrder: [], collapsed: [] }
+  }
+}
+
+function save(): void {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ featureOrder: prefs.featureOrder, collapsed: prefs.collapsed }))
+  } catch {
+    // Not remembered across restarts; the change still applies.
+  }
+}
+
+let prefs: NavPrefs = {
+  hiddenFeatures: [],
+  favorites: [],
+  hiddenBoards: [],
+  order: {},
+  ...(PROTOTYPE_ENABLED ? readSaved() : { featureOrder: [], collapsed: [] })
+}
 const prefListeners = new Set<() => void>()
 
 function update(next: Partial<NavPrefs>): void {
   prefs = { ...prefs, ...next }
+  if (next.featureOrder !== undefined || next.collapsed !== undefined) save()
   for (const listener of prefListeners) listener()
 }
 
@@ -269,6 +313,21 @@ export const navActions = {
   },
   moveFavorite(key: string, delta: -1 | 1) {
     update({ favorites: moved(prefs.favorites, key, delta) })
+  },
+  /** Moves a feature one place in the rail order (hidden features count as places). */
+  moveFeature(id: FeatureId, delta: -1 | 1) {
+    const ids = orderedFeatures(prefs.featureOrder).map((feature) => feature.id)
+    update({ featureOrder: moved(ids, id, delta) as FeatureId[] })
+  },
+  /** Puts a feature right before `before` in the rail order, or last when `before` is `null`. */
+  placeFeature(id: FeatureId, before: FeatureId | null) {
+    if (id === before) return
+    const ids = orderedFeatures(prefs.featureOrder)
+      .map((feature) => feature.id)
+      .filter((item) => item !== id)
+    const at = before === null ? -1 : ids.indexOf(before)
+    ids.splice(at < 0 ? ids.length : at, 0, id)
+    update({ featureOrder: ids })
   },
   /** Moves a board within its group; `keys` is the group's current display order. */
   moveBoard(groupId: string, keys: readonly string[], key: string, delta: -1 | 1) {

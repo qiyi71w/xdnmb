@@ -61,6 +61,7 @@ function asyncStore(db: ReadingDatabase): IdentityStore {
     insertCredential: async (input) => db.insertCredential(input),
     renameCredential: async (id, name) => db.renameCredential(id, name),
     deleteCredential: async (id) => db.deleteCredential(id),
+    reorderCredentials: async (ids) => db.reorderCredentials(ids),
     loadRoleSelections: async () => db.loadRoleSelections(),
     setRoleSelection: async (role, id) => db.setRoleSelection(role, id)
   }
@@ -154,22 +155,63 @@ describe('identity service with real SQLite', () => {
     expect(await service.getOverview()).toEqual(before)
   })
 
-  it('keeps browse, default-post and web-sync selections independent', async () => {
+  it('keeps default-post and web-sync selections independent of the order', async () => {
     const { service } = setup()
     const a = await imported(service, SECRET_A, 'A')
     const b = await imported(service, SECRET_B, 'B')
-    await service.select('browse', a.id)
     await service.select('default-post', b.id)
     await service.select('web-sync', a.id)
-    expect(await service.select('browse', b.id)).toEqual({ ok: true })
+    expect(await service.reorder([b.id, a.id])).toEqual({ ok: true })
     expect((await service.getOverview()).roles).toEqual({
-      browse: { state: 'selected', credentialId: b.id },
       'default-post': { state: 'selected', credentialId: b.id },
       'web-sync': { state: 'selected', credentialId: a.id }
     })
-    expect(await service.browseUserhash()).toBe(SECRET_B)
     expect(await service.select('web-sync', '999')).toEqual({ ok: false, reason: 'not-found' })
     expect((await service.getOverview()).roles['web-sync']).toEqual({ state: 'selected', credentialId: a.id })
+  })
+
+  it('browses with the first credential of the stored order, none only when the list is empty', async () => {
+    const path = databasePath()
+    const first = setup(path)
+    expect(await first.service.browseUserhash()).toBeNull()
+    const a = await imported(first.service, SECRET_A, 'A')
+    const b = await imported(first.service, SECRET_B, 'B')
+    expect(await first.service.browseUserhash()).toBe(SECRET_A)
+    expect(await first.service.reorder([b.id, a.id])).toEqual({ ok: true })
+    expect(await first.service.browseUserhash()).toBe(SECRET_B)
+    // Only a complete permutation of the stored IDs is accepted.
+    expect(await first.service.reorder([a.id])).toEqual({ ok: false, reason: 'not-found' })
+    expect(await first.service.reorder([a.id, a.id])).toEqual({ ok: false, reason: 'not-found' })
+    expect(await first.service.reorder([a.id, '999'])).toEqual({ ok: false, reason: 'not-found' })
+    first.db.close()
+
+    const reopened = setup(path)
+    expect((await reopened.service.getOverview()).credentials.map((item) => item.id)).toEqual([b.id, a.id])
+    expect(await reopened.service.browseUserhash()).toBe(SECRET_B)
+    // A new import goes to the end; removing the first hands browsing to the next one.
+    const c = await imported(reopened.service, 'SyntheticHashC', 'C')
+    expect((await reopened.service.getOverview()).credentials.map((item) => item.id)).toEqual([b.id, a.id, c.id])
+    expect(await reopened.service.remove(b.id)).toEqual({ ok: true })
+    expect(await reopened.service.browseUserhash()).toBe(SECRET_A)
+  })
+
+  it('migrates the former browse choice to the front of the order and drops the browse role', () => {
+    const path = databasePath()
+    const old = new Database(path)
+    for (const migration of MIGRATIONS.filter((migration) => migration.version <= 10)) migration.up(old)
+    old.pragma('user_version = 10')
+    const insert = old.prepare("INSERT INTO credentials (name, source, imported_at, ciphertext) VALUES (?, 'raw', '2026-10-23T08:00:00.000Z', x'00')")
+    for (const name of ['甲', '乙', '丙']) insert.run(name)
+    old.prepare("INSERT INTO identity_roles VALUES ('browse', 2), ('web-sync', 3)").run()
+    old.close()
+
+    const { db } = setup(path)
+    expect(db.listCredentials().map((item) => item.name)).toEqual(['乙', '甲', '丙'])
+    expect(db.loadRoleSelections()).toEqual({ 'default-post': { state: 'none' }, 'web-sync': { state: 'selected', credentialId: '3' } })
+    db.close()
+    const raw = new Database(path, { readonly: true })
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM identity_roles WHERE role = 'browse'").get()).toEqual({ n: 0 })
+    raw.close()
   })
 
   it('keeps a removed credential referenced as missing, never substituting another, across restart', async () => {
@@ -177,12 +219,11 @@ describe('identity service with real SQLite', () => {
     const first = setup(path)
     const a = await imported(first.service, SECRET_A, 'A')
     const b = await imported(first.service, SECRET_B, 'B')
-    await first.service.select('browse', a.id)
     await first.service.select('web-sync', a.id)
     await first.service.select('default-post', b.id)
     expect(await first.service.browseUserhash()).toBe(SECRET_A)
     expect(await first.service.remove(a.id)).toEqual({ ok: true })
-    await expect(first.service.browseUserhash()).rejects.toMatchObject({ error: { kind: 'identity', detail: 'identity-missing' } })
+    expect(await first.service.browseUserhash()).toBe(SECRET_B)
     first.db.close()
 
     const reopened = setup(path)
@@ -190,20 +231,15 @@ describe('identity service with real SQLite', () => {
     const c = await imported(reopened.service, SECRET_A, 'A 重新导入')
     expect(c.id).not.toBe(a.id)
     expect((await reopened.service.getOverview()).roles).toEqual({
-      browse: { state: 'missing', credentialId: a.id },
       'default-post': { state: 'selected', credentialId: b.id },
       'web-sync': { state: 'missing', credentialId: a.id }
     })
-    await expect(reopened.service.browseUserhash()).rejects.toBeInstanceOf(ForumReadError)
-    await reopened.service.select('browse', null)
-    expect(await reopened.service.browseUserhash()).toBeNull()
     expect((await reopened.service.getOverview()).roles['web-sync'].state).toBe('missing')
   })
 
   it('refuses imports without OS protection but still allows removal; stored secrets stay blocked', async () => {
     const { service, protector } = setup()
     const a = await imported(service, SECRET_A, 'A')
-    await service.select('browse', a.id)
     protector.available = false
     expect(await service.importRaw(SECRET_B, 'B')).toEqual({ ok: false, failure: { reason: 'protection-unavailable' } })
     expect((await service.getOverview())).toMatchObject({ protection: 'unavailable', credentials: [a] })
@@ -215,7 +251,6 @@ describe('identity service with real SQLite', () => {
   it('blocks duplicate checks and browse reads when a stored credential cannot be decrypted, keeping it', async () => {
     const { service, protector } = setup()
     const a = await imported(service, SECRET_A, 'A')
-    await service.select('browse', a.id)
     protector.decryptFails = true
     expect(await service.importRaw(SECRET_B, 'B')).toEqual({ ok: false, failure: { reason: 'decrypt-failed' } })
     await expect(service.browseUserhash()).rejects.toMatchObject({ error: { kind: 'identity', detail: 'identity-locked' } })
@@ -232,11 +267,10 @@ describe('identity service with real SQLite', () => {
   it('stops using a cached browse secret once OS protection becomes unavailable, keeping it stored', async () => {
     const { service, protector } = setup()
     const a = await imported(service, SECRET_A, 'A')
-    await service.select('browse', a.id)
     expect(await service.browseUserhash()).toBe(SECRET_A)
     protector.available = false
     await expect(service.browseUserhash()).rejects.toMatchObject({ error: { kind: 'identity', detail: 'identity-locked' } })
-    expect((await service.getOverview()).roles.browse).toEqual({ state: 'selected', credentialId: a.id })
+    expect((await service.getOverview()).credentials).toEqual([a])
     protector.available = true
     expect(await service.browseUserhash()).toBe(SECRET_A)
   })

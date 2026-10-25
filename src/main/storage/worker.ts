@@ -66,6 +66,7 @@ port.on('message', (request: StorageRequest) => {
       case 'insertCredential': value = db.insertCredential(...request.args); break
       case 'renameCredential': value = db.renameCredential(...request.args); break
       case 'deleteCredential': value = db.deleteCredential(...request.args); break
+      case 'reorderCredentials': value = db.reorderCredentials(...request.args); break
       case 'loadRoleSelections': value = db.loadRoleSelections(...request.args); break
       case 'setRoleSelection': value = db.setRoleSelection(...request.args); break
       case 'listDrafts': value = db.listDrafts(...request.args); break

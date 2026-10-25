@@ -33,9 +33,10 @@ export class RetainedContentDatabase {
     const query = kind === 'favorites' ? 'SELECT thread_id, added_at AS at FROM favorites'
       : kind === 'history' ? 'SELECT thread_id, last_visited_at AS at FROM thread_visits'
         : 'SELECT thread_id, updated_at AS at FROM offline_copies'
-    // The excerpt is the head post's text while it is still held locally (cache or offline copy).
+    // The excerpt is the head post's text while it is still held locally (cache or offline copy):
+    // enough for the six-line excerpt of a list row.
     return db.transaction(() => db.prepare<[], { thread_id: string; at: string; title: string | null; excerpt: string | null }>(`
-      SELECT e.*, t.title, substr(p.plain_text, 1, 200) AS excerpt
+      SELECT e.*, t.title, substr(p.plain_text, 1, 400) AS excerpt
       FROM (${query}) e LEFT JOIN retained_titles t USING(thread_id) LEFT JOIN posts p ON p.id = e.thread_id
       ORDER BY e.at DESC, e.thread_id
     `).all().map((row) => ({ threadId: row.thread_id, at: row.at, title: row.title ?? null,

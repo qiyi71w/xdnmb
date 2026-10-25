@@ -260,7 +260,7 @@ function StartPanel({ overview, task }: { overview: SubscriptionOverview; task: 
           {mode === 'sync' ? '预览同步' : '预览合并'}
         </button>
         {blockers.length > 0 && openSettings !== null && (
-          <button type="button" className="btn" onClick={openSettings}>
+          <button type="button" className="btn" onClick={() => openSettings('subscriptions')}>
             打开设置
           </button>
         )}

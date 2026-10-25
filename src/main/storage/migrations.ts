@@ -480,6 +480,21 @@ export const MIGRATIONS: readonly Migration[] = [
           EXISTS(SELECT 1 FROM protected_posts h WHERE h.post_id=p.id) AS protected FROM posts p;`)
       createSearchSchema(db)
     }
+  },
+  {
+    // Credentials get a user order; forum reads use the first one instead of a separate browse
+    // role. The former browse choice moves to the front so reads keep the same identity.
+    version: 11,
+    up(db) {
+      db.exec(`ALTER TABLE credentials ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
+        WITH ordered AS (
+          SELECT id, ROW_NUMBER() OVER (
+            ORDER BY COALESCE(id = (SELECT credential_id FROM identity_roles WHERE role = 'browse'), 0) DESC, id
+          ) AS n FROM credentials
+        )
+        UPDATE credentials SET position = (SELECT n FROM ordered WHERE ordered.id = credentials.id);
+        DELETE FROM identity_roles WHERE role = 'browse';`)
+    }
   }
 ]
 

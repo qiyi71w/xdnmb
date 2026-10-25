@@ -152,6 +152,7 @@
 }
 
 .proto-rail {
+  position: relative;
   flex: none;
   width: var(--proto-rail);
   display: flex;
@@ -220,6 +221,79 @@
   min-height: 8px;
 }
 
+/* Favorite boards under 版块: round, the board's first character (two when they collide). */
+.proto-rail-btn.proto-rail-fav {
+  width: 32px;
+  height: 32px;
+  margin: 2px 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.proto-rail-btn.proto-rail-fav.is-pair {
+  font-size: 11px;
+  letter-spacing: -0.04em;
+}
+
+.proto-rail-btn.proto-rail-fav.is-current {
+  box-shadow: none;
+  font-weight: 750;
+}
+
+/* Feature buttons can be dragged along the rail. */
+.proto-rail-btn[data-rail-feature] {
+  touch-action: none;
+}
+
+.proto-rail.is-dragging,
+.proto-rail.is-dragging .proto-rail-btn {
+  cursor: grabbing;
+}
+
+.proto-rail-btn.is-dragging {
+  opacity: 0.45;
+}
+
+/* Where the dragged feature goes. */
+.proto-rail-drop {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+/* Name of the hovered or focused rail button (portal in body, beside the button). */
+.proto-rail-tip {
+  position: fixed;
+  z-index: 60;
+  max-width: 16rem;
+  padding: 4px 8px;
+  border-radius: var(--radius-m);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: translateY(-50%);
+  pointer-events: none;
+  animation: proto-tip-in 0.12s var(--ease-out);
+}
+
+@keyframes proto-tip-in {
+  from {
+    opacity: 0;
+  }
+}
+
 /* D, E, collapsed F: the rail is the whole navigation. */
 .proto-nav-d .proto-rail,
 .proto-nav-e .proto-rail,
@@ -268,7 +342,9 @@
 }
 
 .proto-all-title {
+  margin: 0;
   padding: 2px 6px 8px;
+  font-size: inherit;
   font-weight: 650;
 }
 
@@ -304,12 +380,6 @@
   border-radius: var(--radius-m);
   background: var(--accent-soft);
   color: var(--accent-ink);
-}
-
-/* Hidden from the rail: plain tile instead of the tinted one. */
-.proto-all-item.is-hidden .proto-all-icon {
-  background: var(--hover);
-  color: var(--ink-2);
 }
 
 /* ---------- Settings page ---------- */
@@ -499,24 +569,14 @@
 
 /* ---------- 功能显示 and 版块管理 ---------- */
 
-.proto-feature-toggles {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(9em, 1fr));
-  gap: 2px 12px;
-}
-
 .proto-check {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 30px;
-  padding: 2px 6px;
-  border-radius: var(--radius-m);
   cursor: pointer;
-}
-
-.proto-check:hover {
-  background: var(--hover);
 }
 
 .proto-check input {
@@ -530,6 +590,19 @@
 .proto-check-icon {
   flex: none;
   color: var(--accent);
+}
+
+.proto-manage-filter {
+  max-width: 20rem;
+  margin-bottom: 8px;
+}
+
+/* While filtering, group headings are plain (not collapsible). */
+div.proto-manage-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px;
 }
 
 .proto-manage-group > summary {

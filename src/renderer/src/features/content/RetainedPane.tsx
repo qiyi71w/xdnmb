@@ -182,6 +182,9 @@ export function RetainedPane({
             {filtered.shown.map(({ item: entry, uncertain }) => {
               const rowId = `retained-page-${entryKey}-${entry.threadId}`
               const heading = retainedHeading(entry)
+              // Like a thread row: the title when there is one, then the head post's excerpt (up to
+              // six lines, its line breaks kept); only a thread with neither is named by number.
+              const excerpt = entry.excerpt?.trim() || null
               const selected = entry.threadId === selectedThreadId
               const rowConfirming = confirming !== null && confirming.threadId === entry.threadId
               const rowFailure = failure !== null && failure.threadId === entry.threadId && !rowConfirming ? failure.text : null
@@ -196,13 +199,16 @@ export function RetainedPane({
                     onClick={() => onOpenThread(entry.threadId)}
                     {...itemProps}
                   >
-                    <span
-                      className={heading.source === 'excerpt' ? 'retained-heading is-excerpt' : 'retained-heading'}
-                      id={`${rowId}-title`}
-                      title={heading.source === 'excerpt' ? heading.text : undefined}
-                    >
-                      {heading.text}
-                    </span>
+                    {(heading.source !== 'excerpt' || excerpt === null) && (
+                      <span className="retained-heading" id={`${rowId}-title`}>
+                        {heading.text}
+                      </span>
+                    )}
+                    {excerpt !== null && (
+                      <span className="retained-excerpt" id={heading.source === 'excerpt' ? `${rowId}-title` : undefined}>
+                        {excerpt}
+                      </span>
+                    )}
                     <span className="row-meta">
                       {heading.source !== 'number' && <span>No.{entry.threadId}</span>}
                       <span>

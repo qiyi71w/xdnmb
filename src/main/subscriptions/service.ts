@@ -359,6 +359,13 @@ export function createSubscriptionService(deps: {
       } catch { return { ok: false, reason: 'storage' } }
       finally { configuring = false }
     },
+    async revealAppUuid() {
+      try {
+        const configuration = await store.loadSubscriptionConfiguration()
+        if (configuration.context.appCredentialId === null) return { ok: true, value: null }
+        return { ok: true, value: await identity('app', configuration.context) }
+      } catch (error) { return { ok: false, reason: error instanceof UnavailableIdentity ? error.reason : 'storage' } }
+    },
     async selectSource({ source }) {
       try {
         await store.setSubscriptionSource(source)

@@ -1,5 +1,5 @@
 // PROTOTYPE (throwaway): the settings page — a view filling the content area with a section directory
-// on the left — reusing the sections of the settings dialog plus 功能显示 and 版块管理 (in-memory only).
+// on the left — reusing the sections of the settings dialog plus 功能显示 and 版块管理.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import type { AppPlatform } from '../../../../../shared/api'
@@ -19,44 +19,31 @@ import {
 } from '../../../app/SettingsDialog'
 import type { SettingsWriteStatus } from '../../../app/useSettingsWriter'
 import { Icon } from '../../../components/Icon'
-import { Loading } from '../../../components/Notices'
 import { useCover } from '../../../lib/appCovered'
 import { openLayer } from '../../../lib/layers'
+import type { SettingsSectionId } from '../../../lib/settingsOpener'
 import { usePopover } from '../../../lib/usePopover'
 import { CacheSection } from '../../content/CacheSection'
 import { CookieSection } from '../../identity/CookieSection'
 import type { IdentitiesState } from '../../identity/useIdentities'
 import { SubscriptionSection } from '../../subscriptions/SubscriptionSection'
 import type { SubscriptionsState } from '../../subscriptions/useSubscriptions'
-import { useBoardView } from './PrototypeNavParts'
-import { FEATURES, navActions, useNavPrefs, type Board, type BoardGroup, type NavPrefs } from './prototypeStore'
+import { BoardManageSection, FeatureVisibilitySection } from './PrototypeNavSettings'
 import './prototype.css'
 
-type SectionId =
-  | 'appearance'
-  | 'theme'
-  | 'reading'
-  | 'density'
-  | 'zoom'
-  | 'features'
-  | 'boards'
-  | 'tabs'
-  | 'cookies'
-  | 'subscriptions'
-  | 'publication'
-  | 'window'
-  | 'cache'
+type SectionId = SettingsSectionId
 
+// Daily reading adjustments come first; making a theme comes after them.
 const CATEGORIES: readonly { id: string; title: string; sections: readonly { id: SectionId; title: string }[] }[] = [
   {
     id: 'display',
     title: '显示',
     sections: [
       { id: 'appearance', title: '外观' },
-      { id: 'theme', title: '自定义主题' },
       { id: 'reading', title: '阅读' },
       { id: 'density', title: '密度与动态' },
-      { id: 'zoom', title: '界面缩放' }
+      { id: 'zoom', title: '界面缩放' },
+      { id: 'theme', title: '自定义主题' }
     ]
   },
   {
@@ -102,12 +89,14 @@ export interface PrototypeSettingsProps {
   write: Write
   adopt: (settings: AppSettings) => void
   directory: BoardDirectory | null
+  /** Where the page lands: a section, or the top (`null`). A new `seq` moves an open page. */
+  target: { section: SectionId | null; seq: number }
   /** Leaves the page. */
   onClose: () => void
 }
 
 export function PrototypeSettingsPage(props: PrototypeSettingsProps) {
-  const { identities, subscriptions, onClose } = props
+  const { identities, subscriptions, target, onClose } = props
   const { refresh } = identities
   const { refreshOverview } = subscriptions
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -123,12 +112,6 @@ export function PrototypeSettingsPage(props: PrototypeSettingsProps) {
     void refresh()
     void refreshOverview()
   }, [refresh, refreshOverview])
-
-  // Focus moves to the page title. Leaving the page, App returns focus (it knows what replaces the
-  // page and which entry is still shown).
-  useLayoutEffect(() => {
-    headingRef.current?.focus({ preventScroll: true })
-  }, [])
 
   // A leave-able view: Esc goes back when nothing above it takes it.
   useEffect(() => {
@@ -146,18 +129,19 @@ export function PrototypeSettingsPage(props: PrototypeSettingsProps) {
   }, [])
 
   const section = (id: SectionId) => <SectionBody id={id} {...props} />
-  return <SettingsView headingRef={headingRef} section={section} status={props.status} onClose={onClose} />
+  return <SettingsView headingRef={headingRef} section={section} status={props.status} target={target} onClose={onClose} />
 }
 
 interface ShapeProps {
   headingRef: RefObject<HTMLHeadingElement | null>
   section: (id: SectionId) => ReactNode
   status: SettingsWriteStatus
+  target: PrototypeSettingsProps['target']
 }
 
 // ---------- Content-area view with a section directory ----------
 
-function SettingsView({ headingRef, section, status, onClose }: ShapeProps & { onClose: () => void }) {
+function SettingsView({ headingRef, section, status, target, onClose }: ShapeProps & { onClose: () => void }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const jumpRef = useRef<HTMLDivElement>(null)
   const [currentId, setCurrentId] = useState<SectionId>('appearance')
@@ -185,6 +169,39 @@ function SettingsView({ headingRef, section, status, onClose }: ShapeProps & { o
     heading.tabIndex = -1
     heading.focus({ preventScroll: true })
   }
+  const goRef = useRef(go)
+  useLayoutEffect(() => {
+    goRef.current = go
+  })
+
+  // Each opening lands where its entry points: that section and its heading, else the page title
+  // at the top. Focus returns to the opener when the page is left (App).
+  useLayoutEffect(() => {
+    if (target.section !== null) {
+      goRef.current(target.section)
+      return
+    }
+    const pane = scrollRef.current
+    if (pane !== null) pane.scrollTop = 0
+    chosenAt.current = null
+    setCurrentId('appearance')
+    headingRef.current?.focus({ preventScroll: true })
+  }, [target.seq, target.section, headingRef])
+  // A modal that was open when the page opened (the compose panel's 导入饼干) keeps the page inert
+  // until it closes, then drops focus on its hidden opener: take focus once the page can hold it.
+  useEffect(() => {
+    let frame = 0
+    let tries = 0
+    const settle = () => {
+      const page = scrollRef.current?.closest('.proto-settings')
+      if (page == null || page.contains(document.activeElement) || tries++ > 30) return
+      if (target.section !== null) goRef.current(target.section)
+      else headingRef.current?.focus({ preventScroll: true })
+      frame = requestAnimationFrame(settle)
+    }
+    frame = requestAnimationFrame(settle)
+    return () => cancelAnimationFrame(frame)
+  }, [target.seq, target.section, headingRef])
 
   // The directory follows the section at the top of the pane; scrolled to the end, the last one
   // (the last sections are too short to reach the top).
@@ -381,169 +398,4 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
     case 'cache':
       return <CacheSection />
   }
-}
-
-function FeatureVisibilitySection() {
-  const headingId = useId()
-  const prefs = useNavPrefs()
-  return (
-    <section className="settings-section" aria-labelledby={headingId}>
-      <h3 className="settings-section-title" id={headingId}>
-        功能显示
-      </h3>
-      <ul className="proto-feature-toggles">
-        {FEATURES.map((feature) => (
-          <li key={feature.id}>
-            <label className="proto-check">
-              <input
-                type="checkbox"
-                checked={!prefs.hiddenFeatures.includes(feature.id)}
-                onChange={(event) => navActions.setFeatureShown(feature.id, event.target.checked)}
-              />
-              <Icon name={feature.icon} className="proto-check-icon" />
-              <span>{feature.label}</span>
-            </label>
-          </li>
-        ))}
-      </ul>
-    </section>
-  )
-}
-
-function BoardManageSection({ directory }: { directory: BoardDirectory | null }) {
-  const headingId = useId()
-  const { prefs, all } = useBoardView(directory)
-  const byKey = new Map(all.flatMap((group) => group.boards.map((item) => [item.key, item] as const)))
-  const favorites = prefs.favorites.flatMap((key) => {
-    const found = byKey.get(key)
-    return found === undefined ? [] : [found]
-  })
-
-  return (
-    <section className="settings-section" aria-labelledby={headingId}>
-      <h3 className="settings-section-title" id={headingId}>
-        版块管理
-      </h3>
-      {directory === null && <Loading>正在读取版面目录…</Loading>}
-      {directory !== null && (
-        <>
-          <div className="settings-group">
-            <h4 className="settings-group-title">收藏</h4>
-            {favorites.length === 0 ? (
-              <p className="settings-empty">还没有收藏的版块。</p>
-            ) : (
-              <ul className="proto-manage-list">
-                {favorites.map((item, index) => (
-                  <ManageRow
-                    key={item.key}
-                    item={item}
-                    prefs={prefs}
-                    first={index === 0}
-                    last={index === favorites.length - 1}
-                    onMove={(delta) => navActions.moveFavorite(item.key, delta)}
-                  />
-                ))}
-              </ul>
-            )}
-          </div>
-          {all.map((group) => (
-            <ManageGroup key={group.id} group={group} prefs={prefs} />
-          ))}
-        </>
-      )}
-    </section>
-  )
-}
-
-function ManageGroup({ group, prefs }: { group: BoardGroup; prefs: NavPrefs }) {
-  const keys = group.boards.map((item) => item.key)
-  const hiddenCount = group.boards.filter((item) => prefs.hiddenBoards.includes(item.key)).length
-  return (
-    <details className="settings-group proto-manage-group">
-      <summary className="proto-manage-summary">
-        <Icon name="chevron" size={12} className="proto-chevron" />
-        <span className="settings-group-title">{group.title}</span>
-        <span className="proto-manage-count">
-          {group.boards.length}
-          {hiddenCount > 0 && ` · 隐藏 ${hiddenCount}`}
-        </span>
-      </summary>
-      <ul className="proto-manage-list">
-        {group.boards.map((item, index) => (
-          <ManageRow
-            key={item.key}
-            item={item}
-            prefs={prefs}
-            first={index === 0}
-            last={index === group.boards.length - 1}
-            onMove={(delta) => navActions.moveBoard(group.id, keys, item.key, delta)}
-          />
-        ))}
-      </ul>
-    </details>
-  )
-}
-
-function ManageRow({
-  item,
-  prefs,
-  first,
-  last,
-  onMove
-}: {
-  item: Board
-  prefs: NavPrefs
-  first: boolean
-  last: boolean
-  onMove: (delta: -1 | 1) => void
-}) {
-  const favorite = prefs.favorites.includes(item.key)
-  const hidden = prefs.hiddenBoards.includes(item.key)
-  return (
-    <li className={hidden ? 'proto-manage-row is-hidden' : 'proto-manage-row'}>
-      <Icon name={item.icon} className="proto-manage-icon" />
-      <span className="proto-manage-label">{item.label}</span>
-      <span className="proto-manage-actions">
-        <button
-          type="button"
-          className={favorite ? 'icon-btn proto-manage-star is-on' : 'icon-btn proto-manage-star'}
-          aria-pressed={favorite}
-          aria-label={`收藏 ${item.label}`}
-          title={favorite ? '取消收藏' : '收藏'}
-          onClick={() => navActions.setFavorite(item.key, !favorite)}
-        >
-          <Icon name="star" />
-        </button>
-        <button
-          type="button"
-          className="btn btn-small"
-          aria-pressed={hidden}
-          aria-label={`隐藏 ${item.label}`}
-          onClick={() => navActions.setBoardHidden(item.key, !hidden)}
-        >
-          {hidden ? '已隐藏' : '隐藏'}
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          aria-label={`上移 ${item.label}`}
-          title="上移"
-          aria-disabled={first ? true : undefined}
-          onClick={() => !first && onMove(-1)}
-        >
-          <Icon name="arrowUp" />
-        </button>
-        <button
-          type="button"
-          className="icon-btn proto-flip"
-          aria-label={`下移 ${item.label}`}
-          title="下移"
-          aria-disabled={last ? true : undefined}
-          onClick={() => !last && onMove(1)}
-        >
-          <Icon name="arrowUp" />
-        </button>
-      </span>
-    </li>
-  )
 }

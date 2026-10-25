@@ -139,17 +139,14 @@ export function CacheSection() {
             </div>
             <dl className="usage-list">
               <div>
-                <dt>文字（含派生的搜索数据）</dt>
+                <dt>文字</dt>
                 <dd title={exactBytes(usage.cacheTextBytes)}>{formatBytes(usage.cacheTextBytes)}</dd>
               </div>
               <div>
-                <dt>图片（实际加载过的）</dt>
+                <dt>图片</dt>
                 <dd title={exactBytes(usage.cacheImageBytes)}>{formatBytes(usage.cacheImageBytes)}</dd>
               </div>
             </dl>
-            <p className="setting-help">
-              浏览时自动保存已读取的文字和实际加载的图片，不预取整串。超过上限时先删除较久未用的内容；多个地方共用的图片只计一次。
-            </p>
             {usage.overLimit && !usage.protectedOverLimit && (
               <p className="notice-inline is-warning" role="status">
                 <Icon name="alert" size={14} />
@@ -180,9 +177,7 @@ export function CacheSection() {
                 <dd title={exactBytes(usage.personalDataBytes)}>{formatBytes(usage.personalDataBytes)}</dd>
               </div>
             </dl>
-            <p className="setting-help">
-              正在打开的串、离线副本和草稿引用的内容受保护；个人记录指收藏、历史、阅读状态、草稿等，它们都不随普通缓存清理。
-            </p>
+            <p className="setting-help">正在打开的串、离线副本和草稿受保护，不随普通缓存清理。</p>
           </div>
 
           <div className="usage-block">
@@ -192,9 +187,7 @@ export function CacheSection() {
                 {formatBytes(usage.databaseBytes)}
               </span>
             </div>
-            <p className="setting-help">
-              磁盘上的实际大小，包含索引和预写日志，所以和上面的逻辑占用不相等。清理后空间会在库内复用，文件不一定立刻缩小；图片文件另存，不在此列。
-            </p>
+            <p className="setting-help">磁盘上的实际大小，不含图片文件。</p>
           </div>
 
           <form className="limit-form" onSubmit={onSubmit}>
@@ -225,7 +218,7 @@ export function CacheSection() {
               </button>
             </div>
             <p className="field-hint" id={hintId}>
-              十进制：1 GB = 1,000,000,000 字节，可填小数（如 1.5）；填 0 表示不保留普通缓存。这是逻辑额度，不限制整个数据目录。
+              填 0 表示不保留普通缓存。
             </p>
             {invalid && (
               <p className="field-warning" id={errorId}>

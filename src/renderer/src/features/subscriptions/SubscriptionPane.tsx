@@ -22,7 +22,7 @@ import type {
 } from '../../../../shared/subscriptions'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, Loading } from '../../components/Notices'
-import { formatLocalTime } from '../../lib/format'
+import { describeReadError, formatLocalTime } from '../../lib/format'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
@@ -56,12 +56,14 @@ import { useSubscriptionsContext } from './useSubscriptions'
 import { askedThreads, ReminderChoiceField, useReminderAsk, type ReminderAsk, type ReminderChoice } from '../reminders/ReminderLinkage'
 import { ReminderMenu } from '../reminders/ReminderMenu'
 import { useThreadRules } from '../reminders/useReminders'
+// PROTOTYPE (throwaway): opening the page reads every page (R2-10); no unread filter (#20).
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import '../feed/feed.css'
 import '../identity/identity.css'
 import './subscriptions.css'
 
 /** A write the user asked for, frozen with the source and identity combination shown when asked. */
-interface ChangeDraft {
+export interface ChangeDraft {
   action: SubscriptionAction
   threadId: ThreadId
   label: string
@@ -75,18 +77,34 @@ interface ChangeDraft {
 
 const THREAD_ID = /^\d{1,20}$/
 
-/** Both identities, the viewed source's first; the fixed web sync object is always named. Never a secret. */
+/** Fired after any page of a subscription list was read, so other views can re-read the stored observation. */
+export const SUBSCRIPTION_OBSERVED_EVENT = 'xidao:subscription-observed'
+
+/** The identity a write to the viewed source uses. Never a secret. */
 function identityLine(overview: SubscriptionOverview): string {
-  const app = `App UUID：${overview.appConfigured ? `已设置 · 本机引用 #${overview.context.appCredentialId ?? '未知'}` : '未设置'}`
-  const web = `网页同步对象：${webObjectText(overview)}`
-  const [first, second] = overview.source === 'app' ? [app, web] : [web, app]
-  return `${first}；${second} · 配置代次 ${overview.context.generation}`
+  return overview.source === 'app' ? 'App UUID' : `网页同步对象：${webObjectText(overview)}`
+}
+
+/** A confirmation draft for one write to the viewed source; null while the overview is unknown. */
+export function changeDraft(overview: SubscriptionOverview | null, action: SubscriptionAction, threadId: ThreadId, label: string): ChangeDraft | null {
+  if (overview === null) return null
+  return {
+    action,
+    threadId,
+    label,
+    source: overview.source,
+    generation: overview.context.generation,
+    selection: selectionKey(overview),
+    objectRef: sourceObjectRef(overview.context, overview.source),
+    identity: identityLine(overview)
+  }
 }
 
 /**
  * Remote subscription list of the currently selected source (App / 网页), in the tab's list slot.
- * Reads page 1 when the user navigates here or switches source here; further pages, refresh and
- * 停止 are explicit. Old observations stay on screen (labelled) when a read fails, is cancelled or
+ * Reads when the user navigates here or switches source here: page 1 only, or (prototype) page
+ * after page up to the end candidate, stopping at the first error, refusal or 取消 and never
+ * retrying by itself. Old observations stay on screen (labelled) when a read fails, is cancelled or
  * is partial; results arriving for a previous source or identity combination are dropped.
  */
 export function SubscriptionPane({
@@ -149,9 +167,10 @@ export function SubscriptionPane({
   /** Explicit navigation (no remembered list) or a source switch made here reads page 1. */
   const autoRead = useRef(remembered === null && saved === undefined)
 
-  const read = useCallback(async (observationId: string | null) => {
+  /** One page; resolves to the observation it produced, or null when refused, failed or stale. */
+  const read = useCallback(async (observationId: string | null): Promise<SubscriptionObservation | null> => {
     const current = overviewRef.current
-    if (current === null || reading.current !== null) return
+    if (current === null || reading.current !== null) return null
     const token = { operationId: crypto.randomUUID(), selection: selectionKey(current) }
     reading.current = token
     dispatch({ type: 'start', activity: observationId === null ? 'first' : 'next' })
@@ -159,17 +178,50 @@ export function SubscriptionPane({
     try {
       result = await window.xidao.subscriptions.read({ source: current.source, observationId, operationId: token.operationId })
     } catch {
-      if (reading.current !== token) return
+      if (reading.current !== token) return null
       reading.current = null
       dispatch({ type: 'internal', where: 'read' })
-      return
+      return null
     }
-    if (reading.current !== token) return
+    if (reading.current !== token) return null
     reading.current = null
-    if (selectionRef.current !== token.selection) return
-    if (result.ok) dispatch({ type: 'observed', observation: result.value })
-    else dispatch({ type: 'refused', reason: result.reason })
+    if (selectionRef.current !== token.selection) return null
+    if (!result.ok) {
+      dispatch({ type: 'refused', reason: result.reason })
+      return null
+    }
+    dispatch({ type: 'observed', observation: result.value })
+    window.dispatchEvent(new Event(SUBSCRIPTION_OBSERVED_EVENT))
+    return result.value
   }, [])
+
+  /**
+   * Reads from `observationId` (null: a new observation from page 1). The prototype goes on page
+   * after page until the end candidate and stops at the first error (rate limit and verification
+   * included), refusal, 取消 or source change; nothing is retried automatically.
+   */
+  /** 取消 was asked during `readOn`: no further page starts, even when the current one completed. */
+  const stopAsked = useRef(false)
+  /** The last `readOn` ended because of 取消 (the page in flight may still have completed). */
+  const [halted, setHalted] = useState(false)
+  const readOn = useCallback(
+    async (observationId: string | null) => {
+      stopAsked.current = false
+      setHalted(false)
+      let next = observationId
+      for (;;) {
+        const observation = await read(next)
+        if (!PROTOTYPE_ENABLED || observation === null) return
+        if (observation.error !== null || observation.cancelled || observation.nextPage === null) return
+        if (stopAsked.current) {
+          setHalted(true)
+          return
+        }
+        next = observation.id
+      }
+    },
+    [read]
+  )
 
   /** Abandons the running read: it is cancelled and its late result discarded. */
   const abandonRead = useCallback(() => {
@@ -183,6 +235,7 @@ export function SubscriptionPane({
   const stopRead = useCallback(() => {
     const token = reading.current
     if (token === null) return
+    stopAsked.current = true
     dispatch({ type: 'stop-requested' })
     window.xidao.subscriptions.cancel({ operationId: token.operationId }).catch(() => undefined)
   }, [])
@@ -217,17 +270,17 @@ export function SubscriptionPane({
         const latest = overviewRef.current
         if (!shouldRead || latest === null || sourceBlocker(latest, latest.source) !== null) return
         autoRead.current = false
-        void read(null)
+        void readOn(null)
       })
     return () => {
       alive = false
     }
-  }, [selection, abandonRead, read])
+  }, [selection, abandonRead, readOn])
 
   const refresh = useCallback(() => {
     abandonRead()
-    void read(null)
-  }, [abandonRead, read])
+    void readOn(null)
+  }, [abandonRead, readOn])
   // Ctrl/Cmd+R in 同步与合并 only re-reads local history: a preview is always started explicitly.
   useRegisterContent('lists', entryKey, { refresh: view === 'reconcile' ? () => void refreshPlans() : refresh })
 
@@ -327,19 +380,11 @@ export function SubscriptionPane({
   }, [draft])
 
   const openDraft = (action: SubscriptionAction, threadId: ThreadId, label: string) => {
-    if (overview === null || selection === null) return
+    const next = changeDraft(overview, action, threadId, label)
+    if (next === null) return
     draftOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setReminderChoice('keep')
-    setDraft({
-      action,
-      threadId,
-      label,
-      source: overview.source,
-      generation: overview.context.generation,
-      selection,
-      objectRef: sourceObjectRef(overview.context, overview.source),
-      identity: identityLine(overview)
-    })
+    setDraft(next)
   }
 
   const closeDraft = () => {
@@ -369,20 +414,20 @@ export function SubscriptionPane({
   const blocker = overview === null ? null : sourceBlocker(overview, overview.source)
   const writeBlocked = overview === null || blocker !== null || !overview.writable || busy
   const writeHint = busy
-    ? '另一项订阅操作、同步预览或计划正在进行，完成后才能开始新的操作'
+    ? '另一项订阅操作正在进行'
     : overview !== null && !overview.writable
-      ? '本地存储不可写，无法保存操作意图'
+      ? '本地存储不可写'
       : blocker
   const taskHint =
     task === null || task.phase === 'preview-failed'
-      ? '预览两端差异后逐项确认，或从旧 UUID 合并'
+      ? null
       : task.phase === 'previewing'
-        ? '预览正在读取'
+        ? '预览读取中'
         : task.phase === 'preview'
-          ? '有一份尚未执行的预览'
+          ? '有一份未执行的预览'
           : task.phase === 'executing'
-            ? '计划正在执行'
-            : '计划已结束，可查看结果'
+            ? '计划执行中'
+            : '计划已结束'
 
   const labelOf = (threadId: ThreadId) => {
     const thread = threads.find((item) => item.head.id === threadId)
@@ -409,6 +454,18 @@ export function SubscriptionPane({
   const readInFlight = state.activity === 'first' || state.activity === 'next'
   const endPage = displayed?.pages.find((page) => page.endCandidate)?.page ?? null
   const nextPage = shown !== null && shown.error === null && !readInFlight && blocker === null ? shown.nextPage : null
+  /** Page being read now (prototype: one line for every page). */
+  const readingPage = state.activity === 'first' ? 1 : state.activity === 'next' ? (shown?.nextPage ?? null) : null
+  /** Prototype: the automatic reading stopped before the end candidate because of 取消. */
+  const stoppedByCancel = PROTOTYPE_ENABLED && shown !== null && !readInFlight && shown.error === null && shown.nextPage !== null && (shown.cancelled || halted)
+  const readingLine = (
+    <div className="sub-reading">
+      <Loading>正在读取第 {readingPage ?? ''} 页…</Loading>
+      <button type="button" className="btn btn-small" onClick={stopRead} disabled={state.stopRequested}>
+        {state.stopRequested ? '正在取消…' : '取消'}
+      </button>
+    </div>
+  )
 
   return (
     <section className="list-pane sub-pane" aria-label={`订阅：${SOURCE_NAME[source]}`}>
@@ -423,22 +480,9 @@ export function SubscriptionPane({
         <header className="list-header">
           <div className="list-title-row">
             <h2 className="list-title">
-              <span className="list-kind">订阅</span>
-              <span className="list-name">{SOURCE_NAME[source]}</span>
+              <span className="list-name">订阅</span>
             </h2>
-            <button
-              type="button"
-              className="icon-btn"
-              onClick={refresh}
-              disabled={blocker !== null}
-              aria-label="刷新订阅（重新从第 1 页读取）"
-              title="刷新订阅"
-            >
-              <Icon name="refresh" />
-            </button>
-          </div>
-          <div className="sub-source-row">
-            <div className="segmented" role="group" aria-label="订阅来源">
+            <div className="segmented sub-source" role="group" aria-label="订阅来源">
               {(['app', 'web'] as const).map((item) => (
                 <button
                   key={item}
@@ -446,6 +490,7 @@ export function SubscriptionPane({
                   className="segmented-item"
                   aria-pressed={source === item}
                   aria-busy={switching === item ? true : undefined}
+                  aria-label={SOURCE_NAME[item]}
                   disabled={!overview.writable}
                   onClick={() => void switchSource(item)}
                 >
@@ -453,7 +498,16 @@ export function SubscriptionPane({
                 </button>
               ))}
             </div>
-            <p className="sub-identity">{identityLine(overview)}</p>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={refresh}
+              disabled={blocker !== null}
+              aria-label="刷新订阅（从第 1 页重新读取）"
+              title="刷新订阅"
+            >
+              <Icon name="refresh" />
+            </button>
           </div>
           {switchError !== null && (
             <p className="form-message is-error" role="status">
@@ -468,11 +522,11 @@ export function SubscriptionPane({
             <div className="notice notice-cached" role="status">
               <Icon name="alert" className="notice-icon" />
               <div className="notice-text">
-                <p className="notice-title">{SOURCE_NAME[source]}暂时无法读取或更改</p>
+                <p className="notice-title">{SOURCE_NAME[source]}暂时不可用</p>
                 <p>{blocker}</p>
               </div>
               {openSettings !== null && (
-                <button type="button" className="btn btn-small" onClick={openSettings}>
+                <button type="button" className="btn btn-small" onClick={() => openSettings('subscriptions')}>
                   打开设置
                 </button>
               )}
@@ -485,7 +539,7 @@ export function SubscriptionPane({
             <button type="button" className="btn btn-small" ref={reconcileButtonRef} onClick={() => showView('reconcile')}>
               同步与合并…
             </button>
-            <span className="field-hint">{taskHint}</span>
+            {taskHint !== null && <span className="field-hint">{taskHint}</span>}
           </div>
 
           {draft !== null && (
@@ -494,11 +548,11 @@ export function SubscriptionPane({
               stale={draft.selection !== selection}
               blockedReason={
                 busy
-                  ? '另一项订阅操作、同步预览或计划正在进行'
+                  ? '另一项订阅操作正在进行'
                   : operations?.some((item) =>
                         blocksNewWrite(item, { source: draft.source, objectRef: draft.objectRef, threadId: draft.threadId })
                       )
-                    ? '这个串还有未核对的操作，请先在操作记录中核对'
+                    ? '这个串有待核对的操作，请先在操作记录中核对'
                     : null
               }
               cancelRef={confirmCancelRef}
@@ -521,22 +575,15 @@ export function SubscriptionPane({
         </div>
 
         <div className="list-status">
-          {state.activity === 'stored' && <Loading>正在读取本机保存的观察…</Loading>}
-          {state.activity === 'first' && (
-            <div className="sub-reading">
-              <Loading>正在读取第 1 页…</Loading>
-              <button type="button" className="btn btn-small" onClick={stopRead} disabled={state.stopRequested}>
-                {state.stopRequested ? '正在停止…' : '停止读取'}
-              </button>
-            </div>
-          )}
+          {state.activity === 'stored' && <Loading>正在读取本机保存的列表…</Loading>}
+          {PROTOTYPE_ENABLED ? readInFlight && readingLine : state.activity === 'first' && readingLine}
           {state.internalError !== null && (
             <FailureNotice
-              title={state.internalError === 'stored' ? '本机保存的观察读取失败' : '订阅读取请求失败，仍显示之前的列表'}
+              title={state.internalError === 'stored' ? '本机保存的列表读取失败' : '订阅读取请求失败，仍显示之前的列表'}
               failure={{ type: 'internal' }}
               onRetry={
                 state.internalError === 'read' && blocker === null
-                  ? () => void read(shown !== null && shown.nextPage !== null ? shown.id : null)
+                  ? () => void readOn(shown !== null && shown.nextPage !== null ? shown.id : null)
                   : undefined
               }
               compact
@@ -548,7 +595,30 @@ export function SubscriptionPane({
               <p className="notice-text">读取未执行：{failureText(state.refusal)}</p>
             </div>
           )}
-          {shown !== null && shown.error !== null && (
+          {PROTOTYPE_ENABLED && shown !== null && shown.error !== null && (
+            <p className="sub-stopped" role="alert">
+              <Icon name="alert" size={14} />
+              <span>
+                停在第 {shown.error.page} 页：{describeReadError(shown.error.detail)}
+              </span>
+              {blocker === null && !readInFlight && (
+                <button type="button" className="btn btn-small" onClick={() => void readOn(shown.id)}>
+                  重试
+                </button>
+              )}
+            </p>
+          )}
+          {stoppedByCancel && shown !== null && (
+            <p className="sub-stopped" role="status">
+              <span>已取消，停在第 {shown.nextPage} 页</span>
+              {blocker === null && (
+                <button type="button" className="btn btn-small" onClick={() => void readOn(shown.id)}>
+                  继续读取
+                </button>
+              )}
+            </p>
+          )}
+          {!PROTOTYPE_ENABLED && shown !== null && shown.error !== null && (
             <FailureNotice
               title={`读取第 ${shown.error.page} 页失败${displayed !== null ? '，已取得的内容保留' : ''}`}
               failure={{ type: 'read', error: shown.error.detail }}
@@ -561,23 +631,20 @@ export function SubscriptionPane({
             <div className="notice notice-cached is-compact" role="status">
               <Icon name="archive" className="notice-icon" />
               <p className="notice-text">
-                本次没有取得新的列表。下面是 {formatLocalTime(displayed.startedAt)} 开始的较早观察（{coverageText(displayed)}），可能已不是当前状态。
+                本次没有取得新的列表，下面是 {formatLocalTime(displayed.startedAt)} 的较早列表（{coverageText(displayed)}）。
               </p>
             </div>
           )}
           {displayed !== null && displayed === shown && state.shownStored && (
             <p className="notice-inline" role="status">
               <Icon name="archive" size={14} />
-              本机保存的观察，{formatLocalTime(displayed.startedAt)} 开始；本次尚未重新读取
+              本机保存的列表，{formatLocalTime(displayed.startedAt)}
             </p>
           )}
           {displayed !== null && (
             <p className={displayed.nextPage !== null ? 'sub-coverage is-partial' : 'sub-coverage'}>
               <Icon name={displayed.nextPage !== null ? 'alert' : 'info'} size={14} />
-              <span>
-                {coverageText(displayed)}
-                {displayed.nextPage !== null && '。只覆盖了部分页，未读取的页里可能还有订阅'}
-              </span>
+              <span>{coverageText(displayed)}</span>
             </p>
           )}
         </div>
@@ -585,17 +652,16 @@ export function SubscriptionPane({
         {displayed === null && state.activity === 'idle' && blocker === null && (
           <div className="list-empty">
             <p className="list-empty-title">{shown !== null || state.refusal !== null || state.internalError !== null ? '还没有取得列表' : '还没有读取这份订阅'}</p>
-            <p className="list-empty-text">读取只会请求第 1 页；后续页需要再点读取。</p>
+            {!PROTOTYPE_ENABLED && <p className="list-empty-text">读取只会请求第 1 页；后续页需要再点读取。</p>}
             <button type="button" className="btn sub-empty-action" onClick={refresh}>
-              读取第 1 页
+              {PROTOTYPE_ENABLED ? '读取' : '读取第 1 页'}
             </button>
           </div>
         )}
 
         {displayed !== null && threads.length === 0 && endPage === 1 && (
           <div className="list-empty" role="status">
-            <p className="list-empty-title">第 1 页没有订阅</p>
-            <p className="list-empty-text">有效的空页只是结束候选，不代表远端一定是空集合。</p>
+            <p className="list-empty-title">没有订阅</p>
           </div>
         )}
 
@@ -604,7 +670,7 @@ export function SubscriptionPane({
             filters={filters}
             onChange={setFilters}
             forums={forumNames}
-            unreadOffered
+            unreadOffered={!PROTOTYPE_ENABLED}
             noun="订阅的串"
             total={threads.length}
             result={filtered}
@@ -657,28 +723,19 @@ export function SubscriptionPane({
         )}
         {filtering && threads.length > 0 && filtered.shown.length === 0 && (
           <p className="list-filters-empty" role="status">
-            已读取的订阅都不符合筛选。可以读取下一页，或清除筛选。
+            已读取的订阅都不符合筛选。
           </p>
         )}
 
         <div className="list-footer">
-          {state.activity === 'next' && (
-            <div className="sub-reading">
-              <Loading>正在读取第 {shown?.nextPage ?? ''} 页…</Loading>
-              <button type="button" className="btn btn-small" onClick={stopRead} disabled={state.stopRequested}>
-                {state.stopRequested ? '正在停止…' : '停止读取'}
-              </button>
-            </div>
-          )}
-          {shown !== null && shown.cancelled && !readInFlight && (
+          {!PROTOTYPE_ENABLED && state.activity === 'next' && readingLine}
+          {!PROTOTYPE_ENABLED && shown !== null && shown.cancelled && !readInFlight && (
             <p className="list-end">已停止，第 {shown.nextPage ?? ''} 页起没有读取</p>
           )}
-          {endPage !== null && endPage > 1 && (
-            <p className="list-end">第 {endPage} 页为空，列表可能到此为止（结束候选，不保证是同一时刻的完整快照）</p>
-          )}
-          {shown !== null && nextPage !== null && (
-            <button type="button" className="btn btn-quiet" onClick={() => void read(shown.id)}>
-              {shown.cancelled ? '继续读取' : '读取'}第 {nextPage} 页
+          {endPage !== null && endPage > 1 && <p className="list-end">第 {endPage} 页为空，已读完</p>}
+          {shown !== null && nextPage !== null && !stoppedByCancel && (
+            <button type="button" className="btn btn-quiet" onClick={() => void readOn(shown.id)}>
+              {PROTOTYPE_ENABLED ? `继续读取（第 ${nextPage} 页起）` : `${shown.cancelled ? '继续读取' : '读取'}第 ${nextPage} 页`}
             </button>
           )}
         </div>
@@ -692,7 +749,8 @@ export function SubscriptionPane({
   )
 }
 
-function ChangeConfirm({
+/** Confirmation of one write (加入／取消订阅); Esc cancels. Shared by the list and the thread toolbar. */
+export function ChangeConfirm({
   draft,
   stale,
   blockedReason,
@@ -722,7 +780,7 @@ function ChangeConfirm({
     event.stopPropagation()
     onCancel()
   }
-  const reason = stale ? '订阅来源或身份已变化，这个确认已失效，请重新发起' : blockedReason
+  const reason = stale ? '订阅来源或身份已变化，请重新发起' : blockedReason
   const label = draft.label === `No.${draft.threadId}` ? '' : `「${draft.label}」`
   return (
     <div className={draft.action === 'remove' ? 'sub-confirm is-remove' : 'sub-confirm'} role="group" aria-labelledby={titleId} aria-describedby={textId} onKeyDown={onKeyDown}>
@@ -732,9 +790,8 @@ function ChangeConfirm({
       </p>
       <div className="sub-confirm-text" id={textId}>
         <p>
-          向{SOURCE_NAME[draft.source]}发出一次请求（{draft.identity}）。
+          向{SOURCE_NAME[draft.source]}发出一次请求（{draft.identity}），不会自动重试。
         </p>
-        <p>先在本机保存这次意图再发出；不会自动重试，也不会撤回。服务端报告与回读核对分别记录，报告成功不等于集合一定改变。</p>
       </div>
       <ReminderChoiceField
         ask={reminderAsk}
@@ -797,7 +854,7 @@ function AddForm({
     onAdd(threadId)
   }
 
-  const describedBy = [hintId, error !== null ? errorId : null].filter(Boolean).join(' ')
+  const describedBy = [hint !== null ? hintId : null, error !== null ? errorId : null].filter(Boolean).join(' ') || undefined
 
   return (
     <form className="sub-add" onSubmit={submit} noValidate>
@@ -829,9 +886,11 @@ function AddForm({
           </button>
         )}
       </div>
-      <p className="field-hint" id={hintId}>
-        {hint ?? '确认前会显示将使用的来源与身份；每次只操作一个串。'}
-      </p>
+      {hint !== null && (
+        <p className="field-hint" id={hintId}>
+          {hint}
+        </p>
+      )}
       <div id={errorId} role="status" className="form-message-region">
         {error !== null && (
           <p className="form-message is-error">

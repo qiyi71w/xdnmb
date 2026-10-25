@@ -247,9 +247,7 @@
   display: grid;
   gap: 6px;
   margin: 10px 10px 4px;
-  padding: 10px 12px;
-  border-radius: var(--radius-m);
-  background: var(--info-bg);
+  padding: 0 4px;
   font-size: var(--text-sm);
 }
 
@@ -270,12 +268,8 @@
 }
 
 .reminder-checker-line {
-  color: var(--ink-2);
-  overflow-wrap: anywhere;
-}
-
-.reminder-checker-line.is-warning {
-  color: var(--warn-ink);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
 }
 
 .reminder-checker-message {
@@ -283,6 +277,7 @@
   align-items: flex-start;
   gap: 6px;
   overflow-wrap: anywhere;
+  color: var(--ink-2);
 }
 
 .reminder-checker-message .icon {
@@ -298,9 +293,8 @@
   color: var(--danger-ink);
 }
 
-.reminder-checker-hint {
-  font-size: var(--text-xs);
-  color: var(--ink-3);
+.reminder-empty-action {
+  margin-top: 12px;
 }
 
 .reminder-groups {

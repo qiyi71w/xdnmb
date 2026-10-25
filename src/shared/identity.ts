@@ -20,16 +20,17 @@ export interface CredentialSummary {
 
 /**
  * Independent identity roles. Changing one never changes another.
- * - `browse`: credential sent with forum reads.
  * - `default-post`: default 发言饼干 for new edits (consumed by posting/drafts).
  * - `web-sync`: the fixed 网页订阅 同步对象 (consumed by subscription sync).
+ *
+ * Forum reads use the first credential of the ordered list; with no credential they carry none.
  */
-export type IdentityRole = 'browse' | 'default-post' | 'web-sync'
+export type IdentityRole = 'default-post' | 'web-sync'
 
-export const IDENTITY_ROLES: readonly IdentityRole[] = ['browse', 'default-post', 'web-sync']
+export const IDENTITY_ROLES: readonly IdentityRole[] = ['default-post', 'web-sync']
 
 /**
- * - `none`: nothing chosen (browse: reads carry no credential).
+ * - `none`: nothing chosen.
  * - `selected`: the chosen credential exists locally.
  * - `missing`: the chosen credential was removed. The reference is kept as missing and is never
  *   replaced by another credential; operations depending on this role require a new choice.
@@ -50,6 +51,7 @@ export interface IdentityOverview {
   protection: ProtectionState
   /** False when local storage is read-only/unavailable: imports, renames, removals and selections are refused. */
   writable: boolean
+  /** In the user's order; the first one is sent with forum reads. */
   credentials: CredentialSummary[]
   roles: Record<IdentityRole, RoleSelection>
 }

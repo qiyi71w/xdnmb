@@ -159,11 +159,6 @@ export function Navigation({
       aria-label="订阅、时间线与版面"
       style={{ '--nav-t': progress } as CSSProperties}
     >
-      <div className="nav-brand">
-        <span className="nav-mark" aria-hidden="true" />
-        <span>汐岛</span>
-      </div>
-
       <div className="nav-scroll" onKeyDown={roving.onKeyDown}>
         <ul className="nav-list nav-search" aria-label="搜索">
           <li>
@@ -331,10 +326,6 @@ export function NavMeasure({ directory, onMeasure }: { directory: BoardDirectory
   if (empty) return null
   return (
     <div ref={ref} className="nav nav-measure" aria-hidden="true" inert style={{ '--nav-t': 1 } as CSSProperties}>
-      <div className="nav-brand">
-        <span className="nav-mark" />
-        <span>汐岛</span>
-      </div>
       <div className="nav-scroll">
         <div className="nav-list nav-search">
           <span className="nav-item">
@@ -375,10 +366,8 @@ function IdentityFooter({ identities, onOpenSettings }: { identities: Identities
         : '读取中…'
       : status.state === 'none'
         ? '不使用饼干'
-        : status.state === 'missing'
-          ? '已移除，需重选'
-          : status.name
-  const warning = status?.state === 'missing' || (status === null && failed)
+        : status.name
+  const warning = status === null && failed
   return (
     <div className="nav-account">
       <button

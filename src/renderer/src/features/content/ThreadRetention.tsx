@@ -260,9 +260,7 @@ export function OfflineDialog({
           {title}
           <span className="offline-thread-id">No.{threadId}</span>
         </p>
-        <p className="offline-intro">
-          离线副本单独保存在本机，不随普通缓存清理。保存按页逐步读取，记录的是读取当时能取得的内容，不是整串的完整快照；论坛上已删除的内容不会从副本中移除。
-        </p>
+        <p className="offline-intro">离线副本保存在本机，不随普通缓存清理。</p>
 
         {state.status === 'loading' && <Loading>正在读取离线副本状态…</Loading>}
         {state.status === 'failed' && (

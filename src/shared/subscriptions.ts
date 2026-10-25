@@ -69,6 +69,11 @@ export interface SubscriptionsApi {
   getOverview(): Promise<SubscriptionOverview>
   /** null generates a UUID; otherwise use the supplied UUID. No secret is returned. */
   configureApp(input: { uuid: string | null }): Promise<SubscriptionResult<SubscriptionOverview>>
+  /**
+   * The saved App UUID, decrypted for the settings view only (`null`: none saved). It stays
+   * encrypted at rest and is never part of the overview, journal or labels.
+   */
+  revealAppUuid(): Promise<SubscriptionResult<string | null>>
   selectSource(input: { source: SubscriptionSource }): Promise<SubscriptionResult<SubscriptionOverview>>
   /** Local only, for the current identity combination. Failed reads never erase old observations. */
   getObservation(input: { source: SubscriptionSource }): Promise<SubscriptionObservation | null>

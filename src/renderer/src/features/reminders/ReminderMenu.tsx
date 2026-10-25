@@ -254,9 +254,7 @@ export function ReminderPanel({
           </p>
         )}
       </div>
-      <p className="reminder-panel-note">
-        开关只保存规则，不会立即检查，也不会把发言标为已读。重新开启会从开启时起算，不补关闭期间的回复。检查在冷启动、从托盘或 Dock 重新打开窗口时进行，也可以在“提醒”列表里手动检查。
-      </p>
+      <p className="reminder-panel-note">从开启时起算，不补关闭期间的回复。</p>
     </div>
   )
 }

@@ -298,11 +298,6 @@ ul {
   color: var(--accent-ink);
 }
 
-.tag-admin {
-  background: var(--danger-bg);
-  color: var(--danger-ink);
-}
-
 .tag-sage {
   background: var(--danger-bg);
   color: var(--danger-ink);

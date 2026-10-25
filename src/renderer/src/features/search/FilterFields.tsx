@@ -4,6 +4,8 @@ import type { ContentFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
 import { listFilterCount, type FilteredList, type ListFilters, NO_LIST_FILTERS } from './listFilters'
 import type { MetadataState } from './useThreadMetadata'
+// PROTOTYPE (throwaway): the prototype has no read/unread tracking, so no 仅未读 filter.
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import '../identity/identity.css'
 import './search.css'
 
@@ -120,7 +122,7 @@ export function FilterFields({
 
 /** Footnote shared by every filter surface: what dates mean and how unknown fields are treated. */
 export function FilterRules() {
-  return <p className="filter-rules">日期按论坛显示的日期比较，未换算时区。字段未知的内容不会被当作不符合：它们仍会显示，并标出“字段未知”。</p>
+  return <p className="filter-rules">日期按论坛显示的日期比较。字段未知的串照常显示，并标出“字段未知”。</p>
 }
 
 /**
@@ -184,7 +186,7 @@ export function ListFilterBar({
       </div>
       <div className="list-filters-panel" id={panelId} hidden={!open}>
         <FilterFields value={filters.content} onChange={(content) => onChange({ ...filters, content })} forums={forums} />
-        {unreadOffered && (
+        {unreadOffered && !PROTOTYPE_ENABLED && (
           <label className="filter-unread" htmlFor={unreadId}>
             <input
               id={unreadId}
@@ -201,9 +203,9 @@ export function ListFilterBar({
         <p className="list-filters-scope">
           <Icon name="info" size={13} />
           <span>
-            只在{coverage}中筛选，不会为了筛选自动读取更多内容
-            {metadata?.status === 'loading' && '；正在读取本机记录的筛选信息…'}
-            {metadata?.status === 'failed' && '；本机筛选信息读取失败，全部按字段未知显示'}
+            只在{coverage}中筛选
+            {metadata?.status === 'loading' && '；正在读取筛选信息…'}
+            {metadata?.status === 'failed' && '；筛选信息读取失败，按字段未知显示'}
           </span>
         </p>
       )}

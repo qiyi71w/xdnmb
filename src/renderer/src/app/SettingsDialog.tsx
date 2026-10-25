@@ -28,10 +28,17 @@ import { CookieSection } from '../features/identity/CookieSection'
 import type { IdentitiesState } from '../features/identity/useIdentities'
 import { SubscriptionSection } from '../features/subscriptions/SubscriptionSection'
 import type { SubscriptionsState } from '../features/subscriptions/useSubscriptions'
-import { systemPrefersDark, systemReducesMotion } from '../lib/useAppearance'
+import { previewTheme, systemPrefersDark, systemReducesMotion } from '../lib/useAppearance'
 import { describeIssues, invalidFields } from './appearanceIssues'
 import type { SettingsWriteStatus } from './useSettingsWriter'
 import './settings.css'
+import { PROTOTYPE_ENABLED } from '../features/directory/prototype/prototypeStore'
+
+declare global {
+  interface Window {
+    queryLocalFonts?: () => Promise<readonly { family: string }[]>
+  }
+}
 
 export type Write = (patch: Partial<AppSettings>, delay?: number) => void
 
@@ -156,7 +163,7 @@ function Choice<T extends string>({
   )
 }
 
-export function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+export function Section({ id, title, children }: { id: string; title: ReactNode; children: ReactNode }) {
   return (
     <section className="settings-section" aria-labelledby={id}>
       <h3 className="settings-section-title" id={id}>
@@ -257,20 +264,27 @@ function Slider({
 // Sections
 
 export function AppearanceSection({ settings, write }: { settings: AppSettings; write: Write }) {
-  const noCustom = settings.customTheme === null
   const options: ChoiceOption<ColorScheme>[] = [
     { value: 'system', label: '跟随系统' },
     { value: 'light', label: '浅色' },
-    { value: 'dark', label: '深色' },
-    { value: 'custom', label: '自定义', unavailableReason: noCustom ? 'setting-scheme-help' : undefined }
+    { value: 'dark', label: '深色' }
   ]
+  if (!PROTOTYPE_ENABLED) return <Section id="settings-appearance" title="外观">
+    <SettingRow labelId="setting-scheme" label="配色">
+      <Choice<ColorScheme | 'custom'>
+        labelledBy="setting-scheme"
+        options={[...options, { value: 'custom', label: '自定义', unavailableReason: settings.customTheme === null ? 'theme-create-help' : undefined }]}
+        value={settings.customThemeEnabled ? 'custom' : settings.colorScheme}
+        onChange={(value) => write(value === 'custom' ? { customThemeEnabled: true } : { colorScheme: value, customThemeEnabled: false })}
+      />
+      {settings.customTheme === null && <span className="setting-help" id="theme-create-help">请先创建或导入主题</span>}
+    </SettingRow>
+  </Section>
   return (
     <Section id="settings-appearance" title="外观">
       <SettingRow
         labelId="setting-scheme"
         label="配色"
-        helpId="setting-scheme-help"
-        help={noCustom ? '“自定义”暂不可选：需要先在下方创建或导入一个自定义主题。' : '“自定义”使用下方的自定义主题。'}
       >
         <Choice
           labelledBy="setting-scheme"
@@ -278,6 +292,18 @@ export function AppearanceSection({ settings, write }: { settings: AppSettings; 
           value={settings.colorScheme}
           onChange={(colorScheme) => write({ colorScheme })}
         />
+      </SettingRow>
+      <SettingRow labelId="setting-theme-source" label="主题">
+        <Choice
+          labelledBy="setting-theme-source"
+          options={[
+            { value: 'builtin', label: '汐岛' },
+            { value: 'custom', label: settings.customTheme?.name ?? '自定义', unavailableReason: settings.customTheme === null ? 'theme-create-help' : undefined }
+          ]}
+          value={settings.customThemeEnabled ? 'custom' : 'builtin'}
+          onChange={(value) => write({ customThemeEnabled: value === 'custom' })}
+        />
+        {settings.customTheme === null && <span className="setting-help" id="theme-create-help">请先创建或导入主题</span>}
       </SettingRow>
     </Section>
   )
@@ -295,73 +321,65 @@ const HEX = /^#[0-9a-f]{6}$/i
 
 function sameTheme(a: CustomTheme | null, b: CustomTheme | null): boolean {
   if (a === null || b === null) return a === b
-  return (
-    a.name === b.name &&
-    a.base === b.base &&
-    a.opacity === b.opacity &&
-    a.radius === b.radius &&
-    THEME_COLOR_KEYS.every((key) => a.colors[key] === b.colors[key])
-  )
+  return a.name === b.name && a.opacity === b.opacity && a.radius === b.radius &&
+    (['light', 'dark'] as const).every((scheme) => THEME_COLOR_KEYS.every((key) => a.colors[scheme][key] === b.colors[scheme][key]))
 }
 
-/**
- * Custom theme editor. The draft keeps exactly what the user typed; every change is validated with
- * the shared checks. Valid drafts are applied (and the custom scheme selected); invalid ones are not,
- * their issues are listed, and the last usable theme stays in effect.
- */
+/** Valid drafts preview in this renderer; only 保存 writes settings. */
 export function ThemeSection({ settings, write, adopt }: { settings: AppSettings; write: Write; adopt: (settings: AppSettings) => void }) {
   const [draft, setDraft] = useState<CustomTheme | null>(settings.customTheme)
+  const [basis, setBasis] = useState(settings.customTheme)
   const [issues, setIssues] = useState<AppearanceIssue[]>([])
-  /** Last theme this editor applied; any other custom theme in settings came from elsewhere (import). */
-  const [written, setWritten] = useState<CustomTheme | null>(settings.customTheme)
-  const [basis, setBasis] = useState<CustomTheme | null>(settings.customTheme)
-  if (settings.customTheme !== basis) {
-    setBasis(settings.customTheme)
-    if (!sameTheme(settings.customTheme, written)) {
+  const [expanded, setExpanded] = useState(!PROTOTYPE_ENABLED)
+  const [editingScheme, setEditingScheme] = useState<SchemeBase>(resolveAppearance(settings, systemPrefersDark()).scheme)
+  useEffect(() => () => previewTheme(null), [])
+  useEffect(() => {
+    if (!sameTheme(settings.customTheme, basis)) {
+      setBasis(settings.customTheme)
       setDraft(settings.customTheme)
-      setWritten(settings.customTheme)
       setIssues([])
+      previewTheme(null)
     }
-  }
+  }, [settings.customTheme, basis])
 
-  const apply = (theme: CustomTheme, delay: number) => {
-    setWritten(theme)
-    write({ customTheme: theme, colorScheme: 'custom' }, delay)
-  }
-
-  const edit = (next: CustomTheme, delay = INPUT_DELAY) => {
+  const edit = (next: CustomTheme) => {
     setDraft(next)
     const parsed = parseCustomTheme(next)
+    setIssues(parsed.ok ? [] : parsed.issues)
     if (parsed.ok) {
-      setIssues([])
-      apply(parsed.value, delay)
-    } else setIssues(parsed.issues)
+      if (PROTOTYPE_ENABLED) previewTheme(parsed.value)
+      else write({ customTheme: parsed.value, customThemeEnabled: true })
+    }
   }
-
-  const create = () => {
-    const theme = themeFromBuiltin(resolveAppearance(settings, systemPrefersDark()).scheme)
-    setDraft(theme)
+  const create = () => edit(themeFromBuiltin(resolveAppearance(settings, systemPrefersDark()).scheme))
+  const discard = () => {
+    setDraft(settings.customTheme)
     setIssues([])
-    apply(theme, 0)
+    previewTheme(null)
   }
-
+  const save = () => {
+    if (draft === null) return
+    const parsed = parseCustomTheme(draft)
+    if (!parsed.ok) { setIssues(parsed.issues); return }
+    write({ customTheme: parsed.value, customThemeEnabled: true })
+    previewTheme(null)
+  }
+  const dirty = !sameTheme(draft, settings.customTheme)
   const invalid = invalidFields(issues)
   const describedBy = issues.length > 0 ? 'theme-issues' : undefined
   const usable = settings.customTheme
-
   return (
-    <Section id="settings-theme" title="自定义主题">
+    <Section id="settings-theme" title={PROTOTYPE_ENABLED ? <button type="button" className="theme-disclosure" aria-expanded={expanded} aria-controls="theme-editor-body" onClick={() => setExpanded(!expanded)}>自定义主题 <Icon name={expanded ? 'minus' : 'plus'} size={14} /></button> : '自定义主题'}>
+      <div id="theme-editor-body" hidden={!expanded}>
       {draft === null ? (
         <div className="theme-empty">
-          <p className="setting-help">还没有自定义主题。可以复制当前生效的配色，再调整颜色、透明度和圆角。</p>
           <button type="button" className="btn" onClick={create}>
             <Icon name="plus" />
-            从当前配色创建自定义主题
+            创建主题
           </button>
         </div>
       ) : (
         <div className="theme-editor">
-          <p className="setting-help">修改有效时立即应用，配色随之切换为“自定义”；无效的修改不会应用，也不会被自动更正。</p>
           <div className="theme-field">
             <label className="setting-label" htmlFor="theme-name">
               名称
@@ -378,25 +396,22 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
               onChange={(event) => edit({ ...draft, name: event.target.value })}
             />
           </div>
-          <SettingRow labelId="theme-base" label="基调" help="系统控件的明暗与状态颜色的起点">
+          <SettingRow labelId="theme-base" label="编辑颜色">
             <Choice<SchemeBase>
               labelledBy="theme-base"
-              options={[
-                { value: 'light', label: '浅色基调' },
-                { value: 'dark', label: '深色基调' }
-              ]}
-              value={draft.base}
-              onChange={(base) => edit({ ...draft, base }, 0)}
+              options={[{ value: 'light', label: '浅色' }, { value: 'dark', label: '深色' }]}
+              value={editingScheme}
+              onChange={(scheme) => { setEditingScheme(scheme); if (!PROTOTYPE_ENABLED) write({ colorScheme: scheme }) }}
             />
           </SettingRow>
 
           <div className="theme-colors" role="group" aria-label="颜色">
             {THEME_COLOR_KEYS.map((key) => {
               const field = COLOR_FIELDS[key]
-              const typed = draft.colors[key]
-              const picker = HEX.test(typed) ? typed.toLowerCase() : (usable?.colors[key] ?? '#000000')
-              const fieldInvalid = invalid.has(`colors.${key}`)
-              const setColor = (value: string) => edit({ ...draft, colors: { ...draft.colors, [key]: value } })
+              const typed = draft.colors[editingScheme][key]
+              const picker = HEX.test(typed) ? typed.toLowerCase() : (usable?.colors[editingScheme][key] ?? '#000000')
+              const fieldInvalid = invalid.has(`colors.${editingScheme}.${key}`)
+              const setColor = (value: string) => edit({ ...draft, colors: { ...draft.colors, [editingScheme]: { ...draft.colors[editingScheme], [key]: value } } })
               return (
                 <div key={key} className="theme-color">
                   <label className="theme-color-label" htmlFor={`theme-color-${key}`}>
@@ -438,7 +453,7 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
             labelId="theme-opacity"
             label="透明度"
             helpId="theme-opacity-help"
-            help="磨砂导航、工具栏和浮层的不透明程度，1 为完全不透明"
+            help="导航和浮层的透明度"
           >
             <Slider
               labelledBy="theme-opacity"
@@ -466,14 +481,20 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
           {issues.length > 0 && (
             <IssueList
               id="theme-issues"
-              title={`以下问题未解决，这些修改没有应用；${usable === null ? '当前配色' : `上次可用的主题“${usable.name}”`}仍然生效：`}
+              title="请调整以下颜色"
               issues={issues}
             />
           )}
         </div>
       )}
+      {PROTOTYPE_ENABLED && dirty && <div className="theme-transfer-buttons">
+        <button type="button" className="btn btn-primary" aria-disabled={issues.length > 0 || undefined} onClick={save}>保存</button>
+        <button type="button" className="btn" onClick={discard}>放弃修改</button>
+        <span className="setting-help" role="status">{issues.length > 0 ? '修改未应用' : '预览中'}</span>
+      </div>}
 
-      <ThemeTransfer adopt={adopt} />
+      <ThemeTransfer adopt={(next) => { previewTheme(null); adopt(next) }} />
+      </div>
     </Section>
   )
 }
@@ -481,9 +502,9 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
 type TransferResult = { tone: 'done' | 'warning'; text: string; issues?: AppearanceIssue[] }
 
 const IMPORT_FAILURES = {
-  read: '导入失败：无法读取所选文件，当前设置未改变',
-  'too-large': '导入失败：文件过大（主题文件不超过 64 KB），当前设置未改变',
-  'not-saved': '导入失败：主题有效，但本地存储拒绝保存，当前设置未改变'
+  read: '无法读取文件',
+  'too-large': '主题文件不能超过 64 KB',
+  'not-saved': '主题未能保存'
 } as const
 
 /** Theme import / export through the system file dialogs (main shows them). Cancelling says nothing. */
@@ -502,20 +523,20 @@ function ThemeTransfer({ adopt }: { adopt: (settings: AppSettings) => void }) {
           adopt(outcome.settings)
           setResult({
             tone: 'done',
-            text: `已导入主题“${outcome.settings.customTheme?.name ?? ''}”：配色已切换为自定义，文件中的字体、字号和阅读宽度已一并应用`
+            text: `已导入“${outcome.settings.customTheme?.name ?? ''}”`
           })
         } else if (outcome.status === 'rejected') {
-          setResult({ tone: 'warning', text: '未导入：主题文件不可用，当前主题和阅读参数保持不变。原因：', issues: outcome.issues })
+          setResult({ tone: 'warning', text: '主题文件不可用', issues: outcome.issues })
         } else if (outcome.status === 'failed') {
           setResult({ tone: 'warning', text: IMPORT_FAILURES[outcome.reason] })
         }
       } else {
         const outcome = await window.xidao.theme.export()
-        if (outcome.status === 'exported') setResult({ tone: 'done', text: '已导出主题文件（含当前阅读参数）' })
-        else if (outcome.status === 'failed') setResult({ tone: 'warning', text: '导出失败：未能写入所选文件' })
+        if (outcome.status === 'exported') setResult({ tone: 'done', text: '已导出主题' })
+        else if (outcome.status === 'failed') setResult({ tone: 'warning', text: '未能写入文件' })
       }
     } catch {
-      setResult({ tone: 'warning', text: action === 'import' ? '导入失败：操作未完成，当前设置未改变' : '导出失败：操作未完成' })
+      setResult({ tone: 'warning', text: action === 'import' ? '导入未完成' : '导出未完成' })
     } finally {
       setBusy(false)
     }
@@ -531,7 +552,6 @@ function ThemeTransfer({ adopt }: { adopt: (settings: AppSettings) => void }) {
           导出主题…
         </button>
       </div>
-      <p className="setting-help">主题文件是带版本的 JSON，包含颜色、透明度、圆角与阅读参数；不可用的文件会被拒绝，当前设置保持不变。</p>
       <div role="status" className="theme-transfer-result">
         {result !== null && (
           <>
@@ -553,20 +573,45 @@ function ThemeTransfer({ adopt }: { adopt: (settings: AppSettings) => void }) {
   )
 }
 
+function FontPicker({ value, onChange }: { value: ReadingFont; onChange: (font: ReadingFont) => void }) {
+  const [families, setFamilies] = useState<string[]>([])
+  const [filter, setFilter] = useState('')
+  const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle')
+  const load = async () => {
+    if (state === 'loading') return
+    if (window.queryLocalFonts === undefined) { setState('unavailable'); return }
+    setState('loading')
+    try {
+      const fonts = await window.queryLocalFonts()
+      setFamilies([...new Set(fonts.map((font) => font.family))].filter((family) => family.length > 0 && family.length <= 200).sort((a, b) => a.localeCompare(b)))
+      setState('ready')
+    } catch { setState('unavailable') }
+  }
+  useEffect(() => {
+    if (PROTOTYPE_ENABLED) void load()
+  }, [])
+  if (!PROTOTYPE_ENABLED) return <Choice<ReadingFont> labelledBy="setting-font" options={[{ value: 'sans', label: '无衬线' }, { value: 'serif', label: '衬线' }]} value={value} onChange={onChange} />
+  const selectedFamily = value.startsWith('local:') ? value.slice(6) : null
+  const choices = [...new Set(selectedFamily === null ? families : [selectedFamily, ...families])].filter((family) => family.toLocaleLowerCase().includes(filter.toLocaleLowerCase()))
+  return <div className="font-picker">
+    <input type="search" className="text-input" aria-label="筛选字体" placeholder="筛选字体" value={filter} onChange={(event) => setFilter(event.target.value)} />
+    <select className="text-input" size={6} aria-labelledby="setting-font" value={value} onChange={(event) => onChange(event.target.value as ReadingFont)}>
+      <option value="sans">系统无衬线</option>
+      <option value="serif">系统衬线</option>
+      {choices.map((family) => <option key={family} value={`local:${family}`}>{family}</option>)}
+    </select>
+    {state !== 'ready' && <button type="button" className="btn btn-quiet" aria-disabled={state === 'loading' || undefined} onClick={() => void load()}>{state === 'loading' ? '正在读取字体…' : '读取系统字体'}</button>}
+    {state === 'unavailable' && <span className="setting-help" role="status">无法读取系统字体，可使用内置字体</span>}
+    {state === 'ready' && filter && choices.length === 0 && <span className="setting-help" role="status">没有匹配的字体</span>}
+  </div>
+}
+
 export function ReadingSection({ settings, write }: { settings: AppSettings; write: Write }) {
   const { reading } = settings
   return (
     <Section id="settings-reading" title="阅读">
-      <SettingRow labelId="setting-font" label="字体">
-        <Choice<ReadingFont>
-          labelledBy="setting-font"
-          options={[
-            { value: 'sans', label: '无衬线' },
-            { value: 'serif', label: '衬线' }
-          ]}
-          value={reading.font}
-          onChange={(font) => write({ reading: { ...reading, font } })}
-        />
+      <SettingRow labelId="setting-font" label="正文字体">
+        <FontPicker value={reading.font} onChange={(font) => write({ reading: { ...reading, font } })} />
       </SettingRow>
       <SettingRow labelId="setting-font-size" label="字号" help="正文与串标题的文字大小">
         <Slider
@@ -583,7 +628,7 @@ export function ReadingSection({ settings, write }: { settings: AppSettings; wri
         labelId="setting-reading-width"
         label="阅读宽度"
         helpId="setting-reading-width-help"
-        help="正文每行最多的字数；窗口不够宽时先收窄两侧留白，再收起导航。"
+        help="正文每行最多的字数"
       >
         <Slider
           labelledBy="setting-reading-width"
@@ -598,7 +643,7 @@ export function ReadingSection({ settings, write }: { settings: AppSettings; wri
       </SettingRow>
       <figure className="reading-preview">
         <figcaption className="setting-help">预览</figcaption>
-        <p className="reading-preview-text">汐岛的正文使用这里选择的字体与字号。窗口变窄时，正文两侧的留白先收窄，字号保持不变。</p>
+        <p className="reading-preview-text">潮水退去，纸页留下。这里预览正文的字体和字号。</p>
       </figure>
     </Section>
   )

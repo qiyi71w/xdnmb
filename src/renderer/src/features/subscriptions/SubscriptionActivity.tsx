@@ -37,14 +37,10 @@ export function WriteStatus() {
               {active.kind === 'change' ? `正在${ACTION_NAME[active.action]}` : '正在核对'}：{objectLine(active)}
             </p>
             <p className="sub-write-detail">
-              {active.kind === 'change'
-                ? `已先保存这次意图，使用配置代次 ${active.generation}；等待服务端报告后回读核对。之后切换来源或身份不会改变这次操作。`
-                : `只读核对，使用这条记录当时的身份与配置代次 ${active.generation}，不会再次发出写入。`}
+              {active.kind === 'change' ? '等待服务端报告，之后回读核对。' : '只读核对，不会再次写入。'}
             </p>
             {active.reminders !== null && <LinkageLine linkage={active.reminders} className="sub-write-detail" />}
-            {active.stopRequested && (
-              <p className="sub-write-detail">已请求停止读取；已经发出的写入不会因此撤回。</p>
-            )}
+            {active.stopRequested && <p className="sub-write-detail">已停止读取；已发出的写入不会撤回。</p>}
           </div>
           <button type="button" className="btn btn-small" onClick={stopReadback} disabled={active.stopRequested}>
             {active.kind === 'change' ? '停止回读' : '停止核对'}
@@ -69,10 +65,10 @@ function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: ()
       lines = [`服务端报告：${reportSummary(operation)}`, `回读核对：${verificationText(operation)}`]
       if (operation.reportError?.kind === 'rate-limited') {
         tone = 'warn'
-        lines.push('因限流或需要验证，已停止自动回读；稍后可在操作记录中手动核对，不会自动重发。')
+        lines.push('因限流或需要验证，已停止回读；可在操作记录中手动核对。')
       } else if (needsReconcile(operation)) {
         tone = 'warn'
-        lines.push('结果尚不能确认，可在操作记录中手动核对；不会自动重发。')
+        lines.push('结果未确认，可在操作记录中手动核对。')
       }
       break
     }
@@ -81,7 +77,7 @@ function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: ()
         // The write was dispatched; only its local record failed. Never present this as 未执行.
         tone = 'warn'
         title = `${what}的结果未知：${failureText(outcome.reason)}`
-        lines = [objectLine(write), '请在操作记录中核对（只读，不会重发写入），不要直接重复操作。']
+        lines = [objectLine(write), '请在操作记录中核对，不要直接重复操作。']
         break
       }
       tone = 'error'
@@ -93,8 +89,8 @@ function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: ()
       title = write.kind === 'change' ? `${what}的结果未知：应用内部请求失败` : '核对请求失败：应用内部请求失败'
       lines =
         write.kind === 'change'
-          ? [objectLine(write), '写入可能已经发出。请在操作记录中核对，不要直接重复操作。']
-          : [objectLine(write), '没有发出任何写入，可以稍后再核对。']
+          ? [objectLine(write), '写入可能已发出，请在操作记录中核对。']
+          : [objectLine(write), '没有发出写入，可以稍后再核对。']
       break
   }
   return (

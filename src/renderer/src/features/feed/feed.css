@@ -222,6 +222,12 @@
   color: var(--ink);
 }
 
+/* An admin's cookie ID is the only marker of an admin (no tag); it stays red when selected. */
+.user-hash.is-admin,
+.thread-row.is-selected .user-hash.is-admin {
+  color: var(--danger-ink);
+}
+
 .thread-row.is-selected::before,
 .thread-list li:has(> .thread-row.is-selected) + li > .thread-row::before {
   display: none;

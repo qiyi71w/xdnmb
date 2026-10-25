@@ -14,7 +14,7 @@ export function IdentitySettingsAction({ error }: { error: Failure | ReadError |
   const openSettings = useSettingsOpener()
   if (openSettings === null || identityErrorOf(error) === null) return null
   return (
-    <button type="button" className="btn btn-small" onClick={openSettings}>
+    <button type="button" className="btn btn-small" onClick={() => openSettings('cookies')}>
       打开设置
     </button>
   )

@@ -13,13 +13,12 @@ import {
   type CustomTheme,
   type Palette,
   type Parsed,
-  type ReadingFont,
   type ReadingParams,
   type SchemeBase
 } from './theme'
 
 /** `system` follows the operating system's light/dark preference. */
-export type ColorScheme = 'system' | 'light' | 'dark' | 'custom'
+export type ColorScheme = 'system' | 'light' | 'dark'
 
 /** `compact` only reduces padding of the main lists and controls; text size, theme and split stay. */
 export type Density = 'comfortable' | 'compact'
@@ -33,6 +32,7 @@ export interface AppSettings {
   /** Remembered close behavior; actual quit still handles unsaved editors. */
   closeAction: CloseAction
   colorScheme: ColorScheme
+  customThemeEnabled: boolean
   /** The user's custom theme; `null` until one is created or imported. Kept when another scheme is chosen. */
   customTheme: CustomTheme | null
   /** Post text font, size and preferred width; apply under every scheme. */
@@ -45,15 +45,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
   newTabSplitDefault: true,
   closeAction: 'ask',
   colorScheme: 'system',
+  customThemeEnabled: false,
   customTheme: null,
   reading: DEFAULT_READING,
   density: 'comfortable',
   motion: 'system'
 }
 
-export const SETTING_KEYS = ['newTabSplitDefault', 'closeAction', 'colorScheme', 'customTheme', 'reading', 'density', 'motion'] as const satisfies readonly (keyof AppSettings)[]
+export const SETTING_KEYS = ['newTabSplitDefault', 'closeAction', 'colorScheme', 'customThemeEnabled', 'customTheme', 'reading', 'density', 'motion'] as const satisfies readonly (keyof AppSettings)[]
 
-const COLOR_SCHEMES: readonly ColorScheme[] = ['system', 'light', 'dark', 'custom']
+const COLOR_SCHEMES: readonly ColorScheme[] = ['system', 'light', 'dark']
 const DENSITIES: readonly Density[] = ['comfortable', 'compact']
 const MOTIONS: readonly MotionPreference[] = ['system', 'reduce']
 
@@ -68,6 +69,7 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
   let parsed: Parsed<unknown>
   switch (key) {
     case 'newTabSplitDefault':
+    case 'customThemeEnabled':
       parsed = typeof value === 'boolean' ? { ok: true, value } : { ok: false, issues: [{ kind: 'field', field: key, problem: 'type' }] }
       break
     case 'closeAction':
@@ -96,8 +98,8 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
 
 /** The custom scheme needs a custom theme; anything else is consistent. */
 function consistencyIssues(settings: AppSettings): AppearanceIssue[] {
-  return settings.colorScheme === 'custom' && settings.customTheme === null
-    ? [{ kind: 'field', field: 'colorScheme', problem: 'unavailable' }]
+  return settings.customThemeEnabled && settings.customTheme === null
+    ? [{ kind: 'field', field: 'customThemeEnabled', problem: 'unavailable' }]
     : []
 }
 
@@ -134,7 +136,12 @@ export function settingsFromStored(stored: ReadonlyMap<string, unknown>): AppSet
     const parsed = parseSetting(key, stored.get(key))
     if (parsed.ok) (settings as Record<keyof AppSettings, unknown>)[key] = parsed.value
   }
-  if (consistencyIssues(settings).length > 0) settings.colorScheme = 'system'
+  if (stored.get('colorScheme') === 'custom' && settings.customTheme !== null) {
+    const oldTheme = stored.get('customTheme')
+    settings.colorScheme = isRecord(oldTheme) && (oldTheme.base === 'light' || oldTheme.base === 'dark') ? oldTheme.base : 'system'
+    settings.customThemeEnabled = true
+  }
+  if (consistencyIssues(settings).length > 0) settings.customThemeEnabled = false
   return settings
 }
 
@@ -163,7 +170,7 @@ export function zoomState(rawFactor: number): ZoomState {
   return { factor, canZoomIn: factor < ZOOM_FACTORS[ZOOM_FACTORS.length - 1]!, canZoomOut: factor > ZOOM_FACTORS[0] }
 }
 
-const READING_FONTS: Record<ReadingFont, string> = {
+const READING_FONTS: Record<'sans' | 'serif', string> = {
   sans: 'var(--font-ui)',
   serif: "'Songti SC', STSong, 'Noto Serif CJK SC', 'Noto Serif SC', 'Source Han Serif SC', SimSun, serif"
 }
@@ -177,10 +184,9 @@ export interface ResolvedAppearance {
 
 /** What the UI draws for `settings`; `systemDark` is the operating system's current preference. */
 export function resolveAppearance(settings: AppSettings, systemDark: boolean): ResolvedAppearance {
-  const custom = settings.colorScheme === 'custom' ? settings.customTheme : null
-  const scheme: SchemeBase =
-    custom !== null ? custom.base : settings.colorScheme === 'light' || settings.colorScheme === 'dark' ? settings.colorScheme : systemDark ? 'dark' : 'light'
-  const palette: Palette = custom !== null ? customPalette(custom) : BUILTIN_PALETTES[scheme]
+  const custom = settings.customThemeEnabled ? settings.customTheme : null
+  const scheme: SchemeBase = settings.colorScheme === 'light' || settings.colorScheme === 'dark' ? settings.colorScheme : systemDark ? 'dark' : 'light'
+  const palette: Palette = custom !== null ? customPalette(custom, scheme) : BUILTIN_PALETTES[scheme]
   const radius = custom !== null ? custom.radius : BUILTIN_RADIUS
   const { font, fontSize, readingWidth } = settings.reading
   const variables: Record<string, string> = {}
@@ -192,6 +198,6 @@ export function resolveAppearance(settings: AppSettings, systemDark: boolean): R
   variables['--radius-s'] = `${Math.round((radius * 6) / 14)}px`
   variables['--text-body'] = `${fontSize}px`
   variables['--reading-width'] = `${readingWidth * fontSize}px`
-  variables['--font-reading'] = READING_FONTS[font]
+  variables['--font-reading'] = font === 'sans' || font === 'serif' ? READING_FONTS[font] : `${JSON.stringify(font.slice(6))}, var(--font-ui)`
   return { scheme, variables }
 }

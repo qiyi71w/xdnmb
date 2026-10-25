@@ -37,7 +37,7 @@ function draft(patch: Partial<SavedDraft> = {}): SavedDraft {
 const overview = (ids: string[]): IdentityOverview => ({
   protection: 'available', writable: true,
   credentials: ids.map((id) => ({ id, name: `饼干${id}`, source: 'raw', importedAt: '2026-10-24T00:00:00.000Z' })),
-  roles: { browse: { state: 'none' }, 'default-post': { state: 'none' }, 'web-sync': { state: 'none' } }
+  roles: { 'default-post': { state: 'none' }, 'web-sync': { state: 'none' } }
 })
 
 describe('editors across threads and tabs', () => {

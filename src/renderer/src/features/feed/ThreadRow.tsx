@@ -43,8 +43,7 @@ export function ThreadRow({
         <span className="row-byline">
           <span className="row-author">
             {name !== null && <span className="row-name">{name}</span>}
-            {head.userHash !== null && <span className="user-hash">{head.userHash}</span>}
-            {head.isAdmin === true && <span className="tag tag-admin">管理员</span>}
+            {head.userHash !== null && <span className={head.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{head.userHash}</span>}
             {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
           </span>
           {head.createdAt !== null && <span className="row-time">{head.createdAt}</span>}

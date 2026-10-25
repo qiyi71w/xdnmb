@@ -55,7 +55,7 @@ function credentialSummary(row: CredentialRow): CredentialSummary {
 }
 
 function noRoles(): Record<IdentityRole, RoleSelection> {
-  return { browse: { state: 'none' }, 'default-post': { state: 'none' }, 'web-sync': { state: 'none' } }
+  return { 'default-post': { state: 'none' }, 'web-sync': { state: 'none' } }
 }
 
 interface PostRow {
@@ -924,7 +924,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
   listCredentials(): CredentialSummary[] {
     if (!this.db) return []
     return this.db.prepare<[], CredentialRow>(
-      'SELECT id, name, source, imported_at FROM credentials ORDER BY id'
+      'SELECT id, name, source, imported_at FROM credentials ORDER BY position, id'
     ).all().map(credentialSummary)
   }
 
@@ -943,7 +943,8 @@ class SqliteReadingDatabase implements ReadingDatabase {
   insertCredential(input: { name: string; source: CredentialSource; importedAt: string; ciphertext: Uint8Array }): CredentialSummary {
     const db = this.writable()
     const row = db.prepare<[string, string, string, Buffer], CredentialRow>(`
-      INSERT INTO credentials (name, source, imported_at, ciphertext) VALUES (?, ?, ?, ?)
+      INSERT INTO credentials (name, source, imported_at, ciphertext, position)
+      VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM credentials))
       RETURNING id, name, source, imported_at
     `).get(input.name, input.source, input.importedAt, Buffer.from(input.ciphertext))
     if (!row) throw new Error('credential insert returned no row')
@@ -956,6 +957,17 @@ class SqliteReadingDatabase implements ReadingDatabase {
 
   deleteCredential(id: CredentialId): boolean {
     return this.writable().prepare('DELETE FROM credentials WHERE id = ?').run(id).changes === 1
+  }
+
+  reorderCredentials(ids: CredentialId[]): boolean {
+    const db = this.writable()
+    return db.transaction(() => {
+      const stored = db.prepare<[], { id: number }>('SELECT id FROM credentials').all().map((row) => String(row.id))
+      if (ids.length !== stored.length || new Set(ids).size !== ids.length || !ids.every((id) => stored.includes(id))) return false
+      const update = db.prepare('UPDATE credentials SET position = ? WHERE id = ?')
+      ids.forEach((id, index) => update.run(index + 1, id))
+      return true
+    }).immediate()
   }
 
   loadRoleSelections(): Record<IdentityRole, RoleSelection> {

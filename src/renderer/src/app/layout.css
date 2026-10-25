@@ -80,6 +80,22 @@
   padding: 8px 8px 6px;
 }
 
+:root .topbar.is-native-titlebar {
+  -webkit-app-region: drag;
+  min-height: 44px;
+  padding-right: max(148px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px));
+}
+
+:root .topbar.is-native-titlebar.is-macos {
+  padding-left: 80px;
+  padding-right: 8px;
+}
+
+.topbar.is-native-titlebar button,
+.topbar.is-native-titlebar .tab {
+  -webkit-app-region: no-drag;
+}
+
 .history-buttons {
   display: flex;
   flex: none;
@@ -226,6 +242,15 @@
   padding: 5px 8px 4px;
 }
 
+:root[data-density='compact'] .topbar.is-native-titlebar:not(.is-macos) {
+  padding-right: max(148px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px));
+}
+
+:root[data-density='compact'] .topbar.is-native-titlebar.is-macos {
+  padding-left: 80px;
+  padding-right: 8px;
+}
+
 :root[data-density='compact'] .tab-strip {
   gap: 2px;
 }
@@ -363,4 +388,27 @@
 
 .pane-empty-action {
   margin-top: 8px;
+}
+
+.theme-disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.font-picker {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 320px);
+}
+
+.font-picker select {
+  min-height: 144px;
+  width: 100%;
 }

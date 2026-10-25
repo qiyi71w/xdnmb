@@ -1,6 +1,7 @@
 // PROTOTYPE (throwaway): choosing a board by name, shared by D's board panel and E's 全部版块 list
 // and empty tab page. A filter field, 收藏 first, then every group. `columns` lays the groups side by
-// side so the whole directory is seen at once (D); `list` stacks them, each group collapsible (E).
+// side so the whole directory is seen at once (D); `list` stacks them, each group collapsible (E,
+// sharing the saved collapse state of the board trees).
 // Hidden boards are never listed: filter matches among them (or all of them, when nothing else is
 // left) are named below the results with 显示 to bring them back; no match offers 清除筛选.
 // Keyboard: ↓ from the field enters the boards (or those buttons when there are none), ↑/↓/Home/End
@@ -11,14 +12,14 @@ import { Icon } from '../../../components/Icon'
 import { useRovingFocus } from '../../../lib/useRovingFocus'
 import type { ListRef } from '../../tabs/tabsState'
 import { groupKey, type RovingItemProps } from './PrototypeNavParts'
-import { navActions, type Board, type BoardGroup, type BoardView } from './prototypeStore'
+import { navActions, useNavPrefs, type Board, type BoardGroup, type BoardView } from './prototypeStore'
 
-function matches(text: string, query: string): boolean {
+export function matches(text: string, query: string): boolean {
   return text.toLowerCase().includes(query)
 }
 
-/** Groups narrowed to `query`: a matching group title keeps the whole group. */
-function matchingGroups(groups: BoardGroup[], query: string): BoardGroup[] {
+/** Groups narrowed to `query` (trimmed, lower case): a matching group title keeps the whole group. */
+export function matchingGroups(groups: BoardGroup[], query: string): BoardGroup[] {
   return groups
     .map((group) => (matches(group.title, query) ? group : { ...group, boards: group.boards.filter((item) => matches(item.label, query)) }))
     .filter((group) => group.boards.length > 0)
@@ -70,7 +71,7 @@ export function BoardPicker({
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+  const collapsed = useNavPrefs().collapsed
   const normalized = query.trim().toLowerCase()
   const shown = useMemo(() => filtered(view, normalized), [view, normalized])
   const filtering = normalized !== ''
@@ -80,7 +81,7 @@ export function BoardPicker({
       ...shown.favorites.map((item) => item.key),
       ...shown.groups.flatMap((group) => [
         ...(shape === 'list' ? [groupKey(group.id)] : []),
-        ...(shape === 'list' && !filtering && collapsed.has(group.id) ? [] : group.boards.map((item) => item.key))
+        ...(shape === 'list' && !filtering && collapsed.includes(group.id) ? [] : group.boards.map((item) => item.key))
       ])
     ],
     [shown, shape, filtering, collapsed]
@@ -113,12 +114,7 @@ export function BoardPicker({
     const firstOffered = offered[0]
     if (firstOffered === undefined) return
     refocus.current = { key: firstOffered.key, star: false }
-    setCollapsed((previous) => {
-      if (!hiddenShown.some((group) => previous.has(group.id))) return previous
-      const next = new Set(previous)
-      for (const group of hiddenShown) next.delete(group.id)
-      return next
-    })
+    for (const group of hiddenShown) if (collapsed.includes(group.id)) navActions.setCollapsed(group.id, false)
     for (const item of offered) navActions.setBoardHidden(item.key, false)
   }
 
@@ -221,7 +217,7 @@ export function BoardPicker({
         {shown.groups.length > 0 && (
           <div className="proto-picker-groups">
             {shown.groups.map((group) => {
-              const closed = shape === 'list' && !filtering && collapsed.has(group.id)
+              const closed = shape === 'list' && !filtering && collapsed.includes(group.id)
               const listId = `${fieldId}-${group.id}`
               return (
                 <section key={group.id} className="proto-picker-group" aria-label={group.title}>
@@ -233,14 +229,7 @@ export function BoardPicker({
                         aria-expanded={!closed}
                         aria-controls={closed ? undefined : listId}
                         disabled={filtering}
-                        onClick={() =>
-                          setCollapsed((previous) => {
-                            const next = new Set(previous)
-                            if (next.has(group.id)) next.delete(group.id)
-                            else next.add(group.id)
-                            return next
-                          })
-                        }
+                        onClick={() => navActions.setCollapsed(group.id, !collapsed.includes(group.id))}
                         {...(filtering ? {} : roving.itemProps(groupKey(group.id)))}
                       >
                         <Icon name="chevron" size={12} className={closed ? 'proto-chevron' : 'proto-chevron is-open'} />

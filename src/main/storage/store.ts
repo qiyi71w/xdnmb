@@ -66,7 +66,7 @@ export async function openReadingStore(options: {
       case 'getReadingState': value = emptyReadingState(args[0] as ThreadId); break
       case 'loadSettings': value = { ...DEFAULT_SETTINGS }; break
       case 'loadRoleSelections':
-        value = { browse: { state: 'none' }, 'default-post': { state: 'none' }, 'web-sync': { state: 'none' } }
+        value = { 'default-post': { state: 'none' }, 'web-sync': { state: 'none' } }
         break
       case 'loadSubscriptionConfiguration':
         value = { context: { generation: 0, appCredentialId: null, webCredentialId: null }, source: 'app' }; break
@@ -168,6 +168,7 @@ export async function openReadingStore(options: {
     insertCredential: (input) => request('insertCredential', input),
     renameCredential: (id, name) => request('renameCredential', id, name),
     deleteCredential: (id) => request('deleteCredential', id),
+    reorderCredentials: (ids) => request('reorderCredentials', ids),
     loadRoleSelections: () => request('loadRoleSelections'),
     setRoleSelection: (role, id) => request('setRoleSelection', role, id),
     listDrafts: () => request('listDrafts'),

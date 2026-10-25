@@ -828,7 +828,7 @@ function IdentityRow({
         ))}
       </select>
       {overview !== null && credentials.length === 0 && openSettings !== null && (
-        <button type="button" className="btn btn-small" onClick={openSettings}>
+        <button type="button" className="btn btn-small" onClick={() => openSettings('cookies')}>
           导入饼干
         </button>
       )}

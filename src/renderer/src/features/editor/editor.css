@@ -544,8 +544,14 @@
   animation: compose-modal-in 0.2s var(--ease-out);
 }
 
+/* Dim and soften the page enough that its text does not compete with the editor. */
 .compose-modal::backdrop {
-  background: oklch(0.2 0.02 240 / 0.28);
+  background: oklch(0.2 0.02 240 / 0.45);
+  backdrop-filter: blur(3px);
+}
+
+:root[data-scheme='dark'] .compose-modal::backdrop {
+  background: oklch(0.06 0.01 240 / 0.62);
 }
 
 @keyframes compose-modal-in {

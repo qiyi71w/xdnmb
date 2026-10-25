@@ -275,6 +275,7 @@ export interface XidaoApi {
   view: {
     getZoom(): Promise<ZoomState>
     zoom(input: { action: ZoomAction }): Promise<ZoomState>
+    updateTitleBar(input: { color: string; symbolColor: string; scheme: 'system' | 'light' | 'dark' }): Promise<void>
   }
   /**
    * Post images. The caller names a stored post, never a URL or path; requests go only to the
@@ -312,6 +313,11 @@ export interface XidaoApi {
     remove(input: { credentialId: CredentialId }): Promise<IdentityMutationResult>
     /** Sets one role only; `null` clears it to `none`. */
     select(input: { role: IdentityRole; credentialId: CredentialId | null }): Promise<IdentityMutationResult>
+    /**
+     * Replaces the credential order; `credentialIds` must be exactly the stored IDs (else `not-found`,
+     * nothing changed). The first one is sent with forum reads.
+     */
+    reorder(input: { credentialIds: CredentialId[] }): Promise<IdentityMutationResult>
   }
   /**
    * Saved drafts and editor attachments. Drafts are never sent automatically; nothing here talks
@@ -395,6 +401,7 @@ export const IpcChannel = {
   exportTheme: 'theme:export',
   getZoom: 'view:get-zoom',
   zoom: 'view:zoom',
+  updateTitleBar: 'view:update-title-bar',
   openExternal: 'links:open-external',
   loadImage: 'images:load',
   cancelImage: 'images:cancel',
@@ -406,6 +413,7 @@ export const IpcChannel = {
   identityRename: 'identities:rename',
   identityRemove: 'identities:remove',
   identitySelect: 'identities:select',
+  identityReorder: 'identities:reorder',
   listDrafts: 'drafts:list',
   saveDraft: 'drafts:save',
   deleteDraft: 'drafts:delete',
@@ -416,6 +424,7 @@ export const IpcChannel = {
   selectThreadIdentity: 'posting:select-thread-identity',
   subscriptionOverview: 'subscriptions:overview',
   subscriptionConfigureApp: 'subscriptions:configure-app',
+  subscriptionRevealApp: 'subscriptions:reveal-app',
   subscriptionSelectSource: 'subscriptions:select-source',
   subscriptionObservation: 'subscriptions:observation',
   subscriptionRead: 'subscriptions:read',

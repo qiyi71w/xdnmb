@@ -26,6 +26,9 @@ import {
   stateDetail
 } from './reminderText'
 import { failureText, useRemindersContext } from './useReminders'
+import { useListOpener } from './openList'
+// PROTOTYPE (throwaway): no read/unread surface (#20).
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import '../feed/feed.css'
 import './reminders.css'
 
@@ -75,6 +78,7 @@ export function ReminderPane({
   onOpenTarget: (thread: ThreadOpen) => boolean
 }) {
   const { overview, failure, reload } = useRemindersContext()
+  const openList = useListOpener()
   const registry = useContext(ContentRegistryContext)
   const headingId = useId()
   useRegisterContent('lists', entryKey, { refresh: () => void reload() })
@@ -146,7 +150,8 @@ export function ReminderPane({
       const result = await window.xidao.reminders.check()
       if (!alive.current) return
       if (result.accepted) {
-        setMessage({ text: '已开始检查，结果会逐步出现在下面', tone: 'info' })
+        // The running check shows its own progress, then its outcome: no separate “started” line.
+        setMessage(null)
       } else {
         setMessage({ text: refusalText(result), tone: result.reason === 'storage' ? 'error' : 'warn' })
         if (result.reason === 'cooldown' && result.retryAfterMs > 0) {
@@ -267,6 +272,18 @@ export function ReminderPane({
   const running = overview?.checker.running === true
   const round = overview?.currentRound ?? null
   const coverageProblem = overview !== null && overviewHasCoverageProblem(overview)
+  const empty = overview !== null && overview.threads.length === 0
+  const notification = overview?.lastNotification != null ? notificationText(overview.lastNotification) : null
+  /** After a check: one line only — the click's own refusal, else a failed notification, else the round's outcome. */
+  const result: { text: string; tone: 'info' | 'warn' | 'error' } | null = running
+    ? null
+    : message !== null
+      ? message
+      : notification?.warn === true
+        ? { text: notification.text, tone: 'warn' }
+        : overview?.lastRound != null
+          ? { text: roundOutcomeText(overview.lastRound), tone: 'info' }
+          : null
 
   return (
     <section className="list-pane reminder-pane" aria-labelledby={headingId}>
@@ -274,12 +291,11 @@ export function ReminderPane({
         <header className="list-header">
           <div className="list-title-row">
             <h2 className="list-title" id={headingId}>
-              <span className="list-kind">提醒</span>
-              <span className="list-name">按串分组</span>
+              <span className="list-name">提醒</span>
             </h2>
-            {overview !== null && (
+            {overview !== null && (!PROTOTYPE_ENABLED || coverageProblem) && (
               <p className="reminder-total">
-                {overview.totalUnread > 0 ? `${formatReminderCount(overview.totalUnread)} 条未读提醒` : '没有未读提醒'}
+                {!PROTOTYPE_ENABLED && (overview.totalUnread > 0 ? `${formatReminderCount(overview.totalUnread)} 条未读提醒` : '没有未读提醒')}
                 {coverageProblem && (
                   <span className="reminder-total-note">
                     <Icon name="alert" size={13} />
@@ -294,45 +310,35 @@ export function ReminderPane({
         <div className="reminder-checker">
           <div className="reminder-checker-row">
             {running ? (
-              <button type="button" className="btn" aria-busy={request === 'cancel' || undefined} onClick={() => void cancelCheck()}>
-                <Icon name="close" />
+              <button type="button" className="btn btn-small" aria-busy={request === 'cancel' || undefined} onClick={() => void cancelCheck()}>
+                <Icon name="close" size={14} />
                 {request === 'cancel' ? '正在取消…' : '取消检查'}
               </button>
             ) : (
               <button
                 type="button"
-                className="btn btn-primary"
+                className="btn btn-small btn-quiet"
                 aria-busy={request === 'check' || undefined}
                 disabled={overview === null}
                 onClick={() => void startCheck()}
               >
-                <Icon name="refresh" />
+                <Icon name="refresh" size={14} />
                 {request === 'check' ? '正在开始…' : '检查更新'}
               </button>
             )}
             <div className="reminder-checker-status" role="status">
               {running && round !== null && <Loading live={false}>{progressText(round)}</Loading>}
               {running && round === null && <Loading live={false}>正在检查…</Loading>}
-              {!running && cooldownLeft > 0 && (
-                <p className="reminder-checker-line">冷却中：{secondsText(cooldownLeft)}后可以再次检查（不会自动开始）</p>
-              )}
             </div>
+            {/* Counts down every second: deliberately outside any live region. */}
+            {!running && cooldownLeft > 0 && <p className="reminder-checker-line">{secondsText(cooldownLeft)}后可再次检查</p>}
           </div>
-          {message !== null && (
-            <p className={`reminder-checker-message is-${message.tone}`} role={message.tone === 'error' ? 'alert' : 'status'}>
-              <Icon name={message.tone === 'info' ? 'info' : 'alert'} size={14} />
-              <span>{message.text}</span>
+          {result !== null && (
+            <p className={`reminder-checker-message is-${result.tone}`} role={result.tone === 'error' ? 'alert' : 'status'}>
+              {result.tone !== 'info' && <Icon name="alert" size={14} />}
+              <span>{result.text}</span>
             </p>
           )}
-          {overview?.lastRound != null && <p className="reminder-checker-line">{roundOutcomeText(overview.lastRound)}</p>}
-          {overview?.lastNotification != null && (
-            <p className={notificationText(overview.lastNotification).warn ? 'reminder-checker-line is-warning' : 'reminder-checker-line'}>
-              {notificationText(overview.lastNotification).text}
-            </p>
-          )}
-          <p className="reminder-checker-hint">
-            检查只在冷启动、从托盘或 Dock 重新打开窗口、或点“检查更新”时进行，三者共用 60 秒冷却；每批最多读 5 页，轮流处理各串。列表和通知不会把发言标为已读。
-          </p>
         </div>
 
         <div className="list-status">
@@ -350,10 +356,14 @@ export function ReminderPane({
           )}
         </div>
 
-        {overview !== null && overview.threads.length === 0 && (
+        {empty && (
           <div className="list-empty" role="status">
             <p className="list-empty-title">还没有开启提醒的串</p>
-            <p className="list-empty-text">在串的工具栏、订阅列表或收藏中点“提醒”，可分别开启全串更新、PO追更和引用我的发言。</p>
+            {openList !== null && (
+              <button type="button" className="btn reminder-empty-action" onClick={() => openList({ kind: 'subscriptions' })}>
+                去订阅的串
+              </button>
+            )}
           </div>
         )}
 
@@ -461,7 +471,9 @@ function ReminderGroup({
       </div>
 
       <p className="reminder-counts">
-        {group.unreadCount > 0 ? (
+        {PROTOTYPE_ENABLED ? (
+          <span>{group.eventCount > 0 ? `${formatReminderCount(group.eventCount)} 条提醒` : emptyText(group)}</span>
+        ) : group.unreadCount > 0 ? (
           <span className="reminder-unread">{formatReminderCount(group.unreadCount)} 条未读</span>
         ) : group.eventCount > 0 ? (
           <span>没有未读提醒</span>
@@ -471,7 +483,7 @@ function ReminderGroup({
         {group.uncertainCount > 0 && (
           <span className="reminder-uncertain">
             <Icon name="alert" size={13} />
-            另有 {group.uncertainCount} 条无法确认是否在提醒起点之后，不计入提醒
+            另有 {group.uncertainCount} 条无法确认是否在提醒起点之后
           </span>
         )}
       </p>
@@ -525,13 +537,13 @@ function EventRow({
     <>
       <button
         type="button"
-        className={event.read ? 'reminder-event' : 'reminder-event is-unread'}
+        className={event.read || PROTOTYPE_ENABLED ? 'reminder-event' : 'reminder-event is-unread'}
         aria-describedby={open !== null ? statusId : undefined}
         aria-busy={busy !== null || undefined}
         onClick={() => onLocate(event.postId, 'navigate')}
       >
         <span className="reminder-event-top">
-          <span className={event.read ? 'tag' : 'tag tag-po'}>{event.read ? '已读' : '未读'}</span>
+          {!PROTOTYPE_ENABLED && <span className={event.read ? 'tag' : 'tag tag-po'}>{event.read ? '已读' : '未读'}</span>}
           {event.kinds.map((kind) => (
             <span key={kind} className="reminder-event-kind">
               {KIND_NAME[kind]}

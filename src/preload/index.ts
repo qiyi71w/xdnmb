@@ -66,6 +66,7 @@ const api: XidaoApi = {
   subscriptions: {
     getOverview: () => ipcRenderer.invoke(IpcChannel.subscriptionOverview),
     configureApp: (input) => ipcRenderer.invoke(IpcChannel.subscriptionConfigureApp, input),
+    revealAppUuid: () => ipcRenderer.invoke(IpcChannel.subscriptionRevealApp),
     selectSource: (input) => ipcRenderer.invoke(IpcChannel.subscriptionSelectSource, input),
     getObservation: (input) => ipcRenderer.invoke(IpcChannel.subscriptionObservation, input),
     read: (input) => ipcRenderer.invoke(IpcChannel.subscriptionRead, input),
@@ -114,7 +115,8 @@ const api: XidaoApi = {
   },
   view: {
     getZoom: () => ipcRenderer.invoke(IpcChannel.getZoom),
-    zoom: (input) => ipcRenderer.invoke(IpcChannel.zoom, input)
+    zoom: (input) => ipcRenderer.invoke(IpcChannel.zoom, input),
+    updateTitleBar: (input) => ipcRenderer.invoke(IpcChannel.updateTitleBar, input)
   },
   links: {
     openExternal: (input) => ipcRenderer.invoke(IpcChannel.openExternal, input)
@@ -131,7 +133,8 @@ const api: XidaoApi = {
     importRaw: (input) => ipcRenderer.invoke(IpcChannel.identityImportRaw, input),
     rename: (input) => ipcRenderer.invoke(IpcChannel.identityRename, input),
     remove: (input) => ipcRenderer.invoke(IpcChannel.identityRemove, input),
-    select: (input) => ipcRenderer.invoke(IpcChannel.identitySelect, input)
+    select: (input) => ipcRenderer.invoke(IpcChannel.identitySelect, input),
+    reorder: (input) => ipcRenderer.invoke(IpcChannel.identityReorder, input)
   },
   drafts: {
     list: () => ipcRenderer.invoke(IpcChannel.listDrafts),

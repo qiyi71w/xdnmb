@@ -49,7 +49,8 @@ export function TabView({
   onShowPane,
   onOpenTarget,
   onOpenNav,
-  onOpenFromOnlineSearch
+  onOpenFromOnlineSearch,
+  composeHidden = false
 }: {
   tab: Tab
   active: boolean
@@ -75,6 +76,8 @@ export function TabView({
    * that entry is no longer current.
    */
   onOpenFromOnlineSearch: (entryKey: number, init: EntryInit) => boolean
+  /** PROTOTYPE: something covers the tab content (the settings page); its compose modal stays closed. */
+  composeHidden?: boolean
 }) {
   const entry = currentEntry(tab)
   const listRef = useRef<HTMLDivElement>(null)
@@ -119,7 +122,7 @@ export function TabView({
   let body
   if (entry.kind === 'thread') {
     const target: PostTarget = { kind: 'reply', threadId: entry.thread.threadId }
-    composeTargets.push({ target, displayed: active })
+    composeTargets.push({ target, displayed: active && !composeHidden })
     body = (
       <main className="reader-wrap is-page" ref={readerRef} tabIndex={-1}>
         <ThreadPane
@@ -189,7 +192,7 @@ export function TabView({
     const forumTarget: PostTarget | null = feed.kind === 'forum' ? { kind: 'thread', forumId: feed.id } : null
     // PROTOTYPE: the panel floats over the tab, so it stays shown whichever pane the single-pane
     // fallback shows.
-    if (PROTOTYPE_ENABLED && forumTarget !== null) composeTargets.push({ target: forumTarget, displayed: active })
+    if (PROTOTYPE_ENABLED && forumTarget !== null) composeTargets.push({ target: forumTarget, displayed: active && !composeHidden })
     const listDock =
       forumTarget !== null && !PROTOTYPE_ENABLED ? (
         <EditorDock tabId={tab.id} target={forumTarget} displayed={active && listVisible} />
@@ -284,7 +287,7 @@ export function TabView({
       )
     }
     if (PROTOTYPE_ENABLED && splitShown && entry.thread !== null) {
-      composeTargets.push({ target: { kind: 'reply', threadId: entry.thread.threadId }, displayed: active })
+      composeTargets.push({ target: { kind: 'reply', threadId: entry.thread.threadId }, displayed: active && !composeHidden })
     }
     body = splitShown ? (
       <div className={single ? 'split is-single' : 'split'}>

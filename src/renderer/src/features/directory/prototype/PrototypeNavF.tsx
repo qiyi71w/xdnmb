@@ -1,7 +1,8 @@
 // PROTOTYPE (throwaway) variant F — 可收起版块栏: the board column stays, redrawn: no counts, 收藏 as the
 // first group, groups open by default with headings that stick to the top and collapse on click, and
 // a width that follows its names. The rail's 版块 button collapses the column to the rail; while it
-// is collapsed the same button pops the column out over the content, and choosing a board puts it away.
+// is collapsed the same button pops the column out over the content, choosing a board puts it away,
+// and up to five favorite boards sit under it in the rail.
 
 import { useLayoutEffect, useMemo, useRef, type CSSProperties } from 'react'
 import { Icon } from '../../../components/Icon'
@@ -93,6 +94,18 @@ export function PrototypeNavF({
           active: !collapsed,
           onClick: () => (collapsed ? pop.toggle() : setBoardColumnCollapsed(true))
         }}
+        favorites={
+          collapsed
+            ? {
+                boards: view.favorites,
+                selectedKey: settingsCurrent || selected === null ? null : listKey(selected),
+                onSelect: (ref) => {
+                  closePop(false)
+                  onSelect(ref)
+                }
+              }
+            : null
+        }
       />
       {!collapsed && column(false)}
       {collapsed && pop.open && (

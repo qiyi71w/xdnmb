@@ -524,7 +524,10 @@ describe('window lifecycle storage', () => {
   it('upgrades a version 6 database keeping its sends, without launch notices, and keeps only the latest saved workspace', () => {
     const path = databasePath()
     const v6 = openReadingDatabase(path, PUBLICATION_MIGRATIONS.filter((migration) => migration.version <= 6))
-    const credential = v6.insertCredential({ name: '甲', source: 'raw', importedAt: fetchedAt, ciphertext: Buffer.from('synthetic') })
+    // Seed the frozen v6 table directly: the current write interface also maintains later columns.
+    const seed = new Database(path)
+    const credential = { id: String(seed.prepare("INSERT INTO credentials (name, source, imported_at, ciphertext) VALUES ('甲', 'raw', ?, ?)").run(fetchedAt, Buffer.from('synthetic')).lastInsertRowid) }
+    seed.close()
     const sent = v6.createPublication({
       requestId: 'request-1', editorId: 'editor-1', forumId: '1', at: fetchedAt,
       payload: { draftId: null, target: { kind: 'thread', forumId: '1' }, credentialId: credential.id,

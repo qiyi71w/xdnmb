@@ -1,8 +1,8 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import type { SubscriptionOverview, SubscriptionResult, SubscriptionSource } from '../../../../shared/subscriptions'
+import type { SubscriptionOverview, SubscriptionResult } from '../../../../shared/subscriptions'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, Loading } from '../../components/Notices'
-import { SOURCE_SHORT, failureText, webObjectText } from './subscriptionText'
+import { failureText, webObjectText } from './subscriptionText'
 import type { SubscriptionsState } from './useSubscriptions'
 import './subscriptions.css'
 
@@ -25,8 +25,8 @@ function MessageLine({ id, message }: { id?: string; message: Message | null }) 
 }
 
 /**
- * 订阅 settings: the viewed source, the App UUID (write-only, never shown back) and the fixed web
- * sync object, which is chosen in 饼干 › 用途.
+ * 订阅 settings: the App UUID (shown in its field, saved with 保存) and the fixed web sync object,
+ * which is chosen in 饼干 › 用途. Which source the list shows is switched on the subscription page.
  */
 export function SubscriptionSection({ subscriptions }: { subscriptions: SubscriptionsState }) {
   const { overview, overviewFailed, refreshOverview } = subscriptions
@@ -67,82 +67,23 @@ function SubscriptionSettings({ overview, subscriptions }: { overview: Subscript
           <Icon name="alert" className="notice-icon" />
           <div className="notice-text">
             <p className="notice-title">系统凭据保护不可用</p>
-            <p>App UUID 与网页同步对象暂时无法使用，也不能保存新的 UUID；不会以明文保存。</p>
+            <p>App UUID 与网页同步对象暂时无法使用。</p>
           </div>
         </div>
       )}
       {!overview.writable && (
         <div className="notice notice-cached" role="note">
           <Icon name="alert" className="notice-icon" />
-          <div className="notice-text">
-            <p className="notice-title">本地存储不可写</p>
-            <p>暂时无法更换 App UUID 或切换来源。</p>
-          </div>
+          <p className="notice-text">本地存储不可写</p>
         </div>
       )}
-      <SourcePicker overview={overview} onApplied={subscriptions.applyOverview} />
       <AppUuidForm overview={overview} busy={subscriptions.busy} onApplied={subscriptions.applyOverview} />
       <div className="settings-group">
         <h4 className="settings-group-title">网页同步对象</h4>
         <p className="sub-setting-value">{webObjectText(overview)}</p>
-        <p className="settings-group-text">
-          固定绑定一块饼干，在上方「饼干 › 用途 › 网页同步对象」中更换；浏览或发言饼干改变时不会跟着改变。
-        </p>
+        <p className="settings-group-text">在「饼干 › 用途」中更换。</p>
       </div>
-      <p className="settings-note">
-        <Icon name="info" size={14} />
-        当前配置代次 {overview.context.generation}。更换 UUID 或同步对象会进入新的代次，之前的观察与操作记录保留各自的代次。
-      </p>
     </>
-  )
-}
-
-function SourcePicker({ overview, onApplied }: { overview: SubscriptionOverview; onApplied: (next: SubscriptionOverview) => void }) {
-  const labelId = useId()
-  const helpId = useId()
-  const [pending, setPending] = useState<SubscriptionSource | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const choose = async (source: SubscriptionSource) => {
-    if (pending !== null || source === overview.source) return
-    setPending(source)
-    setError(null)
-    try {
-      const result = await window.xidao.subscriptions.selectSource({ source })
-      if (result.ok) onApplied(result.value)
-      else setError(`未切换：${failureText(result.reason)}`)
-    } catch {
-      setError('切换请求失败，未切换，请重试')
-    } finally {
-      setPending(null)
-    }
-  }
-
-  return (
-    <div className="settings-group">
-      <h4 className="settings-group-title" id={labelId}>
-        查看的订阅来源
-      </h4>
-      <div className="segmented" role="group" aria-labelledby={labelId} aria-describedby={helpId}>
-        {(['app', 'web'] as const).map((source) => (
-          <button
-            key={source}
-            type="button"
-            className="segmented-item"
-            aria-pressed={overview.source === source}
-            aria-busy={pending === source ? true : undefined}
-            disabled={!overview.writable}
-            onClick={() => void choose(source)}
-          >
-            {SOURCE_SHORT[source]}
-          </button>
-        ))}
-      </div>
-      <p className="settings-group-text" id={helpId}>
-        只切换显示哪一份远端列表，不复制集合，不改变发言或浏览饼干。
-      </p>
-      <MessageLine message={error === null ? null : { tone: 'error', text: error }} />
-    </div>
   )
 }
 
@@ -160,19 +101,47 @@ function AppUuidForm({
   const uuidRef = useRef<HTMLInputElement>(null)
   const generateRef = useRef<HTMLButtonElement>(null)
   const cancelGenerateRef = useRef<HTMLButtonElement>(null)
-  const [shown, setShown] = useState(false)
+  const [shown, setShown] = useState(true)
+  /** The saved UUID as read back from main; `undefined` while reading, `null` when none is saved. */
+  const [saved, setSaved] = useState<string | null | undefined>(undefined)
+  const [dirty, setDirty] = useState(false)
   const [pending, setPending] = useState<'set' | 'generate' | null>(null)
   const [confirmGenerate, setConfirmGenerate] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
   const [invalid, setInvalid] = useState(false)
   const titleId = useId()
   const inputId = useId()
-  const hintId = useId()
   const messageId = useId()
   const confirmId = useId()
   const blocked = overview.protection === 'unavailable' || !overview.writable || busy
+  const savedRef = overview.context.appCredentialId
 
-  // The typed UUID never outlives this form (dialog closed or section unmounted).
+  // The field shows the saved UUID, read back from main (it stays encrypted at rest) on mount and
+  // whenever the saved one changes.
+  useEffect(() => {
+    let alive = true
+    window.xidao.subscriptions.revealAppUuid().then(
+      (result) => {
+        if (!alive) return
+        if (!result.ok) {
+          setSaved(null)
+          setMessage({ tone: 'error', text: `已保存的 UUID 无法读取：${failureText(result.reason)}` })
+          return
+        }
+        setSaved(result.value)
+        if (uuidRef.current !== null) uuidRef.current.value = result.value ?? ''
+        setDirty(false)
+      },
+      () => {
+        if (alive) setSaved(null)
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [savedRef])
+
+  // The UUID never outlives this form (settings left or section unmounted).
   useEffect(() => {
     const input = uuidRef.current
     return () => {
@@ -184,10 +153,9 @@ function AppUuidForm({
     if (confirmGenerate) cancelGenerateRef.current?.focus()
   }, [confirmGenerate])
 
-  const clearInput = () => {
-    if (uuidRef.current !== null) uuidRef.current.value = ''
-    setShown(false)
-    setInvalid(false)
+  const onInput = () => {
+    if (invalid) setInvalid(false)
+    setDirty((uuidRef.current?.value.trim().toLowerCase() ?? '') !== (saved ?? ''))
   }
 
   const apply = async (kind: 'set' | 'generate', uuid: string | null) => {
@@ -200,7 +168,7 @@ function AppUuidForm({
       result = await window.xidao.subscriptions.configureApp({ uuid })
     } catch {
       setPending(null)
-      setMessage({ tone: 'error', text: '请求失败，结果未知；请重新打开设置查看当前状态' })
+      setMessage({ tone: 'error', text: '请求失败，结果未知；请重新打开设置查看' })
       return
     }
     setPending(null)
@@ -212,17 +180,12 @@ function AppUuidForm({
       }
       return
     }
-    clearInput()
+    setDirty(false)
     onApplied(result.value)
     const after = result.value.context.generation
     setMessage({
       tone: 'success',
-      text:
-        after === before
-          ? '与当前 UUID 相同，配置没有变化。'
-          : kind === 'generate'
-            ? `已生成并保存新的 UUID，进入配置代次 ${after}。UUID 不会再显示；之前的远端集合和本地阅读资料保留，没有复制。需要时可在「订阅 › 同步与合并」中预览合并搬运。`
-            : `已保存这个 UUID，进入配置代次 ${after}。UUID 不会再显示；之前的远端集合和本地阅读资料保留，没有复制。需要时可在「订阅 › 同步与合并」中预览合并搬运。`
+      text: after === before ? '与当前 UUID 相同' : kind === 'generate' ? '已生成并保存新的 UUID' : '已保存'
     })
   }
 
@@ -263,15 +226,10 @@ function AppUuidForm({
         <h4 className="import-title" id={titleId}>
           App 订阅 UUID
         </h4>
-        <p className="sub-setting-value">
-          {overview.appConfigured
-            ? `已设置 · 本机引用 #${overview.context.appCredentialId ?? '未知'}`
-            : '未设置'}
-        </p>
-        {busy && <p className="field-hint">订阅操作、同步预览或计划正在进行，结束后才能更换 UUID。</p>}
+        {busy && <p className="field-hint">订阅操作进行中，结束后才能更换 UUID。</p>}
 
-        <label className="field-label" htmlFor={inputId}>
-          {overview.appConfigured ? '更换为另一个 UUID' : '使用已有的 UUID'}
+        <label className="visually-hidden" htmlFor={inputId}>
+          App 订阅 UUID
         </label>
         <div className="secret-row">
           <input
@@ -283,12 +241,10 @@ function AppUuidForm({
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            placeholder="粘贴或输入 UUID"
-            aria-describedby={invalid ? `${hintId} ${messageId}` : hintId}
+            placeholder={saved === undefined ? '读取中…' : '未设置，粘贴或输入 UUID'}
+            aria-describedby={invalid ? messageId : undefined}
             aria-invalid={invalid ? true : undefined}
-            onInput={() => {
-              if (invalid) setInvalid(false)
-            }}
+            onInput={onInput}
           />
           <button
             type="button"
@@ -300,13 +256,10 @@ function AppUuidForm({
             {shown ? '隐藏' : '显示'}
           </button>
         </div>
-        <p className="field-hint" id={hintId}>
-          默认遮蔽显示，按系统凭据保护保存，保存后不会再显示。更换只切换到另一份远端集合，不搬运旧集合。
-        </p>
 
         <div className="import-actions sub-uuid-actions">
-          <button type="submit" className="btn btn-primary" disabled={pending !== null} aria-describedby={messageId}>
-            {pending === 'set' ? '正在保存…' : '使用这个 UUID'}
+          <button type="submit" className="btn btn-primary" disabled={pending !== null || !dirty} aria-describedby={messageId}>
+            {pending === 'set' ? '正在保存…' : '保存'}
           </button>
           <button
             type="button"
@@ -325,9 +278,7 @@ function AppUuidForm({
             <p className="credential-confirm-title" id={confirmId}>
               生成新的 UUID？
             </p>
-            <p className="credential-confirm-text">
-              App 订阅将切换到一份新的空集合。当前 UUID 的远端集合不会被删除或搬运，本地阅读资料保留；新 UUID 不会显示出来。
-            </p>
+            <p className="credential-confirm-text">App 订阅将换到一份新的空集合，原 UUID 的集合不会被删除。</p>
             <div className="credential-confirm-actions">
               <button
                 type="button"

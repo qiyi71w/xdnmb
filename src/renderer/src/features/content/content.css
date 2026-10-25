@@ -309,8 +309,7 @@
 }
 
 /* No title: the first line of the head post, kept to one line. */
-.retained-title.is-excerpt,
-.retained-heading.is-excerpt {
+.retained-title.is-excerpt {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -395,6 +394,10 @@
   color: var(--ink);
 }
 
+.retained-row.is-selected .retained-excerpt {
+  color: var(--ink);
+}
+
 .retained-open {
   min-width: 0;
   display: grid;
@@ -417,6 +420,19 @@
   font-size: var(--text-md);
   font-weight: 600;
   overflow-wrap: anywhere;
+}
+
+/* The head post as in the thread lists: up to six lines, its line breaks kept. */
+.retained-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--ink-2);
 }
 
 .retained-row-action {

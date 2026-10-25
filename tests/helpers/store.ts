@@ -42,6 +42,7 @@ export function asStore(db: ReadingDatabase): AppStore {
     insertCredential: async (...args) => db.insertCredential(...args),
     renameCredential: async (...args) => db.renameCredential(...args),
     deleteCredential: async (...args) => db.deleteCredential(...args),
+    reorderCredentials: async (...args) => db.reorderCredentials(...args),
     loadRoleSelections: async () => db.loadRoleSelections(),
     setRoleSelection: async (...args) => db.setRoleSelection(...args),
     listDrafts: async () => db.listDrafts(),

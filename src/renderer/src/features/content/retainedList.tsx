@@ -4,6 +4,10 @@ import type { ThreadId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
 import { attempt, contentFailureText, type Refused } from './contentText'
 import type { ReadingResets } from './readingResets'
+// PROTOTYPE (throwaway): no read/unread tracking surface, so only 阅读进度 is named.
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
+
+const READING = PROTOTYPE_ENABLED ? '阅读进度' : '阅读进度与已读记录'
 
 export type RetainedListState =
   | { status: 'loading' }
@@ -115,10 +119,10 @@ export function useRetainedList(kind: RetainedList, resets: ReadingResets) {
     setDone(
       threadId === null
         ? clearReading
-          ? `已清空浏览历史，并清除了其中 ${result.value.length} 个串的阅读进度与已读记录`
+          ? `已清空浏览历史和其中 ${result.value.length} 个串的${READING}`
           : '已清空浏览历史'
         : clearReading
-          ? '已删除这条访问记录，并清除了它的阅读进度与已读记录'
+          ? `已删除这条访问记录和它的${READING}`
           : '已删除这条访问记录'
     )
     removeRows(threadId)
@@ -178,17 +182,16 @@ export function HistoryConfirm({
           type="checkbox"
           checked={confirming.clearReading}
           disabled={busy}
-          aria-describedby={impactId}
+          aria-describedby={confirming.clearReading ? impactId : undefined}
           onChange={(event) => onChange({ ...confirming, clearReading: event.target.checked })}
         />
-        <span className="choice-title">同时清除{all ? '历史中各串' : '这个串'}的阅读进度与已读记录</span>
+        <span className="choice-title">同时清除{all ? '这些串' : '这个串'}的{READING}</span>
       </label>
-      <p className="history-confirm-impact" id={impactId}>
-        {confirming.clearReading
-          ? `将删除${all ? '全部' : '这条'}访问记录，以及${all ? '这些串' : '这个串'}保存的阅读位置和已读记录：之后打开会从开头阅读，已读标记不再保留；正在打开的阅读器会回到开头。${all ? '不在历史中的串不受影响。' : ''}`
-          : `只删除${all ? '全部' : '这条'}访问记录；阅读位置和已读记录保留。`}
-        {' '}收藏、离线副本、草稿、提醒起点与已发送的通知、同步记录都不受影响。
-      </p>
+      {confirming.clearReading && (
+        <p className="history-confirm-impact" id={impactId}>
+          之后打开会从开头阅读。
+        </p>
+      )}
       {failure !== null && (
         <p className="form-message is-error" role="alert">
           <Icon name="alert" size={14} />

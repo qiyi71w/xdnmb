@@ -55,30 +55,17 @@
   font-weight: 600;
 }
 
-.nav-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 14px calc(16px - 6px * var(--nav-t)) 10px;
-  font-size: 0.9375rem;
-  font-weight: 650;
-  letter-spacing: 0.02em;
-}
-
-.nav-mark {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, oklch(0.85 0.06 205), var(--accent) 70%);
-  box-shadow: 0 2px 6px -2px var(--accent);
-}
-
 .nav-scroll {
   flex: 1;
   min-height: 0;
   overflow: hidden auto;
   overscroll-behavior: contain;
   padding: 2px calc(8px - 4px * var(--nav-t)) 12px;
+}
+
+/* Top of the navigation column (no brand row above it). */
+.nav > .nav-scroll:first-child {
+  padding-top: 10px;
 }
 
 .nav-section + .nav-section {

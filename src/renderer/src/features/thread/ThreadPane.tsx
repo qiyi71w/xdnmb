@@ -9,6 +9,8 @@ import type { ThreadOpen } from '../tabs/tabsState'
 import type { ComposeEntry } from '../editor/ComposePanel'
 import { decideView, markAllInChunks, savedStart, type ReaderStart } from './readingStart'
 import { ThreadReader } from './ThreadReader'
+// PROTOTYPE (throwaway): no read/unread surface, so read records are never mentioned.
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import './thread.css'
 
 const NOTHING_READ: ReadonlySet<PostId> = new Set()
@@ -119,7 +121,7 @@ export function ThreadPane({
     setReadNow(NOTHING_READ)
     void refetch().then(() => {
       if (cancelled) return
-      setNotice('这个串的阅读进度与已读记录已清除，已回到开头')
+      setNotice(PROTOTYPE_ENABLED ? '这个串的阅读进度已清除，已回到开头' : '这个串的阅读进度与已读记录已清除，已回到开头')
       setView((current) =>
         current === null
           ? current
@@ -139,10 +141,10 @@ export function ThreadPane({
         .markRead({ threadId, postIds })
         .then(
           (result) => {
-            if (!result.saved && mounted.current) setNotice('已读记录未能保存到本地')
+            if (!result.saved && mounted.current && !PROTOTYPE_ENABLED) setNotice('已读记录未能保存到本地')
           },
           () => {
-            if (mounted.current) setNotice('已读记录未能保存到本地')
+            if (mounted.current && !PROTOTYPE_ENABLED) setNotice('已读记录未能保存到本地')
           }
         )
         .finally(() => void refetch())

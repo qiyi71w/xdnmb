@@ -1,6 +1,10 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
+import {
+  useEffect, useId, useLayoutEffect, useRef, useState,
+  type ComponentProps, type DragEvent, type FormEvent, type KeyboardEvent, type RefObject
+} from 'react'
 import {
   IDENTITY_ROLES,
+  type CredentialId,
   type CredentialSummary,
   type IdentityMutationResult,
   type IdentityOverview,
@@ -9,6 +13,7 @@ import {
 import { Icon } from '../../components/Icon'
 import { FailureNotice, Loading } from '../../components/Notices'
 import { formatLocalTime } from '../../lib/format'
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import {
   MISSING_SELECTION_TEXT,
   ROLE_INFO,
@@ -30,9 +35,13 @@ interface Message {
   text: string
 }
 
+/** Where an account's cookies are claimed and exported; opened in the system browser. */
+const OFFICIAL_COOKIE_PAGE = 'https://www.nmbxd1.com/Member/User/Index/'
+
 /**
- * 饼干 settings: imported credentials, the two paste entries and the three independent role selectors.
- * Pasted secrets live only in the DOM value of their (uncontrolled) inputs while this section is mounted.
+ * 饼干 settings: the ordered credential list (the first one is used for browsing), one import area
+ * and the two independent role selectors. Pasted secrets live only in the DOM value of their
+ * (uncontrolled) inputs while this section is mounted.
  */
 export function CookieSection({ identities }: { identities: IdentitiesState }) {
   const { overview, failed, refresh } = identities
@@ -72,39 +81,42 @@ function CookieSettings({ overview, onChanged }: { overview: IdentityOverview; o
 
   return (
     <>
+      {PROTOTYPE_ENABLED && <OfficialPageLink />}
       {!protectionOk && (
         <div className="notice notice-cached" role="note">
           <Icon name="alert" className="notice-icon" />
           <div className="notice-text">
-            <p className="notice-title">系统凭据保护不可用，不会以明文保存</p>
-            <p>暂时无法导入饼干，需要饼干的读取也会被阻止。已导入的饼干仍可重命名、移除或调整用途。</p>
+            <p className="notice-title">系统凭据保护不可用</p>
+            <p>不能导入饼干，需要饼干的读取会被阻止。</p>
           </div>
         </div>
       )}
       {!overview.writable && (
         <div className="notice notice-cached" role="note">
           <Icon name="alert" className="notice-icon" />
-          <div className="notice-text">
-            <p className="notice-title">本地存储不可写</p>
-            <p>暂时无法导入、重命名、移除饼干或更改用途。</p>
-          </div>
+          <p className="notice-text">本地存储不可写</p>
         </div>
       )}
 
       <CredentialList overview={overview} onChanged={onChanged} />
 
-      <div className="cookie-imports">
-        <ImportForm entry="export" disabled={importBlocked} onImported={onChanged} />
-        <ImportForm entry="raw" disabled={importBlocked} onImported={onChanged} />
-      </div>
-      <p className="settings-note">
-        <Icon name="info" size={14} />
-        账号登录、领取和导出请在官网完成。
-      </p>
+      {PROTOTYPE_ENABLED ? (
+        <ImportArea disabled={importBlocked} onImported={onChanged} />
+      ) : (
+        <>
+          <div className="cookie-imports">
+            <ImportForm entry="export" disabled={importBlocked} onImported={onChanged} />
+            <ImportForm entry="raw" disabled={importBlocked} onImported={onChanged} />
+          </div>
+          <p className="settings-note">
+            <Icon name="info" size={14} />
+            账号登录、领取和导出请在官网完成。
+          </p>
+        </>
+      )}
 
       <div className="settings-group">
         <h4 className="settings-group-title">用途</h4>
-        <p className="settings-group-text">三种用途分别保存，更改其中一项不会影响其他两项。</p>
         <div className="role-list">
           {IDENTITY_ROLES.map((role) => (
             <RoleSelect key={role} role={role} overview={overview} onChanged={onChanged} />
@@ -112,6 +124,27 @@ function CookieSettings({ overview, onChanged }: { overview: IdentityOverview; o
         </div>
       </div>
     </>
+  )
+}
+
+/** The official cookie page, in the system browser: account login, claiming and export happen there. */
+function OfficialPageLink() {
+  const [failed, setFailed] = useState(false)
+  const open = () => {
+    setFailed(false)
+    window.xidao.links.openExternal({ url: OFFICIAL_COOKIE_PAGE }).then(
+      (result) => setFailed(!result.opened),
+      () => setFailed(true)
+    )
+  }
+  return (
+    <div className="cookie-official">
+      <button type="button" className="btn" onClick={open}>
+        <Icon name="external" size={14} />
+        打开官网饼干页
+      </button>
+      <MessageLine message={failed ? { tone: 'error', text: '无法打开浏览器' } : null} />
+    </div>
   )
 }
 
@@ -133,25 +166,130 @@ function MessageLine({ id, message }: { id?: string; message: Message | null }) 
 
 /* ---------- Credential list ---------- */
 
+type MoveDirection = 'up' | 'down'
+
+/** Ordered list: drag a row's handle, or use 上移／下移 from the keyboard. The first one browses. */
 function CredentialList({ overview, onChanged }: { overview: IdentityOverview; onChanged: () => Promise<void> }) {
   const headingId = useId()
   const headingRef = useRef<HTMLHeadingElement>(null)
+  const listRef = useRef<HTMLUListElement>(null)
   const [message, setMessage] = useState<Message | null>(null)
+  /** The order being saved: shown at once, replaced by the stored order when the save ends. */
+  const [pendingOrder, setPendingOrder] = useState<CredentialId[] | null>(null)
+  const [dragId, setDragId] = useState<CredentialId | null>(null)
+  const [dropAt, setDropAt] = useState<{ id: CredentialId; after: boolean } | null>(null)
+  /** A move button moved its row: focus stays on it (or its twin when it became unavailable). */
+  const focusAfterMove = useRef<{ id: CredentialId; direction: MoveDirection } | null>(null)
+
+  const credentials =
+    pendingOrder === null
+      ? overview.credentials
+      : pendingOrder.flatMap((id) => overview.credentials.filter((item) => item.id === id))
+  const movable = overview.writable && pendingOrder === null && credentials.length > 1
+
+  // While saving the moved row keeps the pressed button; once saved, its twin takes over when the
+  // pressed one no longer applies (moved to the top or bottom).
+  useLayoutEffect(() => {
+    const wanted = focusAfterMove.current
+    const list = listRef.current
+    if (wanted === null || list === null) return
+    const button = (direction: MoveDirection) =>
+      list.querySelector<HTMLButtonElement>(`[data-credential="${wanted.id}"] [data-move="${direction}"]`)
+    const same = button(wanted.direction)
+    if (pendingOrder !== null) {
+      if (same !== null && document.activeElement !== same) same.focus()
+      return
+    }
+    focusAfterMove.current = null
+    const target = same !== null && same.getAttribute('aria-disabled') !== 'true' ? same : button(wanted.direction === 'up' ? 'down' : 'up')
+    target?.focus()
+  })
+
+  const save = async (ids: CredentialId[], moved: CredentialSummary) => {
+    if (pendingOrder !== null) return
+    setPendingOrder(ids)
+    setMessage(null)
+    try {
+      const result = await window.xidao.identities.reorder({ credentialIds: ids })
+      if (result.ok) {
+        const position = ids.indexOf(moved.id) + 1
+        setMessage({ tone: 'success', text: position === 1 ? `「${moved.name}」移到第一位，浏览时使用` : `「${moved.name}」移到第 ${position} 位` })
+      } else setMessage({ tone: 'error', text: mutationErrorText(result, '调整顺序') })
+      await onChanged()
+    } catch {
+      setMessage({ tone: 'error', text: '顺序未保存，请重试' })
+    } finally {
+      setPendingOrder(null)
+    }
+  }
+
+  const move = (credential: CredentialSummary, direction: MoveDirection) => {
+    const ids = credentials.map((item) => item.id)
+    const from = ids.indexOf(credential.id)
+    const to = direction === 'up' ? from - 1 : from + 1
+    if (!movable || from < 0 || to < 0 || to >= ids.length) return
+    ids.splice(from, 1)
+    ids.splice(to, 0, credential.id)
+    focusAfterMove.current = { id: credential.id, direction }
+    void save(ids, credential)
+  }
+
+  const drop = () => {
+    const dragged = credentials.find((item) => item.id === dragId)
+    const at = dropAt
+    setDragId(null)
+    setDropAt(null)
+    if (dragged === undefined || at === null || at.id === dragged.id) return
+    const ids = credentials.map((item) => item.id).filter((id) => id !== dragged.id)
+    const index = ids.indexOf(at.id)
+    if (index < 0) return
+    ids.splice(at.after ? index + 1 : index, 0, dragged.id)
+    if (ids.every((id, position) => id === credentials[position]?.id)) return
+    void save(ids, dragged)
+  }
+
+  const dragProps = (credential: CredentialSummary) => ({
+    onDragOver: (event: DragEvent<HTMLLIElement>) => {
+      if (dragId === null) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      const box = event.currentTarget.getBoundingClientRect()
+      const after = event.clientY > box.top + box.height / 2
+      if (dropAt?.id !== credential.id || dropAt.after !== after) setDropAt({ id: credential.id, after })
+    },
+    onDrop: (event: DragEvent<HTMLLIElement>) => {
+      if (dragId === null) return
+      event.preventDefault()
+      drop()
+    }
+  })
 
   return (
     <div className="settings-group">
       <h4 className="settings-group-title" id={headingId} ref={headingRef} tabIndex={-1}>
         已导入的饼干
       </h4>
-      {overview.credentials.length === 0 ? (
-        <p className="settings-empty">还没有导入饼干。</p>
+      {credentials.length === 0 ? (
+        <p className="settings-empty">还没有导入饼干，浏览时不带饼干。</p>
       ) : (
-        <ul className="credential-list" aria-labelledby={headingId}>
-          {overview.credentials.map((credential) => (
+        <ul className="credential-list" aria-labelledby={headingId} ref={listRef} aria-busy={pendingOrder !== null ? true : undefined}>
+          {credentials.map((credential, index) => (
             <CredentialItem
               key={credential.id}
               credential={credential}
+              index={index}
+              count={credentials.length}
               overview={overview}
+              movable={movable}
+              dragging={dragId === credential.id}
+              dropMark={dropAt !== null && dropAt.id === credential.id && dragId !== credential.id ? (dropAt.after ? 'after' : 'before') : null}
+              dragProps={dragProps(credential)}
+              onDragStart={() => setDragId(credential.id)}
+              onDragEnd={() => {
+                setDragId(null)
+                setDropAt(null)
+              }}
+              onMove={(direction) => move(credential, direction)}
               onChanged={onChanged}
               onAnnounce={setMessage}
               listHeading={headingRef}
@@ -179,13 +317,32 @@ function mutationErrorText(result: IdentityMutationResult & { ok: false }, actio
 
 function CredentialItem({
   credential,
+  index,
+  count,
   overview,
+  movable,
+  dragging,
+  dropMark,
+  dragProps,
+  onDragStart,
+  onDragEnd,
+  onMove,
   onChanged,
   onAnnounce,
   listHeading
 }: {
   credential: CredentialSummary
+  index: number
+  count: number
   overview: IdentityOverview
+  /** Order changes are possible now (writable, several items, no save running). */
+  movable: boolean
+  dragging: boolean
+  dropMark: 'before' | 'after' | null
+  dragProps: Pick<ComponentProps<'li'>, 'onDragOver' | 'onDrop'>
+  onDragStart: () => void
+  onDragEnd: () => void
+  onMove: (direction: MoveDirection) => void
   onChanged: () => Promise<void>
   onAnnounce: (message: Message) => void
   listHeading: RefObject<HTMLHeadingElement | null>
@@ -194,6 +351,7 @@ function CredentialItem({
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  const itemRef = useRef<HTMLLIElement>(null)
   const renameButton = useRef<HTMLButtonElement>(null)
   const removeButton = useRef<HTMLButtonElement>(null)
   const renameInput = useRef<HTMLInputElement>(null)
@@ -205,6 +363,7 @@ function CredentialItem({
 
   const roles = rolesUsing(overview, credential.id)
   const writable = overview.writable
+  const browsing = index === 0
 
   // Focus follows the mode: into the editor / confirmation, back to the button that opened it.
   useEffect(() => {
@@ -266,10 +425,13 @@ function CredentialItem({
     try {
       const result = await window.xidao.identities.remove({ credentialId: credential.id })
       if (result.ok || result.reason === 'not-found') {
-        const affected = roles.length > 0 ? `；${roleList(roles)}需要重新选择` : ''
+        const affected = [
+          roles.length > 0 ? `${roleList(roles)}需要重新选择` : null,
+          browsing && count > 1 ? '浏览改用下一个饼干' : null
+        ].filter(Boolean)
         onAnnounce({
           tone: 'success',
-          text: result.ok ? `已移除「${credential.name}」${affected}` : '这个饼干已不存在'
+          text: result.ok ? `已移除「${credential.name}」${affected.length > 0 ? `；${affected.join('，')}` : ''}` : '这个饼干已不存在'
         })
         // The item disappears; keep keyboard focus inside the list area.
         listHeading.current?.focus()
@@ -292,8 +454,12 @@ function CredentialItem({
     if (!pending) leave(mode === 'rename' ? renameButton : removeButton)
   }
 
+  const itemClass = ['credential-item', dragging ? 'is-dragging' : null, dropMark === null ? null : `is-drop-${dropMark}`]
+    .filter(Boolean)
+    .join(' ')
+
   return (
-    <li className="credential-item">
+    <li ref={itemRef} className={itemClass} data-credential={credential.id} {...dragProps}>
       {mode === 'rename' ? (
         <form className="credential-rename" onSubmit={(event) => void saveRename(event)} onKeyDown={onEditorKeyDown}>
           <label className="field-label" htmlFor={nameId}>
@@ -326,15 +492,35 @@ function CredentialItem({
         </form>
       ) : (
         <div className="credential-main">
-          <Icon name="key" className="credential-icon" />
+          {movable && mode === 'view' ? (
+            // Mouse only; the keyboard uses 上移／下移.
+            <span
+              className="credential-handle"
+              draggable
+              aria-hidden="true"
+              title="拖动调整顺序"
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = 'move'
+                event.dataTransfer.setData('text/plain', '')
+                if (itemRef.current !== null) event.dataTransfer.setDragImage(itemRef.current, 16, 16)
+                onDragStart()
+              }}
+              onDragEnd={onDragEnd}
+            >
+              <Icon name="more" size={16} />
+            </span>
+          ) : (
+            <Icon name="key" className="credential-icon" />
+          )}
           <div className="credential-text">
             <p className="credential-name">{credential.name}</p>
             <p className="credential-meta">
               {SOURCE_LABEL[credential.source]} · 导入于 {formatLocalTime(credential.importedAt)}
             </p>
-            {roles.length > 0 && (
+            {(browsing || roles.length > 0) && (
               <p className="credential-roles">
                 <span className="visually-hidden">用于：</span>
+                {browsing && <span className="tag">浏览</span>}
                 {roles.map((role) => (
                   <span key={role} className="tag">
                     {ROLE_INFO[role].label}
@@ -344,6 +530,32 @@ function CredentialItem({
             )}
           </div>
           <div className="credential-actions">
+            {count > 1 && (
+              <>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  data-move="up"
+                  aria-label={`上移「${credential.name}」`}
+                  title="上移"
+                  aria-disabled={!movable || index === 0 ? true : undefined}
+                  onClick={() => movable && index > 0 && onMove('up')}
+                >
+                  <Icon name="arrowUp" />
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn credential-flip"
+                  data-move="down"
+                  aria-label={`下移「${credential.name}」`}
+                  title="下移"
+                  aria-disabled={!movable || index === count - 1 ? true : undefined}
+                  onClick={() => movable && index < count - 1 && onMove('down')}
+                >
+                  <Icon name="arrowUp" />
+                </button>
+              </>
+            )}
             <button
               type="button"
               ref={renameButton}
@@ -377,10 +589,9 @@ function CredentialItem({
             移除「{credential.name}」？
           </p>
           <p className="credential-confirm-text">
-            {roles.length > 0
-              ? `${roleList(roles)}正在使用它，移除后将显示为需要重新选择，不会自动改用其他饼干。`
-              : '目前没有用途使用它。'}
-            移除后无法恢复，需要重新粘贴才能再次使用。
+            {roles.length > 0 && `${roleList(roles)}将需要重新选择。`}
+            {browsing && count > 1 && '浏览将改用下一个饼干。'}
+            移除后需要重新导入。
           </p>
           <div className="credential-confirm-actions">
             <button type="button" className="btn btn-small btn-danger" onClick={() => void confirmRemove()} disabled={pending}>
@@ -407,27 +618,57 @@ function CredentialItem({
 
 /* ---------- Import entries ---------- */
 
-const IMPORT_COPY: Record<ImportEntry, { title: string; secretLabel: string; description: string; nameHint: string }> = {
+const IMPORT_COPY: Record<ImportEntry, { tab: string; title: string; secretLabel: string; description: string; nameHint: string }> = {
   export: {
+    tab: '官网导出',
     title: '粘贴官网导出内容',
     secretLabel: '官网导出内容',
-    description: '粘贴在官网导出的饼干内容（Base64 或 JSON）。',
-    nameHint: '可不填，留空时使用导出内容中的名称。'
+    description: 'Base64 或 JSON。',
+    nameHint: '留空时用导出内容里的名称。'
   },
   raw: {
+    tab: 'userhash',
     title: '粘贴原始 userhash',
     secretLabel: 'userhash',
-    description: '粘贴饼干的 userhash 值，可带 userhash= 前缀。',
-    nameHint: '必填，1–40 个字符。'
+    description: '可带 userhash= 前缀。',
+    nameHint: '1–40 个字符。'
   }
+}
+
+const IMPORT_ENTRIES: readonly ImportEntry[] = ['export', 'raw']
+
+/** One import area: a switch picks the format; switching clears whatever was pasted. */
+function ImportArea({ disabled, onImported }: { disabled: boolean; onImported: () => Promise<void> }) {
+  const [entry, setEntry] = useState<ImportEntry>('export')
+  const titleId = useId()
+  return (
+    <div className="settings-group">
+      <div className="cookie-import-head">
+        <h4 className="settings-group-title" id={titleId}>
+          导入饼干
+        </h4>
+        <div className="segmented" role="group" aria-labelledby={titleId}>
+          {IMPORT_ENTRIES.map((item) => (
+            <button key={item} type="button" className="segmented-item" aria-pressed={entry === item} onClick={() => setEntry(item)}>
+              {IMPORT_COPY[item].tab}
+            </button>
+          ))}
+        </div>
+      </div>
+      <ImportForm key={entry} entry={entry} titled={false} disabled={disabled} onImported={onImported} />
+    </div>
+  )
 }
 
 function ImportForm({
   entry,
+  titled = true,
   disabled,
   onImported
 }: {
   entry: ImportEntry
+  /** False inside the import area, whose heading and switch already name the form. */
+  titled?: boolean
   disabled: boolean
   onImported: () => Promise<void>
 }) {
@@ -488,10 +729,7 @@ function ImportForm({
         setShown(false)
         setName('')
         setInvalid(null)
-        setMessage({
-          tone: 'success',
-          text: `已导入「${result.credential.name}」：格式有效并已加密保存；远端可用性未验证。`
-        })
+        setMessage({ tone: 'success', text: `已导入「${result.credential.name}」` })
         await onImported()
       } else {
         const { text, field } = importFailureText(result.failure, entry)
@@ -508,11 +746,19 @@ function ImportForm({
   const describedName = invalid === 'name' ? `${nameHintId} ${messageId}` : nameHintId
 
   return (
-    <form className="import-form" aria-labelledby={titleId} onSubmit={(event) => void submit(event)} noValidate>
+    <form
+      className="import-form"
+      aria-labelledby={titled ? titleId : undefined}
+      aria-label={titled ? undefined : copy.title}
+      onSubmit={(event) => void submit(event)}
+      noValidate
+    >
       <fieldset className="import-fieldset" disabled={disabled}>
-        <h4 className="import-title" id={titleId}>
-          {copy.title}
-        </h4>
+        {titled && (
+          <h4 className="import-title" id={titleId}>
+            {copy.title}
+          </h4>
+        )}
 
         <label className="field-label" htmlFor={secretId}>
           {copy.secretLabel}
@@ -545,7 +791,7 @@ function ImportForm({
           </button>
         </div>
         <p className="field-hint" id={secretHintId}>
-          {copy.description}默认遮蔽显示。
+          {copy.description}
         </p>
 
         <label className="field-label" htmlFor={nameId}>
@@ -599,7 +845,6 @@ function RoleSelect({
   const [pendingValue, setPendingValue] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const selectId = useId()
-  const explanationId = useId()
   const warningId = useId()
   const errorId = useId()
 
@@ -631,16 +876,13 @@ function RoleSelect({
     }
   }
 
-  const describedBy = [explanationId, missing ? warningId : null, error !== null ? errorId : null].filter(Boolean).join(' ')
+  const describedBy = [missing ? warningId : null, error !== null ? errorId : null].filter(Boolean).join(' ') || undefined
 
   return (
     <div className="role-field">
       <label className="field-label" htmlFor={selectId}>
         {info.label}
       </label>
-      <p className="field-hint" id={explanationId}>
-        {info.explanation}
-      </p>
       <select
         id={selectId}
         className={missing && pendingValue === null ? 'select-input is-warning' : 'select-input'}
@@ -669,7 +911,7 @@ function RoleSelect({
       {missing && (
         <p className="field-warning" id={warningId}>
           <Icon name="alert" size={14} />
-          <span>之前选择的饼干已移除，需要重新选择；不会自动改用其他饼干。</span>
+          <span>之前选择的饼干已移除，请重新选择。</span>
         </p>
       )}
       <div id={errorId} role="status" className="form-message-region">

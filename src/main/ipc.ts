@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy, type ReadOutcome, type LocateHint } from '../shared/api'
 import type { FeedRef, PostId, ReadingMode } from '../shared/forum'
 import type { ImageFormat, ImageKind } from '../shared/images'
@@ -43,6 +43,8 @@ const CREDENTIAL_ID = /^[1-9]\d{0,14}$/
 const LOCAL_ID = /^[1-9]\d{0,14}$/
 /** Pasted input and names beyond this are refused outright; the parsers report smaller limits. */
 const MAX_TEXT_LENGTH = 65_536
+/** Far beyond any real cookie list; bounds a reorder request. */
+const MAX_CREDENTIALS = 1000
 
 class InvalidRequestError extends Error {
   override readonly name = 'InvalidRequestError'
@@ -562,6 +564,15 @@ export function registerIpc({
 
   handle(IpcChannel.getZoom, async (event) => currentZoom(event.sender))
 
+  handle(IpcChannel.updateTitleBar, async (event, raw) => {
+    const input = record(raw)
+    if (typeof input.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(input.color) || typeof input.symbolColor !== 'string' || !/^#[0-9a-f]{6}$/i.test(input.symbolColor) || (input.scheme !== 'system' && input.scheme !== 'light' && input.scheme !== 'dark')) throw new InvalidRequestError()
+    if (process.env.VITE_XIDAO_PROTOTYPE !== '1') return
+    nativeTheme.themeSource = input.scheme
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (process.platform !== 'darwin') window?.setTitleBarOverlay({ color: input.color, symbolColor: input.symbolColor, height: 44 })
+  })
+
   handle(IpcChannel.zoom, async (event, raw) => {
     const action = record(raw).action
     if (action !== 'in' && action !== 'out' && action !== 'reset') throw new InvalidRequestError()
@@ -631,6 +642,12 @@ export function registerIpc({
     return identities.select(identityRole(input.role), id)
   })
 
+  handle(IpcChannel.identityReorder, async (_event, raw) => {
+    const ids = record(raw).credentialIds
+    if (!Array.isArray(ids) || ids.length > MAX_CREDENTIALS) throw new InvalidRequestError()
+    return identities.reorder(ids.map(credentialId))
+  })
+
   // Drafts and posting identity choice: local only, nothing reaches the forum.
   handle(IpcChannel.listDrafts, async () => drafts.list())
   handle(IpcChannel.saveDraft, async (_event, raw) => drafts.save(draftSaveInput(raw)))
@@ -665,6 +682,9 @@ export function registerIpc({
     if (uuid !== null && (typeof uuid !== 'string' || uuid.length > 64)) throw new InvalidRequestError()
     return subscriptions.configureApp({ uuid })
   })
+
+  // The one path a subscription secret takes back to the renderer: the settings view's UUID field.
+  handle(IpcChannel.subscriptionRevealApp, async () => subscriptions.revealAppUuid())
 
   handle(IpcChannel.subscriptionSelectSource, async (_event, raw) =>
     subscriptions.selectSource({ source: subscriptionSource(record(raw).source) }))

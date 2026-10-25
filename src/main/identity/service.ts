@@ -22,11 +22,13 @@ export interface IdentityService {
   rename(id: CredentialId, name: string): Promise<IdentityMutationResult>
   remove(id: CredentialId): Promise<IdentityMutationResult>
   select(role: IdentityRole, id: CredentialId | null): Promise<IdentityMutationResult>
+  /** Stores the credential order; the first credential is the one sent with forum reads. */
+  reorder(ids: CredentialId[]): Promise<IdentityMutationResult>
   /**
-   * Userhash for forum reads: `null` only when no browse credential is chosen. Throws
-   * ForumReadError(identity/…) when the chosen credential was removed, cannot be decrypted, or the
-   * choice itself cannot be read, so the read is not sent rather than silently sent anonymously or
-   * with another credential. The secret is decrypted for each read and never cached.
+   * Userhash for forum reads: the first credential in the user's order, `null` only when no
+   * credential is stored. Throws ForumReadError(identity/…) when it cannot be decrypted or the list
+   * itself cannot be read, so the read is not sent rather than silently sent anonymously or with
+   * another credential. The secret is decrypted for each read and never cached.
    */
   browseUserhash(): Promise<string | null>
 }
@@ -146,12 +148,22 @@ export function createIdentityService(deps: {
       })
     },
 
+    reorder(ids) {
+      return serialized(async () => {
+        try {
+          return (await store.reorderCredentials(ids)) ? { ok: true } : { ok: false, reason: 'not-found' }
+        } catch (error) {
+          return storageFailure(error)
+        }
+      })
+    },
+
     async browseUserhash() {
       if (deps.storageState() === 'unavailable') throw new ForumReadError({ kind: 'identity', detail: 'identity-unknown' })
-      const selection = (await store.loadRoleSelections()).browse
-      if (selection.state === 'none') return null
-      if (selection.state === 'missing') throw new ForumReadError({ kind: 'identity', detail: 'identity-missing' })
-      const ciphertext = await store.loadCredentialCiphertext(selection.credentialId)
+      const first = (await store.listCredentials())[0]
+      if (first === undefined) return null
+      const ciphertext = await store.loadCredentialCiphertext(first.id)
+      // Removed between the two reads: never fall back to another credential or to none.
       if (ciphertext === null) throw new ForumReadError({ kind: 'identity', detail: 'identity-missing' })
       let userhash: string
       try {

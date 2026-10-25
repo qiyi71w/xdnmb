@@ -1,6 +1,7 @@
-// PROTOTYPE (throwaway) variant D — 版块浮层: no board column. The navigation is the icon rail only;
-// its 版块 button (and the board name at the top of a board list) opens a wide panel beside the rail:
-// a filter with 关闭 beside it, 收藏, then every group laid out in columns. Choosing a board closes it.
+// PROTOTYPE (throwaway) variant D — 版块浮层: no board column. The navigation is the icon rail only,
+// with up to five favorite boards under its 版块 button; that button (and the board name at the top
+// of a board list) opens a wide panel beside the rail: a filter with 关闭 beside it, 收藏, then every
+// group laid out in columns. Choosing a board closes it.
 // The panel is not modal: Esc, 关闭 or a press outside cancels it (focus back to its opener), Tab leaving it closes it and
 // leaves focus where it went; prototypeStore's `closeBoardPanel` is the one place focus is decided.
 
@@ -28,6 +29,7 @@ export function PrototypeNavD({
 }: PrototypeNavProps) {
   const open = useBoardPanelOpen()
   const selectedKey = settingsCurrent || selected === null ? null : listKey(selected)
+  const { view } = useBoardView(state.directory)
 
   return (
     <nav
@@ -45,6 +47,14 @@ export function PrototypeNavD({
           label: '版块',
           popup: { expanded: open, controls: BOARD_PANEL_ID },
           onClick: (button) => (open ? closeBoardPanel('cancel') : openBoardPanel(button))
+        }}
+        favorites={{
+          boards: view.favorites,
+          selectedKey,
+          onSelect: (ref) => {
+            closeBoardPanel('dismiss')
+            onSelect(ref)
+          }
         }}
       />
       {open && <BoardPanel state={state} selectedKey={selectedKey} onSelect={onSelect} onRetry={onRetry} />}
@@ -86,7 +96,12 @@ function BoardPanel({
       pressing.current = true
       setTimeout(() => (pressing.current = false))
       const target = event.target as Element | null
-      if (target === null || panelRef.current?.contains(target) || target.closest('[data-proto-boards-trigger]') !== null) return
+      if (
+        target === null ||
+        panelRef.current?.contains(target) ||
+        target.closest('[data-proto-boards-trigger], [data-rail-board]') !== null
+      )
+        return
       closeBoardPanel('cancel', target)
     }
     document.addEventListener('keydown', onKeyDown, true)

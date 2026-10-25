@@ -134,7 +134,7 @@ async function setup() {
   const a = db.insertCredential({ name: '固定对象甲', source: 'raw', importedAt: clock.toISOString(), ciphertext: await protector.encrypt(COOKIE_A) })
   const b = db.insertCredential({ name: '固定对象乙', source: 'raw', importedAt: clock.toISOString(), ciphertext: await protector.encrypt(COOKIE_B) })
   db.setRoleSelection('web-sync', a.id)
-  db.setRoleSelection('browse', b.id)
+  db.reorderCredentials([b.id, a.id])
   db.setRoleSelection('default-post', b.id)
   return { file, db, protector, remote, store, create, service, a, b, setTime(value: string) { clock = new Date(value) } }
 }
@@ -157,12 +157,15 @@ describe('protected subscription configuration and observations', () => {
     const initial = await service.getOverview()
     expect(initial.appConfigured).toBe(false)
     expect(await service.read({ source: 'app', observationId: null, operationId: 'read' }, signal())).toEqual({ ok: false, reason: 'unconfigured' })
+    expect(unwrap(await service.revealAppUuid())).toBeNull()
     const configured = unwrap(await service.configureApp({ uuid: UUID_A }))
+    // The settings view reads the saved UUID back; it stays out of the overview.
+    expect(unwrap(await service.revealAppUuid())).toBe(UUID_A)
     const same = unwrap(await service.configureApp({ uuid: UUID_A.toUpperCase() }))
     expect(same.context).toEqual(configured.context)
     await service.selectSource({ source: 'web' })
     expect((await service.getOverview()).context).toEqual(configured.context)
-    db.setRoleSelection('browse', a.id)
+    db.reorderCredentials([a.id, b.id])
     db.setRoleSelection('default-post', a.id)
     expect((await service.getOverview()).context).toEqual(configured.context)
     db.setRoleSelection('web-sync', b.id)
@@ -174,7 +177,7 @@ describe('protected subscription configuration and observations', () => {
     expect(replaced.context.generation).toBe(rebound.context.generation + 1)
     expect(replaced.context.appCredentialId).not.toBe(configured.context.appCredentialId)
     expect(await protector.decrypt(db.loadSubscriptionAppCiphertext(configured.context.appCredentialId!)!)).toBe(UUID_A)
-    expect(db.loadRoleSelections().browse).toEqual({ state: 'selected', credentialId: a.id })
+    expect(db.listCredentials()[0]?.id).toBe(a.id)
     const raw = new Database(file, { readonly: true })
     expect(raw.prepare('SELECT id FROM subscription_app_credentials').all()).toHaveLength(2)
     raw.close()
@@ -218,7 +221,7 @@ describe('protected subscription configuration and observations', () => {
     expect(state.attention?.startedAt).toBe('2026-10-22T00:00:00.000Z')
     expect(state.readPostIds).toContain('1001')
     expect(db.getReadingState('1002').attention).toMatchObject({ source: 'import', startedAt: '2026-10-23T12:00:00.000Z' })
-    expect(db.loadRoleSelections().browse).toEqual({ state: 'selected', credentialId: b.id })
+    expect(db.listCredentials()[0]?.id).toBe(b.id)
     await service.configureApp({ uuid: UUID_B })
     expect(await service.read({ source: 'app', observationId: app.id, operationId: 'read' }, signal())).toEqual({ ok: false, reason: 'stale' })
     expect(db.loadSubscriptionObservationById(app.id)?.ids).toEqual(app.ids)
@@ -295,7 +298,9 @@ describe('protected subscription configuration and observations', () => {
     const file = path()
     const old = openReadingDatabase(file, MIGRATIONS.filter((migration) => migration.version <= 4))
     const protector = new Protector()
-    const cookie = old.insertCredential({ name: '原对象', source: 'raw', importedAt: '2026-10-23', ciphertext: await protector.encrypt(COOKIE_A) })
+    const seed = new Database(file)
+    const cookie = { id: String(seed.prepare("INSERT INTO credentials (name, source, imported_at, ciphertext) VALUES ('原对象', 'raw', '2026-10-23', ?)").run(await protector.encrypt(COOKIE_A)).lastInsertRowid) }
+    seed.close()
     // The v4 runtime predates subscription generation tracking; seed its existing role as migration input.
     old.close()
     const raw = new Database(file)
@@ -648,7 +653,7 @@ describe('previewed subscription reconciliation', () => {
     await executePreview(service, preview)
     expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1001', '1002'])
     expect([...remote.web.get(COOKIE_B)!]).toEqual(['4001', '1001', '1002', '3001'])
-    expect(db.loadRoleSelections()).toEqual({ browse: { state: 'selected', credentialId: b.id }, 'default-post': { state: 'selected', credentialId: b.id }, 'web-sync': { state: 'selected', credentialId: b.id } })
+    expect(db.loadRoleSelections()).toEqual({ 'default-post': { state: 'selected', credentialId: b.id }, 'web-sync': { state: 'selected', credentialId: b.id } })
   })
 
   it.each(['rejected', 'mismatch', 'lost-response'] as const)('keeps prior successes and stops subsequent items after %s', async (failure) => {
@@ -870,7 +875,9 @@ describe('subscription reconciliation persistence', () => {
     const file = path()
     const old = openReadingDatabase(file, SUBSCRIPTION_MIGRATIONS.filter((migration) => migration.version <= 5))
     const protector = new Protector()
-    const cookie = old.insertCredential({ name: '旧绑定', source: 'raw', importedAt: '2026-10-23', ciphertext: await protector.encrypt(COOKIE_A) })
+    const seed = new Database(file)
+    const cookie = { id: String(seed.prepare("INSERT INTO credentials (name, source, imported_at, ciphertext) VALUES ('旧绑定', 'raw', '2026-10-23', ?)").run(await protector.encrypt(COOKIE_A)).lastInsertRowid) }
+    seed.close()
     old.setRoleSelection('web-sync', cookie.id)
     old.setSubscriptionAppCredential('historical-app-reference', await protector.encrypt(UUID_A))
     old.setSubscriptionSource('web')

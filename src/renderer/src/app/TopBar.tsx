@@ -3,6 +3,7 @@ import type { AppPlatform } from '../../../shared/api'
 import { Icon } from '../components/Icon'
 import type { Tab } from '../features/tabs/tabsState'
 import { shortcutLabel } from './shortcuts'
+import { PROTOTYPE_ENABLED } from '../features/directory/prototype/prototypeStore'
 
 function withShortcut(label: string, shortcut: string): string {
   return shortcut === '' ? label : `${label}（${shortcut}）`
@@ -75,7 +76,7 @@ export function TopBar({
   }
 
   return (
-    <header className="topbar">
+    <header className={`topbar${PROTOTYPE_ENABLED ? ` is-native-titlebar${platform === 'darwin' ? ' is-macos' : ''}` : ''}`}>
       {navTrigger !== null && (
         <button
           ref={navTrigger.ref}

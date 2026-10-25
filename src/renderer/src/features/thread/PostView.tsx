@@ -36,10 +36,9 @@ export function PostView({
             <span className="visually-hidden">未读</span>
           </span>
         )}
-        {post.userHash !== null && <span className="user-hash">{post.userHash}</span>}
+        {post.userHash !== null && <span className={post.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{post.userHash}</span>}
         {isPo && <span className="tag tag-po">PO</span>}
         {name !== null && <span className="post-name">{name}</span>}
-        {post.isAdmin === true && <span className="tag tag-admin">管理员</span>}
         {post.isSage === true && <span className="tag tag-sage">SAGE</span>}
         {post.createdAt !== null && <span className="post-time">{post.createdAt}</span>}
         <span className="post-no">No.{post.id}</span>

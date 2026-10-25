@@ -2,8 +2,8 @@
 //
 // Built-in and custom themes are both a `Palette` (one value per color token). The UI applies the
 // palette as CSS custom properties; the checks below run on the same values, so what is checked is
-// what is drawn. Theme data never carries CSS text or scripts: colors are #rrggbb, every other field
-// is an enumerated choice or a bounded number.
+// what is drawn. Theme data never carries CSS text or scripts: colors are #rrggbb, font families
+// are quoted as CSS strings, and numeric parameters have explicit bounds.
 
 /** Color tokens used by the stylesheets as `var(--<token>)`. */
 export const COLOR_TOKENS = [
@@ -298,7 +298,7 @@ export function paletteContrastFailures(palette: Palette): ContrastFailure[] {
 // ---------------------------------------------------------------------------------------------
 // Reading parameters and custom themes
 
-export type ReadingFont = 'sans' | 'serif'
+export type ReadingFont = 'sans' | 'serif' | `local:${string}`
 
 /** Reading parameters: they apply to post text under any theme and travel with theme files. */
 export interface ReadingParams {
@@ -337,10 +337,8 @@ export const THEME_COLOR_KEYS = ['background', 'surface', 'text', 'secondaryText
 
 export interface CustomTheme {
   name: string
-  /** Native control scheme and the starting hues of status colors. */
-  base: SchemeBase
-  /** `#rrggbb`, lowercase. */
-  colors: ThemeColors
+  /** Five user colors for each application light/dark mode. */
+  colors: Record<SchemeBase, ThemeColors>
   /** Opacity of the frosted navigation, toolbars and overlays; 1 is solid. */
   opacity: number
   /** Large corner radius, CSS pixels; smaller radii scale with it. */
@@ -360,13 +358,14 @@ function must(text: string): Rgba {
  * checks. Status text colors are the app's own: each starts from the base scheme's hue and is pulled
  * toward the user's text color only as far as needed for contrast.
  */
-export function customPalette(theme: CustomTheme): Palette {
-  const background = must(theme.colors.background)
-  const surface = must(theme.colors.surface)
-  const text = must(theme.colors.text)
-  const secondary = must(theme.colors.secondaryText)
-  const accent = must(theme.colors.accent)
-  const builtin = BUILTIN_PALETTES[theme.base]
+export function customPalette(theme: CustomTheme, base: SchemeBase): Palette {
+  const colors = theme.colors[base]
+  const background = must(colors.background)
+  const surface = must(colors.surface)
+  const text = must(colors.text)
+  const secondary = must(colors.secondaryText)
+  const accent = must(colors.accent)
+  const builtin = BUILTIN_PALETTES[base]
   const seed = (token: ColorToken) => must(builtin[token])
 
   const palette: Palette = {
@@ -388,7 +387,7 @@ export function customPalette(theme: CustomTheme): Palette {
     'nav-current': rgbaCss(text, 0.1),
     accent: toHex(accent),
     'accent-ink': toHex(accent),
-    'accent-soft': rgbaCss(accent, theme.base === 'dark' ? 0.16 : 0.12),
+    'accent-soft': rgbaCss(accent, base === 'dark' ? 0.16 : 0.12),
     'on-accent': onAccent(accent),
     greentext: toHex(text),
     'quote-ref-ink': toHex(text),
@@ -430,15 +429,17 @@ function onAccent(accent: Rgba): string {
 
 /** Custom theme seeded from a built-in scheme; it passes the same checks. */
 export function themeFromBuiltin(base: SchemeBase): CustomTheme {
-  const p = BUILTIN_PALETTES[base]
-  const hex = (token: ColorToken) => toHex(must(p[token]))
   return {
-    name: base === 'light' ? '浅色副本' : '深色副本',
-    base,
-    colors: { background: hex('window'), surface: hex('paper'), text: hex('ink'), secondaryText: hex('ink-2'), accent: hex('accent-ink') },
-    opacity: must(p.glass).a,
+    name: '我的主题',
+    colors: { light: colorsFromBuiltin('light'), dark: colorsFromBuiltin('dark') },
+    opacity: must(BUILTIN_PALETTES[base].glass).a,
     radius: BUILTIN_RADIUS
   }
+}
+
+function colorsFromBuiltin(base: SchemeBase): ThemeColors {
+  const hex = (token: ColorToken) => toHex(must(BUILTIN_PALETTES[base][token]))
+  return { background: hex('window'), surface: hex('paper'), text: hex('ink'), secondaryText: hex('ink-2'), accent: hex('accent-ink') }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -457,7 +458,7 @@ export type AppearanceIssue =
   | { kind: 'format' }
   | { kind: 'version'; found: number | null }
   | { kind: 'field'; field: string; problem: 'missing' | 'type' | 'range' | 'unknown' | 'unavailable' }
-  | { kind: 'contrast'; foreground: ColorToken; surface: Surface; ratio: number; minimum: number }
+  | { kind: 'contrast'; scheme?: SchemeBase; foreground: ColorToken; surface: Surface; ratio: number; minimum: number }
 
 type Fields = Record<string, unknown>
 
@@ -492,7 +493,10 @@ function enumField<T extends string>(input: Fields, key: string, field: string, 
 const READING_KEYS = ['font', 'fontSize', 'readingWidth'] as const
 
 function readReading(input: Fields, prefix: string, issues: AppearanceIssue[]): ReadingParams | null {
-  const font = enumField(input, 'font', prefix + 'font', ['sans', 'serif'] as const, issues)
+  const rawFont = input.font
+  let font: ReadingFont | null = null
+  if (rawFont === 'sans' || rawFont === 'serif' || (typeof rawFont === 'string' && rawFont.startsWith('local:') && rawFont.length > 6 && rawFont.length <= 206 && !/[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(rawFont))) font = rawFont as ReadingFont
+  else issues.push({ kind: 'field', field: prefix + 'font', problem: rawFont === undefined ? 'missing' : 'range' })
   const fontSize = intField(input, 'fontSize', prefix + 'fontSize', THEME_LIMITS.fontSize, issues)
   const readingWidth = intField(input, 'readingWidth', prefix + 'readingWidth', THEME_LIMITS.readingWidth, issues)
   return font === null || fontSize === null || readingWidth === null ? null : { font, fontSize, readingWidth }
@@ -509,7 +513,8 @@ export function parseReadingParams(value: unknown, field = 'reading'): Parsed<Re
   return reading !== null && issues.length === 0 ? { ok: true, value: reading } : { ok: false, issues }
 }
 
-const THEME_KEYS = ['name', 'base', 'colors', 'opacity', 'radius'] as const
+const THEME_KEYS = ['name', 'colors', 'opacity', 'radius'] as const
+const LEGACY_THEME_KEYS = ['name', 'base', 'colors', 'opacity', 'radius'] as const
 // Control characters and bidirectional overrides are refused in names.
 const NAME_FORBIDDEN = /[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/u
 
@@ -526,23 +531,33 @@ function readTheme(input: Fields, prefix: string, issues: AppearanceIssue[]): Cu
       issues.push({ kind: 'field', field: prefix + 'name', problem: 'range' })
     } else name = trimmed
   }
-  const base = enumField(input, 'base', prefix + 'base', ['light', 'dark'] as const, issues)
-
-  const colors: Partial<ThemeColors> = {}
-  const rawColors = input.colors
-  if (rawColors === undefined) issues.push({ kind: 'field', field: prefix + 'colors', problem: 'missing' })
-  else if (!isRecord(rawColors)) issues.push({ kind: 'field', field: prefix + 'colors', problem: 'type' })
-  else {
-    unknownFields(rawColors, THEME_COLOR_KEYS, `${prefix}colors.`, issues)
-    for (const key of THEME_COLOR_KEYS) {
-      const field = `${prefix}colors.${key}`
-      const value = rawColors[key]
-      if (value === undefined) issues.push({ kind: 'field', field, problem: 'missing' })
-      else if (typeof value !== 'string') issues.push({ kind: 'field', field, problem: 'type' })
-      else if (!HEX.test(value)) issues.push({ kind: 'field', field, problem: 'range' })
-      else colors[key] = value.toLowerCase()
+  const legacy = Object.hasOwn(input, 'base')
+  const base = legacy ? enumField(input, 'base', prefix + 'base', ['light', 'dark'] as const, issues) : null
+  const readColors = (raw: unknown, field: string): ThemeColors | null => {
+    if (!isRecord(raw)) {
+      issues.push({ kind: 'field', field, problem: raw === undefined ? 'missing' : 'type' })
+      return null
     }
+    const start = issues.length
+    unknownFields(raw, THEME_COLOR_KEYS, `${field}.`, issues)
+    const colors: Partial<ThemeColors> = {}
+    for (const key of THEME_COLOR_KEYS) {
+      const value = raw[key]
+      if (typeof value === 'string' && HEX.test(value)) colors[key] = value.toLowerCase()
+      else issues.push({ kind: 'field', field: `${field}.${key}`, problem: value === undefined ? 'missing' : typeof value === 'string' ? 'range' : 'type' })
+    }
+    return issues.length === start ? colors as ThemeColors : null
   }
+  let colors: CustomTheme['colors'] | null = null
+  if (legacy) {
+    const old = readColors(input.colors, `${prefix}colors`)
+    if (old !== null && base !== null) colors = { light: colorsFromBuiltin('light'), dark: colorsFromBuiltin('dark'), [base]: old }
+  } else if (isRecord(input.colors)) {
+    unknownFields(input.colors, ['light', 'dark'], `${prefix}colors.`, issues)
+    const light = readColors(input.colors.light, `${prefix}colors.light`)
+    const dark = readColors(input.colors.dark, `${prefix}colors.dark`)
+    if (light !== null && dark !== null) colors = { light, dark }
+  } else issues.push({ kind: 'field', field: prefix + 'colors', problem: input.colors === undefined ? 'missing' : 'type' })
 
   let opacity: number | null = null
   const rawOpacity = input.opacity
@@ -553,26 +568,27 @@ function readTheme(input: Fields, prefix: string, issues: AppearanceIssue[]): Cu
   } else opacity = Math.round(rawOpacity * 100) / 100
   const radius = intField(input, 'radius', prefix + 'radius', THEME_LIMITS.radius, issues)
 
-  if (issues.length > start || name === null || base === null || opacity === null || radius === null) return null
-  return { name, base, colors: colors as ThemeColors, opacity, radius }
+  if (issues.length > start || name === null || colors === null || opacity === null || radius === null) return null
+  return { name, colors, opacity, radius }
 }
 
 /** Contrast issues of a custom theme (empty when every listed pair reaches the minimum). */
 export function themeContrastIssues(theme: CustomTheme): AppearanceIssue[] {
-  return paletteContrastFailures(customPalette(theme)).map((failure) => ({
+  return (['light', 'dark'] as const).flatMap((scheme) => paletteContrastFailures(customPalette(theme, scheme)).map((failure): AppearanceIssue => ({
     kind: 'contrast',
+    scheme,
     foreground: failure.foreground,
     surface: failure.surface,
     ratio: Math.floor(failure.ratio * 100) / 100,
     minimum: MIN_TEXT_CONTRAST
-  }))
+  })))
 }
 
 /** Validates a custom theme value (settings or editor), including the contrast checks. */
 export function parseCustomTheme(value: unknown, field = 'customTheme'): Parsed<CustomTheme> {
   if (!isRecord(value)) return { ok: false, issues: [{ kind: 'field', field, problem: 'type' }] }
   const issues: AppearanceIssue[] = []
-  unknownFields(value, THEME_KEYS, `${field}.`, issues)
+  unknownFields(value, Object.hasOwn(value, 'base') ? LEGACY_THEME_KEYS : THEME_KEYS, `${field}.`, issues)
   const theme = readTheme(value, `${field}.`, issues)
   if (theme === null || issues.length > 0) return { ok: false, issues }
   const contrast = themeContrastIssues(theme)
@@ -583,11 +599,11 @@ export function parseCustomTheme(value: unknown, field = 'customTheme'): Parsed<
 // Theme files
 
 export const THEME_FORMAT = 'xidao-theme'
-export const THEME_VERSION = 1
+export const THEME_VERSION = 2
 /** Largest theme file accepted for import, bytes. */
 export const MAX_THEME_FILE_BYTES = 64 * 1024
 
-/** Version 1 theme file: one JSON object with exactly these fields. */
+/** Version 2 stores independent light and dark color sets. */
 export interface ThemeDocument extends CustomTheme, ReadingParams {
   format: typeof THEME_FORMAT
   version: typeof THEME_VERSION
@@ -596,7 +612,7 @@ export interface ThemeDocument extends CustomTheme, ReadingParams {
 const DOCUMENT_KEYS = ['format', 'version', ...THEME_KEYS, ...READING_KEYS] as const
 
 export function themeDocument(theme: CustomTheme, reading: ReadingParams): ThemeDocument {
-  return { format: THEME_FORMAT, version: THEME_VERSION, ...theme, colors: { ...theme.colors }, ...reading }
+  return { format: THEME_FORMAT, version: THEME_VERSION, ...theme, colors: { light: { ...theme.colors.light }, dark: { ...theme.colors.dark } }, ...reading }
 }
 
 export function serializeThemeDocument(document: ThemeDocument): string {
@@ -612,11 +628,12 @@ export function parseThemeDocument(text: string): { ok: true; theme: CustomTheme
     return { ok: false, issues: [{ kind: 'syntax' }] }
   }
   if (!isRecord(raw) || raw.format !== THEME_FORMAT) return { ok: false, issues: [{ kind: 'format' }] }
-  if (raw.version !== THEME_VERSION) {
+  if (raw.version !== 1 && raw.version !== THEME_VERSION) {
     return { ok: false, issues: [{ kind: 'version', found: typeof raw.version === 'number' ? raw.version : null }] }
   }
   const issues: AppearanceIssue[] = []
-  unknownFields(raw, DOCUMENT_KEYS, '', issues)
+  unknownFields(raw, raw.version === 1 ? ['format', 'version', ...LEGACY_THEME_KEYS, ...READING_KEYS] : DOCUMENT_KEYS, '', issues)
+  if (raw.version === 1 && !Object.hasOwn(raw, 'base')) issues.push({ kind: 'field', field: 'base', problem: 'missing' })
   const theme = readTheme(raw, '', issues)
   const reading = readReading(raw, '', issues)
   if (theme === null || reading === null || issues.length > 0) return { ok: false, issues }

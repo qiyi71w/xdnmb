@@ -189,10 +189,10 @@ describe('combined predecessor migration', () => {
     } finally { unchanged.close() }
   })
 
-  it('upgrades frozen reminders-v9 to searchable v10 and keeps reminder and notification records', () => {
+  it('upgrades frozen reminders-v9 to the current schema and keeps reminder and notification records', () => {
     const path = predecessor('reminders-v9')
     const db = open(path)
-    expect(db.status).toEqual({ state: 'ready', schemaVersion: 10 })
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((migration) => migration.version)) })
     db.beginSearchRebuild()
     let rebuilt = false
     for (let batch = 0; batch < 100 && !rebuilt; batch++) rebuilt = db.rebuildSearchBatch()

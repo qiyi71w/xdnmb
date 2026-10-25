@@ -48,6 +48,7 @@ const IMAGE_ORIGIN = 'https://image.nmb.best'
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL
 const rendererFile = join(import.meta.dirname, '../renderer/index.html')
 const rendererFileUrl = pathToFileURL(rendererFile).href
+const prototypeEnabled = process.env.VITE_XIDAO_PROTOTYPE === '1'
 
 function isAppDocument(url: string): boolean {
   if (rendererDevUrl) return URL.canParse(url) && new URL(url).origin === new URL(rendererDevUrl).origin
@@ -126,6 +127,10 @@ function createWindow(): BrowserWindow {
     minHeight: 480,
     show: false,
     title: '汐岛',
+    ...(prototypeEnabled ? platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {
+      titleBarStyle: 'hidden' as const,
+      titleBarOverlay: { color: '#eef2f3', symbolColor: '#20272b', height: 44 }
+    } : {}),
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.cjs'),
       sandbox: true,
@@ -214,8 +219,11 @@ function serveManagedImages(directories: Record<'file' | 'draft', ManagedImageFi
 
 async function start(): Promise<void> {
   const denyAll = session.defaultSession
-  denyAll.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-  denyAll.setPermissionCheckHandler(() => false)
+  denyAll.setPermissionRequestHandler((contents, permission, callback, details) => {
+    callback(prototypeEnabled && permission === 'local-fonts' && contents === mainWindow?.webContents && details.isMainFrame && isAppDocument(details.requestingUrl))
+  })
+  denyAll.setPermissionCheckHandler((contents, permission, _origin, details) =>
+    prototypeEnabled && permission === 'local-fonts' && contents === mainWindow?.webContents && details.isMainFrame && typeof details.requestingUrl === 'string' && isAppDocument(details.requestingUrl))
 
   const openedStore = await openReadingStore({
     databasePath: join(app.getPath('userData'), 'xidao.sqlite'),

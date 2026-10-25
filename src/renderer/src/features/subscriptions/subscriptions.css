@@ -4,20 +4,9 @@
 
 /* ---------- Header ---------- */
 
-.sub-source-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-  margin-top: 8px;
-}
-
-.sub-identity {
-  flex: 1 1 14em;
-  min-width: 0;
-  font-size: var(--text-xs);
-  color: var(--ink-2);
-  overflow-wrap: anywhere;
+/* The source switch sits in the title row, between the title and 刷新. */
+.sub-source {
+  flex: none;
 }
 
 .list-header .form-message {
@@ -307,6 +296,25 @@
 
 .sub-coverage.is-partial {
   color: var(--warn-ink);
+}
+
+/* Where the automatic reading stopped (error or 取消): one line and its action. */
+.sub-stopped {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.sub-stopped[role='alert'] {
+  color: var(--danger-ink);
+}
+
+.sub-stopped .icon {
+  flex: none;
 }
 
 .list-status .notice-inline {

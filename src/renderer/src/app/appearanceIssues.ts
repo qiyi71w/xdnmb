@@ -62,6 +62,7 @@ const FIELD_LABELS: Record<string, string> = {
   readingWidth: '阅读宽度',
   colorScheme: '配色',
   customTheme: '自定义主题',
+  customThemeEnabled: '自定义主题',
   reading: '阅读参数',
   density: '密度',
   motion: '动态效果',
@@ -85,7 +86,7 @@ function rangeText(field: string): string {
     case 'radius':
       return `须为 ${THEME_LIMITS.radius.min}–${THEME_LIMITS.radius.max} 的整数`
     case 'font':
-      return '须为无衬线或衬线'
+      return '请选择内置或本机字体'
     case 'fontSize':
       return `须为 ${THEME_LIMITS.fontSize.min}–${THEME_LIMITS.fontSize.max} 的整数`
     case 'readingWidth':
@@ -102,12 +103,12 @@ export function describeIssue(issue: AppearanceIssue): string {
     case 'format':
       return '文件不是汐岛主题文件'
     case 'version':
-      return issue.found === null ? '主题文件缺少版本号' : `主题文件版本 ${issue.found} 不受支持（支持版本 1）`
+      return issue.found === null ? '主题文件缺少版本号' : `不支持主题文件版本 ${issue.found}`
     case 'contrast':
-      return `${TEXT_LABELS[issue.foreground] ?? issue.foreground}在${surfaceText(issue.surface)}对比度 ${ratioText(issue.ratio)}:1，需至少 ${ratioText(issue.minimum)}:1`
+      return `${issue.scheme === undefined ? '' : issue.scheme === 'light' ? '浅色：' : '深色：'}${TEXT_LABELS[issue.foreground] ?? issue.foreground}在${surfaceText(issue.surface)}对比度 ${ratioText(issue.ratio)}:1，需至少 ${ratioText(issue.minimum)}:1`
     case 'field': {
       const field = relativeField(issue.field)
-      const label = FIELD_LABELS[field] ?? `字段“${issue.field}”`
+      const label = FIELD_LABELS[field] ?? FIELD_LABELS[field.replace(/^colors\.(light|dark)\./, 'colors.')] ?? `字段“${issue.field}”`
       switch (issue.problem) {
         case 'missing':
           return `缺少${label}`
@@ -118,7 +119,7 @@ export function describeIssue(issue: AppearanceIssue): string {
         case 'unknown':
           return `不认识的字段“${issue.field}”`
         case 'unavailable':
-          return field === 'colorScheme' ? '自定义配色需要先创建或导入自定义主题' : `${label}当前不可用`
+          return field === 'customThemeEnabled' ? '请先创建或导入主题' : `${label}当前不可用`
       }
     }
   }

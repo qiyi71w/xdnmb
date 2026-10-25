@@ -144,9 +144,8 @@ export function QuoteCard({
           </Status>
         )}
         <div className="quote-card-meta">
-          {post.userHash !== null && <span className="user-hash">{post.userHash}</span>}
+          {post.userHash !== null && <span className={post.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{post.userHash}</span>}
           {name !== null && <span className="post-name">{name}</span>}
-          {post.isAdmin === true && <span className="tag tag-admin">管理员</span>}
           {post.createdAt !== null && <span>{post.createdAt}</span>}
           {post.image !== null && (
             <span className="tag tag-image">

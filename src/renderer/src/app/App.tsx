@@ -60,7 +60,8 @@ import { SettingsDialog } from './SettingsDialog'
 import { isEditableTarget, matchShortcut, shortcutLabel, type ShortcutAction } from './shortcuts'
 import { TabView } from './TabView'
 import { TopBar } from './TopBar'
-import { SettingsOpenerContext } from '../lib/settingsOpener'
+import { SettingsOpenerContext, type SettingsSectionId } from '../lib/settingsOpener'
+import { ListOpenerContext } from '../features/reminders/openList'
 import { useSettingsWriter } from './useSettingsWriter'
 import './layout.css'
 // PROTOTYPE (throwaway): navigation variants, active only with VITE_XIDAO_PROTOTYPE=1.
@@ -418,8 +419,13 @@ export function App() {
    * the top bar). Leaving it for other content (a list chosen) hands focus to that content instead.
    */
   const settingsReturn = useRef<{ opener: HTMLElement | null; fromTopBar: boolean; pending: boolean } | null>(null)
+  /**
+   * PROTOTYPE: where the settings page lands — the section an entry is about, or the top. A new
+   * request (`seq`) moves the page even while it is already shown.
+   */
+  const [settingsTarget, setSettingsTarget] = useState<{ section: SettingsSectionId | null; seq: number }>({ section: null, seq: 0 })
 
-  const openSettings = useCallback(() => {
+  const openSettings = useCallback((section?: SettingsSectionId) => {
     if (PROTOTYPE_ENABLED && settingsReturn.current === null) {
       const active = document.activeElement
       const opener = active instanceof HTMLElement && active !== document.body ? active : null
@@ -428,9 +434,14 @@ export function App() {
     // The dialog becomes the only layer: an open navigation overlay closes first.
     closeNav(false)
     clearSettingsStatus()
+    setSettingsTarget((previous) => ({ section: section ?? null, seq: previous.seq + 1 }))
     if (PROTOTYPE_ENABLED) setProtoSettingsOpen(true)
     else setSettingsOpen(true)
   }, [closeNav, clearSettingsStatus])
+  /** Settings at the top: Ctrl/Cmd+, and the general 设置 buttons. */
+  const openSettingsTop = useCallback(() => openSettings(), [openSettings])
+  /** Settings at 饼干: the navigation's browse-cookie footer. */
+  const openCookieSettings = useCallback(() => openSettings('cookies'), [openSettings])
 
   /** Leaves settings; `returnFocus` (Esc, 返回, the dialog closed) sends focus back where it came from. */
   const endSettings = useCallback(
@@ -1011,7 +1022,7 @@ export function App() {
       save: saveCurrent,
       back: goBack,
       forward: goForward,
-      'open-settings': openSettings,
+      'open-settings': openSettingsTop,
       'search-thread': searchShownThread,
       'search-local': openLocalSearch
     }
@@ -1094,6 +1105,8 @@ export function App() {
     },
     [protoSettingsShown, endSettings, selectFeed]
   )
+  /** Lists opened from inside content (e.g. the reminders empty state): focus goes to the list. */
+  const openList = useCallback((ref: ListRef) => protoSelect(ref, 'list'), [protoSelect])
   /** Lists of the tab (订阅的串, 提醒, 历史, 离线) and 搜索 are pages; the rest open dialogs. */
   const openProtoFeature = useCallback(
     (id: FeatureId, focusTarget = false) => {
@@ -1210,7 +1223,7 @@ export function App() {
       onRetry: directory.retry,
       features: protoFeatures,
       settingsCurrent: protoSettingsShown,
-      onOpenSettings: openSettings
+      onOpenSettings: openSettingsTop
     }
     const props: PrototypeNavProps =
       placement === 'inline'
@@ -1233,6 +1246,7 @@ export function App() {
         write={settingsWriter.write}
         adopt={settingsWriter.adopt}
         directory={dirData}
+        target={settingsTarget}
         onClose={closeSettings}
       />
     )
@@ -1243,6 +1257,7 @@ export function App() {
       <EditorWorkspaceContext value={editorWorkspace}>
       <SubscriptionsContext value={subscriptions}>
       <RemindersContext value={reminders}>
+      <ListOpenerContext value={openList}>
         <div className="app" ref={appRef}>
           <StorageBanner storage={storage} />
           <LaunchNotice
@@ -1278,7 +1293,7 @@ export function App() {
                     progress={layout.navProgress}
                     panelRef={inlineNavRef}
                     identities={identities}
-                    onOpenSettings={openSettings}
+                    onOpenSettings={openCookieSettings}
                     onOpenDrafts={openDrafts}
                     onOpenRetained={openRetained}
                     onOpenAttempts={openAttempts}
@@ -1320,7 +1335,7 @@ export function App() {
                       settingsTrigger={
                         navVariant !== null && !navOverlay
                           ? null
-                          : { ref: settingsButtonRef, expanded: settingsOpen || protoSettingsShown, onOpen: openSettings }
+                          : { ref: settingsButtonRef, expanded: settingsOpen || protoSettingsShown, onOpen: openSettingsTop }
                       }
                     />}
                     <div className="tab-host" hidden={protoSettingsShown ? true : undefined}>
@@ -1329,6 +1344,7 @@ export function App() {
                           key={tab.id}
                           tab={tab}
                           active={tab.id === tabs.activeId}
+                          composeHidden={protoSettingsShown}
                           layout={layout}
                           directory={directory.state}
                           onRetryDirectory={directory.retry}
@@ -1363,7 +1379,7 @@ export function App() {
                     panelRef={navPanelRef}
                     id="nav-overlay"
                     identities={identities}
-                    onOpenSettings={openSettings}
+                    onOpenSettings={openCookieSettings}
                     onOpenDrafts={openDrafts}
                     onOpenRetained={openRetained}
                     onOpenAttempts={openAttempts}
@@ -1484,6 +1500,7 @@ export function App() {
             whenRestored={whenRestored}
           />
         </div>
+      </ListOpenerContext>
       </RemindersContext>
       </SubscriptionsContext>
       </EditorWorkspaceContext>

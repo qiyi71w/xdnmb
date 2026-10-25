@@ -139,6 +139,7 @@ export interface ReadingStore {
  * reach this layer. IDs are never reused, so a role pointing at a removed credential stays missing.
  */
 export interface IdentityStore {
+  /** In the user's order (position, then ID). */
   listCredentials(): Promise<CredentialSummary[]>
   loadCredentialCiphertexts(): Promise<Array<{ id: CredentialId; ciphertext: Uint8Array }>>
   loadCredentialCiphertext(id: CredentialId): Promise<Uint8Array | null>
@@ -147,6 +148,8 @@ export interface IdentityStore {
   renameCredential(id: CredentialId, name: string): Promise<boolean>
   /** Deletes the ciphertext; role references are kept. False when it did not exist. */
   deleteCredential(id: CredentialId): Promise<boolean>
+  /** Stores the given order. False (and no change) unless `ids` are exactly the stored credentials. */
+  reorderCredentials(ids: CredentialId[]): Promise<boolean>
   loadRoleSelections(): Promise<Record<IdentityRole, RoleSelection>>
   /** Sets one role. False (and no change) when `id` is not an existing credential. */
   setRoleSelection(role: IdentityRole, id: CredentialId | null): Promise<boolean>

@@ -51,6 +51,7 @@ function asyncStore(db: ReadingDatabase): DraftStore & IdentityStore & { readonl
     insertCredential: async (input) => db.insertCredential(input),
     renameCredential: async (id, name) => db.renameCredential(id, name),
     deleteCredential: async (id) => db.deleteCredential(id),
+    reorderCredentials: async (ids) => db.reorderCredentials(ids),
     loadRoleSelections: async () => db.loadRoleSelections(),
     setRoleSelection: async (role, id) => db.setRoleSelection(role, id)
   }

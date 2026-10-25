@@ -3,7 +3,6 @@
 
 import { useMemo, type Ref } from 'react'
 import type { BoardDirectory } from '../../../../../shared/forum'
-import { formatReminderCount } from '../../../../../shared/reminders'
 import { Icon } from '../../../components/Icon'
 import { FailureNotice, Loading } from '../../../components/Notices'
 import type { PendingAttempts } from '../../publication/usePendingAttempts'
@@ -70,14 +69,8 @@ export function featureTitle(id: FeatureId, host: FeatureHost): string | undefin
   return id === 'search' && host.searchShortcut !== '' ? `搜索（${host.searchShortcut}）` : undefined
 }
 
-/** Badge of a feature: confirmed unread reminders, sends to check. */
+/** Badge of a feature: sends to check. Reminders carry no unread count (read tracking removed). */
 export function featureBadge(id: FeatureId, host: FeatureHost): { text: string; tone: 'count' | 'warning'; spoken: string } | null {
-  if (id === 'reminders') {
-    const badge = host.reminderBadge
-    if (badge === null || badge.unread <= 0) return null
-    const text = formatReminderCount(badge.unread)
-    return { text, tone: 'count', spoken: `${text} 条未读` }
-  }
   if (id === 'attempts') {
     const count = host.pendingAttempts.count
     if (count === null || count <= 0) return null

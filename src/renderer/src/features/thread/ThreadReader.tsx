@@ -26,6 +26,7 @@ import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import type { ComposeEntry } from '../editor/ComposePanel'
 import { usePopover } from '../../lib/usePopover'
 import { ThreadMoreMenu } from './ThreadMoreMenu'
+import { SubscribeButton, SubscribeNote } from './SubscribeButton'
 
 const MODE_NAMES: Record<ReadingMode, string> = { all: '全部回复', po: '只看 PO' }
 /** How long a quote target stays marked after the jump. */
@@ -277,7 +278,9 @@ export function ThreadReader({
   const [reminderPanelOpen, setReminderPanelOpen] = useState(false)
   /** PROTOTYPE: so does the page popover of the position control. */
   const [pagePanelOpen, setPagePanelOpen] = useState(false)
-  useCover(reminderPanelOpen || pagePanelOpen)
+  /** And the 订阅 confirmation under its toolbar button. */
+  const [subscribePanelOpen, setSubscribePanelOpen] = useState(false)
+  useCover(reminderPanelOpen || pagePanelOpen || subscribePanelOpen)
   useEffect(
     () => () => {
       near.disconnect()
@@ -450,8 +453,10 @@ export function ThreadReader({
     if (PROTOTYPE_ENABLED) setReadingPage(currentAnchor()?.page ?? null)
   }
 
+  // PROTOTYPE: no unread marks (the read/unread surfaces are removed; only the position is kept).
   const unreadIds = useMemo(() => {
     const ids = new Set<PostId>()
+    if (PROTOTYPE_ENABLED) return ids
     for (const post of readingState?.unread ?? []) if (!readNow.has(post.postId)) ids.add(post.postId)
     return ids
   }, [readingState, readNow])
@@ -543,16 +548,14 @@ export function ThreadReader({
       {unlocatedPostId !== null && (
         <div className="toolbar-note" role="status">
           <Icon name="info" size={14} />
-          <span>未定位到引用的 No.{unlocatedPostId}：已按正常续读位置打开原串，没有跳到这条回复</span>
+          <span>没有找到 No.{unlocatedPostId}，已从上次阅读的位置打开</span>
         </div>
       )}
 
       {temporaryOf !== null && (
         <div className="toolbar-note" role="status">
           <Icon name="info" size={14} />
-          <span>
-            临时显示{MODE_NAMES[mode]}以定位目标，{MODE_NAMES[temporaryOf]}偏好未改变
-          </span>
+          <span>正在临时显示{MODE_NAMES[mode]}</span>
           <button type="button" className="btn btn-small" onClick={() => onChooseMode(temporaryOf)}>
             回到{MODE_NAMES[temporaryOf]}
           </button>
@@ -567,26 +570,26 @@ export function ThreadReader({
       <div role="status" className="toolbar-status-text">
         {toolbarTask !== null && <Loading live={false}>{taskText(toolbarTask, mode)}</Loading>}
         {nearby === 'anchor' && task === null && <span>原位置已变化，已返回附近</span>}
-        {nearby === 'post' && task === null && <span>原位置的发言不在读取到的页面中，已显示附近位置</span>}
+        {nearby === 'post' && task === null && <span>原位置的发言不在已读取的页面中，已显示附近</span>}
         {notice !== null && <span className="toolbar-warning">{notice}</span>}
         {task === null && state.endProbe?.status === 'insufficient' && (
           <span className="toolbar-warning">
             <Icon name="alert" size={14} />
-            覆盖不足：已探测{pageLabel(mode, formatPageList(state.endProbe.probedPages) || '—')}，未能确认末尾位置
+            已探测{pageLabel(mode, formatPageList(state.endProbe.probedPages) || '—')}，未能确认末尾
           </span>
         )}
         {task === null && state.endProbe?.status === 'interrupted' && (
           <span className="toolbar-warning">
             <Icon name="alert" size={14} />
-            末尾定位中断：{pageLabel(mode, state.endProbe.failedPage)}读取失败（{describeReadError(state.endProbe.error)}
-            {state.endProbe.error.serverMessage !== undefined && `；论坛提示：${state.endProbe.error.serverMessage}`}）；已探测
-            {pageLabel(mode, formatPageList(state.endProbe.probedPages) || '—')}，未能确认末尾位置。可再次点击“末尾”重试
+            {pageLabel(mode, state.endProbe.failedPage)}读取失败（{describeReadError(state.endProbe.error)}
+            {state.endProbe.error.serverMessage !== undefined && `；论坛提示：${state.endProbe.error.serverMessage}`}），未能定位末尾
           </span>
         )}
         {!PROTOTYPE_ENABLED && task === null && state.endProbe?.status === 'located' && (
           <span>已定位末尾（探测{pageLabel(mode, formatPageList(state.endProbe.probedPages))}）</span>
         )}
         {compose?.note}
+        <SubscribeNote threadId={threadId} />
       </div>
       {task === null && state.endProbe?.status === 'interrupted' && <IdentitySettingsAction error={state.endProbe.error} />}
       {task?.type === 'locate' && (
@@ -622,6 +625,7 @@ export function ThreadReader({
                 </div>
                 <div className="toolbar-group">
                   {compose?.entry}
+                  <SubscribeButton threadId={threadId} label={title ?? `No.${threadId}`} onOpenChange={setSubscribePanelOpen} />
                   {searchButton}
                   {refreshButton}
                   <ThreadMoreMenu
@@ -641,7 +645,6 @@ export function ThreadReader({
                 <div className="position-control" role="group" aria-label="阅读位置">
                   {startButton}
                   {endButton}
-                  {unreadButton}
                   <PagePopover
                     inputId={`page-${entryKey}-${threadId}`}
                     mode={mode}
@@ -671,6 +674,7 @@ export function ThreadReader({
                 </div>
                 <div className="toolbar-group">
                   {searchButton}
+                  <SubscribeButton threadId={threadId} label={title ?? `No.${threadId}`} onOpenChange={setSubscribePanelOpen} />
                   <FavoriteButton threadId={threadId} />
                   <ReminderMenu
                     threadId={threadId}

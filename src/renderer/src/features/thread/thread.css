@@ -347,6 +347,58 @@
   cursor: progress;
 }
 
+/* ---------- 订阅／已订阅 in the toolbar ---------- */
+
+.subscribe {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.subscribe-btn.is-on,
+.subscribe-btn.is-on .icon {
+  color: var(--accent-ink);
+}
+
+.subscribe-btn.is-warning,
+.subscribe-btn.is-warning .icon {
+  color: var(--warn-ink);
+}
+
+.subscribe-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  inset-inline-end: 0;
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  width: min(24rem, calc(100vw - 24px));
+  padding: 8px;
+  border-radius: var(--radius-l);
+  background: var(--glass-strong);
+  backdrop-filter: blur(24px) saturate(1.5);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+  text-align: start;
+  white-space: normal;
+  font-size: var(--text-sm);
+}
+
+.subscribe-panel .sub-confirm {
+  justify-self: stretch;
+}
+
+.subscribe-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.subscribe-note-close {
+  width: 24px;
+  height: 24px;
+}
+
 /* Text width is --reading-width; side gutters are what is left, never below --gutter-min.
    Font size and line height never change with the window width. */
 .reader-column {

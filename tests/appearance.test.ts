@@ -1,10 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSettingsService, type SettingsStore } from '../src/main/appearance'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
-import { applySettingsPatch, DEFAULT_SETTINGS, nextZoomFactor, settingsFromStored } from '../src/shared/settings'
+import { applySettingsPatch, DEFAULT_SETTINGS, nextZoomFactor, resolveAppearance, settingsFromStored } from '../src/shared/settings'
 import {
   BUILTIN_PALETTES,
   contrastRatio,
@@ -48,8 +48,10 @@ const color = (text: string) => parseColor(text)!
 
 const sepia: CustomTheme = {
   name: '旧纸',
-  base: 'light',
-  colors: { background: '#efe6d6', surface: '#fbf6ec', text: '#2b2118', secondaryText: '#5a4a3a', accent: '#7a3e12' },
+  colors: {
+    light: { background: '#efe6d6', surface: '#fbf6ec', text: '#2b2118', secondaryText: '#5a4a3a', accent: '#7a3e12' },
+    dark: themeFromBuiltin('dark').colors.dark
+  },
   opacity: 0.7,
   radius: 10
 }
@@ -68,8 +70,8 @@ describe('contrast', () => {
 
   it('checks translucent glass as composited over the window, not the solid surface alone', () => {
     // Secondary text passes on the solid surface but not on 50% glass over a dark window.
-    const theme: CustomTheme = { ...sepia, colors: { ...sepia.colors, background: '#5c5c5c', secondaryText: '#6e6e6e' }, opacity: 0.5 }
-    expect(contrastRatio(color('#6e6e6e'), color(sepia.colors.surface))).toBeGreaterThanOrEqual(4.5)
+    const theme: CustomTheme = { ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, background: '#5c5c5c', secondaryText: '#6e6e6e' } }, opacity: 0.5 }
+    expect(contrastRatio(color('#6e6e6e'), color(sepia.colors.light.surface))).toBeGreaterThanOrEqual(4.5)
     const result = parseCustomTheme(theme)
     expect(result.ok).toBe(false)
     if (result.ok) return
@@ -80,7 +82,7 @@ describe('contrast', () => {
     // Secondary text passes on the plain window (4.52:1) but not on the accent tint drawn behind the tabs.
     const theme: CustomTheme = {
       ...sepia,
-      colors: { background: '#ababab', surface: '#ffffff', text: '#000000', secondaryText: '#404040', accent: '#000000' },
+      colors: { ...sepia.colors, light: { background: '#ababab', surface: '#ffffff', text: '#000000', secondaryText: '#404040', accent: '#000000' } },
       opacity: 0.5
     }
     const result = parseCustomTheme(theme)
@@ -92,19 +94,19 @@ describe('contrast', () => {
 
 describe('custom themes', () => {
   it('uses the user colors as given and keeps derived status text legible', () => {
-    const palette = customPalette(sepia)
+    const palette = customPalette(sepia, 'light')
     expect([palette.window, palette.paper, palette.ink, palette['ink-2'], palette['accent-ink']]).toEqual([
-      sepia.colors.background,
-      sepia.colors.surface,
-      sepia.colors.text,
-      sepia.colors.secondaryText,
-      sepia.colors.accent
+      sepia.colors.light.background,
+      sepia.colors.light.surface,
+      sepia.colors.light.text,
+      sepia.colors.light.secondaryText,
+      sepia.colors.light.accent
     ])
     expect(paletteContrastFailures(palette)).toEqual([])
   })
 
   it('refuses a theme whose own colors are too low in contrast, naming the pair and ratio', () => {
-    const result = parseCustomTheme({ ...sepia, colors: { ...sepia.colors, text: '#b0a898' } })
+    const result = parseCustomTheme({ ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, text: '#b0a898' } } })
     expect(result.ok).toBe(false)
     if (result.ok) return
     const issue = result.issues.find((i) => i.kind === 'contrast' && i.foreground === 'ink' && i.surface.join() === 'paper')
@@ -118,6 +120,40 @@ describe('custom themes', () => {
   })
 })
 
+describe('dual-set appearance', () => {
+  it.each(['light', 'dark'] as const)('migrates an old %s theme without changing its colors', (base) => {
+    const old = { name: '旧主题', base, colors: sepia.colors[base], opacity: 0.7, radius: 10 }
+    const settings = settingsFromStored(new Map<string, unknown>([['colorScheme', 'custom'], ['customTheme', old]]))
+    expect(settings.colorScheme).toBe(base)
+    expect(settings.customThemeEnabled).toBe(true)
+    expect(settings.customTheme?.colors[base]).toEqual(old.colors)
+    const other = base === 'light' ? 'dark' : 'light'
+    expect(settings.customTheme?.colors[other]).toEqual(themeFromBuiltin(other).colors[other])
+  })
+
+  it('selects the custom set using the app mode and follows system changes', () => {
+    const settings = { ...DEFAULT_SETTINGS, customTheme: sepia, customThemeEnabled: true }
+    expect(resolveAppearance(settings, false).variables['--paper']).toBe(sepia.colors.light.surface)
+    expect(resolveAppearance(settings, true).variables['--paper']).toBe(sepia.colors.dark.surface)
+    expect(resolveAppearance({ ...settings, colorScheme: 'light' }, true).scheme).toBe('light')
+    expect(resolveAppearance({ ...settings, colorScheme: 'dark' }, false).scheme).toBe('dark')
+    expect(resolveAppearance({ ...settings, customThemeEnabled: false }, false).variables['--paper']).toBe(BUILTIN_PALETTES.light.paper)
+  })
+
+  it('checks the inactive dark set too', () => {
+    const parsed = parseCustomTheme({ ...sepia, colors: { ...sepia.colors, dark: { ...sepia.colors.dark, text: sepia.colors.dark.surface } } })
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) expect(parsed.issues).toContainEqual(expect.objectContaining({ kind: 'contrast', scheme: 'dark', foreground: 'ink' }))
+  })
+
+  it('accepts installed font family names and safely quotes the CSS font family', () => {
+    const reading = { ...DEFAULT_SETTINGS.reading, font: 'local:Noto Serif CJK SC' as const }
+    expect(applySettingsPatch(DEFAULT_SETTINGS, { reading }).ok).toBe(true)
+    expect(resolveAppearance({ ...DEFAULT_SETTINGS, reading }, false).variables['--font-reading']).toBe('"Noto Serif CJK SC", var(--font-ui)')
+    expect(applySettingsPatch(DEFAULT_SETTINGS, { reading: { ...reading, font: 'local:bad\nfont' } }).ok).toBe(false)
+  })
+})
+
 describe('theme documents', () => {
   const valid = () => themeDocument(sepia, { font: 'serif', fontSize: 18, readingWidth: 38 })
 
@@ -126,12 +162,22 @@ describe('theme documents', () => {
     expect(parsed).toEqual({ ok: true, theme: sepia, reading: { font: 'serif', fontSize: 18, readingWidth: 38 } })
   })
 
+  it.each(['light', 'dark'] as const)('imports version 1 %s files and exports version 2', (base) => {
+    const old = { format: 'xidao-theme', version: 1, name: '旧主题', base, colors: sepia.colors[base], opacity: 0.7, radius: 10, font: 'sans', fontSize: 16, readingWidth: 42 }
+    const parsed = parseThemeDocument(JSON.stringify(old))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.theme.colors[base]).toEqual(old.colors)
+    expect(themeDocument(parsed.theme, parsed.reading).version).toBe(2)
+  })
+
+
   it.each([
     ['not JSON', '{', { kind: 'syntax' }],
     ['another format', JSON.stringify({ format: 'other', version: 1 }), { kind: 'format' }],
-    ['a newer version', JSON.stringify({ ...valid(), version: 2 }), { kind: 'version', found: 2 }],
+    ['a newer version', JSON.stringify({ ...valid(), version: 3 }), { kind: 'version', found: 3 }],
     ['an unknown field', JSON.stringify({ ...valid(), css: 'body{}' }), { kind: 'field', field: 'css', problem: 'unknown' }],
-    ['a non-hex color', JSON.stringify({ ...valid(), colors: { ...sepia.colors, text: 'red' } }), { kind: 'field', field: 'colors.text', problem: 'range' }],
+    ['a non-hex color', JSON.stringify({ ...valid(), colors: { ...sepia.colors, light: { ...sepia.colors.light, text: 'red' } } }), { kind: 'field', field: 'colors.light.text', problem: 'range' }],
     ['an out-of-range size', JSON.stringify({ ...valid(), fontSize: 40 }), { kind: 'field', field: 'fontSize', problem: 'range' }],
     ['an unknown font', JSON.stringify({ ...valid(), font: 'Comic Sans' }), { kind: 'field', field: 'font', problem: 'range' }],
     ['a missing field', JSON.stringify({ ...valid(), radius: undefined }), { kind: 'field', field: 'radius', problem: 'missing' }]
@@ -163,15 +209,15 @@ describe('settings', () => {
     })
   })
 
-  it('refuses the custom scheme without a custom theme', () => {
-    expect(applySettingsPatch(DEFAULT_SETTINGS, { colorScheme: 'custom' })).toMatchObject({ ok: false, issues: [{ field: 'colorScheme', problem: 'unavailable' }] })
+  it('refuses enabling a custom theme before one exists', () => {
+    expect(applySettingsPatch(DEFAULT_SETTINGS, { customThemeEnabled: true })).toMatchObject({ ok: false, issues: [{ field: 'customThemeEnabled', problem: 'unavailable' }] })
   })
 
   it('falls back per value when stored settings are no longer valid', () => {
     const stored = new Map<string, unknown>([
       ['density', 'compact'],
       ['colorScheme', 'custom'],
-      ['customTheme', { ...sepia, colors: { ...sepia.colors, text: sepia.colors.surface } }],
+      ['customTheme', { ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, text: sepia.colors.light.surface } } }],
       ['reading', { font: 'serif', fontSize: 12, readingWidth: 42 }]
     ])
     expect(settingsFromStored(stored)).toEqual({ ...DEFAULT_SETTINGS, density: 'compact', colorScheme: 'system', customTheme: null })
@@ -195,7 +241,7 @@ describe('settings service with real storage', () => {
     const service = createSettingsService(storeOf(open(path)))
     const saved = await service.update({ density: 'compact', motion: 'reduce', reading: { font: 'serif', fontSize: 20, readingWidth: 36 } })
     expect(saved).toMatchObject({ saved: true, issues: [] })
-    const refused = await service.update({ customTheme: { ...sepia, colors: { ...sepia.colors, accent: '#fbf6ec' } }, colorScheme: 'custom' })
+    const refused = await service.update({ customTheme: { ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, accent: '#fbf6ec' } } }, customThemeEnabled: true })
     expect(refused.saved).toBe(false)
     expect(refused.issues.length).toBeGreaterThan(0)
     expect(refused.settings).toEqual(saved.settings)
@@ -206,11 +252,11 @@ describe('settings service with real storage', () => {
     const dir = folder()
     const db = open(join(dir, 'reading.sqlite'))
     const service = createSettingsService(storeOf(db))
-    await service.update({ customTheme: sepia, colorScheme: 'custom' })
+    await service.update({ customTheme: sepia, customThemeEnabled: true })
     const before = db.loadSettings()
 
     const lowContrast = join(dir, 'low.json')
-    writeFileSync(lowContrast, serializeThemeDocument(themeDocument({ ...sepia, colors: { ...sepia.colors, text: '#d8d0c0' } }, DEFAULT_SETTINGS.reading)))
+    writeFileSync(lowContrast, serializeThemeDocument(themeDocument({ ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, text: '#d8d0c0' } } }, DEFAULT_SETTINGS.reading)))
     expect(await service.importTheme(lowContrast)).toMatchObject({
       status: 'rejected',
       issues: expect.arrayContaining([expect.objectContaining({ kind: 'contrast', foreground: 'ink', surface: ['paper'] })])
@@ -235,14 +281,14 @@ describe('settings service with real storage', () => {
     await source.update({ customTheme: sepia, colorScheme: 'light', reading: { font: 'serif', fontSize: 19, readingWidth: 34 } })
     const file = join(dir, 'theme.json')
     expect(await source.exportTheme(file, false)).toEqual({ status: 'exported' })
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ format: 'xidao-theme', version: 1 })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ format: 'xidao-theme', version: 2 })
 
     const targetDb = open(join(dir, 'b.sqlite'))
     const target = createSettingsService(storeOf(targetDb))
     expect(await target.importTheme(file)).toMatchObject({ status: 'imported' })
     expect(targetDb.loadSettings()).toEqual({
       ...DEFAULT_SETTINGS,
-      colorScheme: 'custom',
+      customThemeEnabled: true,
       customTheme: sepia,
       reading: { font: 'serif', fontSize: 19, readingWidth: 34 }
     })

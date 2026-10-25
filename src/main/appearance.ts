@@ -87,7 +87,7 @@ export function createSettingsService(store: SettingsStore): SettingsService {
         if (parsed === null) return { status: 'rejected', issues: [{ kind: 'syntax' }] }
         if (!parsed.ok) return { status: 'rejected', issues: parsed.issues }
         const current = await load()
-        const next: AppSettings = { ...current, customTheme: parsed.theme, reading: parsed.reading, colorScheme: 'custom' }
+        const next: AppSettings = { ...current, customTheme: parsed.theme, reading: parsed.reading, customThemeEnabled: true }
         return (await save(next)) ? { status: 'imported', settings: next } : { status: 'failed', reason: 'not-saved' }
       }),
 

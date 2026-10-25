@@ -18,10 +18,9 @@ export const SOURCE_LABEL: Record<CredentialSource, string> = {
   raw: '原始 userhash'
 }
 
-export const ROLE_INFO: Record<IdentityRole, { label: string; noneLabel: string; explanation: string }> = {
-  browse: { label: '浏览饼干', noneLabel: '不使用饼干', explanation: '用于读取论坛。' },
-  'default-post': { label: '默认发言饼干', noneLabel: '未设置', explanation: '用于新的发言编辑。' },
-  'web-sync': { label: '网页同步对象', noneLabel: '未绑定', explanation: '用于网页订阅同步，不随浏览或发言饼干改变。' }
+export const ROLE_INFO: Record<IdentityRole, { label: string; noneLabel: string }> = {
+  'default-post': { label: '默认发言饼干', noneLabel: '未设置' },
+  'web-sync': { label: '网页同步对象', noneLabel: '未绑定' }
 }
 
 export const MISSING_SELECTION_TEXT = '已移除的饼干，需要重新选择'
@@ -38,15 +37,12 @@ export function roleList(roles: readonly IdentityRole[]): string {
   return roles.map((role) => ROLE_INFO[role].label).join('、')
 }
 
-export type BrowseStatus = { state: 'none' } | { state: 'selected'; name: string } | { state: 'missing' }
+export type BrowseStatus = { state: 'none' } | { state: 'selected'; name: string }
 
+/** Forum reads carry the first credential of the list; none only when the list is empty. */
 export function browseStatus(overview: IdentityOverview): BrowseStatus {
-  const selection = overview.roles.browse
-  if (selection.state === 'none') return { state: 'none' }
-  if (selection.state === 'missing') return { state: 'missing' }
-  const credential = overview.credentials.find((item) => item.id === selection.credentialId)
-  // A selection without its credential cannot be used; show it as needing a new choice.
-  return credential === undefined ? { state: 'missing' } : { state: 'selected', name: credential.name }
+  const first = overview.credentials[0]
+  return first === undefined ? { state: 'none' } : { state: 'selected', name: first.name }
 }
 
 export function nameErrorText(error: NameError | 'required'): string {
