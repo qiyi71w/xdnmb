@@ -1105,8 +1105,8 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
                           <span className="account-cookie-id">{cookie.publicId}</span>
                           <span className="account-cookie-meta">
                             <span>ID {cookie.id}</span>
-                            <span>有效时间 {cookie.validUntil}</span>
-                            <span>领取时间 {cookie.claimedAt}</span>
+                            {cookie.validUntil !== null && <span>有效时间 {cookie.validUntil}</span>}
+                            {cookie.claimedAt !== null && <span>领取时间 {cookie.claimedAt}</span>}
                           </span>
                           {outcome !== undefined && (
                             <span className={outcome.tone === 'error' ? 'account-cookie-outcome is-error' : 'account-cookie-outcome'}>

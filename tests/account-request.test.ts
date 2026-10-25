@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
+import { gzipSync } from 'node:zlib'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestAccountPage } from '../src/main/account/client'
 import { ACCOUNT_ORIGIN } from '../src/main/account/protocol'
@@ -36,5 +38,14 @@ describe('account HTTPS request gate', () => {
   it('rejects a header-injecting secret without opening a request', async () => {
     await expect(requestAccountPage(new URL('/Member/User/Cookie/index.html', ACCOUNT_ORIGIN), 'bad\r\nCookie: userhash=synthetic', signal())).rejects.toMatchObject({ reason: 'blocked' })
     expect(network.request).not.toHaveBeenCalled()
+  })
+  it('decodes a gzipped member page sent regardless of Accept-Encoding', async () => {
+    const request = Object.assign(new EventEmitter(), { destroy: vi.fn(), end: vi.fn() })
+    const response = Object.assign(new PassThrough(), { statusCode: 200, headers: { 'content-encoding': 'gzip' } })
+    network.request.mockImplementation((_url, _options, receive) => {
+      request.end.mockImplementation(() => queueMicrotask(() => { receive(response); response.end(gzipSync('<title>饼干列表</title>')) }))
+      return request
+    })
+    await expect(requestAccountPage(new URL('/Member/User/Cookie/index.html', ACCOUNT_ORIGIN), 'synthetic-session', signal())).resolves.toBe('<title>饼干列表</title>')
   })
 })

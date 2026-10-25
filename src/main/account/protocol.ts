@@ -63,24 +63,45 @@ function link(raw: string | undefined, base: URL): URL | null {
   if (raw === undefined) return null
   try { const url = new URL(raw, base); url.hash = ''; return url } catch { return null }
 }
+const COLUMNS = ['ID', '饼干', '有效时间', '领取时间', '操作'] as const
+/** Column positions of a header row whose non-empty cells are exactly COLUMNS (a checkbox column may lead). */
+function columnsOf(row: Element): number[] | null {
+  const labels = row.children.filter((cell) => cell.tag === 'th' || cell.tag === 'td').map(text)
+  const named = labels.flatMap((label, index) => (label === '' ? [] : [index]))
+  return named.length === COLUMNS.length && named.every((index, at) => labels[index] === COLUMNS[at]) ? named : null
+}
+/** 0000-00-00 00:00:00 is the site's empty date, not a time. */
+function dateOrNull(value: string): string | null {
+  return /^0{4}-0{2}-0{2}(?: 0{2}:0{2}:0{2})?$/.test(value) ? null : value
+}
 export function parseAccountList(html: string, pageUrl: URL): { cookies: AccountCookie[]; pages: URL[] } {
   const nodes = descendants(document(html))
-  const table = nodes.find((node) => node.tag === 'table' && descendants(node).some((row) =>
-    row.tag === 'tr' && row.children.filter((cell) => cell.tag === 'th' || cell.tag === 'td').map(text).join('|') === 'ID|饼干|有效时间|领取时间|操作'))
-  if (!table) throw new AccountError('unknown-structure')
+  let header: Element | null = null
+  let columns: number[] | null = null
+  const table = nodes.find((node) => node.tag === 'table' && descendants(node).some((row) => {
+    if (row.tag !== 'tr') return false
+    const found = columnsOf(row)
+    if (found !== null) { header = row; columns = found }
+    return found !== null
+  }))
+  if (!table || header === null || columns === null) throw new AccountError('unknown-structure')
+  const [idAt, publicAt, validAt, claimedAt, actionsAt] = columns as number[]
+  const width = (header as Element).children.filter((node) => node.tag === 'td' || node.tag === 'th').length
   const cookies: AccountCookie[] = []
   for (const row of descendants(table).filter((node) => node.tag === 'tr')) {
+    if (row === header) continue
     const cells = row.children.filter((node) => node.tag === 'td' || node.tag === 'th')
-    if (cells.map(text).join('|') === 'ID|饼干|有效时间|领取时间|操作') continue
     if (!cells.length) continue
-    if (cells.length !== 5) throw new AccountError('unknown-structure')
-    const id = text(cells[0]!)
-    const exports = descendants(cells[4]!).filter((node) => node.tag === 'a').map((node) => link(node.attrs.href, pageUrl))
+    if (cells.length !== width) throw new AccountError('unknown-structure')
+    const id = text(cells[idAt!]!)
+    const exports = descendants(cells[actionsAt!]!).filter((node) => node.tag === 'a').map((node) => link(node.attrs.href, pageUrl))
       .filter((url): url is URL => url !== null && official(url) && EXPORT.test(url.pathname) && !url.search)
+    const publicId = text(cells[publicAt!]!)
+    const claimed = text(cells[claimedAt!]!)
     if (!/^[1-9]\d{0,19}$/.test(id) || exports.length !== 1 || EXPORT.exec(exports[0]!.pathname)?.[1] !== id ||
-        cells.slice(1, 4).some((cell) => !text(cell))) throw new AccountError('unknown-structure')
+        !publicId || !claimed) throw new AccountError('unknown-structure')
     if (cookies.some((cookie) => cookie.id === id)) throw new AccountError('unknown-structure')
-    cookies.push({ id, publicId: text(cells[1]!), validUntil: text(cells[2]!), claimedAt: text(cells[3]!) })
+    cookies.push({ id, publicId, validUntil: dateOrNull(text(cells[validAt!]!)), claimedAt: dateOrNull(claimed) })
   }
   const pages = new Map<string, URL>()
   for (const node of nodes) {

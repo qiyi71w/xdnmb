@@ -21,7 +21,7 @@ function makeListHtml(rowsHtml: string, paginationHtml = ''): string {
 <body>
 <table>
   <thead>
-    <tr><th>ID</th><th>饼干</th><th>有效时间</th><th>领取时间</th><th>操作</th></tr>
+    <tr><th><input type="checkbox"></th><th>ID</th><th>饼干</th><th>有效时间</th><th>领取时间</th><th>操作</th></tr>
   </thead>
   <tbody>
     ${rowsHtml}
@@ -40,12 +40,14 @@ function makeRow(
   exportHref = `/Member/User/Cookie/export/id/${id}.html`,
   extraAction = ''
 ): string {
+  // Observed 2026-10-25: a leading checkbox column, the public ID linked to "/", and 应用／二维码／删除.
   return `<tr>
+  <td><input type="checkbox" value="${id}"></td>
   <td>${id}</td>
-  <td>${publicId}</td>
+  <td><a href="/">${publicId}</a></td>
   <td>${validUntil}</td>
   <td>${claimedAt}</td>
-  <td><a href="${exportHref}">导出</a>${extraAction}</td>
+  <td><a href="/Member/User/Cookie/switchTo/id/${id}.html">应用</a> <a href="${exportHref}">二维码</a>${extraAction} <a href="/Member/User/Cookie/delete/id/${id}.html">删除</a></td>
 </tr>`
 }
 
@@ -207,6 +209,11 @@ describe('parseAccountList HTML adapter', () => {
       validUntil: '2028-01-01',
       claimedAt: '2026-01-01'
     })
+  })
+
+  it('reads the site empty date as unknown, not as a time', () => {
+    const result = parseAccountList(makeListHtml(makeRow('101', 'Cookie_A', '0000-00-00 00:00:00', '2022-06-20 16:42:06')), PAGE_URL)
+    expect(result.cookies[0]).toMatchObject({ validUntil: null, claimedAt: '2022-06-20 16:42:06' })
   })
 
   it('extracts and dedupes same-origin index pagination links while ignoring non-index links', () => {

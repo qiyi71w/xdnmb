@@ -1,5 +1,6 @@
 import { request as httpsRequest } from 'node:https'
 import type { ClientRequest } from 'node:http'
+import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib'
 import type { RequestScheduler } from '../reading/scheduler'
 import { ACCOUNT_ORIGIN, AccountError, isAllowedAccountRead, parseAccountExport, parseAccountList } from './protocol'
 import type { AccountCookie } from '../../shared/account'
@@ -25,7 +26,7 @@ export function requestAccountPage(url: URL, secret: string, signal: AbortSignal
   signal.addEventListener('abort', abort, { once: true })
   try {
     request = httpsRequest(url, {
-      method: 'GET', headers: { Accept: 'text/html', 'Accept-Encoding': 'identity', 'User-Agent': 'Xidao/0.1', Cookie: `memberUserspapapa=${secret}` }
+      method: 'GET', headers: { Accept: 'text/html', 'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': 'Xidao/0.1', Cookie: `memberUserspapapa=${secret}` }
     }, (response) => {
       if (settled) { response.destroy(); return }
       const status = response.statusCode ?? 0
@@ -41,18 +42,22 @@ export function requestAccountPage(url: URL, secret: string, signal: AbortSignal
         finish(new AccountError(status === 429 ? 'rate-limited' : status === 401 || status === 403 || loginRedirect ? 'expired' : status >= 300 && status < 400 ? 'unknown-structure' : 'network'))
         return
       }
-      const encoding = response.headers['content-encoding']
-      if (encoding && encoding !== 'identity') { response.destroy(); finish(new AccountError('unknown-structure')); return }
+      // Observed 2026-10-25: the site gzips member pages whatever Accept-Encoding says.
+      const encoding = (response.headers['content-encoding'] ?? 'identity').trim().toLowerCase()
+      const decoder = encoding === 'gzip' ? createGunzip() : encoding === 'deflate' ? createInflate() : encoding === 'br' ? createBrotliDecompress() : encoding === 'identity' ? null : undefined
+      if (decoder === undefined) { response.destroy(); finish(new AccountError('unknown-structure')); return }
+      const body = decoder === null ? response : response.pipe(decoder)
       let size = 0
       const chunks: Buffer[] = []
-      response.on('data', (chunk: Buffer) => {
+      body.on('data', (chunk: Buffer) => {
         size += chunk.length
-        if (size > 2 * 1024 * 1024) { response.destroy(); finish(new AccountError('unknown-structure')) }
+        if (size > 2 * 1024 * 1024) { response.destroy(); decoder?.destroy(); finish(new AccountError('unknown-structure')) }
         else chunks.push(chunk)
       })
       response.on('error', () => finish(new AccountError('network')))
       response.on('aborted', () => finish(new AccountError('network')))
-      response.on('end', () => {
+      decoder?.on('error', () => finish(new AccountError('unknown-structure')))
+      body.on('end', () => {
         try { finish(null, new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))) }
         catch { finish(new AccountError('unknown-structure')) }
       })

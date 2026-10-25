@@ -4,8 +4,9 @@ export type AccountFailure = 'protection-unavailable' | 'storage' | 'expired' | 
 export interface AccountCookie {
   id: string
   publicId: string
-  validUntil: string
-  claimedAt: string
+  /** Null when the site shows its empty date (0000-00-00 00:00:00). */
+  validUntil: string | null
+  claimedAt: string | null
 }
 export type AccountResult<T> = { ok: true; value: T } | { ok: false; reason: AccountFailure }
 export interface AccountOverview {
