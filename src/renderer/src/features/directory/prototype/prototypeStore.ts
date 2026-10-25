@@ -1,9 +1,11 @@
-// PROTOTYPE (throwaway): three variants of the navigation and settings page, switchable in the
-// running app with the floating bar (components/PrototypeSwitcher.tsx). Built only with
-// VITE_XIDAO_PROTOTYPE=1. Feature visibility and board favorites / hiding / order / collapsing live
-// in memory only; a restart forgets them on purpose. The chosen variant is kept in localStorage.
+// PROTOTYPE (throwaway): where the boards go beside B's icon rail — B (board column, the reference),
+// D (board panel from the rail), E (boards switched at the top of the list), F (collapsible board
+// column) — switchable in the running app with the floating bar (components/PrototypeSwitcher.tsx).
+// Built only with VITE_XIDAO_PROTOTYPE=1. Feature visibility, board favorites / hiding / order /
+// collapsing and F's column state live in memory only; a restart forgets them on purpose. The
+// chosen variant is kept in localStorage.
 
-import { useSyncExternalStore } from 'react'
+import { createContext, useSyncExternalStore, type ReactNode } from 'react'
 import type { BoardDirectory } from '../../../../../shared/forum'
 import type { IconName } from '../../../components/Icon'
 import { listKey, type ListRef } from '../../tabs/tabsState'
@@ -12,26 +14,28 @@ export const PROTOTYPE_ENABLED = import.meta.env.VITE_XIDAO_PROTOTYPE === '1'
 
 // ---------- Variant ----------
 
-export type NavVariant = 'A' | 'B' | 'C'
+export type NavVariant = 'B' | 'D' | 'E' | 'F'
 
 export const NAV_VARIANTS: readonly { key: NavVariant; name: string }[] = [
-  { key: 'A', name: '单栏分组' },
-  { key: 'B', name: '图标栏' },
-  { key: 'C', name: '版块优先' }
+  { key: 'B', name: '版块栏' },
+  { key: 'D', name: '版块浮层' },
+  { key: 'E', name: '列表内切换' },
+  { key: 'F', name: '可收起版块栏' }
 ]
 
 const VARIANT_KEY = 'xidao.prototype.navVariant'
 
+/** Saved A / C (no longer built) and anything unknown fall back to B. */
 function readVariant(): NavVariant {
   try {
     const saved = localStorage.getItem(VARIANT_KEY)
-    return saved === 'B' || saved === 'C' ? saved : 'A'
+    return saved === 'D' || saved === 'E' || saved === 'F' ? saved : 'B'
   } catch {
-    return 'A'
+    return 'B'
   }
 }
 
-let variant: NavVariant = PROTOTYPE_ENABLED ? readVariant() : 'A'
+let variant: NavVariant = PROTOTYPE_ENABLED ? readVariant() : 'B'
 const variantListeners = new Set<() => void>()
 
 export function setNavVariant(next: NavVariant): void {
@@ -56,25 +60,68 @@ export function useNavVariant(): NavVariant | null {
   return PROTOTYPE_ENABLED ? current : null
 }
 
-// ---------- Command palette (variant C) ----------
+// ---------- Small shared UI state ----------
 
-let paletteOpen = false
-const paletteListeners = new Set<() => void>()
-
-export function setPaletteOpen(open: boolean): void {
-  if (open === paletteOpen) return
-  paletteOpen = open
-  for (const listener of paletteListeners) listener()
+function cell<T>(initial: T) {
+  let value = initial
+  const listeners = new Set<() => void>()
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  }
+  return {
+    get: () => value,
+    set(next: T) {
+      if (Object.is(next, value)) return
+      value = next
+      for (const listener of listeners) listener()
+    },
+    use: () => useSyncExternalStore(subscribe, () => value)
+  }
 }
 
-function subscribePalette(listener: () => void): () => void {
-  paletteListeners.add(listener)
-  return () => paletteListeners.delete(listener)
+/** D: the board panel. Whoever opened it gets focus back when it closes. */
+const boardPanel = cell(false)
+let boardPanelOpener: HTMLElement | null = null
+
+export const useBoardPanelOpen = boardPanel.use
+
+export function openBoardPanel(opener: HTMLElement | null): void {
+  boardPanelOpener = opener
+  boardPanel.set(true)
 }
 
-export function usePaletteOpen(): boolean {
-  return useSyncExternalStore(subscribePalette, () => paletteOpen)
+export function closeBoardPanel(returnFocus: boolean): void {
+  if (!boardPanel.get()) return
+  boardPanel.set(false)
+  const opener = boardPanelOpener
+  boardPanelOpener = null
+  if (returnFocus && opener?.isConnected === true) opener.focus()
 }
+
+/** F: the board column is collapsed to the rail. */
+const columnCollapsed = cell(false)
+export const useBoardColumnCollapsed = columnCollapsed.use
+export const setBoardColumnCollapsed = columnCollapsed.set
+
+/** F: content width of the board column (measured), CSS pixels. */
+const columnWidth = cell(180)
+export const useBoardColumnWidth = columnWidth.use
+export const setBoardColumnWidth = columnWidth.set
+
+// ---------- List slots (D, E) ----------
+
+/** What the variant adds to the tab content; no provider (`null`) outside the prototype. */
+export interface ListHost {
+  /** D: the board name at the top of a board list, as a button opening the board panel. */
+  boardTitle: ((name: string) => ReactNode) | null
+  /** E: the row above every list (favorite boards, 全部版块). */
+  listTop: ((current: ListRef | null) => ReactNode) | null
+  /** E: board choice on the page of a tab without a list; D: a button opening the board panel. */
+  emptyPage: (() => ReactNode) | null
+}
+
+export const ListHostContext = createContext<ListHost | null>(null)
 
 // ---------- Features ----------
 

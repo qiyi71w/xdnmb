@@ -15,6 +15,8 @@ import type { FeedPageRecord } from './feedState'
 import { ThreadRow } from './ThreadRow'
 import { useFeed } from './useFeed'
 import './feed.css'
+// PROTOTYPE (throwaway): D makes the board name open its board panel.
+import { ListHostContext } from '../directory/prototype/prototypeStore'
 
 /** The first thread row reaching below the scroller top, and its row top's offset from that top. */
 function firstVisible(scroller: HTMLElement): WorkspaceList['anchor'] {
@@ -60,6 +62,7 @@ export function FeedPane({
   footer: ReactNode
 }) {
   const registry = useContext(ContentRegistryContext)
+  const protoHost = useContext(ListHostContext)
   // The same entry's list as it was when last unmounted (split toggled, single pane, back/forward).
   const [remembered] = useState(() => {
     const memory = registry?.listMemory.get(entryKey)
@@ -193,7 +196,7 @@ export function FeedPane({
           <div className="list-title-row">
             <h2 className="list-title">
               <span className="list-kind">{kindLabel}</span>
-              <span className="list-name">{info.name}</span>
+              <span className="list-name">{protoHost?.boardTitle != null ? protoHost.boardTitle(info.name) : info.name}</span>
             </h2>
             <button type="button" className="icon-btn" onClick={refreshList} aria-label="刷新列表（重新读取第 1 页）" title="刷新列表">
               <Icon name="refresh" />

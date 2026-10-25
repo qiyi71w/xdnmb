@@ -62,27 +62,28 @@ import { TopBar } from './TopBar'
 import { SettingsOpenerContext } from '../lib/settingsOpener'
 import { useSettingsWriter } from './useSettingsWriter'
 import './layout.css'
-// PROTOTYPE (throwaway): navigation / settings variants, active only with VITE_XIDAO_PROTOTYPE=1.
+// PROTOTYPE (throwaway): navigation variants, active only with VITE_XIDAO_PROTOTYPE=1.
 import { PrototypeSwitcher } from '../components/PrototypeSwitcher'
-import { PrototypeCommandPalette, usePaletteShortcut } from '../features/directory/prototype/PrototypeCommandPalette'
-import { PrototypeNavA } from '../features/directory/prototype/PrototypeNavA'
-import { PrototypeNavB, RAIL_WIDTH } from '../features/directory/prototype/PrototypeNavB'
-import { PrototypeNavC } from '../features/directory/prototype/PrototypeNavC'
+import { PrototypeNavB } from '../features/directory/prototype/PrototypeNavB'
+import { BoardPanelEmptyPage, BoardPanelTitle, PrototypeNavD } from '../features/directory/prototype/PrototypeNavD'
+import { BoardChooserPage, BoardStrip, PrototypeNavE } from '../features/directory/prototype/PrototypeNavE'
+import { PrototypeNavF } from '../features/directory/prototype/PrototypeNavF'
 import type { FeatureHost, PrototypeNavProps } from '../features/directory/prototype/PrototypeNavParts'
+import { RAIL_WIDTH } from '../features/directory/prototype/PrototypeRail'
 import { PrototypeSettingsPage } from '../features/directory/prototype/PrototypeSettings'
 import {
-  boardGroups,
+  ListHostContext,
   NAV_VARIANTS,
+  closeBoardPanel,
+  openBoardPanel,
   PROTOTYPE_ENABLED,
   setNavVariant,
-  useNavPrefs,
+  useBoardColumnCollapsed,
+  useBoardColumnWidth,
   useNavVariant,
-  usePaletteOpen,
-  type FeatureId
+  type FeatureId,
+  type ListHost
 } from '../features/directory/prototype/prototypeStore'
-
-/** PROTOTYPE: no settings page (same object, so closing an already closed page renders nothing). */
-const PROTO_SETTINGS_CLOSED = { open: false, shown: false }
 
 function StorageBanner({ storage }: { storage: StorageStatus | null }) {
   if (storage === null || storage.state === 'ready') return null
@@ -257,13 +258,23 @@ export function App() {
   const current = tabs === null ? null : activeTab(tabs)
   /** PROTOTYPE: the navigation variant; `null` (the regular navigation and settings dialog) unless built in. */
   const navVariant = useNavVariant()
-  /** PROTOTYPE: B's icon rail widens the navigation column. */
-  const navExtra = navVariant === 'B' ? RAIL_WIDTH : 0
+  const protoColumnCollapsed = useBoardColumnCollapsed()
+  const protoColumnWidth = useBoardColumnWidth()
+  /**
+   * PROTOTYPE: navigation column width. B: the regular column plus the rail (narrowing as usual);
+   * D, E: the rail alone; F: the rail plus the board column at its content width, unless collapsed.
+   * The 8 px is the navigation's outer margin.
+   */
+  const protoNavFull =
+    navVariant === null || navVariant === 'B'
+      ? null
+      : 8 + RAIL_WIDTH + (navVariant === 'F' && !protoColumnCollapsed ? protoColumnWidth : 0)
+  const navFull = protoNavFull ?? LAYOUT_DEFAULTS.navFull + (navVariant === 'B' ? RAIL_WIDTH : 0)
   const layout = computeLayout({
     width,
     view: current === null ? 'list' : viewOf(current),
-    navFull: LAYOUT_DEFAULTS.navFull + navExtra,
-    navCompactMin: navCompactMin + navExtra,
+    navFull,
+    navCompactMin: protoNavFull ?? navCompactMin + (navVariant === 'B' ? RAIL_WIDTH : 0),
     listWidth: LAYOUT_DEFAULTS.listWidth,
     readingWidth,
     minGutter: LAYOUT_DEFAULTS.minGutter,
@@ -392,24 +403,21 @@ export function App() {
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   const { clearStatus: clearSettingsStatus } = settingsWriter
 
-  /**
-   * PROTOTYPE: the settings page. `open`: A keeps it as a tab; `shown`: it is on screen (A: its tab
-   * is selected). B and C only use `shown`.
-   */
-  const [protoSettings, setProtoSettings] = useState(PROTO_SETTINGS_CLOSED)
-  const protoSettingsShown = navVariant !== null && protoSettings.shown
+  /** PROTOTYPE: the settings page is shown in place of the tabs. */
+  const [protoSettingsOpen, setProtoSettingsOpen] = useState(false)
+  const protoSettingsShown = navVariant !== null && protoSettingsOpen
 
   const openSettings = useCallback(() => {
     // The dialog becomes the only layer: an open navigation overlay closes first.
     closeNav(false)
     clearSettingsStatus()
-    if (PROTOTYPE_ENABLED) setProtoSettings({ open: true, shown: true })
+    if (PROTOTYPE_ENABLED) setProtoSettingsOpen(true)
     else setSettingsOpen(true)
   }, [closeNav, clearSettingsStatus])
 
   const closeSettings = useCallback(() => {
     setSettingsOpen(false)
-    setProtoSettings(PROTO_SETTINGS_CLOSED)
+    setProtoSettingsOpen(false)
     // UUID, binding or source may have changed inside settings.
     void refreshSubscriptions()
     void refreshSubscriptionJournal()
@@ -771,7 +779,7 @@ export function App() {
   const closeForQuit = useCallback(() => {
     closeNav(false)
     setSettingsOpen(false)
-    setProtoSettings(PROTO_SETTINGS_CLOSED)
+    setProtoSettingsOpen(false)
     setDraftsOpen(false)
     setAttemptsOpen(false)
     setOwnPostsOpen(false)
@@ -951,7 +959,7 @@ export function App() {
 
   const workspaceStyle = {
     '--nav-width': `${layout.navWidth}px`,
-    '--nav-full': `${LAYOUT_DEFAULTS.navFull + navExtra}px`,
+    '--nav-full': `${navFull}px`,
     '--list-width': `${LAYOUT_DEFAULTS.listWidth}px`
   } as CSSProperties
 
@@ -969,20 +977,13 @@ export function App() {
   const promptEditor = editors.state.editors.find((editor) => editor.publication?.phase === 'prompt')
 
   // ---------- PROTOTYPE: navigation variants (unused unless built in) ----------
-  const navPrefs = useNavPrefs()
-  const protoGroups = useMemo(() => boardGroups(dirData, navPrefs.order), [dirData, navPrefs.order])
-  /** Leaving the settings page for content: A keeps its tab, B and C close the page. */
-  const leaveProtoSettings = useCallback(() => {
-    if (!protoSettings.shown) return
-    if (navVariant === 'A') setProtoSettings({ open: true, shown: false })
-    else closeSettings()
-  }, [protoSettings.shown, navVariant, closeSettings])
+  /** Choosing content leaves the settings page. */
   const protoSelect = useCallback(
     (ref: ListRef) => {
-      leaveProtoSettings()
+      if (protoSettingsShown) closeSettings()
       selectFeed(ref)
     },
-    [leaveProtoSettings, selectFeed]
+    [protoSettingsShown, closeSettings, selectFeed]
   )
   const openProtoFeature = useCallback(
     (id: FeatureId) => {
@@ -1003,14 +1004,41 @@ export function App() {
           : null,
       reminderBadge,
       pendingAttempts,
-      searchShortcut: shortcutLabel('search-local', platform),
-      commandShortcut: platform === null ? '' : platform === 'darwin' ? '⌘K' : 'Ctrl+K'
+      searchShortcut: shortcutLabel('search-local', platform)
     }),
     [openProtoFeature, protoSettingsShown, selectedFeed, reminderBadge, pendingAttempts, platform]
   )
-  const paletteOpen = usePaletteOpen()
-  const appCovered = useCallback(() => stateRef.current.covered, [])
-  usePaletteShortcut(navVariant === 'C', platform, appCovered)
+
+  /** D: the board panel opened from the tab content; it lives in the navigation, so a closed overlay opens first. */
+  const { open: navOverlayOpen, toggle: toggleNavOverlay } = navPopover
+  // The panel lives in D's navigation: it closes with it (overlay closed, column → overlay, variant switch).
+  useEffect(() => {
+    if (navVariant !== 'D' || (navOverlay && !navOverlayOpen)) closeBoardPanel(false)
+  }, [navVariant, navOverlay, navOverlayOpen])
+  const openProtoBoards = useCallback(
+    (button: HTMLButtonElement) => {
+      if (navOverlay && !navOverlayOpen) toggleNavOverlay()
+      openBoardPanel(button)
+    },
+    [navOverlay, navOverlayOpen, toggleNavOverlay]
+  )
+  const protoListHost = useMemo<ListHost | null>(() => {
+    if (navVariant === 'D') {
+      return {
+        boardTitle: (name) => <BoardPanelTitle name={name} onOpen={openProtoBoards} />,
+        listTop: null,
+        emptyPage: () => <BoardPanelEmptyPage onOpen={openProtoBoards} />
+      }
+    }
+    if (navVariant === 'E') {
+      return {
+        boardTitle: null,
+        listTop: (feed) => <BoardStrip current={feed} directory={dirData} onSelect={protoSelect} />,
+        emptyPage: () => <BoardChooserPage directory={dirData} onSelect={protoSelect} />
+      }
+    }
+    return null
+  }, [navVariant, openProtoBoards, dirData, protoSelect])
 
   const protoNav = (placement: 'inline' | 'overlay') => {
     if (navVariant === null) return null
@@ -1027,15 +1055,15 @@ export function App() {
       placement === 'inline'
         ? { ...common, variant: 'inline', progress: layout.navProgress, panelRef: inlineNavRef }
         : { ...common, variant: 'overlay', progress: 0, panelRef: navPanelRef, id: 'nav-overlay' }
-    if (navVariant === 'A') return <PrototypeNavA {...props} />
     if (navVariant === 'B') return <PrototypeNavB {...props} />
-    return <PrototypeNavC {...props} />
+    if (navVariant === 'D') return <PrototypeNavD {...props} />
+    if (navVariant === 'E') return <PrototypeNavE {...props} />
+    return <PrototypeNavF {...props} />
   }
 
   const protoSettingsPage =
     navVariant === null ? null : (
       <PrototypeSettingsPage
-        variant={navVariant}
         identities={identities}
         subscriptions={subscriptions}
         settings={settings}
@@ -1067,11 +1095,8 @@ export function App() {
             <QuoteControllerContext.Provider value={quote.controller}>
             <QuoteActiveContext.Provider value={quote.activeKey}>
             <SearchOpenerContext value={openSearch}>
-            <div
-              className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'}
-              style={workspaceStyle}
-              inert={navVariant === 'C' && protoSettingsShown ? true : undefined}
-            >
+            <ListHostContext value={protoListHost}>
+            <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
               {!navOverlay && (
                 <div
                   className="nav-column"
@@ -1107,7 +1132,7 @@ export function App() {
               <div className="main-column">
                 {tabs !== null && current !== null && entry !== null && (
                   <>
-                    {!(navVariant === 'B' && protoSettingsShown) && <TopBar
+                    {!protoSettingsShown && <TopBar
                       tabs={tabs.tabs}
                       activeId={tabs.activeId}
                       titleOf={titleOf}
@@ -1127,33 +1152,16 @@ export function App() {
                       navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
                       onBack={goBack}
                       onForward={goForward}
-                      onActivate={
-                        navVariant === 'A'
-                          ? (tabId) => {
-                              leaveProtoSettings()
-                              activate(tabId)
-                            }
-                          : activate
-                      }
+                      onActivate={activate}
                       onClose={closeTab}
                       onNewTab={newTab}
                       settingsTrigger={
-                        navVariant === 'B' && !navOverlay
+                        navVariant !== null && !navOverlay
                           ? null
                           : { ref: settingsButtonRef, expanded: settingsOpen || protoSettingsShown, onOpen: openSettings }
                       }
-                      extraTab={
-                        navVariant === 'A' && protoSettings.open
-                          ? {
-                              title: '设置',
-                              selected: protoSettings.shown,
-                              onActivate: () => setProtoSettings({ open: true, shown: true }),
-                              onClose: closeSettings
-                            }
-                          : null
-                      }
                     />}
-                    <div className="tab-host" hidden={protoSettingsShown && navVariant !== 'C' ? true : undefined}>
+                    <div className="tab-host" hidden={protoSettingsShown ? true : undefined}>
                       {tabs.tabs.map((tab) => (
                         <TabView
                           key={tab.id}
@@ -1173,12 +1181,7 @@ export function App() {
                         />
                       ))}
                     </div>
-                    {navVariant === 'A' && protoSettingsShown && (
-                      <div className="tab-host proto-settings-host" id="proto-settings-panel" role="tabpanel" aria-labelledby="tab-proto-settings">
-                        {protoSettingsPage}
-                      </div>
-                    )}
-                    {navVariant === 'B' && protoSettingsShown && protoSettingsPage}
+                    {protoSettingsShown && protoSettingsPage}
                   </>
                 )}
               </div>
@@ -1211,7 +1214,7 @@ export function App() {
                 </>
               )}
             </div>
-            {navVariant === 'C' && protoSettingsShown && <div className="proto-settings-c-layer">{protoSettingsPage}</div>}
+            </ListHostContext>
             </SearchOpenerContext>
             </QuoteActiveContext.Provider>
             </QuoteControllerContext.Provider>
@@ -1305,9 +1308,6 @@ export function App() {
               }}
               onCancel={() => setClosing(null)}
             />
-          )}
-          {navVariant === 'C' && paletteOpen && (
-            <PrototypeCommandPalette features={protoFeatures} groups={protoGroups} onSelectBoard={protoSelect} onOpenSettings={openSettings} />
           )}
           {navVariant !== null && <PrototypeSwitcher variants={NAV_VARIANTS} current={navVariant} onChange={setNavVariant} />}
           <LifecycleHost

@@ -7,7 +7,7 @@ import { Icon } from './Icon'
 import './prototype-switcher.css'
 
 const KEEPS_ARROWS =
-  'input, textarea, select, [contenteditable]:not([contenteditable="false"]), dialog, [role="dialog"], [role="menu"], [role="listbox"], [role="tablist"], [role="toolbar"], [role="slider"], .image-viewer, .nav.is-overlay'
+  'input, textarea, select, [contenteditable]:not([contenteditable="false"]), dialog, [role="dialog"], [role="menu"], [role="listbox"], [role="tablist"], [role="toolbar"], [role="slider"], [data-keeps-arrows], .image-viewer, .nav.is-overlay'
 
 export function PrototypeSwitcher<K extends string>({
   variants,

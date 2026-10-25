@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useContext, useLayoutEffect, useRef } from 'react'
 import { EditorDock } from '../features/editor/EditorDock'
 import type { FeedRef, ForumId, ThreadSummary } from '../../../shared/forum'
 import { feedKey, type FeedInfo } from '../features/directory/feeds'
@@ -14,6 +14,8 @@ import { currentEntry, type EntryInit, type Tab, type ThreadOpen } from '../feat
 import { ThreadPane } from '../features/thread/ThreadPane'
 import { FailureNotice, Loading } from '../components/Notices'
 import { Icon } from '../components/Icon'
+// PROTOTYPE (throwaway): D / E add to the list top and the empty tab page.
+import { ListHostContext } from '../features/directory/prototype/prototypeStore'
 
 type Region = 'list' | 'reader'
 
@@ -66,6 +68,7 @@ export function TabView({
   const readerRef = useRef<HTMLElement>(null)
   const lastRegion = useRef<Region | null>(null)
   const openSearch = useSearchOpener()
+  const protoHost = useContext(ListHostContext)
 
   const splitShown = entry.kind === 'list' && entry.feed !== null && tab.split
   const single = splitShown && layout.singlePane
@@ -119,6 +122,8 @@ export function TabView({
         onOpen={onOpenFromOnlineSearch}
       />
     )
+  } else if (entry.feed === null && protoHost?.emptyPage != null) {
+    body = protoHost.emptyPage()
   } else if (entry.feed === null) {
     body = (
       <div className="pane-empty">
@@ -213,6 +218,14 @@ export function TabView({
         <div className="list-pane">
           <div className="pane-empty list-pending">{state}</div>
           {listDock}
+        </div>
+      )
+    }
+    if (protoHost?.listTop != null) {
+      list = (
+        <div className="proto-list-with-top">
+          {protoHost.listTop(feed)}
+          {list}
         </div>
       )
     }

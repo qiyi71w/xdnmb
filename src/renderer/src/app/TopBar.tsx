@@ -24,7 +24,6 @@ export function TopBar({
   splitToggle,
   navTrigger,
   settingsTrigger,
-  extraTab,
   onBack,
   onForward,
   onActivate,
@@ -47,8 +46,6 @@ export function TopBar({
   navTrigger: { ref: RefObject<HTMLButtonElement | null>; expanded: boolean; onToggle: () => void } | null
   /** Opens the settings dialog (also Ctrl/Cmd+,); focus returns to the opener when it closes. `null` hides it. */
   settingsTrigger: { ref: RefObject<HTMLButtonElement | null>; expanded: boolean; onOpen: () => void } | null
-  /** PROTOTYPE (variant A): the settings page as one more tab after the real ones; selected means no real tab is. */
-  extraTab?: { title: string; selected: boolean; onActivate: () => void; onClose: () => void } | null
   onBack: () => void
   onForward: () => void
   onActivate: (tabId: number) => void
@@ -120,7 +117,7 @@ export function TopBar({
 
       <div className="tab-strip" role="tablist" aria-label="标签" ref={stripRef}>
         {tabs.map((tab, index) => {
-          const selected = tab.id === activeId && extraTab?.selected !== true
+          const selected = tab.id === activeId
           const title = titleOf(tab)
           return (
             <div key={tab.id} className={selected ? 'tab is-active' : 'tab'} role="presentation">
@@ -152,33 +149,6 @@ export function TopBar({
             </div>
           )
         })}
-        {extraTab != null && (
-          <div className={extraTab.selected ? 'tab is-active' : 'tab'} role="presentation">
-            <button
-              type="button"
-              role="tab"
-              id="tab-proto-settings"
-              className="tab-button"
-              aria-selected={extraTab.selected}
-              aria-controls={extraTab.selected ? 'proto-settings-panel' : undefined}
-              tabIndex={extraTab.selected ? 0 : -1}
-              title={extraTab.title}
-              onClick={extraTab.onActivate}
-            >
-              <Icon name="settings" size={14} className="tab-icon" />
-              <span className="tab-title">{extraTab.title}</span>
-            </button>
-            <button
-              type="button"
-              className="tab-close"
-              aria-label={`关闭标签：${extraTab.title}`}
-              tabIndex={extraTab.selected ? 0 : -1}
-              onClick={extraTab.onClose}
-            >
-              <Icon name="close" size={13} />
-            </button>
-          </div>
-        )}
       </div>
 
       {splitToggle !== null && (

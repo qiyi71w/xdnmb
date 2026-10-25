@@ -1,5 +1,5 @@
-// PROTOTYPE (throwaway): pieces the three navigation variants share (feature entries, the board
-// tree, directory placeholders). Each variant owns its own layout.
+// PROTOTYPE (throwaway): pieces the navigation variants share (feature labels and badges, the board
+// tree, directory placeholders). Each variant owns where its boards go.
 
 import { useMemo, type Ref } from 'react'
 import type { BoardDirectory } from '../../../../../shared/forum'
@@ -28,6 +28,8 @@ export interface RovingItemProps {
   'data-roving-item': string
   tabIndex: number
   onFocus: () => void
+  /** Where a popup moves focus when it opens (`usePopover`). */
+  'data-autofocus'?: string
 }
 
 /** What the app gives every variant for the 功能 entries. */
@@ -38,8 +40,6 @@ export interface FeatureHost {
   reminderBadge: ReminderBadge | null
   pendingAttempts: PendingAttempts
   searchShortcut: string
-  /** Ctrl+K / ⌘K label of the command palette (variant C); empty until the platform is known. */
-  commandShortcut: string
 }
 
 export interface PrototypeNavProps {
@@ -99,49 +99,6 @@ export function featureIsDialog(id: FeatureId): boolean {
   return id !== 'subscriptions' && id !== 'reminders'
 }
 
-/** A full-width feature row (`.nav-item`) with its badge. */
-export function FeatureRow({
-  id,
-  host,
-  itemProps,
-  className,
-  role
-}: {
-  id: FeatureId
-  host: FeatureHost
-  itemProps?: RovingItemProps
-  className?: string
-  role?: 'menuitem'
-}) {
-  const info = featureInfo(id)
-  const current = host.current === id
-  const badge = featureBadge(id, host)
-  const marked = featureMarked(id, host)
-  return (
-    <button
-      type="button"
-      role={role}
-      className={['nav-item', current ? 'is-current' : '', className ?? ''].filter(Boolean).join(' ')}
-      aria-current={current ? 'page' : undefined}
-      aria-haspopup={featureIsDialog(id) ? 'dialog' : undefined}
-      aria-label={badge === null && !marked ? undefined : featureLabel(id, host)}
-      title={featureTitle(id, host)}
-      onClick={() => host.open(id)}
-      {...itemProps}
-    >
-      <Icon name={info.icon} className="nav-item-icon" />
-      <span className="nav-item-label">{info.label}</span>
-      {badge !== null && (
-        <span className={`nav-badge is-${badge.tone}`} aria-hidden="true">
-          {badge.text}
-        </span>
-      )}
-      {marked && id === 'reminders' && <span className="nav-coverage-mark" aria-hidden="true" />}
-      {marked && id === 'attempts' && <Icon name="alert" size={14} className="nav-badge-icon" />}
-    </button>
-  )
-}
-
 /** Small count / warning dot for icon-only feature buttons. */
 export function FeatureDot({ id, host }: { id: FeatureId; host: FeatureHost }) {
   const badge = featureBadge(id, host)
@@ -170,14 +127,12 @@ export function useBoardView(directory: BoardDirectory | null) {
 }
 
 /** Roving keys of the board tree in display order (collapsed groups keep only their heading). */
-export function boardTreeKeys(view: BoardView, prefs: NavPrefs, part: 'all' | 'favorites' | 'groups' = 'all'): string[] {
+export function boardTreeKeys(view: BoardView, prefs: NavPrefs): string[] {
   return [
-    ...(part === 'groups' ? [] : view.favorites.map((item) => item.key)),
-    ...(part === 'favorites'
-      ? []
-      : view.groups.flatMap((group) =>
-          prefs.collapsed.includes(group.id) ? [groupKey(group.id)] : [groupKey(group.id), ...group.boards.map((item) => item.key)]
-        ))
+    ...view.favorites.map((item) => item.key),
+    ...view.groups.flatMap((group) =>
+      prefs.collapsed.includes(group.id) ? [groupKey(group.id)] : [groupKey(group.id), ...group.boards.map((item) => item.key)]
+    )
   ]
 }
 
@@ -185,20 +140,16 @@ function BoardRow({
   item,
   selectedKey,
   onSelect,
-  itemProps,
-  quickFavorite,
-  favorite
+  itemProps
 }: {
   item: Board
   selectedKey: string | null
   onSelect: (ref: ListRef) => void
   itemProps: ItemProps
-  quickFavorite: boolean
-  favorite: boolean
 }) {
   const current = item.key === selectedKey
   return (
-    <li className={quickFavorite ? 'proto-board-row' : undefined}>
+    <li>
       <button
         type="button"
         className={current ? 'nav-item is-current' : 'nav-item'}
@@ -209,24 +160,14 @@ function BoardRow({
         <Icon name={item.icon} className="nav-item-icon" />
         <span className="nav-item-label">{item.label}</span>
       </button>
-      {quickFavorite && (
-        <button
-          type="button"
-          className={favorite ? 'proto-star is-on' : 'proto-star'}
-          tabIndex={-1}
-          aria-pressed={favorite}
-          aria-label={favorite ? `取消收藏 ${item.label}` : `收藏 ${item.label}`}
-          title={favorite ? '取消收藏' : '收藏'}
-          onClick={() => navActions.setFavorite(item.key, !favorite)}
-        >
-          <Icon name="star" size={14} />
-        </button>
-      )}
     </li>
   )
 }
 
-/** Favorite boards on top, then the groups, each collapsible from its heading (`part` renders one of the two). */
+/**
+ * Favorite boards on top, then the groups, each collapsible from its heading. `counts`: a collapsed
+ * group shows how many boards it holds.
+ */
 export function BoardTree({
   view,
   prefs,
@@ -234,8 +175,7 @@ export function BoardTree({
   onSelect,
   itemProps,
   favoritesTitle,
-  quickFavorite = false,
-  part = 'all'
+  counts = true
 }: {
   view: BoardView
   prefs: NavPrefs
@@ -243,30 +183,21 @@ export function BoardTree({
   onSelect: (ref: ListRef) => void
   itemProps: ItemProps
   favoritesTitle: string
-  quickFavorite?: boolean
-  part?: 'all' | 'favorites' | 'groups'
+  counts?: boolean
 }) {
   return (
     <>
-      {part !== 'groups' && view.favorites.length > 0 && (
+      {view.favorites.length > 0 && (
         <section className="nav-section proto-favorites" aria-label={favoritesTitle}>
           <h2 className="nav-heading">{favoritesTitle}</h2>
           <ul className="nav-list">
             {view.favorites.map((item) => (
-              <BoardRow
-                key={item.key}
-                item={item}
-                selectedKey={selectedKey}
-                onSelect={onSelect}
-                itemProps={itemProps}
-                quickFavorite={quickFavorite}
-                favorite
-              />
+              <BoardRow key={item.key} item={item} selectedKey={selectedKey} onSelect={onSelect} itemProps={itemProps} />
             ))}
           </ul>
         </section>
       )}
-      {part !== 'favorites' && view.groups.map((group) => {
+      {view.groups.map((group) => {
         const collapsed = prefs.collapsed.includes(group.id)
         const listId = `proto-group-${group.id}`
         return (
@@ -282,21 +213,13 @@ export function BoardTree({
               >
                 <Icon name="chevron" size={12} className="proto-chevron" />
                 <span className="proto-group-title">{group.title}</span>
-                {collapsed && <span className="proto-group-count">{group.boards.length}</span>}
+                {counts && collapsed && <span className="proto-group-count">{group.boards.length}</span>}
               </button>
             </h2>
             {!collapsed && (
               <ul className="nav-list" id={listId}>
                 {group.boards.map((item) => (
-                  <BoardRow
-                    key={item.key}
-                    item={item}
-                    selectedKey={selectedKey}
-                    onSelect={onSelect}
-                    itemProps={itemProps}
-                    quickFavorite={quickFavorite}
-                    favorite={false}
-                  />
+                  <BoardRow key={item.key} item={item} selectedKey={selectedKey} onSelect={onSelect} itemProps={itemProps} />
                 ))}
               </ul>
             )}
@@ -329,17 +252,6 @@ export function DirectoryPlaceholder({ state, onRetry, empty }: { state: Directo
       )}
       {directory !== null && empty && <p className="nav-empty">没有可浏览的版面。</p>}
     </>
-  )
-}
-
-/** Three dots (no such icon in the shared set). */
-export function MoreIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
-      <circle cx="6" cy="12" r="1.6" />
-      <circle cx="12" cy="12" r="1.6" />
-      <circle cx="18" cy="12" r="1.6" />
-    </svg>
   )
 }
 

@@ -1,10 +1,7 @@
-// PROTOTYPE (throwaway): the settings page in three shapes, reusing the sections of the settings
-// dialog plus 功能显示 and 版块管理 (in-memory only).
-// A: a tab of its own, one category at a time behind category tabs.
-// B: a view filling the content area, with a section directory on the left.
-// C: one long column over the whole window, category and section titles sticking to the top.
+// PROTOTYPE (throwaway): the settings page — a view filling the content area with a section directory
+// on the left — reusing the sections of the settings dialog plus 功能显示 and 版块管理 (in-memory only).
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import type { AppPlatform } from '../../../../../shared/api'
 import type { BoardDirectory } from '../../../../../shared/forum'
 import type { AppSettings } from '../../../../../shared/settings'
@@ -31,7 +28,7 @@ import type { IdentitiesState } from '../../identity/useIdentities'
 import { SubscriptionSection } from '../../subscriptions/SubscriptionSection'
 import type { SubscriptionsState } from '../../subscriptions/useSubscriptions'
 import { useBoardView } from './PrototypeNavParts'
-import { FEATURES, navActions, useNavPrefs, type Board, type BoardGroup, type NavPrefs, type NavVariant } from './prototypeStore'
+import { FEATURES, navActions, useNavPrefs, type Board, type BoardGroup, type NavPrefs } from './prototypeStore'
 import './prototype.css'
 
 type SectionId =
@@ -90,7 +87,6 @@ const CATEGORIES: readonly { id: string; title: string; sections: readonly { id:
 ]
 
 export interface PrototypeSettingsProps {
-  variant: NavVariant
   identities: IdentitiesState
   subscriptions: SubscriptionsState
   settings: AppSettings
@@ -99,12 +95,12 @@ export interface PrototypeSettingsProps {
   write: Write
   adopt: (settings: AppSettings) => void
   directory: BoardDirectory | null
-  /** Leaves the page (B and C; A closes its tab from the tab strip). */
+  /** Leaves the page. */
   onClose: () => void
 }
 
 export function PrototypeSettingsPage(props: PrototypeSettingsProps) {
-  const { variant, identities, subscriptions, onClose } = props
+  const { identities, subscriptions, onClose } = props
   const { refresh } = identities
   const { refreshOverview } = subscriptions
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -131,9 +127,8 @@ export function PrototypeSettingsPage(props: PrototypeSettingsProps) {
     }
   }, [])
 
-  // B and C are leave-able views: Esc goes back when nothing above them takes it.
+  // A leave-able view: Esc goes back when nothing above it takes it.
   useEffect(() => {
-    if (variant === 'A') return
     const layer = openLayer()
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || !layer.isTop()) return
@@ -145,12 +140,10 @@ export function PrototypeSettingsPage(props: PrototypeSettingsProps) {
       layer.release()
       document.removeEventListener('keydown', onKeyDown)
     }
-  }, [variant])
+  }, [])
 
   const section = (id: SectionId) => <SectionBody id={id} {...props} />
-  if (variant === 'A') return <SettingsTabA headingRef={headingRef} section={section} status={props.status} />
-  if (variant === 'B') return <SettingsViewB headingRef={headingRef} section={section} status={props.status} onClose={onClose} />
-  return <SettingsPageC headingRef={headingRef} section={section} status={props.status} onClose={onClose} />
+  return <SettingsView headingRef={headingRef} section={section} status={props.status} onClose={onClose} />
 }
 
 interface ShapeProps {
@@ -159,68 +152,9 @@ interface ShapeProps {
   status: SettingsWriteStatus
 }
 
-// ---------- A: tab with category tabs ----------
+// ---------- Content-area view with a section directory ----------
 
-function SettingsTabA({ headingRef, section, status }: ShapeProps) {
-  const [category, setCategory] = useState(0)
-  const baseId = useId()
-  const current = CATEGORIES[category] ?? CATEGORIES[0]!
-
-  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (event.altKey || event.ctrlKey || event.metaKey) return
-    let next: number
-    if (event.key === 'ArrowRight') next = (category + 1) % CATEGORIES.length
-    else if (event.key === 'ArrowLeft') next = (category - 1 + CATEGORIES.length) % CATEGORIES.length
-    else if (event.key === 'Home') next = 0
-    else if (event.key === 'End') next = CATEGORIES.length - 1
-    else return
-    event.preventDefault()
-    setCategory(next)
-    document.getElementById(`${baseId}-tab-${next}`)?.focus()
-  }
-
-  return (
-    <div className="proto-settings proto-settings-a">
-      <header className="proto-settings-a-head">
-        <h1 className="proto-settings-title" ref={headingRef} tabIndex={-1}>
-          设置
-        </h1>
-        <div className="proto-cat-tabs" role="tablist" aria-label="设置大类">
-          {CATEGORIES.map((item, index) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              id={`${baseId}-tab-${index}`}
-              className="proto-cat-tab"
-              aria-selected={index === category}
-              aria-controls={`${baseId}-panel`}
-              tabIndex={index === category ? 0 : -1}
-              onClick={() => setCategory(index)}
-              onKeyDown={onKeyDown}
-            >
-              {item.title}
-            </button>
-          ))}
-        </div>
-      </header>
-      <div className="proto-settings-scroll" role="tabpanel" id={`${baseId}-panel`} aria-labelledby={`${baseId}-tab-${category}`}>
-        <div className="proto-settings-column">
-          <SettingsStatusNotices status={status} />
-          {current.sections.map((item) => (
-            <div key={item.id} className="proto-settings-item">
-              {section(item.id)}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ---------- B: content-area view with a section directory ----------
-
-function SettingsViewB({ headingRef, section, status, onClose }: ShapeProps & { onClose: () => void }) {
+function SettingsView({ headingRef, section, status, onClose }: ShapeProps & { onClose: () => void }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [currentId, setCurrentId] = useState<SectionId>('appearance')
 
@@ -293,41 +227,6 @@ function SettingsViewB({ headingRef, section, status, onClose }: ShapeProps & { 
               </section>
             ))}
           </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ---------- C: one long page with sticky titles ----------
-
-function SettingsPageC({ headingRef, section, status, onClose }: ShapeProps & { onClose: () => void }) {
-  return (
-    <div className="proto-settings proto-settings-c">
-      <div className="proto-settings-scroll">
-        <div className="proto-settings-column">
-          <header className="proto-settings-c-head">
-            <button type="button" className="btn btn-quiet" onClick={onClose}>
-              <Icon name="arrowLeft" />
-              返回
-            </button>
-            <h1 className="proto-settings-title" ref={headingRef} tabIndex={-1}>
-              设置
-            </h1>
-          </header>
-          <SettingsStatusNotices status={status} />
-          {CATEGORIES.map((category) => (
-            <section key={category.id} className="proto-category" aria-labelledby={`proto-cat-${category.id}`}>
-              <h2 className="proto-category-title" id={`proto-cat-${category.id}`}>
-                {category.title}
-              </h2>
-              {category.sections.map((item) => (
-                <div key={item.id} className="proto-settings-item">
-                  {section(item.id)}
-                </div>
-              ))}
-            </section>
-          ))}
         </div>
       </div>
     </div>
