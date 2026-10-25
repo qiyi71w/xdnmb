@@ -14,10 +14,20 @@ import { currentEntry, type EntryInit, type Tab, type ThreadOpen } from '../feat
 import { ThreadPane } from '../features/thread/ThreadPane'
 import { FailureNotice, Loading } from '../components/Notices'
 import { Icon } from '../components/Icon'
-// PROTOTYPE (throwaway): D / E add to the list top and the empty tab page.
-import { ListHostContext } from '../features/directory/prototype/prototypeStore'
+// PROTOTYPE (throwaway): D / E add to the list top and the empty tab page; the editor floats.
+import { ListHostContext, PROTOTYPE_ENABLED } from '../features/directory/prototype/prototypeStore'
+import { ComposeButton, ComposeFrame, ComposeSentNote, type ComposeTarget } from '../features/editor/ComposePanel'
+import type { PostTarget } from '../../../shared/drafts'
 
 type Region = 'list' | 'reader'
+
+/** PROTOTYPE: a target's entry (回复 / 发新串) and its confirmed-send note, placed by the pane. */
+function composeEntry(tabId: number, target: PostTarget, className?: string) {
+  return {
+    entry: <ComposeButton tabId={tabId} target={target} className={className} />,
+    note: <ComposeSentNote tabId={tabId} target={target} />
+  }
+}
 
 /**
  * Content of one tab: its current history entry. Inactive tabs stay mounted but hidden, keeping
@@ -96,8 +106,13 @@ export function TabView({
     target.focus({ preventScroll: pane === 'reader' })
   }, [active, single, pane])
 
+  /** PROTOTYPE: targets whose floating panel this tab can show. */
+  const composeTargets: ComposeTarget[] = []
+
   let body
   if (entry.kind === 'thread') {
+    const target: PostTarget = { kind: 'reply', threadId: entry.thread.threadId }
+    composeTargets.push({ target, displayed: active })
     body = (
       <main className="reader-wrap is-page" ref={readerRef} tabIndex={-1}>
         <ThreadPane
@@ -107,7 +122,8 @@ export function TabView({
           displayed={active}
           forumName={forumName}
           onBackToList={null}
-          footer={<EditorDock tabId={tab.id} target={{ kind: 'reply', threadId: entry.thread.threadId }} displayed={active} />}
+          footer={PROTOTYPE_ENABLED ? null : <EditorDock tabId={tab.id} target={target} displayed={active} />}
+          compose={PROTOTYPE_ENABLED ? composeEntry(tab.id, target) : null}
         />
       </main>
     )
@@ -148,9 +164,13 @@ export function TabView({
     const selectedThreadId = tab.split ? (entry.thread?.threadId ?? null) : null
     const info = feed.kind === 'subscriptions' || feed.kind === 'reminders' ? null : feedInfo(feed)
     // New threads go to forums only; timelines and subscriptions have no post target.
+    const forumTarget: PostTarget | null = feed.kind === 'forum' ? { kind: 'thread', forumId: feed.id } : null
+    // PROTOTYPE: the panel floats over the tab, so it stays shown whichever pane the single-pane
+    // fallback shows (App reserves a drawer's width from the same pane-independent targets).
+    if (PROTOTYPE_ENABLED && forumTarget !== null) composeTargets.push({ target: forumTarget, displayed: active })
     const listDock =
-      feed.kind === 'forum' ? (
-        <EditorDock tabId={tab.id} target={{ kind: 'thread', forumId: feed.id }} displayed={active && listVisible} />
+      forumTarget !== null && !PROTOTYPE_ENABLED ? (
+        <EditorDock tabId={tab.id} target={forumTarget} displayed={active && listVisible} />
       ) : null
     let list
     if (feed.kind === 'reminders') {
@@ -182,6 +202,7 @@ export function TabView({
           selectedThreadId={selectedThreadId}
           onOpenThread={(summary) => onSelectThread(tab.id, summary)}
           footer={listDock}
+          compose={PROTOTYPE_ENABLED && forumTarget !== null ? composeEntry(tab.id, forumTarget, 'btn btn-small') : null}
         />
       )
     } else {
@@ -229,6 +250,9 @@ export function TabView({
         </div>
       )
     }
+    if (PROTOTYPE_ENABLED && splitShown && entry.thread !== null) {
+      composeTargets.push({ target: { kind: 'reply', threadId: entry.thread.threadId }, displayed: active })
+    }
     body = splitShown ? (
       <div className={single ? 'split is-single' : 'split'}>
         <div className="list-column" ref={listRef} hidden={!listVisible} onFocus={() => (lastRegion.current = 'list')}>
@@ -255,12 +279,15 @@ export function TabView({
               forumName={forumName}
               onBackToList={single ? () => onShowPane(tab.id, 'list') : null}
               footer={
-                <EditorDock
-                  tabId={tab.id}
-                  target={{ kind: 'reply', threadId: entry.thread.threadId }}
-                  displayed={active && readerVisible}
-                />
+                PROTOTYPE_ENABLED ? null : (
+                  <EditorDock
+                    tabId={tab.id}
+                    target={{ kind: 'reply', threadId: entry.thread.threadId }}
+                    displayed={active && readerVisible}
+                  />
+                )
               }
+              compose={PROTOTYPE_ENABLED ? composeEntry(tab.id, { kind: 'reply', threadId: entry.thread.threadId }) : null}
             />
           )}
         </main>
@@ -272,7 +299,13 @@ export function TabView({
 
   return (
     <div className="tab-panel" role="tabpanel" id={`tabpanel-${tab.id}`} aria-labelledby={`tab-${tab.id}`} hidden={!active}>
-      {body}
+      {PROTOTYPE_ENABLED ? (
+        <ComposeFrame tabId={tab.id} targets={composeTargets}>
+          {body}
+        </ComposeFrame>
+      ) : (
+        body
+      )}
     </div>
   )
 }

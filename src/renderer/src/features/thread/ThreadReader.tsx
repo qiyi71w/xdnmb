@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { Post, PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
 import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
 import { Icon } from '../../components/Icon'
@@ -21,6 +21,11 @@ import { useThread } from './useThread'
 import { FavoriteButton, OfflineButton } from '../content/ThreadRetention'
 import { ReminderMenu } from '../reminders/ReminderMenu'
 import { useThreadRules } from '../reminders/useReminders'
+// PROTOTYPE (throwaway): one-row toolbar, position control and the 回复 entry.
+import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
+import type { ComposeEntry } from '../editor/ComposePanel'
+import { usePopover } from '../../lib/usePopover'
+import { ThreadMoreMenu } from './ThreadMoreMenu'
 
 const MODE_NAMES: Record<ReadingMode, string> = { all: '全部回复', po: '只看 PO' }
 /** How long a quote target stays marked after the jump. */
@@ -60,6 +65,114 @@ function failureTitle(task: ThreadTask, mode: ReadingMode): string {
     case 'locate':
       return '定位末尾失败，仍显示之前的内容'
   }
+}
+
+/** A page number typed by the user: whole digits only, 1 or more. */
+function parsePage(input: string): { page: number; valid: boolean; invalid: boolean } {
+  const trimmed = input.trim()
+  const page = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN
+  const valid = Number.isSafeInteger(page) && page >= 1
+  return { page, valid, invalid: trimmed !== '' && !valid }
+}
+
+/**
+ * PROTOTYPE: 第 x 页 of the position control. Opens a small panel with the page input and the
+ * coverage text (`children`); a valid jump closes it and focus returns to the button.
+ */
+function PagePopover({
+  inputId,
+  mode,
+  label,
+  placeholder,
+  onJump,
+  onOpenChange,
+  children
+}: {
+  inputId: string
+  mode: ReadingMode
+  label: string
+  placeholder: string
+  onJump: (page: number) => void
+  onOpenChange: (open: boolean) => void
+  children: ReactNode
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const popover = usePopover(triggerRef, panelRef)
+  const panelId = useId()
+  const [input, setInput] = useState('')
+  const { page, valid, invalid } = parsePage(input)
+
+  const report = useRef(onOpenChange)
+  useEffect(() => {
+    report.current = onOpenChange
+  })
+  useEffect(() => {
+    report.current(popover.open)
+  }, [popover.open])
+  useEffect(() => () => report.current(false), [])
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (!valid) return
+    popover.close()
+    setInput('')
+    onJump(page)
+  }
+
+  return (
+    <span
+      className="position-page"
+      onBlur={(event) => {
+        const next = event.relatedTarget as Node | null
+        if (popover.open && next !== null && !event.currentTarget.contains(next)) popover.close(false)
+      }}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="btn btn-small btn-quiet position-page-trigger"
+        aria-expanded={popover.open}
+        aria-controls={popover.open ? panelId : undefined}
+        aria-label={`${label}：跳转页码与读取范围`}
+        onClick={popover.toggle}
+      >
+        {label}
+        <Icon name="chevron" size={12} className="position-page-chevron" />
+      </button>
+      {popover.open && (
+        <div ref={panelRef} id={panelId} className="position-page-panel" role="group" aria-label="跳转页码">
+          <form className="page-jump" onSubmit={submit}>
+            <label className="page-jump-label" htmlFor={inputId}>
+              {mode === 'po' ? 'PO 页码' : '页码'}
+            </label>
+            <input
+              id={inputId}
+              className="page-input"
+              inputMode="numeric"
+              autoComplete="off"
+              data-autofocus=""
+              placeholder={placeholder}
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              aria-invalid={invalid ? true : undefined}
+              aria-describedby={invalid ? `${inputId}-error` : undefined}
+            />
+            <button type="submit" className="btn btn-small" disabled={!valid} aria-label="跳转到输入的页码">
+              跳转
+            </button>
+            {invalid && (
+              <span className="page-jump-error" id={`${inputId}-error`}>
+                <Icon name="alert" size={13} />
+                页码须为 1 以上的整数
+              </span>
+            )}
+          </form>
+          <div className="toolbar-coverage">{children}</div>
+        </div>
+      )}
+    </span>
+  )
 }
 
 export interface ThreadReaderProps {
@@ -102,6 +215,8 @@ export interface ThreadReaderProps {
   restoreFocus: SourceFocus | null
   /** Quote target of the opening: briefly marked once placed and displayed. */
   highlightPostId: PostId | null
+  /** PROTOTYPE: the 回复 entry placed in the toolbar and its sent note; `null` outside the prototype. */
+  compose: ComposeEntry | null
 }
 
 export function ThreadReader({
@@ -127,7 +242,8 @@ export function ThreadReader({
   footer,
   unlocatedPostId,
   restoreFocus,
-  highlightPostId
+  highlightPostId,
+  compose
 }: ThreadReaderProps) {
   const startRef = useRef(start)
   // One view ID per mounted reader: it protects the images it loaded and, through the content
@@ -159,7 +275,9 @@ export function ThreadReader({
   const rules = useThreadRules(ruleThreads)
   /** The 提醒 panel floats over the top of the content: nothing is judged read while it is open. */
   const [reminderPanelOpen, setReminderPanelOpen] = useState(false)
-  useCover(reminderPanelOpen)
+  /** PROTOTYPE: so does the page popover of the position control. */
+  const [pagePanelOpen, setPagePanelOpen] = useState(false)
+  useCover(reminderPanelOpen || pagePanelOpen)
   useEffect(
     () => () => {
       near.disconnect()
@@ -316,12 +434,20 @@ export function ThreadReader({
     } else goTo(target, () => thread.jump(page))
   }
 
-  const parsedPage = /^\d+$/.test(pageInput.trim()) ? Number(pageInput.trim()) : NaN
-  const pageValid = Number.isSafeInteger(parsedPage) && parsedPage >= 1
-  const pageInvalid = pageInput.trim() !== '' && !pageValid
+  const { page: parsedPage, valid: pageValid, invalid: pageInvalid } = parsePage(pageInput)
   const onJump = (event: FormEvent) => {
     event.preventDefault()
     if (pageValid) goTo({ kind: 'page', page: parsedPage }, () => thread.jump(parsedPage))
+  }
+
+  /** PROTOTYPE: page of the post at the reading line, for the position control's 第 x 页. */
+  const [readingPage, setReadingPage] = useState<number | null>(null)
+  useEffect(() => {
+    if (PROTOTYPE_ENABLED) setReadingPage(currentAnchor()?.page ?? null)
+  }, [state.rangeVersion, state.pages, currentAnchor])
+  const onReaderScroll = () => {
+    onScroll()
+    if (PROTOTYPE_ENABLED) setReadingPage(currentAnchor()?.page ?? null)
   }
 
   const unreadIds = useMemo(() => {
@@ -347,191 +473,272 @@ export function ThreadReader({
   // Initial, append and prepend progress is shown where the content will appear.
   const toolbarTask = task !== null && (task.type === 'refresh' || task.type === 'jump' || task.type === 'locate') ? task : null
 
+  const backButton = onBackToList !== null && (
+    <button type="button" className="btn" onClick={onBackToList}>
+      <Icon name="arrowLeft" />
+      返回串列表
+    </button>
+  )
+
+  const modeSwitch = (
+    <div className="segmented" role="group" aria-label="阅读模式">
+      {(['all', 'po'] as const).map((item) => (
+        <button key={item} type="button" className="segmented-item" aria-pressed={mode === item} onClick={() => onChooseMode(item)}>
+          {item === 'all' ? '全部' : '只看 PO'}
+        </button>
+      ))}
+    </div>
+  )
+
+  const searchButton = openSearch !== null && (
+    <button
+      type="button"
+      className="btn"
+      aria-haspopup="dialog"
+      title="在这个串已取得的内容中搜索"
+      onClick={() => openSearch({ view: 'thread', entryKey, threadId, mode, title })}
+    >
+      <Icon name="search" />
+      串内搜索
+    </button>
+  )
+
+  const refreshButton = (
+    <button type="button" className="btn" onClick={thread.refresh} title="重新读取已加载的最后一页并合并">
+      <Icon name="refresh" />
+      刷新
+    </button>
+  )
+
+  // The prototype's position control uses the small quiet form of the same buttons.
+  const positionButton = PROTOTYPE_ENABLED ? 'btn btn-small btn-quiet' : 'btn'
+  const positionIcon = PROTOTYPE_ENABLED ? 14 : 16
+  const startButton = (
+    <button type="button" className={positionButton} onClick={toStart} title="回到第 1 页的开头">
+      <Icon name="toTop" size={positionIcon} />
+      开头
+    </button>
+  )
+  const endButton = (
+    <button type="button" className={positionButton} onClick={() => goTo({ kind: 'last' }, thread.locateEnd)} title="有限探测并定位到末尾附近">
+      <Icon name="toEnd" size={positionIcon} />
+      末尾
+    </button>
+  )
+  const unreadButton = (
+    <button
+      type="button"
+      className={positionButton}
+      onClick={toFirstUnread}
+      disabled={firstUnread === undefined}
+      title={`跳到${MODE_NAMES[mode]}中已获取的第一条未读发言`}
+    >
+      首条未读
+      <span className="btn-count">{unreadHere.length}</span>
+    </button>
+  )
+
+  const notes = (
+    <>
+      {unlocatedPostId !== null && (
+        <div className="toolbar-note" role="status">
+          <Icon name="info" size={14} />
+          <span>未定位到引用的 No.{unlocatedPostId}：已按正常续读位置打开原串，没有跳到这条回复</span>
+        </div>
+      )}
+
+      {temporaryOf !== null && (
+        <div className="toolbar-note" role="status">
+          <Icon name="info" size={14} />
+          <span>
+            临时显示{MODE_NAMES[mode]}以定位目标，{MODE_NAMES[temporaryOf]}偏好未改变
+          </span>
+          <button type="button" className="btn btn-small" onClick={() => onChooseMode(temporaryOf)}>
+            回到{MODE_NAMES[temporaryOf]}
+          </button>
+        </div>
+      )}
+    </>
+  )
+
+  // Only what applies now; the prototype keeps the 已定位末尾 result with the coverage text.
+  const status = (
+    <div className="toolbar-status">
+      <div role="status" className="toolbar-status-text">
+        {toolbarTask !== null && <Loading live={false}>{taskText(toolbarTask, mode)}</Loading>}
+        {nearby === 'anchor' && task === null && <span>原位置已变化，已返回附近</span>}
+        {nearby === 'post' && task === null && <span>原位置的发言不在读取到的页面中，已显示附近位置</span>}
+        {notice !== null && <span className="toolbar-warning">{notice}</span>}
+        {task === null && state.endProbe?.status === 'insufficient' && (
+          <span className="toolbar-warning">
+            <Icon name="alert" size={14} />
+            覆盖不足：已探测{pageLabel(mode, formatPageList(state.endProbe.probedPages) || '—')}，未能确认末尾位置
+          </span>
+        )}
+        {task === null && state.endProbe?.status === 'interrupted' && (
+          <span className="toolbar-warning">
+            <Icon name="alert" size={14} />
+            末尾定位中断：{pageLabel(mode, state.endProbe.failedPage)}读取失败（{describeReadError(state.endProbe.error)}
+            {state.endProbe.error.serverMessage !== undefined && `；论坛提示：${state.endProbe.error.serverMessage}`}）；已探测
+            {pageLabel(mode, formatPageList(state.endProbe.probedPages) || '—')}，未能确认末尾位置。可再次点击“末尾”重试
+          </span>
+        )}
+        {!PROTOTYPE_ENABLED && task === null && state.endProbe?.status === 'located' && (
+          <span>已定位末尾（探测{pageLabel(mode, formatPageList(state.endProbe.probedPages))}）</span>
+        )}
+        {compose?.note}
+      </div>
+      {task === null && state.endProbe?.status === 'interrupted' && <IdentitySettingsAction error={state.endProbe.error} />}
+      {task?.type === 'locate' && (
+        <button type="button" className="btn btn-small" onClick={thread.cancel}>
+          <Icon name="close" size={14} />
+          取消定位
+        </button>
+      )}
+    </div>
+  )
+
+  const failure = toolbarError !== null && (
+    <FailureNotice title={failureTitle(toolbarError.task, mode)} failure={toolbarError.failure} onRetry={thread.retry} compact />
+  )
+
   return (
     <section className="reader" aria-label={title === null ? `串 No.${threadId}` : `串：${title}`}>
       <div
         className="reader-scroll"
         ref={scrollRef}
-        onScroll={onScroll}
+        onScroll={onReaderScroll}
         tabIndex={-1}
         data-pane-focus=""
         inert={viewer !== null}
       >
         <div className="reader-toolbar" ref={toolbarRef}>
-          <div className="reader-toolbar-inner">
-            <div className="toolbar-row">
-              <div className="toolbar-group">
-                {onBackToList !== null && (
-                  <button type="button" className="btn" onClick={onBackToList}>
-                    <Icon name="arrowLeft" />
-                    返回串列表
-                  </button>
-                )}
-                <div className="segmented" role="group" aria-label="阅读模式">
-                  {(['all', 'po'] as const).map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      className="segmented-item"
-                      aria-pressed={mode === item}
-                      onClick={() => onChooseMode(item)}
-                    >
-                      {item === 'all' ? '全部' : '只看 PO'}
-                    </button>
-                  ))}
+          {PROTOTYPE_ENABLED ? (
+            <div className="reader-toolbar-inner">
+              <div className="toolbar-row">
+                <div className="toolbar-group">
+                  {backButton}
+                  {modeSwitch}
+                </div>
+                <div className="toolbar-group">
+                  {compose?.entry}
+                  {searchButton}
+                  {refreshButton}
+                  <ThreadMoreMenu
+                    threadId={threadId}
+                    label={title ?? `No.${threadId}`}
+                    rules={rules.rulesOf(threadId)}
+                    failure={rules.failure}
+                    onRetry={rules.reload}
+                    onUpdated={rules.updated}
+                    onReminderOpenChange={setReminderPanelOpen}
+                  />
                 </div>
               </div>
-              <div className="toolbar-group">
-                {openSearch !== null && (
-                  <button
-                    type="button"
-                    className="btn"
-                    aria-haspopup="dialog"
-                    title="在这个串已取得的内容中搜索"
-                    onClick={() => openSearch({ view: 'thread', entryKey, threadId, mode, title })}
-                  >
-                    <Icon name="search" />
-                    串内搜索
-                  </button>
-                )}
-                <FavoriteButton threadId={threadId} />
-                <ReminderMenu
-                  threadId={threadId}
-                  label={title ?? `No.${threadId}`}
-                  rules={rules.rulesOf(threadId)}
-                  failure={rules.failure}
-                  onRetry={rules.reload}
-                  onUpdated={rules.updated}
-                  onOpenChange={setReminderPanelOpen}
-                />
-                <OfflineButton threadId={threadId} title={title ?? `No.${threadId}`} />
-                <button type="button" className="btn" onClick={thread.refresh} title="重新读取已加载的最后一页并合并">
-                  <Icon name="refresh" />
-                  刷新
-                </button>
-              </div>
-            </div>
 
-            <div className="toolbar-row">
-              <div className="toolbar-group" role="group" aria-label="阅读位置">
-                <button type="button" className="btn" onClick={toStart} title="回到第 1 页的开头">
-                  <Icon name="toTop" />
-                  开头
-                </button>
-                <button type="button" className="btn" onClick={() => goTo({ kind: 'last' }, thread.locateEnd)} title="有限探测并定位到末尾附近">
-                  <Icon name="toEnd" />
-                  末尾
-                </button>
+              <div className="position-row">
+                {status}
+                <div className="position-control" role="group" aria-label="阅读位置">
+                  {startButton}
+                  {endButton}
+                  {unreadButton}
+                  <PagePopover
+                    inputId={`page-${entryKey}-${threadId}`}
+                    mode={mode}
+                    label={pageLabel(mode, readingPage ?? firstPage?.page ?? 1)}
+                    placeholder={lastPage === undefined ? '1' : String(lastPage.page)}
+                    onJump={(page) => goTo({ kind: 'page', page }, () => thread.jump(page))}
+                    onOpenChange={setPagePanelOpen}
+                  >
+                    {loadedRange !== null && <span className="loaded-range">当前显示{loadedRange}</span>}
+                    <CoverageLine coverage={state.coverage} mode={mode} />
+                    {task === null && state.endProbe?.status === 'located' && (
+                      <span>已定位末尾（探测{pageLabel(mode, formatPageList(state.endProbe.probedPages))}）</span>
+                    )}
+                  </PagePopover>
+                </div>
+              </div>
+
+              {notes}
+              {failure}
+            </div>
+          ) : (
+            <div className="reader-toolbar-inner">
+              <div className="toolbar-row">
+                <div className="toolbar-group">
+                  {backButton}
+                  {modeSwitch}
+                </div>
+                <div className="toolbar-group">
+                  {searchButton}
+                  <FavoriteButton threadId={threadId} />
+                  <ReminderMenu
+                    threadId={threadId}
+                    label={title ?? `No.${threadId}`}
+                    rules={rules.rulesOf(threadId)}
+                    failure={rules.failure}
+                    onRetry={rules.reload}
+                    onUpdated={rules.updated}
+                    onOpenChange={setReminderPanelOpen}
+                  />
+                  <OfflineButton threadId={threadId} title={title ?? `No.${threadId}`} />
+                  {refreshButton}
+                </div>
+              </div>
+
+              <div className="toolbar-row">
+                <div className="toolbar-group" role="group" aria-label="阅读位置">
+                  {startButton}
+                  {endButton}
+                  {unreadButton}
+                  <form className="page-jump" onSubmit={onJump}>
+                    <label className="page-jump-label" htmlFor={`page-${entryKey}-${threadId}`}>
+                      {mode === 'po' ? 'PO 页码' : '页码'}
+                    </label>
+                    <input
+                      id={`page-${entryKey}-${threadId}`}
+                      className="page-input"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      placeholder={lastPage === undefined ? '1' : String(lastPage.page)}
+                      value={pageInput}
+                      onChange={(event) => setPageInput(event.target.value)}
+                      aria-invalid={pageInvalid ? true : undefined}
+                      aria-describedby={pageInvalid ? `page-${entryKey}-${threadId}-error` : undefined}
+                    />
+                    <button type="submit" className="btn" disabled={!pageValid} aria-label="跳转到输入的页码">
+                      跳转
+                    </button>
+                    {pageInvalid && (
+                      <span className="page-jump-error" id={`page-${entryKey}-${threadId}-error`}>
+                        <Icon name="alert" size={13} />
+                        页码须为 1 以上的整数
+                      </span>
+                    )}
+                  </form>
+                </div>
                 <button
                   type="button"
-                  className="btn"
-                  onClick={toFirstUnread}
-                  disabled={firstUnread === undefined}
-                  title={`跳到${MODE_NAMES[mode]}中已获取的第一条未读发言`}
+                  className="btn btn-quiet"
+                  onClick={onMarkAllRead}
+                  disabled={confirmedUnread === 0 || markAllBusy}
+                  title="只处理已经获取并确认未读的发言，不包括未获取的页面和以后的新回复"
                 >
-                  首条未读
-                  <span className="btn-count">{unreadHere.length}</span>
-                </button>
-                <form className="page-jump" onSubmit={onJump}>
-                  <label className="page-jump-label" htmlFor={`page-${entryKey}-${threadId}`}>
-                    {mode === 'po' ? 'PO 页码' : '页码'}
-                  </label>
-                  <input
-                    id={`page-${entryKey}-${threadId}`}
-                    className="page-input"
-                    inputMode="numeric"
-                    autoComplete="off"
-                    placeholder={lastPage === undefined ? '1' : String(lastPage.page)}
-                    value={pageInput}
-                    onChange={(event) => setPageInput(event.target.value)}
-                    aria-invalid={pageInvalid ? true : undefined}
-                    aria-describedby={pageInvalid ? `page-${entryKey}-${threadId}-error` : undefined}
-                  />
-                  <button type="submit" className="btn" disabled={!pageValid} aria-label="跳转到输入的页码">
-                    跳转
-                  </button>
-                  {pageInvalid && (
-                    <span className="page-jump-error" id={`page-${entryKey}-${threadId}-error`}>
-                      <Icon name="alert" size={13} />
-                      页码须为 1 以上的整数
-                    </span>
-                  )}
-                </form>
-              </div>
-              <button
-                type="button"
-                className="btn btn-quiet"
-                onClick={onMarkAllRead}
-                disabled={confirmedUnread === 0 || markAllBusy}
-                title="只处理已经获取并确认未读的发言，不包括未获取的页面和以后的新回复"
-              >
-                <Icon name="check" />
-                全部标为已读（已获取的 {confirmedUnread} 条）
-              </button>
-            </div>
-
-            {unlocatedPostId !== null && (
-              <div className="toolbar-note" role="status">
-                <Icon name="info" size={14} />
-                <span>未定位到引用的 No.{unlocatedPostId}：已按正常续读位置打开原串，没有跳到这条回复</span>
-              </div>
-            )}
-
-            {temporaryOf !== null && (
-              <div className="toolbar-note" role="status">
-                <Icon name="info" size={14} />
-                <span>
-                  临时显示{MODE_NAMES[mode]}以定位目标，{MODE_NAMES[temporaryOf]}偏好未改变
-                </span>
-                <button type="button" className="btn btn-small" onClick={() => onChooseMode(temporaryOf)}>
-                  回到{MODE_NAMES[temporaryOf]}
+                  <Icon name="check" />
+                  全部标为已读（已获取的 {confirmedUnread} 条）
                 </button>
               </div>
-            )}
 
-            <div className="toolbar-status">
-              <div role="status" className="toolbar-status-text">
-                {toolbarTask !== null && <Loading live={false}>{taskText(toolbarTask, mode)}</Loading>}
-                {nearby === 'anchor' && task === null && <span>原位置已变化，已返回附近</span>}
-                {nearby === 'post' && task === null && <span>原位置的发言不在读取到的页面中，已显示附近位置</span>}
-                {notice !== null && <span className="toolbar-warning">{notice}</span>}
-                {task === null && state.endProbe?.status === 'insufficient' && (
-                  <span className="toolbar-warning">
-                    <Icon name="alert" size={14} />
-                    覆盖不足：已探测{pageLabel(mode, formatPageList(state.endProbe.probedPages) || '—')}，未能确认末尾位置
-                  </span>
-                )}
-                {task === null && state.endProbe?.status === 'interrupted' && (
-                  <span className="toolbar-warning">
-                    <Icon name="alert" size={14} />
-                    末尾定位中断：{pageLabel(mode, state.endProbe.failedPage)}读取失败（{describeReadError(state.endProbe.error)}
-                    {state.endProbe.error.serverMessage !== undefined && `；论坛提示：${state.endProbe.error.serverMessage}`}）；已探测
-                    {pageLabel(mode, formatPageList(state.endProbe.probedPages) || '—')}，未能确认末尾位置。可再次点击“末尾”重试
-                  </span>
-                )}
-                {task === null && state.endProbe?.status === 'located' && (
-                  <span>已定位末尾（探测{pageLabel(mode, formatPageList(state.endProbe.probedPages))}）</span>
-                )}
+              {notes}
+              {status}
+              {failure}
+
+              <div className="toolbar-coverage">
+                {loadedRange !== null && <span className="loaded-range">当前显示{loadedRange}</span>}
+                <CoverageLine coverage={state.coverage} mode={mode} />
               </div>
-              {task === null && state.endProbe?.status === 'interrupted' && (
-                <IdentitySettingsAction error={state.endProbe.error} />
-              )}
-              {task?.type === 'locate' && (
-                <button type="button" className="btn btn-small" onClick={thread.cancel}>
-                  <Icon name="close" size={14} />
-                  取消定位
-                </button>
-              )}
             </div>
-            {toolbarError !== null && (
-              <FailureNotice title={failureTitle(toolbarError.task, mode)} failure={toolbarError.failure} onRetry={thread.retry} compact />
-            )}
-
-            <div className="toolbar-coverage">
-              {loadedRange !== null && <span className="loaded-range">当前显示{loadedRange}</span>}
-              <CoverageLine coverage={state.coverage} mode={mode} />
-            </div>
-          </div>
+          )}
         </div>
 
         <QuoteEntryContext.Provider value={entryKey}>

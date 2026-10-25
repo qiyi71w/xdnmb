@@ -17,6 +17,7 @@ import { useFeed } from './useFeed'
 import './feed.css'
 // PROTOTYPE (throwaway): D makes the board name open its board panel.
 import { ListHostContext } from '../directory/prototype/prototypeStore'
+import type { ComposeEntry } from '../editor/ComposePanel'
 
 /** The first thread row reaching below the scroller top, and its row top's offset from that top. */
 function firstVisible(scroller: HTMLElement): WorkspaceList['anchor'] {
@@ -50,7 +51,8 @@ export function FeedPane({
   forumNames,
   selectedThreadId,
   onOpenThread,
-  footer
+  footer,
+  compose
 }: {
   /** History entry showing this list; the shell refreshes it through the content registry. */
   entryKey: number
@@ -60,6 +62,8 @@ export function FeedPane({
   onOpenThread: (thread: ThreadSummary) => void
   /** Shown below the scroller (the new-thread editor of a forum). */
   footer: ReactNode
+  /** PROTOTYPE: a forum's 发新串 entry beside its name and its sent note; `null` otherwise. */
+  compose: ComposeEntry | null
 }) {
   const registry = useContext(ContentRegistryContext)
   const protoHost = useContext(ListHostContext)
@@ -198,10 +202,16 @@ export function FeedPane({
               <span className="list-kind">{kindLabel}</span>
               <span className="list-name">{protoHost?.boardTitle != null ? protoHost.boardTitle(info.name) : info.name}</span>
             </h2>
+            {compose !== null && compose.entry}
             <button type="button" className="icon-btn" onClick={refreshList} aria-label="刷新列表（重新读取第 1 页）" title="刷新列表">
               <Icon name="refresh" />
             </button>
           </div>
+          {compose !== null && (
+            <p className="list-compose-sent" role="status">
+              {compose.note}
+            </p>
+          )}
         </header>
 
         {info.description.length > 0 && (

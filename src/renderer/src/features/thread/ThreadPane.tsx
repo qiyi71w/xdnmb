@@ -6,6 +6,7 @@ import { AppCoveredContext, useCoverageScope } from '../../lib/appCovered'
 import { createReadingResets, useReadingGeneration } from '../content/readingResets'
 import { ContentRegistryContext } from '../tabs/contentRegistry'
 import type { ThreadOpen } from '../tabs/tabsState'
+import type { ComposeEntry } from '../editor/ComposePanel'
 import { decideView, markAllInChunks, savedStart, type ReaderStart } from './readingStart'
 import { ThreadReader } from './ThreadReader'
 import './thread.css'
@@ -34,7 +35,8 @@ export function ThreadPane({
   displayed,
   forumName,
   onBackToList,
-  footer
+  footer,
+  compose
 }: {
   entryKey: number
   /** Thread, target and snapshot of the entry; read once when the pane mounts. */
@@ -44,6 +46,8 @@ export function ThreadPane({
   onBackToList: (() => void) | null
   /** Shown below the scroller (the reply editor). */
   footer: ReactNode
+  /** PROTOTYPE: the 回复 entry for the toolbar and its sent note; `null` outside the prototype. */
+  compose: ComposeEntry | null
 }) {
   const threadId = open.threadId
   const openRef = useRef(open)
@@ -255,6 +259,7 @@ export function ThreadPane({
       onMarkAllRead={() => void markAllRead()}
       onBackToList={onBackToList}
       footer={footer}
+      compose={compose}
       unlocatedPostId={openRef.current.unlocatedPostId}
       // Only the first reader of the entry arrives from the opening: a later mode switch or a reset
       // does not, and a snapshot voided by a history clear gives back no focus either.

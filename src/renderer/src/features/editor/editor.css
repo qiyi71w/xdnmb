@@ -430,10 +430,16 @@
 .editor-kbd {
   padding: 0 4px;
   border-radius: 4px;
-  background: oklch(1 0 0 / 0.2);
   font-family: inherit;
   font-size: var(--text-xs);
   font-weight: 500;
+}
+
+/* Shortcut on the primary button: an outline in the button's own text colour, so the keys read
+   at the button label's contrast in light, dark and custom themes. */
+.btn-primary .editor-kbd {
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--on-accent) 55%, transparent);
+  color: var(--on-accent);
 }
 
 .editor-confirm {
@@ -499,4 +505,249 @@
 .unsaved-item .notice-inline,
 .unsaved-dialog .modal-body > .notice-inline {
   margin: 0;
+}
+
+/* ---------- PROTOTYPE (throwaway): floating editor panel ---------- */
+
+/* Tab content beside an open drawer; without one the main part takes all of it. */
+.compose-frame {
+  position: relative;
+  height: 100%;
+  display: flex;
+}
+
+.compose-frame-main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+/* A: centred over a dimmed app. Strong glass outside, the text on paper. */
+.compose-modal {
+  width: min(760px, calc(100vw - 48px));
+  max-width: none;
+  height: min(82dvh, 760px);
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-l);
+  background: var(--glass-strong);
+  backdrop-filter: blur(28px) saturate(1.5);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+  color: var(--ink);
+  overflow: hidden;
+}
+
+.compose-modal[open] {
+  display: flex;
+  flex-direction: column;
+  animation: compose-modal-in 0.2s var(--ease-out);
+}
+
+.compose-modal::backdrop {
+  background: oklch(0.2 0.02 240 / 0.28);
+}
+
+@keyframes compose-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
+/* B: the right edge of the tab content, full height, no backdrop; the thread stays beside it. */
+.compose-drawer {
+  flex: none;
+  width: clamp(420px, 40vw, 640px);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line-soft);
+  background: var(--paper);
+  box-shadow: -8px 0 20px -16px oklch(0.25 0.03 240 / 0.35);
+  animation: compose-drawer-in 0.22s var(--ease-out);
+}
+
+@keyframes compose-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+/* Narrow window: over the content, almost its full width. */
+@media (max-width: 900px) {
+  .compose-drawer {
+    position: absolute;
+    z-index: 6;
+    inset-block: 0;
+    right: 0;
+    width: calc(100% - 24px);
+    border-left: 0;
+    border-radius: var(--radius-l) 0 0 var(--radius-l);
+    box-shadow: var(--shadow-nav), 0 0 0 1px var(--line-soft);
+  }
+
+  /* No content area is left beside it for the prototype switcher: the footer makes room instead. */
+  .compose-drawer .editor-float-foot {
+    padding-bottom: 56px;
+  }
+}
+
+:root[data-motion='reduce'] .compose-modal::backdrop {
+  animation: none;
+}
+
+.editor-panel.is-float {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-float-head {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 12px 10px 20px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.editor-float-title {
+  flex: 1 1 12em;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.editor-float-title .icon {
+  flex: none;
+  color: var(--accent-ink);
+}
+
+.editor-float-title .editor-fixed {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.editor-float-head .editor-identity-row {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.editor-float-head .editor-identity-row select {
+  max-width: 14em;
+}
+
+.editor-float-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding: 14px 20px;
+}
+
+/* Glass outside, paper inside: the body of the modal is solid. */
+.compose-modal .editor-float-body {
+  background: var(--paper);
+}
+
+/* The text is the panel: it takes the height left, never under ten lines. */
+.editor-panel.is-float .editor-content {
+  flex: 1 0 auto;
+  min-height: calc(10 * 1.6em + 18px);
+  resize: none;
+}
+
+.editor-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  margin-left: -4px;
+  padding: 2px 4px;
+  border-radius: var(--radius-s);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+  list-style: none;
+  cursor: pointer;
+}
+
+.editor-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.editor-more > summary:hover {
+  color: var(--ink);
+}
+
+.editor-more > summary .editor-hint {
+  font-weight: 400;
+}
+
+.editor-more[open] > summary .disclosure-icon {
+  transform: rotate(90deg);
+}
+
+.editor-more > .editor-fields {
+  margin-top: 8px;
+}
+
+.editor-float-foot {
+  flex: none;
+  display: grid;
+  gap: 8px;
+  padding: 10px 20px 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.editor-float-foot-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.editor-float-foot-row > .editor-status {
+  flex: 1 1 14em;
+  min-width: 0;
+}
+
+.editor-float-foot-row > .editor-actions {
+  margin-left: auto;
+}
+
+/* Confirmed send, beside the entry that opened it. */
+.compose-sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  color: var(--accent-ink);
+}
+
+.compose-sent .icon {
+  flex: none;
+}
+
+.list-compose-sent {
+  margin: 4px 0 0;
+  font-size: var(--text-xs);
+}
+
+.list-compose-sent:empty {
+  display: none;
 }

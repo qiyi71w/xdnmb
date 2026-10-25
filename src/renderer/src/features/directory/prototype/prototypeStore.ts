@@ -3,7 +3,7 @@
 // column) — switchable in the running app with the floating bar (components/PrototypeSwitcher.tsx).
 // Built only with VITE_XIDAO_PROTOTYPE=1. Feature visibility, board favorites / hiding / order /
 // collapsing and F's column state live in memory only; a restart forgets them on purpose. The
-// chosen variant is kept in localStorage.
+// chosen navigation variant and editor panel variant are kept in localStorage.
 
 import { createContext, useSyncExternalStore, type ReactNode } from 'react'
 import type { BoardDirectory } from '../../../../../shared/forum'
@@ -162,6 +162,71 @@ export const setBoardColumnCollapsed = columnCollapsed.set
 const columnWidth = cell(180)
 export const useBoardColumnWidth = columnWidth.use
 export const setBoardColumnWidth = columnWidth.set
+
+// ---------- Editor panel (reading main line) ----------
+
+/** How the 发言编辑 panel floats: centred over a dimmed reader, or a drawer beside the content. */
+export type EditorVariant = 'modal' | 'drawer'
+
+export const EDITOR_VARIANTS: readonly { key: EditorVariant; name: string }[] = [
+  { key: 'modal', name: '浮窗' },
+  { key: 'drawer', name: '抽屉' }
+]
+
+const EDITOR_VARIANT_KEY = 'xidao.prototype.editorVariant'
+
+function readEditorVariant(): EditorVariant {
+  try {
+    return localStorage.getItem(EDITOR_VARIANT_KEY) === 'drawer' ? 'drawer' : 'modal'
+  } catch {
+    return 'modal'
+  }
+}
+
+const editorVariant = cell<EditorVariant>(PROTOTYPE_ENABLED ? readEditorVariant() : 'modal')
+export const useEditorVariant = editorVariant.use
+
+export function setEditorVariant(next: EditorVariant): void {
+  editorVariant.set(next)
+  try {
+    localStorage.setItem(EDITOR_VARIANT_KEY, next)
+  } catch {
+    // Not remembered across restarts; switching still works.
+  }
+}
+
+/**
+ * Width the open drawer takes from the tab content, as measured while it is shown; `0` while it
+ * floats over the content (narrow window), `null` while none is shown.
+ */
+const drawerWidth = cell<number | null>(null)
+export const useComposeDrawerWidth = drawerWidth.use
+export const setComposeDrawerWidth = drawerWidth.set
+
+/** The drawer's CSS width (`clamp(420px, 40vw, 640px)`, over the content under 900px) before it is measured. */
+export function expectedDrawerWidth(viewportWidth: number): number {
+  return viewportWidth <= 900 ? 0 : Math.min(640, Math.max(420, viewportWidth * 0.4))
+}
+
+/** The control that last opened each editor panel, by `focusKey`: focus goes back there on 收起. */
+const composeOpeners = new Map<string, HTMLElement>()
+
+export function rememberComposeOpener(key: string, opener: HTMLElement): void {
+  composeOpeners.set(key, opener)
+}
+
+/**
+ * Focus after a panel closed: its opener when still shown, else the target's own 回复 / 发新串
+ * entry (`data-compose-key`), else the shown content pane of the active tab.
+ */
+export function returnComposeFocus(key: string): void {
+  const opener = composeOpeners.get(key)
+  composeOpeners.delete(key)
+  const entry = document.querySelector<HTMLElement>(`.tab-panel:not([hidden]) [data-compose-key="${CSS.escape(key)}"]`)
+  const panes = [...document.querySelectorAll<HTMLElement>('.tab-panel:not([hidden]) [data-pane-focus]')]
+  const target = [opener, entry, ...panes].find((element) => isShown(element))
+  target?.focus({ preventScroll: true })
+}
 
 // ---------- List slots (D, E) ----------
 

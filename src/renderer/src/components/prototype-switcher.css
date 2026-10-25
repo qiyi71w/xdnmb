@@ -16,6 +16,53 @@
   font-size: var(--text-sm);
 }
 
+.prototype-switcher-group,
+.prototype-switcher-segment {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Second choice (编辑：浮窗／抽屉), after a thin divider. */
+.prototype-switcher-segment {
+  margin-left: 4px;
+  padding-left: 8px;
+  border-left: 1px solid color-mix(in oklch, var(--paper) 28%, transparent);
+}
+
+.prototype-switcher-segment-label {
+  padding-right: 4px;
+  color: color-mix(in oklch, var(--paper) 78%, var(--ink));
+  white-space: nowrap;
+}
+
+.prototype-switcher-option {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.prototype-switcher-option:hover {
+  background: color-mix(in oklch, var(--paper) 18%, transparent);
+}
+
+.prototype-switcher-option[aria-pressed='true'] {
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.prototype-switcher-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
 .prototype-switcher-arrow {
   display: inline-grid;
   place-items: center;

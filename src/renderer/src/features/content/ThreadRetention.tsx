@@ -108,7 +108,7 @@ const POLL_MS = 1000
 
 type CopyState = { status: 'loading' } | { status: 'failed'; refused: Refused } | { status: 'ready'; copy: OfflineCopy | null }
 
-interface OfflineCopyHandle {
+export interface OfflineCopyHandle {
   state: CopyState
   setState: (state: CopyState) => void
   /** Progress refresh failed while saving; the last known copy stays shown. */
@@ -166,10 +166,9 @@ function useOfflineCopy(threadId: ThreadId): OfflineCopyHandle {
   return { state, setState: update, pollFailure, reload: load }
 }
 
-/** Toolbar entry for the thread's offline copy; opens its dialog. */
-export function OfflineButton({ threadId, title }: { threadId: ThreadId; title: string }) {
+/** What the thread's offline entry says about its copy: its label, and whether it needs attention. */
+export function useOfflineEntry(threadId: ThreadId) {
   const offline = useOfflineCopy(threadId)
-  const [open, setOpen] = useState(false)
   const copy = offline.state.status === 'ready' ? offline.state.copy : null
   const label =
     offline.state.status === 'loading'
@@ -184,13 +183,20 @@ export function OfflineButton({ threadId, title }: { threadId: ThreadId; title: 
               ? '已离线'
               : '离线未完整'
   const warn = offline.state.status === 'failed' || (copy !== null && copy.state !== 'saving' && label === '离线未完整')
+  return { offline, label, warn, saving: copy?.state === 'saving' }
+}
+
+/** Toolbar entry for the thread's offline copy; opens its dialog. */
+export function OfflineButton({ threadId, title }: { threadId: ThreadId; title: string }) {
+  const { offline, label, warn, saving } = useOfflineEntry(threadId)
+  const [open, setOpen] = useState(false)
   return (
     <>
       <button
         type="button"
         className={warn ? 'btn offline-btn is-warning' : 'btn offline-btn'}
         aria-haspopup="dialog"
-        aria-busy={copy?.state === 'saving' || undefined}
+        aria-busy={saving || undefined}
         onClick={() => setOpen(true)}
         title="保存或更新这个串的离线副本"
       >
@@ -202,16 +208,19 @@ export function OfflineButton({ threadId, title }: { threadId: ThreadId; title: 
   )
 }
 
-function OfflineDialog({
+export function OfflineDialog({
   threadId,
   title,
   offline,
-  onClose
+  onClose,
+  fallbackFocus
 }: {
   threadId: ThreadId
   title: string
   offline: OfflineCopyHandle
   onClose: () => void
+  /** Where focus goes on close when the control that had it at opening is gone. */
+  fallbackFocus?: () => HTMLElement | null
 }) {
   const titleId = useId()
   const choiceName = useId()
@@ -244,7 +253,7 @@ function OfflineDialog({
   }
 
   return (
-    <Modal className="offline-dialog" labelledBy={titleId} onClose={onClose}>
+    <Modal className="offline-dialog" labelledBy={titleId} onClose={onClose} fallbackFocus={fallbackFocus}>
       <ModalHeader title="离线副本" titleId={titleId} closeLabel="关闭离线副本" onClose={onClose} />
       <div className="modal-body offline-body">
         <p className="offline-thread">

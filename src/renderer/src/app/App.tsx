@@ -63,7 +63,7 @@ import { SettingsOpenerContext } from '../lib/settingsOpener'
 import { useSettingsWriter } from './useSettingsWriter'
 import './layout.css'
 // PROTOTYPE (throwaway): navigation variants, active only with VITE_XIDAO_PROTOTYPE=1.
-import { PrototypeSwitcher } from '../components/PrototypeSwitcher'
+import { PrototypeSegment, PrototypeSwitcher } from '../components/PrototypeSwitcher'
 import { PrototypeNavB } from '../features/directory/prototype/PrototypeNavB'
 import { BoardPanelEmptyPage, BoardPanelTitle, PrototypeNavD } from '../features/directory/prototype/PrototypeNavD'
 import { BoardChooserPage, BoardStrip, PrototypeNavE } from '../features/directory/prototype/PrototypeNavE'
@@ -72,16 +72,21 @@ import type { FeatureHost, PrototypeNavProps } from '../features/directory/proto
 import { RAIL_WIDTH } from '../features/directory/prototype/PrototypeRail'
 import { PrototypeSettingsPage } from '../features/directory/prototype/PrototypeSettings'
 import {
+  EDITOR_VARIANTS,
   ListHostContext,
+  expectedDrawerWidth,
   NAV_VARIANTS,
   closeBoardPanel,
   isShown,
   openBoardPanel,
   PROTOTYPE_ENABLED,
   setBoardPanelHost,
+  setEditorVariant,
   setNavVariant,
   useBoardColumnCollapsed,
   useBoardColumnWidth,
+  useEditorVariant,
+  useComposeDrawerWidth,
   useNavVariant,
   type FeatureId,
   type ListHost
@@ -260,6 +265,7 @@ export function App() {
   const current = tabs === null ? null : activeTab(tabs)
   /** PROTOTYPE: the navigation variant; `null` (the regular navigation and settings dialog) unless built in. */
   const navVariant = useNavVariant()
+  const editorVariant = useEditorVariant()
   const protoColumnCollapsed = useBoardColumnCollapsed()
   const protoColumnWidth = useBoardColumnWidth()
   /**
@@ -272,8 +278,21 @@ export function App() {
       ? null
       : 8 + RAIL_WIDTH + (navVariant === 'F' && !protoColumnCollapsed ? protoColumnWidth : 0)
   const navFull = protoNavFull ?? LAYOUT_DEFAULTS.navFull + (navVariant === 'B' ? RAIL_WIDTH : 0)
+  /**
+   * PROTOTYPE: width an open editor drawer takes beside the active tab's content: measured once
+   * shown, its CSS width until then; 0 while it floats over a narrow window. Its targets do not
+   * depend on the pane shown, so the layout this changes cannot hide the drawer again.
+   */
+  const measuredDrawer = useComposeDrawerWidth()
+  const drawerReserve =
+    navVariant !== null &&
+    editorVariant === 'drawer' &&
+    current !== null &&
+    shownTargets(current, false).some((target) => editorFor(editors.state, current.id, target)?.expanded === true)
+      ? (measuredDrawer ?? expectedDrawerWidth(window.innerWidth))
+      : 0
   const layout = computeLayout({
-    width,
+    width: width - drawerReserve,
     view: current === null ? 'list' : viewOf(current),
     navFull,
     navCompactMin: protoNavFull ?? navCompactMin + (navVariant === 'B' ? RAIL_WIDTH : 0),
@@ -1406,7 +1425,15 @@ export function App() {
               onCancel={() => setClosing(null)}
             />
           )}
-          {navVariant !== null && <PrototypeSwitcher variants={NAV_VARIANTS} current={navVariant} onChange={setNavVariant} />}
+          {navVariant !== null && (
+            <PrototypeSwitcher
+              variants={NAV_VARIANTS}
+              current={navVariant}
+              onChange={setNavVariant}
+              avoidRight={drawerReserve > 0 ? drawerReserve + 8 : 0}
+              extra={<PrototypeSegment label="编辑" options={EDITOR_VARIANTS} current={editorVariant} onChange={setEditorVariant} />}
+            />
+          )}
           <LifecycleHost
             platform={platform}
             onSettingsChange={setSettings}
