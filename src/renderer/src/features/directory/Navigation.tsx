@@ -388,7 +388,7 @@ function IdentityFooter({ identities, onOpenSettings }: { identities: Identities
   )
 }
 
-function DirectoryStatus({ state }: { state: DirectoryState }) {
+export function DirectoryStatus({ state }: { state: DirectoryState }) {
   const { source, refreshing, refreshFailure, directory } = state
   if (source === null) return null
   let body = null

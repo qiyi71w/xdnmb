@@ -33,7 +33,7 @@ import { describeIssues, invalidFields } from './appearanceIssues'
 import type { SettingsWriteStatus } from './useSettingsWriter'
 import './settings.css'
 
-type Write = (patch: Partial<AppSettings>, delay?: number) => void
+export type Write = (patch: Partial<AppSettings>, delay?: number) => void
 
 /** Slider and color edits are coalesced: one update after the input pauses this long. */
 const INPUT_DELAY = 200
@@ -80,13 +80,7 @@ export function SettingsDialog({
     <Modal className="settings-dialog" labelledBy={titleId} onClose={onClose} fallbackFocus={fallbackFocus}>
       <ModalHeader title="设置" titleId={titleId} closeLabel="关闭设置" onClose={onClose} />
       <div className="modal-body settings-body">
-        {status.notSaved && (
-          <p className="notice-inline is-warning" role="status">
-            <Icon name="alert" size={14} />
-            未能保存：本地存储当前不可写入，设置显示的是实际生效的值
-          </p>
-        )}
-        {status.refused.length > 0 && <IssueList title="更改被拒绝，之前的设置保持生效：" issues={status.refused} />}
+        <SettingsStatusNotices status={status} />
 
         <AppearanceSection settings={settings} write={write} />
         <ThemeSection settings={settings} write={write} adopt={adopt} />
@@ -101,6 +95,21 @@ export function SettingsDialog({
         <CacheSection />
       </div>
     </Modal>
+  )
+}
+
+/** Whether the last setting changes could be saved or were refused. */
+export function SettingsStatusNotices({ status }: { status: SettingsWriteStatus }) {
+  return (
+    <>
+      {status.notSaved && (
+        <p className="notice-inline is-warning" role="status">
+          <Icon name="alert" size={14} />
+          未能保存：本地存储当前不可写入，设置显示的是实际生效的值
+        </p>
+      )}
+      {status.refused.length > 0 && <IssueList title="更改被拒绝，之前的设置保持生效：" issues={status.refused} />}
+    </>
   )
 }
 
@@ -147,7 +156,7 @@ function Choice<T extends string>({
   )
 }
 
-function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+export function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <section className="settings-section" aria-labelledby={id}>
       <h3 className="settings-section-title" id={id}>
@@ -247,7 +256,7 @@ function Slider({
 // ---------------------------------------------------------------------------------------------
 // Sections
 
-function AppearanceSection({ settings, write }: { settings: AppSettings; write: Write }) {
+export function AppearanceSection({ settings, write }: { settings: AppSettings; write: Write }) {
   const noCustom = settings.customTheme === null
   const options: ChoiceOption<ColorScheme>[] = [
     { value: 'system', label: '跟随系统' },
@@ -300,7 +309,7 @@ function sameTheme(a: CustomTheme | null, b: CustomTheme | null): boolean {
  * the shared checks. Valid drafts are applied (and the custom scheme selected); invalid ones are not,
  * their issues are listed, and the last usable theme stays in effect.
  */
-function ThemeSection({ settings, write, adopt }: { settings: AppSettings; write: Write; adopt: (settings: AppSettings) => void }) {
+export function ThemeSection({ settings, write, adopt }: { settings: AppSettings; write: Write; adopt: (settings: AppSettings) => void }) {
   const [draft, setDraft] = useState<CustomTheme | null>(settings.customTheme)
   const [issues, setIssues] = useState<AppearanceIssue[]>([])
   /** Last theme this editor applied; any other custom theme in settings came from elsewhere (import). */
@@ -544,7 +553,7 @@ function ThemeTransfer({ adopt }: { adopt: (settings: AppSettings) => void }) {
   )
 }
 
-function ReadingSection({ settings, write }: { settings: AppSettings; write: Write }) {
+export function ReadingSection({ settings, write }: { settings: AppSettings; write: Write }) {
   const { reading } = settings
   return (
     <Section id="settings-reading" title="阅读">
@@ -595,7 +604,7 @@ function ReadingSection({ settings, write }: { settings: AppSettings; write: Wri
   )
 }
 
-function DensityMotionSection({ settings, write }: { settings: AppSettings; write: Write }) {
+export function DensityMotionSection({ settings, write }: { settings: AppSettings; write: Write }) {
   return (
     <Section id="settings-density" title="密度与动态">
       <SettingRow labelId="setting-density" label="密度" help="紧凑只减少列表和按钮的留白，不改变字号、配色或分栏。">
@@ -632,7 +641,7 @@ function DensityMotionSection({ settings, write }: { settings: AppSettings; writ
   )
 }
 
-function TabsSection({ settings, write }: { settings: AppSettings; write: Write }) {
+export function TabsSection({ settings, write }: { settings: AppSettings; write: Write }) {
   return (
     <Section id="settings-tabs" title="标签">
       <div className="setting-row">
@@ -673,7 +682,7 @@ const CLOSE_ACTION_LABEL: Record<CloseAction, string> = {
  * 窗口 settings: what the window's close button does. A remembered 退出汐岛 still handles every
  * unsaved edit before quitting; 后台驻留 never asks anything.
  */
-function WindowSection({ settings, write }: { settings: AppSettings; write: Write }) {
+export function WindowSection({ settings, write }: { settings: AppSettings; write: Write }) {
   return (
     <Section id="settings-window" title="窗口">
       <SettingRow
@@ -699,7 +708,7 @@ const ZOOM_KEYS: Record<ZoomAction, { mac: string; other: string }> = {
 }
 
 /** Interface zoom of the window. The keys are handled by main; this only offers buttons. */
-function ZoomSection({ platform }: { platform: AppPlatform | null }) {
+export function ZoomSection({ platform }: { platform: AppPlatform | null }) {
   const [zoom, setZoom] = useState<ZoomState | null>(null)
 
   // Zooming (buttons or keys) changes the page size in CSS pixels: query the factor again then.
@@ -789,7 +798,7 @@ function ZoomSection({ platform }: { platform: AppPlatform | null }) {
  * 发送 settings: the persistent PO identity prompt switch. Turning it on again restores the prompt
  * at once, even when “本次启动不再提示” was chosen earlier in this run (the main process clears it).
  */
-function PublicationSection() {
+export function PublicationSection() {
   const headingId = useId()
   const labelId = useId()
   const helpId = useId()

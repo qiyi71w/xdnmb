@@ -1,0 +1,46 @@
+/* PROTOTYPE (throwaway): variant switcher, deliberately unlike the app (inverted pill). */
+.prototype-switcher {
+  position: fixed;
+  z-index: 1000;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: 0 6px 20px -6px oklch(0 0 0 / 0.5);
+  font-size: var(--text-sm);
+}
+
+.prototype-switcher-arrow {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.prototype-switcher-arrow:hover {
+  background: color-mix(in oklch, var(--paper) 18%, transparent);
+}
+
+.prototype-switcher-arrow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.prototype-switcher-label {
+  min-width: 7.5em;
+  padding: 0 6px;
+  text-align: center;
+  font-weight: 650;
+  white-space: nowrap;
+}
