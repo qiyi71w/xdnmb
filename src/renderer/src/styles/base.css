@@ -112,7 +112,7 @@ ul {
 .btn-primary {
   border-color: transparent;
   background: var(--accent);
-  color: oklch(1 0 0);
+  color: var(--on-accent);
   font-weight: 600;
 }
 
@@ -122,11 +122,6 @@ ul {
 
 .btn-primary:hover:not(:disabled, [aria-disabled='true']) {
   background: color-mix(in oklch, var(--accent), var(--ink) 12%);
-}
-
-/* The effective scheme (setting or operating system, see lib/useAppearance.ts), not the OS alone. */
-:root[data-scheme='dark'] .btn-primary {
-  color: oklch(0.18 0.01 240);
 }
 
 .btn-danger {

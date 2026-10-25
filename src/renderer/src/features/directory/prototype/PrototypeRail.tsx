@@ -107,7 +107,7 @@ export function PrototypeRail({
           className={allPopover.open ? 'proto-rail-btn is-open' : 'proto-rail-btn'}
           aria-label="全部功能"
           title="全部功能"
-          aria-haspopup="true"
+          aria-haspopup="dialog"
           aria-expanded={allPopover.open}
           aria-controls={allPopover.open ? 'proto-all' : undefined}
           onClick={allPopover.toggle}
@@ -120,6 +120,7 @@ export function PrototypeRail({
           className={settingsCurrent ? 'proto-rail-btn is-current' : 'proto-rail-btn'}
           aria-current={settingsCurrent ? 'page' : undefined}
           aria-label="设置"
+          data-proto-settings=""
           title="设置"
           onClick={onOpenSettings}
           {...rail.itemProps(SETTINGS_KEY)}
@@ -129,7 +130,7 @@ export function PrototypeRail({
       </div>
 
       {allPopover.open && (
-        <div ref={allPanelRef} id="proto-all" className="proto-pop proto-all-panel" role="group" aria-label="全部功能">
+        <div ref={allPanelRef} id="proto-all" className="proto-pop proto-all-panel" role="dialog" aria-label="全部功能">
           <p className="proto-all-title">全部功能</p>
           <div className="proto-all-grid">
             {FEATURES.map((feature) => {
@@ -141,8 +142,15 @@ export function PrototypeRail({
                   className={prefs.hiddenFeatures.includes(feature.id) ? 'proto-all-item is-hidden' : 'proto-all-item'}
                   aria-label={featureLabel(feature.id, features)}
                   onClick={() => {
-                    allPopover.close(false)
-                    features.open(feature.id)
+                    // A dialog takes focus and later returns it to its opener: leave that on 全部功能.
+                    // A list replaces this panel's place: it takes focus itself.
+                    if (featureIsDialog(feature.id)) {
+                      allPopover.close()
+                      features.open(feature.id)
+                    } else {
+                      allPopover.close(false)
+                      features.open(feature.id, true)
+                    }
                   }}
                 >
                   <span className="proto-all-icon">

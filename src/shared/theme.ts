@@ -26,6 +26,7 @@ export const COLOR_TOKENS = [
   'accent',
   'accent-ink',
   'accent-soft',
+  'on-accent',
   'greentext',
   'quote-ref-ink',
   'quote-ref-bg',
@@ -65,6 +66,7 @@ export const BUILTIN_PALETTES: Record<SchemeBase, Palette> = {
     accent: 'oklch(0.55 0.095 215)',
     'accent-ink': 'oklch(0.44 0.1 222)',
     'accent-soft': 'oklch(0.55 0.095 215 / 0.12)',
+    'on-accent': 'oklch(1 0 0)',
     greentext: 'oklch(0.46 0.11 145)',
     'quote-ref-ink': 'oklch(0.42 0.06 260)',
     'quote-ref-bg': 'oklch(0.55 0.06 260 / 0.1)',
@@ -97,6 +99,7 @@ export const BUILTIN_PALETTES: Record<SchemeBase, Palette> = {
     accent: 'oklch(0.74 0.09 210)',
     'accent-ink': 'oklch(0.81 0.08 210)',
     'accent-soft': 'oklch(0.74 0.09 210 / 0.16)',
+    'on-accent': 'oklch(0.18 0.01 240)',
     greentext: 'oklch(0.79 0.12 145)',
     'quote-ref-ink': 'oklch(0.82 0.06 260)',
     'quote-ref-bg': 'oklch(0.75 0.06 260 / 0.14)',
@@ -254,6 +257,8 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
       ...GLASS_BACKDROPS
     ]
   },
+  /** Text and figures drawn on a solid accent fill: primary buttons, count badges. */
+  { foreground: 'on-accent', surfaces: [['accent']] },
   { foreground: 'greentext', surfaces: [['paper']] },
   { foreground: 'quote-ref-ink', surfaces: [['paper', 'quote-ref-bg']] },
   { foreground: 'warn-ink', surfaces: [['warn-bg'], ['paper'], ['pane'], ['window', 'glass-strong']] },
@@ -384,6 +389,7 @@ export function customPalette(theme: CustomTheme): Palette {
     accent: toHex(accent),
     'accent-ink': toHex(accent),
     'accent-soft': rgbaCss(accent, theme.base === 'dark' ? 0.16 : 0.12),
+    'on-accent': onAccent(accent),
     greentext: toHex(text),
     'quote-ref-ink': toHex(text),
     'quote-ref-bg': rgbaCss(seed('quote-ref-ink'), 0.1),
@@ -413,6 +419,13 @@ export function customPalette(theme: CustomTheme): Palette {
     }
   }
   return palette
+}
+
+/** The lighter or darker built-in on-accent color, whichever reads better on `accent`. */
+function onAccent(accent: Rgba): string {
+  const light = BUILTIN_PALETTES.light['on-accent']
+  const dark = BUILTIN_PALETTES.dark['on-accent']
+  return toHex(must(contrastRatio(must(light), accent) >= contrastRatio(must(dark), accent) ? light : dark))
 }
 
 /** Custom theme seeded from a built-in scheme; it passes the same checks. */

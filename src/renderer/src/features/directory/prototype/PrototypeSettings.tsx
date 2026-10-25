@@ -117,14 +117,10 @@ export function PrototypeSettingsPage(props: PrototypeSettingsProps) {
     void refreshOverview()
   }, [refresh, refreshOverview])
 
-  // Focus moves to the page title; leaving the page returns it to whatever opened it.
+  // Focus moves to the page title. Leaving the page, App returns focus (it knows what replaces the
+  // page and which entry is still shown).
   useLayoutEffect(() => {
-    const active = document.activeElement
-    const opener = active instanceof HTMLElement && active !== document.body ? active : null
     headingRef.current?.focus({ preventScroll: true })
-    return () => {
-      if (opener?.isConnected) opener.focus()
-    }
   }, [])
 
   // A leave-able view: Esc goes back when nothing above it takes it.
@@ -158,9 +154,16 @@ function SettingsView({ headingRef, section, status, onClose }: ShapeProps & { o
   const scrollRef = useRef<HTMLDivElement>(null)
   const [currentId, setCurrentId] = useState<SectionId>('appearance')
 
+  // A directory entry scrolls to its section and hands it focus: the next Tab continues inside it.
+  // The section headings come from shared section components, so they become focusable here.
   const go = (id: SectionId) => {
     setCurrentId(id)
-    document.getElementById(`proto-set-${id}`)?.scrollIntoView({ block: 'start', behavior: 'instant' })
+    const item = document.getElementById(`proto-set-${id}`)
+    item?.scrollIntoView({ block: 'start', behavior: 'instant' })
+    const heading = item?.querySelector<HTMLElement>('.settings-section-title')
+    if (heading == null) return
+    heading.tabIndex = -1
+    heading.focus({ preventScroll: true })
   }
 
   // The directory follows the section at the top of the pane.

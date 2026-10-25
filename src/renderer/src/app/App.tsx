@@ -75,8 +75,10 @@ import {
   ListHostContext,
   NAV_VARIANTS,
   closeBoardPanel,
+  isShown,
   openBoardPanel,
   PROTOTYPE_ENABLED,
+  setBoardPanelHost,
   setNavVariant,
   useBoardColumnCollapsed,
   useBoardColumnWidth,
@@ -406,8 +408,19 @@ export function App() {
   /** PROTOTYPE: the settings page is shown in place of the tabs. */
   const [protoSettingsOpen, setProtoSettingsOpen] = useState(false)
   const protoSettingsShown = navVariant !== null && protoSettingsOpen
+  /**
+   * PROTOTYPE: where focus goes back when the settings page is left (Esc, 返回): the control that
+   * opened it, read before anything closes, and whether that was the top bar's 设置 (remounted with
+   * the top bar). Leaving it for other content (a list chosen) hands focus to that content instead.
+   */
+  const settingsReturn = useRef<{ opener: HTMLElement | null; fromTopBar: boolean; pending: boolean } | null>(null)
 
   const openSettings = useCallback(() => {
+    if (PROTOTYPE_ENABLED && settingsReturn.current === null) {
+      const active = document.activeElement
+      const opener = active instanceof HTMLElement && active !== document.body ? active : null
+      settingsReturn.current = { opener, fromTopBar: opener !== null && opener === settingsButtonRef.current, pending: false }
+    }
     // The dialog becomes the only layer: an open navigation overlay closes first.
     closeNav(false)
     clearSettingsStatus()
@@ -415,13 +428,39 @@ export function App() {
     else setSettingsOpen(true)
   }, [closeNav, clearSettingsStatus])
 
-  const closeSettings = useCallback(() => {
-    setSettingsOpen(false)
-    setProtoSettingsOpen(false)
-    // UUID, binding or source may have changed inside settings.
-    void refreshSubscriptions()
-    void refreshSubscriptionJournal()
-  }, [refreshSubscriptions, refreshSubscriptionJournal])
+  /** Leaves settings; `returnFocus` (Esc, 返回, the dialog closed) sends focus back where it came from. */
+  const endSettings = useCallback(
+    (returnFocus: boolean) => {
+      setSettingsOpen(false)
+      setProtoSettingsOpen(false)
+      if (settingsReturn.current !== null) {
+        if (returnFocus) settingsReturn.current.pending = true
+        else settingsReturn.current = null
+      }
+      // UUID, binding or source may have changed inside settings.
+      void refreshSubscriptions()
+      void refreshSubscriptionJournal()
+    },
+    [refreshSubscriptions, refreshSubscriptionJournal]
+  )
+  const closeSettings = useCallback(() => endSettings(true), [endSettings])
+
+  // PROTOTYPE: back from the settings page, once the content it covered is back (the top bar returns
+  // in the same commit, so the page's own cleanup would run before its buttons exist). The opener if
+  // still shown; else the stable entry: the top bar's 设置 it came from, 打开导航, or the rail's 设置.
+  useLayoutEffect(() => {
+    const back = settingsReturn.current
+    if (protoSettingsShown || back === null || !back.pending) return
+    settingsReturn.current = null
+    const target = isShown(back.opener)
+      ? back.opener
+      : back.fromTopBar
+        ? settingsButtonRef.current
+        : navOverlay
+          ? navTriggerRef.current
+          : (inlineNavRef.current?.querySelector<HTMLElement>('[data-proto-settings]') ?? null)
+    target?.focus()
+  }, [protoSettingsShown, navOverlay])
 
   // ---------- Local / thread search ----------
   /** Tab whose reader takes focus after a search hit was opened in it. */
@@ -482,15 +521,26 @@ export function App() {
     if (state !== null) run(activeTab(state))
   }, [])
 
+  /**
+   * Shows `ref` in the active tab. Focus: `nav` — an open navigation overlay closes back to 打开导航
+   * (an inline navigation keeps it); `list` — the active tab's list takes it, for openers that are
+   * going away (the PROTOTYPE 全部功能 panel).
+   */
   const selectFeed = useCallback(
-    (ref: ListRef) => {
-      closeNav()
+    (ref: ListRef, focus: 'nav' | 'list' = 'nav') => {
+      closeNav(focus === 'nav')
       withActive((tab) => {
         const entry = currentEntry(tab)
         if (entry.kind === 'list' && entry.feed !== null && listKey(entry.feed) === listKey(ref)) return
         leave(tab)
         dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'list', feed: ref } })
       })
+      if (focus === 'list') {
+        // The list replaces the shown one in this commit; it exists from the next frame.
+        requestAnimationFrame(() => {
+          document.querySelector<HTMLElement>(`#tabpanel-${stateRef.current.tabs?.activeId} [data-pane-focus]`)?.focus()
+        })
+      }
     },
     [closeNav, withActive, leave]
   )
@@ -780,6 +830,7 @@ export function App() {
     closeNav(false)
     setSettingsOpen(false)
     setProtoSettingsOpen(false)
+    settingsReturn.current = null
     setDraftsOpen(false)
     setAttemptsOpen(false)
     setOwnPostsOpen(false)
@@ -977,17 +1028,17 @@ export function App() {
   const promptEditor = editors.state.editors.find((editor) => editor.publication?.phase === 'prompt')
 
   // ---------- PROTOTYPE: navigation variants (unused unless built in) ----------
-  /** Choosing content leaves the settings page. */
+  /** Choosing content leaves the settings page; the content, not the page's opener, gets focus. */
   const protoSelect = useCallback(
-    (ref: ListRef) => {
-      if (protoSettingsShown) closeSettings()
-      selectFeed(ref)
+    (ref: ListRef, focus: 'nav' | 'list' = 'nav') => {
+      if (protoSettingsShown) endSettings(false)
+      selectFeed(ref, focus)
     },
-    [protoSettingsShown, closeSettings, selectFeed]
+    [protoSettingsShown, endSettings, selectFeed]
   )
   const openProtoFeature = useCallback(
-    (id: FeatureId) => {
-      if (id === 'subscriptions' || id === 'reminders') protoSelect({ kind: id })
+    (id: FeatureId, focusTarget = false) => {
+      if (id === 'subscriptions' || id === 'reminders') protoSelect({ kind: id }, focusTarget ? 'list' : 'nav')
       else if (id === 'search') openLocalSearch()
       else if (id === 'history' || id === 'offline') openRetained(id)
       else if (id === 'drafts') openDrafts()
@@ -1009,19 +1060,65 @@ export function App() {
     [openProtoFeature, protoSettingsShown, selectedFeed, reminderBadge, pendingAttempts, platform]
   )
 
-  /** D: the board panel opened from the tab content; it lives in the navigation, so a closed overlay opens first. */
+  /**
+   * D: the board panel lives in the navigation. Opened from the tab content in the overlay layout,
+   * the overlay opens first to hold it; the panel opens once the overlay is on the layer stack, so
+   * it is the top layer and Esc closes it first (spec I11).
+   */
   const { open: navOverlayOpen, toggle: toggleNavOverlay } = navPopover
-  // The panel lives in D's navigation: it closes with it (overlay closed, column → overlay, variant switch).
+  /** Waiting for the overlay opened to hold the panel. */
+  const boardsPendingOpener = useRef<HTMLElement | null>(null)
+  /** The overlay was opened only to hold the panel: the panel's end ends it too (see `closed`). */
+  const boardsCarrier = useRef(false)
+  // The panel closes with what holds it (overlay closed, column → overlay, variant switch).
   useEffect(() => {
-    if (navVariant !== 'D' || (navOverlay && !navOverlayOpen)) closeBoardPanel(false)
+    if (navVariant !== 'D' || (navOverlay && !navOverlayOpen)) {
+      boardsPendingOpener.current = null
+      closeBoardPanel('dismiss')
+      boardsCarrier.current = false
+    }
   }, [navVariant, navOverlay, navOverlayOpen])
+  // Declared after `usePopover`, whose effect puts the overlay on the layer stack in the same flush.
+  useEffect(() => {
+    const opener = boardsPendingOpener.current
+    if (opener === null || !navOverlayOpen) return
+    boardsPendingOpener.current = null
+    boardsCarrier.current = true
+    openBoardPanel(opener)
+  }, [navOverlayOpen])
   const openProtoBoards = useCallback(
     (button: HTMLButtonElement) => {
-      if (navOverlay && !navOverlayOpen) toggleNavOverlay()
-      openBoardPanel(button)
+      if (navOverlay && !navOverlayOpen) {
+        boardsPendingOpener.current = button
+        toggleNavOverlay()
+      } else {
+        openBoardPanel(button)
+      }
     },
     [navOverlay, navOverlayOpen, toggleNavOverlay]
   )
+  // The panel decides focus when it closes (prototypeStore); the app keeps the overlay in step
+  // without moving focus, so nothing else competes for it.
+  useLayoutEffect(() => {
+    if (navVariant !== 'D') return
+    setBoardPanelHost({
+      home: () =>
+        navOverlay ? navTriggerRef.current : (inlineNavRef.current?.querySelector<HTMLElement>('[data-proto-boards-trigger]') ?? null),
+      closed: (end, at) => {
+        const carrier = boardsCarrier.current
+        boardsCarrier.current = false
+        const outsideOverlay = at === null || navPanelRef.current?.contains(at) !== true
+        // A board chosen: the overlay ends too (the new list's board name takes focus, not 打开导航).
+        // Cancelled while the overlay only held the panel: back to before both opened, unless the
+        // press landed on the overlay's own controls. Focus left for what the overlay covers: it
+        // ends so that focus is not hidden under it.
+        if (end === 'select' || (end === 'cancel' && carrier && outsideOverlay) || (end === 'leave' && outsideOverlay)) {
+          closeNav(false)
+        }
+      }
+    })
+    return () => setBoardPanelHost(null)
+  }, [navVariant, navOverlay, closeNav])
   const protoListHost = useMemo<ListHost | null>(() => {
     if (navVariant === 'D') {
       return {

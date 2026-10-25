@@ -35,7 +35,11 @@ export interface RovingItemProps {
 
 /** What the app gives every variant for the 功能 entries. */
 export interface FeatureHost {
-  open: (id: FeatureId) => void
+  /**
+   * Opens a feature. `focusTarget`: the list it shows takes focus (its opener is going away, e.g.
+   * the 全部功能 panel); dialogs always take focus themselves.
+   */
+  open: (id: FeatureId, focusTarget?: boolean) => void
   /** The feature the active tab shows (订阅的串 / 提醒 lists), if any. */
   current: FeatureId | null
   reminderBadge: ReminderBadge | null

@@ -7,6 +7,7 @@ const TEXT_LABELS: Partial<Record<ColorToken, string>> = {
   'ink-2': '次要文字',
   'ink-3': '次要文字',
   'accent-ink': '强调色文字（链接）',
+  'on-accent': '主按钮文字',
   greentext: '绿字引用',
   'quote-ref-ink': '引用编号',
   'warn-ink': '提醒文字',
@@ -26,6 +27,7 @@ const SURFACE_LABELS: Partial<Record<ColorToken, string>> = {
   hover: '悬停项底色',
   'nav-current': '当前导航项底色',
   'accent-soft': '强调色浅底',
+  accent: '强调色',
   'quote-ref-bg': '引用编号底色',
   'warn-bg': '提醒底色',
   'danger-bg': '错误提示底色'

@@ -1,8 +1,10 @@
 // PROTOTYPE (throwaway) variant D — 版块浮层: no board column. The navigation is the icon rail only;
 // its 版块 button (and the board name at the top of a board list) opens a wide panel beside the rail:
-// a filter, 收藏, then every group laid out in columns. Choosing a board closes it.
+// a filter, 收藏, then every group laid out in columns. Choosing a board closes it. The panel is not
+// modal: Esc or a press outside cancels it (focus back to its opener), Tab leaving it closes it and
+// leaves focus where it went; prototypeStore's `closeBoardPanel` is the one place focus is decided.
 
-import { useEffect, useLayoutEffect, useRef, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useRef, type CSSProperties, type FocusEvent } from 'react'
 import { Icon } from '../../../components/Icon'
 import { openLayer } from '../../../lib/layers'
 import { listKey, type ListRef } from '../../tabs/tabsState'
@@ -10,9 +12,7 @@ import { DirectoryStatus } from '../Navigation'
 import { BoardPicker } from './PrototypeBoardPicker'
 import { DirectoryPlaceholder, useBoardView, type PrototypeNavProps } from './PrototypeNavParts'
 import { PrototypeRail, RAIL_WIDTH } from './PrototypeRail'
-import { closeBoardPanel, openBoardPanel, useBoardPanelOpen } from './prototypeStore'
-
-const PANEL_ID = 'proto-board-panel'
+import { BOARD_PANEL_ID, closeBoardPanel, openBoardPanel, useBoardPanelOpen } from './prototypeStore'
 
 export function PrototypeNavD({
   state,
@@ -43,8 +43,8 @@ export function PrototypeNavD({
         onOpenSettings={onOpenSettings}
         boards={{
           label: '版块',
-          popup: { expanded: open, controls: PANEL_ID },
-          onClick: (button) => (open ? closeBoardPanel(true) : openBoardPanel(button))
+          popup: { expanded: open, controls: BOARD_PANEL_ID },
+          onClick: (button) => (open ? closeBoardPanel('cancel') : openBoardPanel(button))
         }}
       />
       {open && <BoardPanel state={state} selectedKey={selectedKey} onSelect={onSelect} onRetry={onRetry} />}
@@ -65,47 +65,56 @@ function BoardPanel({
 }) {
   const { all, view, hidden } = useBoardView(state.directory)
   const panelRef = useRef<HTMLDivElement>(null)
+  /** A pointer press is under way: the press handler below owns closing, not focus moving out. */
+  const pressing = useRef(false)
 
   useLayoutEffect(() => {
     panelRef.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus()
   }, [])
 
-  // Esc (when on top) and a press outside close it; the triggers toggle it themselves.
+  // Esc (when on top) and a press outside cancel it; the triggers toggle it themselves.
   useEffect(() => {
     const layer = openLayer()
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || !layer.isTop()) return
       event.preventDefault()
       event.stopPropagation()
-      closeBoardPanel(true)
+      closeBoardPanel('cancel')
     }
+    // On window, so it runs before a holding overlay's own document handler sees the same press.
     const onPointerDown = (event: PointerEvent) => {
+      pressing.current = true
+      setTimeout(() => (pressing.current = false))
       const target = event.target as Element | null
       if (target === null || panelRef.current?.contains(target) || target.closest('[data-proto-boards-trigger]') !== null) return
-      closeBoardPanel(true)
+      closeBoardPanel('cancel', target)
     }
     document.addEventListener('keydown', onKeyDown, true)
-    document.addEventListener('pointerdown', onPointerDown, true)
+    window.addEventListener('pointerdown', onPointerDown, true)
     return () => {
       layer.release()
       document.removeEventListener('keydown', onKeyDown, true)
-      document.removeEventListener('pointerdown', onPointerDown, true)
+      window.removeEventListener('pointerdown', onPointerDown, true)
     }
   }, [])
 
+  // Not modal: focus leaving the panel by keyboard (Tab, Shift+Tab) closes it and stays where it went,
+  // so nothing the panel covered can hold focus unseen. Focus going nowhere (window switch) keeps it.
+  const onBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const next = event.relatedTarget
+    if (pressing.current || !(next instanceof Element) || event.currentTarget.contains(next)) return
+    closeBoardPanel('leave', next)
+  }
+
+  // Closing first ends the transaction (and a holding overlay) before the list changes; the new
+  // list's board name then takes focus.
   const choose = (ref: ListRef) => {
-    closeBoardPanel(true)
+    closeBoardPanel('select')
     onSelect(ref)
-    // Opened from a list's board name: that list was just replaced; continue from the new one's.
-    requestAnimationFrame(() => {
-      if (document.activeElement === null || document.activeElement === document.body) {
-        document.querySelector<HTMLElement>('.tab-panel:not([hidden]) [data-proto-board-title]')?.focus()
-      }
-    })
   }
 
   return (
-    <div ref={panelRef} id={PANEL_ID} className="proto-pop proto-board-panel" role="dialog" aria-label="版块">
+    <div ref={panelRef} id={BOARD_PANEL_ID} className="proto-pop proto-board-panel" role="dialog" aria-label="版块" onBlur={onBlur}>
       <BoardPicker
         view={view}
         hidden={hidden}
@@ -131,10 +140,11 @@ export function BoardPanelTitle({ name, onOpen }: { name: string; onOpen: (butto
       className="proto-list-title-btn"
       aria-haspopup="dialog"
       aria-expanded={open}
+      aria-controls={open ? BOARD_PANEL_ID : undefined}
       title="切换版块"
       data-proto-board-title=""
       data-proto-boards-trigger=""
-      onClick={(event) => (open ? closeBoardPanel(true) : onOpen(event.currentTarget))}
+      onClick={(event) => (open ? closeBoardPanel('cancel') : onOpen(event.currentTarget))}
     >
       <span>{name}</span>
       <Icon name="chevron" size={14} className="proto-list-title-chevron" />
@@ -144,6 +154,7 @@ export function BoardPanelTitle({ name, onOpen }: { name: string; onOpen: (butto
 
 /** A tab without a list: the way to the boards. */
 export function BoardPanelEmptyPage({ onOpen }: { onOpen: (button: HTMLButtonElement) => void }) {
+  const open = useBoardPanelOpen()
   return (
     <div className="pane-empty">
       <p className="pane-empty-title">选择版块</p>
@@ -151,8 +162,10 @@ export function BoardPanelEmptyPage({ onOpen }: { onOpen: (button: HTMLButtonEle
         type="button"
         className="btn pane-empty-action"
         aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? BOARD_PANEL_ID : undefined}
         data-proto-boards-trigger=""
-        onClick={(event) => onOpen(event.currentTarget)}
+        onClick={(event) => (open ? closeBoardPanel('cancel') : onOpen(event.currentTarget))}
       >
         <Icon name="forum" />
         全部版块

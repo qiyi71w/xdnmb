@@ -61,14 +61,16 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Hit area 24 × 24 (the row is 28 high); the star drawn inside stays 13 px. Sits in the row's 28 px
+   right padding, 2 px clear of the label. */
 .proto-star {
   position: absolute;
   top: 50%;
-  right: 4px;
+  right: 2px;
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border: 0;
   border-radius: var(--radius-s);
   background: transparent;
@@ -126,7 +128,7 @@
 
 .proto-dot.is-count {
   background: var(--accent);
-  color: oklch(1 0 0);
+  color: var(--on-accent);
 }
 
 .proto-dot.is-warning {
@@ -325,7 +327,10 @@
   font-weight: 700;
 }
 
-.proto-settings-title:focus {
+/* Focus handed to a heading (page entered, directory entry chosen) shows as the page itself: the
+   heading is at the top of its pane and the directory marks it current. */
+.proto-settings-title:focus,
+.proto-settings .settings-section-title:focus {
   outline: none;
 }
 

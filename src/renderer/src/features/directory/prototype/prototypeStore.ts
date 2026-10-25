@@ -80,23 +80,77 @@ function cell<T>(initial: T) {
   }
 }
 
-/** D: the board panel. Whoever opened it gets focus back when it closes. */
+/**
+ * D: the board panel. One open transaction at a time, and `closeBoardPanel` alone decides where
+ * focus goes when it ends: the opener is remembered as it really was when it opened.
+ */
 const boardPanel = cell(false)
 let boardPanelOpener: HTMLElement | null = null
 
 export const useBoardPanelOpen = boardPanel.use
+
+/** The board panel's element id (its triggers' `aria-controls`). */
+export const BOARD_PANEL_ID = 'proto-board-panel'
+
+/**
+ * How the board panel closed:
+ * - `cancel`: Esc, a press outside, or a trigger again — focus returns to the opener;
+ * - `select`: a board was chosen — focus goes to the new list's board name;
+ * - `leave`: focus moved out by itself (Tab) — it stays where it went;
+ * - `dismiss`: what holds it went away (overlay closed, layout or variant switched) — focus untouched.
+ * Without a visible target, focus goes to the host's `home`.
+ */
+export type BoardPanelEnd = 'cancel' | 'select' | 'leave' | 'dismiss'
+
+/** What the app provides around the panel (App registers it while D is shown). */
+export interface BoardPanelHost {
+  /** The visible, stable way back to the boards: 打开导航 (overlay layout) or the rail's 版块 button. */
+  home(): HTMLElement | null
+  /**
+   * The panel just closed, before focus moves. `at`: the pressed element (cancel by a press outside)
+   * or where focus went (leave); `null` otherwise.
+   */
+  closed(end: BoardPanelEnd, at: Element | null): void
+}
+
+let boardPanelHost: BoardPanelHost | null = null
+
+export function setBoardPanelHost(host: BoardPanelHost | null): void {
+  boardPanelHost = host
+}
 
 export function openBoardPanel(opener: HTMLElement | null): void {
   boardPanelOpener = opener
   boardPanel.set(true)
 }
 
-export function closeBoardPanel(returnFocus: boolean): void {
+export function closeBoardPanel(end: BoardPanelEnd, at: Element | null = null): void {
   if (!boardPanel.get()) return
   boardPanel.set(false)
   const opener = boardPanelOpener
   boardPanelOpener = null
-  if (returnFocus && opener?.isConnected === true) opener.focus()
+  const host = boardPanelHost
+  host?.closed(end, at)
+  if (end === 'cancel') {
+    focusShown(opener, host)
+  } else if (end === 'select') {
+    // The chosen list replaces the shown one in this commit; its board name exists from the next frame.
+    requestAnimationFrame(() => focusShown(document.querySelector<HTMLElement>('.tab-panel:not([hidden]) [data-proto-board-title]'), host))
+  }
+}
+
+/** In the document and laid out: a focus target the user can see (not `hidden`, not unmounted). */
+export function isShown(element: Element | null | undefined): element is HTMLElement {
+  return element instanceof HTMLElement && element.isConnected && element.getClientRects().length > 0
+}
+
+/** Focuses `target` when it is shown, else the host's home. */
+function focusShown(target: HTMLElement | null, host: BoardPanelHost | null): void {
+  if (isShown(target)) target.focus()
+  else {
+    const home = host?.home()
+    if (isShown(home)) home.focus()
+  }
 }
 
 /** F: the board column is collapsed to the rail. */
