@@ -123,11 +123,10 @@
   background: var(--hover);
 }
 
-/* Current item: tint, bold and a leading bar (not color alone). */
+/* Current item: tint and bold (not color alone). */
 .nav-item.is-current {
   background: var(--nav-current);
   font-weight: 600;
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 /* Compact density: item padding only; the measured compact minimum follows (nav-measure shares it). */

@@ -190,10 +190,9 @@
   background: var(--hover);
 }
 
-/* Selected row: tint plus a leading bar (not color alone); aria-current names it. */
+/* Selected row: tint; aria-current names it. */
 .thread-row.is-selected {
   background: var(--selected);
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .thread-row.is-selected::before,

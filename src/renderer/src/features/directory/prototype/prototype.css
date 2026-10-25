@@ -192,10 +192,6 @@
   color: var(--accent-ink);
 }
 
-.proto-rail-btn.is-current {
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-
 .proto-rail-btn.is-open {
   background: var(--hover);
   color: var(--ink);
@@ -444,7 +440,6 @@
   background: var(--nav-current);
   color: var(--ink);
   font-weight: 600;
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .proto-toc-item:focus-visible {
@@ -679,7 +674,6 @@
 .proto-choice-btn.is-current {
   background: var(--nav-current);
   font-weight: 600;
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .proto-choice-icon {
