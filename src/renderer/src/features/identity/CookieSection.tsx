@@ -520,21 +520,23 @@ function CredentialItem({
             <Icon name="key" className="credential-icon" />
           )}
           <div className="credential-text">
-            <p className="credential-name">{credential.name}</p>
+            <p className="credential-name">
+              <span>{credential.name}</span>
+              {(browsing || roles.length > 0) && (
+                <span className="credential-roles">
+                  <span className="visually-hidden">用于：</span>
+                  {browsing && <span className="tag">浏览</span>}
+                  {roles.map((role) => (
+                    <span key={role} className="tag">
+                      {ROLE_INFO[role].label}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </p>
             <p className="credential-meta">
               {SOURCE_LABEL[credential.source]} · 导入于 {formatLocalTime(credential.importedAt)}
             </p>
-            {(browsing || roles.length > 0) && (
-              <p className="credential-roles">
-                <span className="visually-hidden">用于：</span>
-                {browsing && <span className="tag">浏览</span>}
-                {roles.map((role) => (
-                  <span key={role} className="tag">
-                    {ROLE_INFO[role].label}
-                  </span>
-                ))}
-              </p>
-            )}
           </div>
           <div className="credential-actions">
             {count > 1 && (

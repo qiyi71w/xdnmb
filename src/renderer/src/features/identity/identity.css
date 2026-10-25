@@ -182,6 +182,10 @@
 }
 
 .credential-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -192,9 +196,10 @@
 }
 
 .credential-roles {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
+  font-weight: 400;
 }
 
 .credential-actions,
