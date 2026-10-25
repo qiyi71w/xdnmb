@@ -777,7 +777,7 @@ export function ThreadReader({
   return (
     <section className="reader" aria-label={title === null ? `串 No.${threadId}` : `串：${title}`}>
       <div
-        className="reader-scroll"
+        className={PROTOTYPE_ENABLED ? 'reader-scroll has-jump-buttons' : 'reader-scroll'}
         ref={scrollRef}
         onScroll={onReaderScroll}
         onWheel={
@@ -921,7 +921,7 @@ export function ThreadReader({
           )}
           {/* PROTOTYPE: the page before the range loads quietly; a thin bar under the toolbar, no text. */}
           {PROTOTYPE_ENABLED && task?.type === 'prepend' && <div className="prepend-progress" aria-hidden="true" />}
-          {/* PROTOTYPE: after moving up a while, 开头 floats just under the toolbar. */}
+          {/* PROTOTYPE: after moving up a while, 开头 floats at the top-right, just under the toolbar. */}
           {PROTOTYPE_ENABLED && (
             <JumpPillButton
               pill="start"
@@ -1064,17 +1064,20 @@ export function ThreadReader({
           </div>
         </div>
         </QuoteEntryContext.Provider>
+        {/* PROTOTYPE: after moving down a while, 末尾 floats at the bottom-right of the scroll viewport
+            (a zero-height sticky dock after the content, so it measures against the viewport). */}
+        {PROTOTYPE_ENABLED && (
+          <div className="jump-end-dock">
+            <JumpPillButton
+              pill="end"
+              shown={pillShown === 'end' && viewer === null}
+              onActivate={() => onPill('end')}
+              onHold={holdPill}
+              onFocusLost={pillFocusBack}
+            />
+          </div>
+        )}
       </div>
-      {/* PROTOTYPE: after moving down a while, 末尾 floats near the bottom of the reader. */}
-      {PROTOTYPE_ENABLED && (
-        <JumpPillButton
-          pill="end"
-          shown={pillShown === 'end' && viewer === null}
-          onActivate={() => onPill('end')}
-          onHold={holdPill}
-          onFocusLost={pillFocusBack}
-        />
-      )}
       <div className="reader-dock" inert={viewer !== null}>
         {footer}
       </div>

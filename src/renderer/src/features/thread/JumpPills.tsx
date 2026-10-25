@@ -96,14 +96,15 @@ export function useJumpPills(): JumpPills {
   return { shown, scrolled, gesture, pressed, hide, hold }
 }
 
-const PILL_TEXT: Record<JumpPill, { text: string; name: string; keys: string; icon: 'toTop' | 'toEnd' }> = {
-  start: { text: '开头', name: '回到开头', keys: 'Control+Home Meta+Home', icon: 'toTop' },
-  end: { text: '末尾', name: '跳到末尾', keys: 'Control+End Meta+End', icon: 'toEnd' }
+const PILL_TEXT: Record<JumpPill, { name: string; tip: string; keys: string; icon: 'toTop' | 'toEnd' }> = {
+  start: { name: '回到开头', tip: '回到开头 · Ctrl/⌘+Home', keys: 'Control+Home Meta+Home', icon: 'toTop' },
+  end: { name: '跳到末尾', tip: '跳到末尾 · Ctrl/⌘+End', keys: 'Control+End Meta+End', icon: 'toEnd' }
 }
 
 /**
- * One pill. Mounted always so it can fade; while hidden it is inert (no Tab stop, not announced).
- * It never takes focus by itself; if it is hidden while focused, `onFocusLost` puts focus back.
+ * One round icon button in the reader's right gutter. Mounted always so it can fade; while hidden it
+ * is inert (no Tab stop, not announced). It never takes focus by itself; if it is hidden while
+ * focused, `onFocusLost` puts focus back.
  */
 export function JumpPillButton({
   pill,
@@ -119,7 +120,7 @@ export function JumpPillButton({
   onFocusLost: () => void
 }) {
   const ref = useRef<HTMLButtonElement>(null)
-  const { text, name, keys, icon } = PILL_TEXT[pill]
+  const { name, tip, keys, icon } = PILL_TEXT[pill]
   // Runs before the browser drops focus from the now inert pill.
   useLayoutEffect(() => {
     if (!shown && ref.current !== null && ref.current === document.activeElement) onFocusLost()
@@ -133,14 +134,14 @@ export function JumpPillButton({
       inert={!shown}
       aria-label={name}
       aria-keyshortcuts={keys}
+      title={tip}
       onPointerEnter={() => onHold('pointer', true)}
       onPointerLeave={() => onHold('pointer', false)}
       onFocus={() => onHold('focus', true)}
       onBlur={() => onHold('focus', false)}
       onClick={onActivate}
     >
-      <Icon name={icon} size={14} />
-      {text}
+      <Icon name={icon} />
     </button>
   )
 }

@@ -527,27 +527,39 @@
 
 /* ---------- PROTOTYPE (throwaway): floating 开头 / 末尾 ---------- */
 
-/* A small paper pill, floating (navigation shadow), centred over the reading column: 开头 just under
-   the toolbar (inside it, so it follows the sticky bar), 末尾 near the bottom of the reader. Solid
-   paper, since the start pill sits inside the toolbar's own backdrop. Hidden pills are inert. They
-   fade and slide 6px in 0.15s; with reduced motion they simply appear. Under the toolbar's popovers. */
+/* Round icon buttons in the reader's right gutter, measured against the scroll viewport: 开头 at the
+   top-right just under the toolbar (inside it, so it follows the sticky bar), 末尾 at the bottom-right
+   (in a zero-height sticky dock after the content). Hidden ones are inert. While shown they rest
+   translucent; hover or keyboard focus makes them solid. They fade and slide 6px in 0.15s; with
+   reduced motion they simply appear. The start one stays under the toolbar's popovers. */
+.reader-scroll.has-jump-buttons {
+  /* What the buttons occupy from the viewport's right edge: margin, button, clearance to the text. */
+  --jump-inset: 16px;
+  --jump-lane: calc(var(--jump-inset) + 32px + 8px);
+  container-type: inline-size;
+}
+
+.jump-end-dock {
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+  height: 0;
+}
+
 .jump-pill {
   position: absolute;
   z-index: -1;
-  left: 50%;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 4px 14px 4px 11px;
+  right: var(--jump-inset);
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border: 0;
   border-radius: 999px;
-  background: var(--paper);
-  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
-  color: var(--ink);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  white-space: nowrap;
+  background: color-mix(in oklch, var(--paper) 72%, transparent);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink-2);
   cursor: pointer;
   opacity: 0;
   visibility: hidden;
@@ -555,38 +567,43 @@
   transition:
     opacity 0.15s var(--ease-out),
     translate 0.15s var(--ease-out),
+    background-color 0.15s var(--ease-out),
     visibility 0s linear 0.15s;
 }
 
 .jump-pill .icon {
-  flex: none;
-  color: var(--accent-ink);
+  color: inherit;
 }
 
 .jump-pill.is-start {
-  top: calc(100% + 10px);
-  translate: -50% -6px;
+  top: calc(100% + 12px);
+  translate: 0 -6px;
 }
 
 .jump-pill.is-end {
-  z-index: 4;
-  bottom: 18px;
-  translate: -50% 6px;
+  z-index: auto;
+  bottom: 16px;
+  translate: 0 6px;
 }
 
 .jump-pill[data-shown] {
-  opacity: 1;
+  opacity: 0.55;
   visibility: visible;
   pointer-events: auto;
-  translate: -50% 0;
+  translate: 0 0;
   transition:
     opacity 0.15s var(--ease-out),
     translate 0.15s var(--ease-out),
+    background-color 0.15s var(--ease-out),
     visibility 0s;
 }
 
-.jump-pill:hover {
-  background: color-mix(in oklch, var(--paper), var(--ink) 5%);
+.jump-pill[data-shown]:hover,
+.jump-pill[data-shown]:focus-visible {
+  opacity: 1;
+  background: var(--paper);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+  color: var(--accent-ink);
 }
 
 .jump-pill:focus-visible {
@@ -595,8 +612,8 @@
 }
 
 :root[data-density='compact'] .jump-pill {
-  min-height: 26px;
-  padding: 2px 12px 2px 9px;
+  width: 28px;
+  height: 28px;
 }
 
 /* Text width is --reading-width; side gutters are what is left, never below --gutter-min.
@@ -605,6 +622,21 @@
   max-width: calc(var(--reading-width) + 2 * var(--gutter-min));
   margin: 0 auto;
   padding: 20px var(--gutter-min) 160px;
+}
+
+/* PROTOTYPE: the text never runs under the 开头 / 末尾 buttons. While the free gutter right of the
+   text (half of what the viewport leaves beside the reading width) is narrower than the buttons' lane,
+   the column's end padding grows just enough, up to the lane itself in narrow windows; the column
+   grows by the same amount, so the text keeps its width wherever the window still allows it. Padding
+   only: font, size and line height stay; the reader's anchor follows the reflow like any resize. */
+.has-jump-buttons .reader-column {
+  --jump-pad: clamp(
+    var(--gutter-min),
+    calc(2 * var(--jump-lane) + var(--reading-width) + var(--gutter-min) - 100cqi),
+    var(--jump-lane)
+  );
+  max-width: calc(var(--reading-width) + var(--gutter-min) + var(--jump-pad));
+  padding-inline-end: var(--jump-pad);
 }
 
 .thread-header {
