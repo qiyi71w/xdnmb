@@ -127,6 +127,13 @@ const api: XidaoApi = {
     releaseView: (input) => ipcRenderer.invoke(IpcChannel.releaseImageView, input),
     saveOriginal: (input) => ipcRenderer.invoke(IpcChannel.saveOriginalImage, input)
   },
+  account: {
+    getOverview: () => ipcRenderer.invoke(IpcChannel.accountOverview),
+    login: () => ipcRenderer.invoke(IpcChannel.accountLogin),
+    list: () => ipcRenderer.invoke(IpcChannel.accountList),
+    importSelected: (input) => ipcRenderer.invoke(IpcChannel.accountImport, input),
+    forget: () => ipcRenderer.invoke(IpcChannel.accountForget)
+  },
   identities: {
     getOverview: () => ipcRenderer.invoke(IpcChannel.identityOverview),
     importExport: (input) => ipcRenderer.invoke(IpcChannel.identityImportExport, input),

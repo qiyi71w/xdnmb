@@ -921,6 +921,24 @@ class SqliteReadingDatabase implements ReadingDatabase {
     return this.db.prepare<[], { file_name: string }>('SELECT file_name FROM image_resources').all().map((row) => row.file_name)
   }
 
+  loadAccountSession(): { ciphertext: Uint8Array; expiresAt: string } | null {
+    if (!this.db) throw new StorageWriteRefusedError(this.status)
+    const row = this.db.prepare<[], { ciphertext: Buffer; expires_at: string }>(
+      'SELECT ciphertext, expires_at FROM account_session WHERE singleton = 1'
+    ).get()
+    return row ? { ciphertext: new Uint8Array(row.ciphertext), expiresAt: row.expires_at } : null
+  }
+
+  saveAccountSession(input: { ciphertext: Uint8Array; expiresAt: string }): void {
+    this.writable().prepare(`INSERT INTO account_session (singleton, ciphertext, expires_at) VALUES (1, ?, ?)
+      ON CONFLICT(singleton) DO UPDATE SET ciphertext = excluded.ciphertext, expires_at = excluded.expires_at`)
+      .run(Buffer.from(input.ciphertext), input.expiresAt)
+  }
+
+  clearAccountSession(): void {
+    this.writable().prepare('DELETE FROM account_session WHERE singleton = 1').run()
+  }
+
   listCredentials(): CredentialSummary[] {
     if (!this.db) return []
     return this.db.prepare<[], CredentialRow>(

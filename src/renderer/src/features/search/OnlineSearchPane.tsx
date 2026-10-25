@@ -447,7 +447,7 @@ export function OnlineSearchPane({
           <div className="online-search-about is-brief" id={`online-search-about-${entryKey}`}>
             <p className="online-search-about-site">
               <span>搜索词会发给第三方服务 nmb-search，收录可能不全或过时</span>
-              <button type="button" className="btn btn-small btn-quiet" title="在系统浏览器中打开同一服务的网站" onClick={openSite}>
+              <button type="button" className="btn btn-small btn-quiet" onClick={openSite}>
                 <Icon name="external" size={14} />
                 打开搜索网站
               </button>

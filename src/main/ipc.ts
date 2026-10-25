@@ -29,6 +29,7 @@ import type { ContentFilters, SearchScope } from '../shared/search'
 import { serverCalendarDate } from '../shared/search-filters'
 import { MAX_SEARCH_QUERY_LENGTH, SEARCH_SITE_URL } from '../shared/online-search'
 import type { OnlineSearchService } from './online-search/service'
+import type { AccountService } from './account/service'
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
@@ -61,6 +62,7 @@ interface IpcDeps {
   images: ImageService
   store: AppStore
   identities: IdentityService
+  account: AccountService
   drafts: DraftService
   subscriptions: SubscriptionService
   publication: PublicationService
@@ -302,7 +304,7 @@ export interface IpcRegistration {
 }
 
 export function registerIpc({
-  reading, images, identities, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
+  reading, images, identities, account, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
   getStatus, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): IpcRegistration {
   const owner = (sender: WebContents): string => String(sender.id)
@@ -615,6 +617,17 @@ export function registerIpc({
     return images.saveOriginal(postId, (suggestedName, format) => chooseSavePath(event.sender, suggestedName, format))
   })
 
+  handle(IpcChannel.accountOverview, async () => account.getOverview())
+  handle(IpcChannel.accountLogin, async () => account.login())
+  handle(IpcChannel.accountList, async () => account.list())
+  handle(IpcChannel.accountForget, async () => account.forget())
+  handle(IpcChannel.accountImport, async (_event, raw) => {
+    const ids = record(raw).ids
+    if (!Array.isArray(ids) || !ids.length || ids.length > MAX_CREDENTIALS ||
+        ids.some((id) => typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id))) throw new InvalidRequestError()
+    return account.importSelected({ ids })
+  })
+
   // Identity operations: secrets travel only renderer → main during import and are never returned.
   handle(IpcChannel.identityOverview, async () => identities.getOverview())
 
@@ -820,6 +833,7 @@ export function registerIpc({
   return {
     cancelAllFor: (sender) => {
       reminderRecipients.delete(sender)
+      account.cancel()
       operations.cancelAllFor(sender)
       subscriptionReads.cancelAllFor(sender)
       publication.releasePrompts()
@@ -830,6 +844,7 @@ export function registerIpc({
       void content.releaseOwner(String(sender.id)).catch(() => undefined)
     },
     cancelAll: () => {
+      account.cancel()
       operations.cancelAll()
       subscriptionReads.cancelAll()
     }

@@ -155,6 +155,13 @@ export interface IdentityStore {
   setRoleSelection(role: IdentityRole, id: CredentialId | null): Promise<boolean>
 }
 
+/** Only OS-protected ciphertext crosses the account persistence seam. */
+export interface AccountSessionStore {
+  loadAccountSession(): Promise<{ ciphertext: Uint8Array; expiresAt: string } | null>
+  saveAccountSession(input: { ciphertext: Uint8Array; expiresAt: string }): Promise<void>
+  clearAccountSession(): Promise<void>
+}
+
 /** One managed copy of an attached image, as stored. */
 export interface DraftAttachmentRecord {
   id: AttachmentId
@@ -246,4 +253,4 @@ export interface WorkspaceStore {
   saveWorkspace(state: string, at: string): Promise<void>
 }
 
-export type AppStore = ReadingStore & IdentityStore & DraftStore & ContentStore & SubscriptionStore & PublicationStore & WorkspaceStore & ReminderStore & SearchStore
+export type AppStore = ReadingStore & IdentityStore & AccountSessionStore & DraftStore & ContentStore & SubscriptionStore & PublicationStore & WorkspaceStore & ReminderStore & SearchStore

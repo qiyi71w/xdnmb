@@ -495,6 +495,16 @@ export const MIGRATIONS: readonly Migration[] = [
         UPDATE credentials SET position = (SELECT n FROM ordered WHERE ordered.id = credentials.id);
         DELETE FROM identity_roles WHERE role = 'browse';`)
     }
+  },
+  {
+    version: 12,
+    up(db) {
+      db.exec(`CREATE TABLE account_session (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        ciphertext BLOB NOT NULL CHECK (typeof(ciphertext) = 'blob' AND length(ciphertext) > 0),
+        expires_at TEXT NOT NULL
+      );`)
+    }
   }
 ]
 

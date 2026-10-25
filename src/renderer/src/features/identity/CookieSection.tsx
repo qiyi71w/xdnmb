@@ -1,7 +1,8 @@
 import {
-  useEffect, useId, useLayoutEffect, useRef, useState,
+  useCallback, useEffect, useId, useLayoutEffect, useRef, useState,
   type ComponentProps, type DragEvent, type FormEvent, type KeyboardEvent, type RefObject
 } from 'react'
+import type { AccountCookie, AccountFailure, AccountOverview } from '../../../../shared/account'
 import {
   IDENTITY_ROLES,
   type CredentialId,
@@ -18,6 +19,10 @@ import {
   MISSING_SELECTION_TEXT,
   ROLE_INFO,
   SOURCE_LABEL,
+  accountBlockerText,
+  accountFailureText,
+  accountImportFailureText,
+  accountImportSummary,
   checkName,
   importFailureText,
   nameErrorText,
@@ -39,9 +44,9 @@ interface Message {
 const OFFICIAL_COOKIE_PAGE = 'https://www.nmbxd1.com/Member/User/Index/'
 
 /**
- * 饼干 settings: the ordered credential list (the first one is used for browsing), one import area
- * and the two independent role selectors. Pasted secrets live only in the DOM value of their
- * (uncontrolled) inputs while this section is mounted.
+ * 饼干 settings: the ordered credential list (the first one is used for browsing), one import area,
+ * import from the logged-in official account and the two independent role selectors. Pasted
+ * secrets live only in the DOM value of their (uncontrolled) inputs while this section is mounted.
  */
 export function CookieSection({ identities }: { identities: IdentitiesState }) {
   const { overview, failed, refresh } = identities
@@ -102,16 +107,19 @@ function CookieSettings({ overview, onChanged }: { overview: IdentityOverview; o
       {PROTOTYPE_ENABLED ? (
         <ImportArea disabled={importBlocked} onImported={onChanged} />
       ) : (
-        <>
-          <div className="cookie-imports">
-            <ImportForm entry="export" disabled={importBlocked} onImported={onChanged} />
-            <ImportForm entry="raw" disabled={importBlocked} onImported={onChanged} />
-          </div>
-          <p className="settings-note">
-            <Icon name="info" size={14} />
-            账号登录、领取和导出请在官网完成。
-          </p>
-        </>
+        <div className="cookie-imports">
+          <ImportForm entry="export" disabled={importBlocked} onImported={onChanged} />
+          <ImportForm entry="raw" disabled={importBlocked} onImported={onChanged} />
+        </div>
+      )}
+
+      <AccountImport onImported={onChanged} />
+
+      {!PROTOTYPE_ENABLED && (
+        <p className="settings-note">
+          <Icon name="info" size={14} />
+          领取、应用和删除饼干请在官网完成。
+        </p>
       )}
 
       <div className="settings-group">
@@ -126,7 +134,7 @@ function CookieSettings({ overview, onChanged }: { overview: IdentityOverview; o
   )
 }
 
-/** The official cookie page, in the system browser: account login, claiming and export happen there. */
+/** The official cookie page, in the system browser: claiming, applying and deleting cookies happen there. */
 function OfficialPageLink() {
   const [failed, setFailed] = useState(false)
   const open = () => {
@@ -823,6 +831,313 @@ function ImportForm({
       </fieldset>
       <MessageLine id={messageId} message={message} />
     </form>
+  )
+}
+
+/* ---------- Official account ---------- */
+
+type AccountBusy = 'login' | 'list' | 'import' | 'forget'
+
+/**
+ * Import from the official account: login (or the stored session) lists the account's cookies by
+ * their public fields; the chosen ones are stored like a pasted export. No secret reaches this view.
+ */
+function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
+  const titleId = useId()
+  const listTitleId = useId()
+  const messageId = useId()
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const listTitleRef = useRef<HTMLHeadingElement>(null)
+  const openRef = useRef<HTMLButtonElement>(null)
+  const alive = useRef(true)
+  const latestOverview = useRef(0)
+  /** Where focus goes once the running action ends: the new list, or login when the session ended. */
+  const pendingFocus = useRef<'list' | 'open' | null>(null)
+  const [overview, setOverview] = useState<AccountOverview | null>(null)
+  const [overviewFailed, setOverviewFailed] = useState(false)
+  const [busy, setBusy] = useState<AccountBusy | null>(null)
+  const [cookies, setCookies] = useState<AccountCookie[] | null>(null)
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
+  /** What the last import did to each row. */
+  const [outcomes, setOutcomes] = useState<ReadonlyMap<string, Message>>(() => new Map())
+  const [message, setMessage] = useState<Message | null>(null)
+
+  // Only the newest read may apply, so a slow earlier one never overwrites a newer state.
+  const readOverview = useCallback(async () => {
+    const request = ++latestOverview.current
+    try {
+      const next = await window.xidao.account.getOverview()
+      if (!alive.current || request !== latestOverview.current) return
+      setOverview(next)
+      setOverviewFailed(false)
+    } catch {
+      if (!alive.current || request !== latestOverview.current) return
+      setOverviewFailed(true)
+    }
+  }, [])
+
+  useEffect(() => {
+    alive.current = true
+    void readOverview()
+    return () => {
+      alive.current = false
+    }
+  }, [readOverview])
+
+  useEffect(() => {
+    if (busy !== null || pendingFocus.current === null) return
+    const target = pendingFocus.current === 'list' ? listTitleRef.current : (openRef.current ?? titleRef.current)
+    pendingFocus.current = null
+    target?.focus()
+  })
+
+  const idle = busy === null
+  const loggedIn = overview?.loggedIn === true
+
+  const endSession = () => {
+    setCookies(null)
+    setSelected(new Set())
+    setOutcomes(new Map())
+    setOverview((current) => current && { ...current, loggedIn: false, expiresAt: null })
+    pendingFocus.current = 'open'
+  }
+
+  /** An expired session drops the list so the button offers login again. */
+  const showFailure = (reason: AccountFailure) => {
+    if (reason === 'expired') endSession()
+    setMessage({ tone: reason === 'cancelled' ? 'success' : 'error', text: accountFailureText(reason) })
+  }
+
+  const open = async () => {
+    if (!idle || overview === null || !overview.available) return
+    const action = overview.loggedIn ? 'list' : 'login'
+    setBusy(action)
+    setMessage(null)
+    try {
+      const result = action === 'list' ? await window.xidao.account.list() : await window.xidao.account.login()
+      if (!alive.current) return
+      if (result.ok) {
+        setCookies(result.value)
+        setSelected(new Set())
+        setOutcomes(new Map())
+        pendingFocus.current = 'list'
+      } else showFailure(result.reason)
+    } catch {
+      if (alive.current) setMessage({ tone: 'error', text: action === 'list' ? '读取失败，请重试' : '登录失败，请重试' })
+    } finally {
+      if (alive.current) setBusy(null)
+    }
+    void readOverview()
+  }
+
+  const importChosen = async () => {
+    if (!idle || cookies === null) return
+    const ids = cookies.filter((cookie) => selected.has(cookie.id)).map((cookie) => cookie.id)
+    if (ids.length === 0) {
+      setMessage({ tone: 'error', text: '请先勾选要导入的饼干' })
+      return
+    }
+    setBusy('import')
+    setMessage(null)
+    try {
+      const result = await window.xidao.account.importSelected({ ids })
+      if (!result.ok) {
+        if (!alive.current) return
+        showFailure(result.reason)
+        void readOverview()
+        return
+      }
+      void onImported()
+      if (!alive.current) return
+      const next = new Map(outcomes)
+      const settled = new Set<string>()
+      let imported = 0
+      let duplicates = 0
+      let failures = 0
+      for (const { id, result: item } of result.value) {
+        if (item.ok) {
+          imported += 1
+          settled.add(id)
+          next.set(id, { tone: 'success', text: `已导入为「${item.credential.name}」` })
+        } else if (item.failure.reason === 'duplicate') {
+          duplicates += 1
+          settled.add(id)
+          next.set(id, { tone: 'success', text: `已有相同饼干「${item.failure.existing.name}」` })
+        } else {
+          failures += 1
+          next.set(id, { tone: 'error', text: accountImportFailureText(item.failure) })
+        }
+      }
+      setOutcomes(next)
+      setSelected((current) => new Set([...current].filter((id) => !settled.has(id))))
+      setMessage({ tone: failures > 0 ? 'error' : 'success', text: accountImportSummary(imported, duplicates, failures) })
+    } catch {
+      // The request may have stored some of them before failing: re-read what is there.
+      void onImported()
+      if (alive.current) setMessage({ tone: 'error', text: '导入结果未知，请查看已导入的饼干' })
+    } finally {
+      if (alive.current) setBusy(null)
+    }
+  }
+
+  const forget = async () => {
+    if (!idle) return
+    setBusy('forget')
+    setMessage(null)
+    try {
+      const result = await window.xidao.account.forget()
+      if (!alive.current) return
+      if (result.ok) {
+        endSession()
+        setMessage({ tone: 'success', text: '已退出登录' })
+      } else showFailure(result.reason)
+    } catch {
+      if (alive.current) setMessage({ tone: 'error', text: '退出登录失败，请重试' })
+    } finally {
+      if (alive.current) setBusy(null)
+    }
+    void readOverview()
+  }
+
+  const allSelected = cookies !== null && cookies.length > 0 && cookies.every((cookie) => selected.has(cookie.id))
+  const toggleAll = () => {
+    if (!idle || cookies === null) return
+    setSelected(allSelected ? new Set() : new Set(cookies.map((cookie) => cookie.id)))
+  }
+  const setChecked = (id: string, checked: boolean) => {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  const openLabel =
+    busy === 'login' ? '正在等待登录…' : busy === 'list' ? '正在读取…' : !loggedIn ? '登录官网导入' : cookies === null ? '读取账号饼干' : '重新读取'
+
+  return (
+    <div className="settings-group" aria-busy={!idle || (overview === null && !overviewFailed) || undefined}>
+      <h4 className="settings-group-title" id={titleId} ref={titleRef} tabIndex={-1}>
+        官网账号
+      </h4>
+
+      {overview === null ? (
+        overviewFailed ? (
+          <div className="account-row">
+            <p className="form-message is-error">
+              <Icon name="alert" size={14} />
+              <span>登录状态读取失败</span>
+            </p>
+            <button type="button" className="btn btn-small" onClick={() => void readOverview()}>
+              重试
+            </button>
+          </div>
+        ) : (
+          <p className="settings-group-text">正在读取登录状态…</p>
+        )
+      ) : (
+        <>
+          {loggedIn && (
+            <p className="settings-group-text">
+              {overview.expiresAt === null ? '已登录' : `已登录，有效至 ${formatLocalTime(overview.expiresAt)}`}
+            </p>
+          )}
+          {!overview.available && (
+            <p className="settings-note is-warning">
+              <Icon name="alert" size={14} />
+              {accountBlockerText(overview.blocker)}
+            </p>
+          )}
+          {(overview.available || loggedIn) && (
+            <div className="account-row">
+              {overview.available && (
+                <button
+                  ref={openRef}
+                  type="button"
+                  className={cookies === null ? 'btn btn-primary' : 'btn'}
+                  aria-disabled={!idle || undefined}
+                  aria-describedby={messageId}
+                  onClick={() => void open()}
+                >
+                  {openLabel}
+                </button>
+              )}
+              {loggedIn && (
+                <button type="button" className="btn btn-quiet" aria-disabled={!idle || undefined} onClick={() => void forget()}>
+                  {busy === 'forget' ? '正在退出…' : '退出登录'}
+                </button>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {cookies !== null && (
+        <div className="account-cookies">
+          <div className="account-cookies-head">
+            <h5 className="account-cookies-title" id={listTitleId} ref={listTitleRef} tabIndex={-1}>
+              账号里的饼干
+            </h5>
+            {cookies.length > 1 && (
+              <button type="button" className="btn btn-quiet btn-small" aria-disabled={!idle || undefined} onClick={toggleAll}>
+                {allSelected ? '全不选' : '全选'}
+              </button>
+            )}
+          </div>
+          {cookies.length === 0 ? (
+            <p className="settings-empty">账号里没有饼干</p>
+          ) : (
+            <>
+              <ul className="account-cookie-list" aria-labelledby={listTitleId}>
+                {cookies.map((cookie) => {
+                  const outcome = outcomes.get(cookie.id)
+                  return (
+                    <li key={cookie.id}>
+                      <label className="account-cookie">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(cookie.id)}
+                          disabled={!idle}
+                          onChange={(event) => setChecked(cookie.id, event.target.checked)}
+                        />
+                        <span className="account-cookie-text">
+                          <span className="account-cookie-id">{cookie.publicId}</span>
+                          <span className="account-cookie-meta">
+                            <span>ID {cookie.id}</span>
+                            <span>有效时间 {cookie.validUntil}</span>
+                            <span>领取时间 {cookie.claimedAt}</span>
+                          </span>
+                          {outcome !== undefined && (
+                            <span className={outcome.tone === 'error' ? 'account-cookie-outcome is-error' : 'account-cookie-outcome'}>
+                              {outcome.text}
+                            </span>
+                          )}
+                        </span>
+                      </label>
+                    </li>
+                  )
+                })}
+              </ul>
+              <div className="account-import-actions">
+                <span className="account-selected-count">已选 {selected.size} 块</span>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  aria-disabled={!idle || undefined}
+                  aria-describedby={messageId}
+                  onClick={() => void importChosen()}
+                >
+                  {busy === 'import' ? '正在导入…' : '导入所选'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      <MessageLine id={messageId} message={message} />
+    </div>
   )
 }
 

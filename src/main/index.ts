@@ -37,6 +37,9 @@ import { createReminderNotifier } from './reminders/notifier'
 import { applyZoom, zoomActionOf } from './zoom'
 import { createSearchService, type SearchService } from './search/service'
 import { createOnlineSearchService, SEARCH_API_ORIGIN } from './online-search/service'
+import { createAccountService } from './account/service'
+import { createAccountClient, requestAccountPage } from './account/client'
+import { isAccountLoginNavigation, openAccountLogin } from './account/login'
 
 /** Verified JSON API origin; the only destination for the selected browse credential. */
 const FORUM_API_ORIGIN = 'https://api.nmb.best'
@@ -79,10 +82,10 @@ app.on('web-contents-created', (_event, contents) => {
   contents.on('will-attach-webview', (event) => event.preventDefault())
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
   contents.on('will-navigate', (event, url) => {
-    if (!isAppDocument(url)) event.preventDefault()
+    if (!isAppDocument(url) && !isAccountLoginNavigation(contents, url)) event.preventDefault()
   })
   contents.on('will-redirect', (event, url) => {
-    if (!isAppDocument(url)) event.preventDefault()
+    if (!isAppDocument(url) && !isAccountLoginNavigation(contents, url)) event.preventDefault()
   })
 })
 
@@ -239,6 +242,12 @@ async function start(): Promise<void> {
     protector,
     storageState: () => openedStore.status.state
   })
+  const account = createAccountService({
+    store: openedStore, protector, identities,
+    storageState: () => openedStore.status.state,
+    client: createAccountClient({ request: requestAccountPage, scheduler }),
+    openLogin: openAccountLogin
+  })
 
   const client = createForumClient({
     transport: createForumTransport({ allowedOrigins: [FORUM_API_ORIGIN], credentialOrigins: [FORUM_API_ORIGIN] }),
@@ -390,6 +399,7 @@ async function start(): Promise<void> {
     reading,
     images,
     identities,
+    account,
     drafts,
     content: retained,
     subscriptions,

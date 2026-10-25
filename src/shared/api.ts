@@ -1,3 +1,4 @@
+import type { AccountApi } from './account'
 import type { ContentApi } from './content'
 import type { BoardDirectory, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
 import type { CredentialId, IdentityMutationResult, IdentityOverview, IdentityRole, ImportResult } from './identity'
@@ -301,6 +302,7 @@ export interface XidaoApi {
     /** Opens an absolute http(s) URL in the system browser; anything else is refused. */
     openExternal(input: { url: string }): Promise<{ opened: boolean }>
   }
+  account: AccountApi
   identities: {
     /** Names, sources, role selections and protection state; never any secret. */
     getOverview(): Promise<IdentityOverview>
@@ -407,6 +409,11 @@ export const IpcChannel = {
   cancelImage: 'images:cancel',
   releaseImageView: 'images:release-view',
   saveOriginalImage: 'images:save-original',
+  accountOverview: 'account:overview',
+  accountLogin: 'account:login',
+  accountList: 'account:list',
+  accountImport: 'account:import',
+  accountForget: 'account:forget',
   identityOverview: 'identities:get-overview',
   identityImportExport: 'identities:import-export',
   identityImportRaw: 'identities:import-raw',

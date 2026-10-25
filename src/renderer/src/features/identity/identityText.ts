@@ -1,3 +1,4 @@
+import type { AccountFailure, AccountOverview } from '../../../../shared/account'
 import {
   CREDENTIAL_NAME_MAX_LENGTH,
   IDENTITY_ROLES,
@@ -108,4 +109,56 @@ function formatErrorText(detail: ImportFormatError, entry: ImportEntry): string 
         ? '导出内容中的饼干包含无法使用的字符'
         : 'userhash 包含无法使用的字符（如空格、分号或引号）'
   }
+}
+
+/** Why the official-site login cannot start; short, shown in place of the login button. */
+export function accountBlockerText(blocker: AccountOverview['blocker']): string {
+  switch (blocker) {
+    case 'protection-unavailable':
+      return '系统凭据保护不可用，不能登录官网'
+    case 'storage':
+      return '本地存储不可写，不能登录官网'
+    case null:
+      return '暂时不能登录官网'
+  }
+}
+
+export function accountFailureText(reason: AccountFailure): string {
+  switch (reason) {
+    case 'protection-unavailable':
+      return '系统凭据保护不可用，未保存登录'
+    case 'storage':
+      return '本地存储不可写，未完成'
+    case 'expired':
+      return '登录已过期，请重新登录'
+    case 'cancelled':
+      return '已取消登录'
+    case 'network':
+      return '无法连接官网，请重试'
+    case 'rate-limited':
+      return '官网请求过于频繁，请稍后再试'
+    case 'unknown-structure':
+      return '无法识别官网返回的页面，未读取或导入饼干'
+    case 'blocked':
+      return '官网拒绝了这次访问'
+  }
+}
+
+/** One account cookie that was not stored (duplicates are reported separately). */
+export function accountImportFailureText(failure: ImportFailure): string {
+  switch (failure.reason) {
+    case 'format':
+      return '官网导出内容无法识别，未导入'
+    case 'name':
+      return '导出内容中的名称不可用，未导入'
+    default:
+      return importFailureText(failure, 'export').text
+  }
+}
+
+export function accountImportSummary(imported: number, duplicates: number, failures: number): string {
+  const parts = [`导入 ${imported} 块`]
+  if (duplicates > 0) parts.push(`${duplicates} 块已存在`)
+  if (failures > 0) parts.push(`${failures} 块失败`)
+  return parts.join('，')
 }
