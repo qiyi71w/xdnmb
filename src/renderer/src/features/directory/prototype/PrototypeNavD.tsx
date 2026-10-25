@@ -1,7 +1,7 @@
 // PROTOTYPE (throwaway) variant D — 版块浮层: no board column. The navigation is the icon rail only;
 // its 版块 button (and the board name at the top of a board list) opens a wide panel beside the rail:
-// a filter, 收藏, then every group laid out in columns. Choosing a board closes it. The panel is not
-// modal: Esc or a press outside cancels it (focus back to its opener), Tab leaving it closes it and
+// a filter with 关闭 beside it, 收藏, then every group laid out in columns. Choosing a board closes it.
+// The panel is not modal: Esc, 关闭 or a press outside cancels it (focus back to its opener), Tab leaving it closes it and
 // leaves focus where it went; prototypeStore's `closeBoardPanel` is the one place focus is decided.
 
 import { useEffect, useLayoutEffect, useRef, type CSSProperties, type FocusEvent } from 'react'
@@ -122,6 +122,7 @@ function BoardPanel({
         onSelect={choose}
         shape="columns"
         autoFocus
+        onClose={() => closeBoardPanel('cancel')}
         placeholder={
           state.directory === null || all.length === 0 ? <DirectoryPlaceholder state={state} onRetry={onRetry} empty={all.length === 0} /> : undefined
         }

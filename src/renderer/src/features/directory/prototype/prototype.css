@@ -452,10 +452,49 @@
   outline-offset: -2px;
 }
 
+/* Narrow window: the directory column gives way to a sticky control on top of the scroll area. */
+.proto-settings-jump {
+  display: none;
+}
+
 @media (max-width: 720px) {
   .proto-settings-toc {
     display: none;
   }
+
+  .proto-settings-jump {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--paper);
+  }
+}
+
+.proto-settings-jump-trigger {
+  gap: 6px;
+  font-weight: 600;
+}
+
+.proto-settings-jump-chevron {
+  color: var(--ink-2);
+  transform: rotate(90deg);
+}
+
+.proto-settings-jump-trigger[aria-expanded='true'] .proto-settings-jump-chevron {
+  transform: rotate(-90deg);
+}
+
+.proto-settings-jump-menu {
+  top: calc(100% + 4px);
+  left: 16px;
+  width: 14rem;
+  max-width: calc(100% - 32px);
+  max-height: min(70dvh, 28rem);
+  overflow: hidden auto;
+  padding: 6px;
 }
 
 /* ---------- 功能显示 and 版块管理 ---------- */
@@ -590,8 +629,17 @@
   gap: 8px;
 }
 
-.proto-picker-field {
+/* The filter field, and in a popup its 关闭 button on the right. */
+.proto-picker-top {
   flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.proto-picker-field {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -619,6 +667,11 @@
 
 .proto-picker-input:focus-visible {
   outline: none;
+}
+
+.proto-picker-close {
+  flex: none;
+  gap: 4px;
 }
 
 .proto-picker-body {

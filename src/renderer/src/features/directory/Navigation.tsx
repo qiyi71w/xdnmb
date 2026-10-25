@@ -40,7 +40,14 @@ const SUBSCRIPTION_SECTION: NavSection = {
   ]
 }
 
-const NAV_ICON: Record<ListRef['kind'], IconName> = { subscriptions: 'bookmark', reminders: 'bell', timeline: 'timeline', forum: 'forum' }
+const NAV_ICON: Record<ListRef['kind'], IconName> = {
+  subscriptions: 'bookmark',
+  reminders: 'bell',
+  history: 'history',
+  offline: 'download',
+  timeline: 'timeline',
+  forum: 'forum'
+}
 
 /**
  * Badge of the 提醒 entry: confirmed unread reminders only (`99+` from 100), hidden at 0. Coverage

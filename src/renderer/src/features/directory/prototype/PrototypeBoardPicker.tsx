@@ -49,7 +49,8 @@ export function BoardPicker({
   onSelect,
   shape,
   autoFocus = false,
-  placeholder
+  placeholder,
+  onClose
 }: {
   view: BoardView
   /** Hidden boards in their groups (`useBoardView().hidden`): offered back, never listed. */
@@ -61,6 +62,8 @@ export function BoardPicker({
   autoFocus?: boolean
   /** Directory not obtained, failed or empty: shown in place of the boards, filtering or not. */
   placeholder?: ReactNode
+  /** A popup holding the picker: a 关闭 button right of the field. */
+  onClose?: () => void
 }) {
   const fieldId = useId()
   const noteId = `${fieldId}-note`
@@ -183,22 +186,30 @@ export function BoardPicker({
 
   return (
     <div className={`proto-picker is-${shape}`} ref={rootRef} data-keeps-arrows="">
-      <div className="proto-picker-field">
-        <Icon name="search" size={15} />
-        <input
-          ref={inputRef}
-          id={fieldId}
-          type="search"
-          className="proto-picker-input"
-          placeholder="筛选版块"
-          aria-label="筛选版块"
-          autoComplete="off"
-          spellCheck={false}
-          value={query}
-          data-autofocus={autoFocus ? '' : undefined}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={onFieldKeyDown}
-        />
+      <div className="proto-picker-top">
+        <div className="proto-picker-field">
+          <Icon name="search" size={15} />
+          <input
+            ref={inputRef}
+            id={fieldId}
+            type="search"
+            className="proto-picker-input"
+            placeholder="筛选版块"
+            aria-label="筛选版块"
+            autoComplete="off"
+            spellCheck={false}
+            value={query}
+            data-autofocus={autoFocus ? '' : undefined}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={onFieldKeyDown}
+          />
+        </div>
+        {onClose !== undefined && (
+          <button type="button" className="btn btn-quiet proto-picker-close" onClick={onClose}>
+            <Icon name="close" size={15} />
+            关闭
+          </button>
+        )}
       </div>
       <div className="proto-picker-body" onKeyDown={onBodyKeyDown}>
         {shown.favorites.length > 0 && (

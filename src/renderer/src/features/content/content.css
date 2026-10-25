@@ -308,6 +308,14 @@
   overflow-wrap: anywhere;
 }
 
+/* No title: the first line of the head post, kept to one line. */
+.retained-title.is-excerpt,
+.retained-heading.is-excerpt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .retained-meta {
   display: flex;
   flex-wrap: wrap;
@@ -337,6 +345,102 @@
   justify-content: flex-end;
   gap: 6px;
   margin-left: auto;
+}
+
+/* ---------- PROTOTYPE: 历史 / 离线 pages ---------- */
+
+.retained-page > .list-scroll > .history-confirm {
+  margin: 8px 10px 0;
+}
+
+.retained-page .list-status > .notice-inline {
+  margin: 6px 0;
+}
+
+/* One row: the open button (heading + meta), its side action, then what the row adds below. */
+.retained-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  border-radius: var(--radius-m);
+}
+
+.retained-row + .retained-row::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: var(--line-soft);
+}
+
+.retained-row:hover {
+  background: var(--hover);
+}
+
+/* Selected row as in the thread lists: tint plus a darker, bolder meta line (not colour alone). */
+.retained-row.is-selected {
+  background: var(--selected);
+}
+
+.retained-row.is-selected::before,
+.retained-row.is-selected + .retained-row::before {
+  display: none;
+}
+
+.retained-row.is-selected .row-meta {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.retained-open {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.retained-open:focus-visible {
+  outline-offset: -2px;
+}
+
+.retained-heading {
+  font-size: var(--text-md);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.retained-row-action {
+  margin: 6px 6px 0 0;
+}
+
+.retained-row-below {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  padding: 0 12px 10px;
+}
+
+.retained-row-below .notice-inline {
+  margin: 0;
+}
+
+:root[data-density='compact'] .retained-open {
+  gap: 2px;
+  padding: 6px 10px;
+}
+
+:root[data-density='compact'] .retained-row-below {
+  padding: 0 10px 6px;
 }
 
 /* ---------- 存储与缓存 ---------- */

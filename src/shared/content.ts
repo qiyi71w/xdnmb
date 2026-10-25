@@ -25,6 +25,8 @@ export interface OfflineCopy {
 export interface RetainedEntry {
   threadId: ThreadId
   title: string | null
+  /** Head post text while it is held locally; null once evicted or never fetched. */
+  excerpt: string | null
   at: string
   offline: OfflineCopy | null
 }

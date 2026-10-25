@@ -1,9 +1,8 @@
 // PROTOTYPE (throwaway): floating bar that cycles UI prototype variants. Mounted only in builds
 // with VITE_XIDAO_PROTOTYPE=1. ← / → cycle too, except inside text fields, dialogs, menus, tab
-// strips and other controls that use those keys themselves. `extra` adds a second, independent
-// choice (a `PrototypeSegment`) after a divider.
+// strips and other controls that use those keys themselves.
 
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { Icon } from './Icon'
 import './prototype-switcher.css'
 
@@ -13,16 +12,11 @@ const KEEPS_ARROWS =
 export function PrototypeSwitcher<K extends string>({
   variants,
   current,
-  onChange,
-  avoidRight = 0,
-  extra
+  onChange
 }: {
   variants: readonly { key: K; name: string }[]
   current: K
   onChange: (key: K) => void
-  /** Width at the window's right edge to keep clear (an open drawer): centred in what is left. */
-  avoidRight?: number
-  extra?: ReactNode
 }) {
   const index = Math.max(0, variants.findIndex((variant) => variant.key === current))
   const step = (delta: number) => {
@@ -49,7 +43,7 @@ export function PrototypeSwitcher<K extends string>({
 
   const variant = variants[index]
   return (
-    <div className="prototype-switcher" style={avoidRight > 0 ? { left: `calc((100% - ${avoidRight}px) / 2)` } : undefined}>
+    <div className="prototype-switcher">
       <div className="prototype-switcher-group" role="group" aria-label="原型方案">
         <button type="button" className="prototype-switcher-arrow" aria-label="上一个方案" onClick={() => step(-1)}>
           <Icon name="arrowLeft" size={14} />
@@ -61,39 +55,6 @@ export function PrototypeSwitcher<K extends string>({
           <Icon name="arrowRight" size={14} />
         </button>
       </div>
-      {extra}
-    </div>
-  )
-}
-
-/** A second choice on the bar: a label and two or more pressed-state options. */
-export function PrototypeSegment<K extends string>({
-  label,
-  options,
-  current,
-  onChange
-}: {
-  label: string
-  options: readonly { key: K; name: string }[]
-  current: K
-  onChange: (key: K) => void
-}) {
-  return (
-    <div className="prototype-switcher-segment" role="group" aria-label={label} data-keeps-arrows="">
-      <span className="prototype-switcher-segment-label" aria-hidden="true">
-        {label}
-      </span>
-      {options.map((option) => (
-        <button
-          key={option.key}
-          type="button"
-          className="prototype-switcher-option"
-          aria-pressed={option.key === current}
-          onClick={() => onChange(option.key)}
-        >
-          {option.name}
-        </button>
-      ))}
     </div>
   )
 }

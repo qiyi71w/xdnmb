@@ -509,7 +509,7 @@
 
 /* ---------- PROTOTYPE (throwaway): floating editor panel ---------- */
 
-/* Tab content beside an open drawer; without one the main part takes all of it. */
+/* Tab content; the modal panels it holds render in the top layer. */
 .compose-frame {
   position: relative;
   height: 100%;
@@ -522,7 +522,7 @@
   height: 100%;
 }
 
-/* A: centred over a dimmed app. Strong glass outside, the text on paper. */
+/* Centred over a dimmed app. Strong glass outside, the text on paper. */
 .compose-modal {
   width: min(760px, calc(100vw - 48px));
   max-width: none;
@@ -552,45 +552,6 @@
   from {
     opacity: 0;
     transform: translateY(8px) scale(0.985);
-  }
-}
-
-/* B: the right edge of the tab content, full height, no backdrop; the thread stays beside it. */
-.compose-drawer {
-  flex: none;
-  width: clamp(420px, 40vw, 640px);
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--line-soft);
-  background: var(--paper);
-  box-shadow: -8px 0 20px -16px oklch(0.25 0.03 240 / 0.35);
-  animation: compose-drawer-in 0.22s var(--ease-out);
-}
-
-@keyframes compose-drawer-in {
-  from {
-    opacity: 0;
-    transform: translateX(16px);
-  }
-}
-
-/* Narrow window: over the content, almost its full width. */
-@media (max-width: 900px) {
-  .compose-drawer {
-    position: absolute;
-    z-index: 6;
-    inset-block: 0;
-    right: 0;
-    width: calc(100% - 24px);
-    border-left: 0;
-    border-radius: var(--radius-l) 0 0 var(--radius-l);
-    box-shadow: var(--shadow-nav), 0 0 0 1px var(--line-soft);
-  }
-
-  /* No content area is left beside it for the prototype switcher: the footer makes room instead. */
-  .compose-drawer .editor-float-foot {
-    padding-bottom: 56px;
   }
 }
 

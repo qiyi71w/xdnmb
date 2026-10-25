@@ -1,7 +1,7 @@
 // PROTOTYPE (throwaway): the settings page — a view filling the content area with a section directory
 // on the left — reusing the sections of the settings dialog plus 功能显示 and 版块管理 (in-memory only).
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import type { AppPlatform } from '../../../../../shared/api'
 import type { BoardDirectory } from '../../../../../shared/forum'
 import type { AppSettings } from '../../../../../shared/settings'
@@ -22,6 +22,7 @@ import { Icon } from '../../../components/Icon'
 import { Loading } from '../../../components/Notices'
 import { useCover } from '../../../lib/appCovered'
 import { openLayer } from '../../../lib/layers'
+import { usePopover } from '../../../lib/usePopover'
 import { CacheSection } from '../../content/CacheSection'
 import { CookieSection } from '../../identity/CookieSection'
 import type { IdentitiesState } from '../../identity/useIdentities'
@@ -85,6 +86,12 @@ const CATEGORIES: readonly { id: string; title: string; sections: readonly { id:
     ]
   }
 ]
+
+const SECTIONS = CATEGORIES.flatMap((category) => category.sections)
+const LAST_SECTION = SECTIONS.at(-1)?.id ?? 'appearance'
+
+/** Within this many pixels of the end, the pane counts as scrolled to the bottom. */
+const BOTTOM_SLACK = 4
 
 export interface PrototypeSettingsProps {
   identities: IdentitiesState
@@ -152,31 +159,49 @@ interface ShapeProps {
 
 function SettingsView({ headingRef, section, status, onClose }: ShapeProps & { onClose: () => void }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const jumpRef = useRef<HTMLDivElement>(null)
   const [currentId, setCurrentId] = useState<SectionId>('appearance')
+  /** Where a directory entry scrolled the pane: its choice stays current until the pane moves. */
+  const chosenAt = useRef<number | null>(null)
+
+  /** Height of the narrow window's sticky section control (0 while the directory column shows). */
+  const stickyOffset = () => {
+    const bar = jumpRef.current
+    return bar !== null && bar.getClientRects().length > 0 ? bar.offsetHeight : 0
+  }
 
   // A directory entry scrolls to its section and hands it focus: the next Tab continues inside it.
   // The section headings come from shared section components, so they become focusable here.
   const go = (id: SectionId) => {
     setCurrentId(id)
+    const pane = scrollRef.current
     const item = document.getElementById(`proto-set-${id}`)
-    item?.scrollIntoView({ block: 'start', behavior: 'instant' })
+    if (pane !== null && item !== null) {
+      pane.scrollTop += item.getBoundingClientRect().top - pane.getBoundingClientRect().top - stickyOffset()
+      chosenAt.current = pane.scrollTop
+    }
     const heading = item?.querySelector<HTMLElement>('.settings-section-title')
     if (heading == null) return
     heading.tabIndex = -1
     heading.focus({ preventScroll: true })
   }
 
-  // The directory follows the section at the top of the pane.
+  // The directory follows the section at the top of the pane; scrolled to the end, the last one
+  // (the last sections are too short to reach the top).
   const onScroll = () => {
     const pane = scrollRef.current
     if (pane === null) return
-    const top = pane.getBoundingClientRect().top + 24
+    if (chosenAt.current !== null && Math.abs(pane.scrollTop - chosenAt.current) < 1) return
+    chosenAt.current = null
+    if (pane.scrollTop > 0 && pane.scrollTop + pane.clientHeight >= pane.scrollHeight - BOTTOM_SLACK) {
+      setCurrentId(LAST_SECTION)
+      return
+    }
+    const top = pane.getBoundingClientRect().top + stickyOffset() + 24
     let found: SectionId = 'appearance'
-    for (const category of CATEGORIES) {
-      for (const item of category.sections) {
-        const element = document.getElementById(`proto-set-${item.id}`)
-        if (element !== null && element.getBoundingClientRect().top <= top) found = item.id
-      }
+    for (const item of SECTIONS) {
+      const element = document.getElementById(`proto-set-${item.id}`)
+      if (element !== null && element.getBoundingClientRect().top <= top) found = item.id
     }
     setCurrentId(found)
   }
@@ -215,6 +240,7 @@ function SettingsView({ headingRef, section, status, onClose }: ShapeProps & { o
           ))}
         </nav>
         <div className="proto-settings-scroll" ref={scrollRef} onScroll={onScroll}>
+          <SectionJump barRef={jumpRef} currentId={currentId} onGo={go} />
           <div className="proto-settings-column">
             <SettingsStatusNotices status={status} />
             {CATEGORIES.map((category) => (
@@ -232,6 +258,94 @@ function SettingsView({ headingRef, section, status, onClose }: ShapeProps & { o
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Narrow window, where the directory column is hidden: a sticky control naming the current section,
+ * opening a menu of every section. Esc closes the menu only (back to the control).
+ */
+function SectionJump({
+  barRef,
+  currentId,
+  onGo
+}: {
+  barRef: RefObject<HTMLDivElement | null>
+  currentId: SectionId
+  onGo: (id: SectionId) => void
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const menu = usePopover(triggerRef, menuRef)
+  const menuId = useId()
+  const current = SECTIONS.find((item) => item.id === currentId)?.title ?? ''
+
+  // A menu: arrow keys, Home and End move between its items.
+  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [])]
+    const at = items.indexOf(document.activeElement as HTMLElement)
+    let next: HTMLElement | undefined
+    if (event.key === 'ArrowDown') next = items[(at + 1) % items.length]
+    else if (event.key === 'ArrowUp') next = items[(at - 1 + items.length) % items.length]
+    else if (event.key === 'Home') next = items[0]
+    else if (event.key === 'End') next = items.at(-1)
+    else return
+    event.preventDefault()
+    event.stopPropagation()
+    next?.focus()
+  }
+
+  return (
+    <div
+      ref={barRef}
+      className="proto-settings-jump"
+      onBlur={(event) => {
+        const next = event.relatedTarget as Node | null
+        if (next !== null && !event.currentTarget.contains(next)) menu.close(false)
+      }}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="btn proto-settings-jump-trigger"
+        aria-haspopup="menu"
+        aria-expanded={menu.open}
+        aria-controls={menu.open ? menuId : undefined}
+        aria-label={`设置分区：${current}`}
+        onClick={menu.toggle}
+      >
+        {current}
+        <Icon name="chevron" size={14} className="proto-settings-jump-chevron" />
+      </button>
+      {menu.open && (
+        <div ref={menuRef} id={menuId} className="proto-pop proto-settings-jump-menu" role="menu" aria-label="设置分区" onKeyDown={onMenuKeyDown}>
+          {CATEGORIES.map((category) => (
+            <div key={category.id} role="group" aria-labelledby={`${menuId}-${category.id}`}>
+              <p className="proto-toc-category" id={`${menuId}-${category.id}`}>
+                {category.title}
+              </p>
+              {category.sections.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={item.id === currentId}
+                  className={item.id === currentId ? 'proto-toc-item is-current' : 'proto-toc-item'}
+                  tabIndex={-1}
+                  data-autofocus={item.id === currentId ? '' : undefined}
+                  onClick={() => {
+                    menu.close(false)
+                    onGo(item.id)
+                  }}
+                >
+                  {item.title}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

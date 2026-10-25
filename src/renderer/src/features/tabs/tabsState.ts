@@ -66,13 +66,20 @@ export type EntryOrigin = 'quote' | 'local-search' | 'online-search' | null
 
 /**
  * What a list entry shows: a forum/timeline feed, the remote subscription list of whichever
- * source (App / 网页) is currently selected, or the local 提醒 list (reminder events by thread).
- * Renderer-only; forum reads still take a `FeedRef`.
+ * source (App / 网页) is currently selected, the local 提醒 list (reminder events by thread), or
+ * the local 历史 / 离线 list (PROTOTYPE pages). Renderer-only; forum reads still take a `FeedRef`.
  */
-export type ListRef = FeedRef | { kind: 'subscriptions' } | { kind: 'reminders' }
+export type ListRef = FeedRef | { kind: 'subscriptions' } | { kind: 'reminders' } | { kind: 'history' } | { kind: 'offline' }
+
+/** The lists of this app's own records, which have no forum ID. */
+export type LocalListRef = Exclude<ListRef, FeedRef>
+
+export function isLocalList(ref: ListRef): ref is LocalListRef {
+  return ref.kind !== 'forum' && ref.kind !== 'timeline'
+}
 
 export function listKey(ref: ListRef): string {
-  return ref.kind === 'subscriptions' || ref.kind === 'reminders' ? ref.kind : `${ref.kind}:${ref.id}`
+  return isLocalList(ref) ? ref.kind : `${ref.kind}:${ref.id}`
 }
 
 /**

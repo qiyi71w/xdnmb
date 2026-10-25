@@ -1,16 +1,17 @@
 import { useContext, useLayoutEffect, useRef } from 'react'
 import { EditorDock } from '../features/editor/EditorDock'
-import type { FeedRef, ForumId, ThreadSummary } from '../../../shared/forum'
+import type { FeedRef, ForumId, Post, ThreadId } from '../../../shared/forum'
 import { feedKey, type FeedInfo } from '../features/directory/feeds'
 import { useSearchOpener } from '../features/search/SearchContext'
 import { SubscriptionPane } from '../features/subscriptions/SubscriptionPane'
 import { ReminderPane } from '../features/reminders/ReminderPane'
+import { RetainedPane } from '../features/content/RetainedPane'
 import type { DirectoryState } from '../features/directory/useDirectory'
 import { forumLabel } from '../features/editor/editorText'
 import { FeedPane } from '../features/feed/FeedPane'
 import type { LayoutResult } from '../features/layout/layout'
 import { OnlineSearchPane } from '../features/search/OnlineSearchPane'
-import { currentEntry, type EntryInit, type Tab, type ThreadOpen } from '../features/tabs/tabsState'
+import { currentEntry, isLocalList, type EntryInit, type Tab, type ThreadOpen } from '../features/tabs/tabsState'
 import { ThreadPane } from '../features/thread/ThreadPane'
 import { FailureNotice, Loading } from '../components/Notices'
 import { Icon } from '../components/Icon'
@@ -58,7 +59,8 @@ export function TabView({
   feedInfo: (ref: FeedRef) => FeedInfo | null
   forumNames: ReadonlyMap<ForumId, string>
   forumName: (forumId: string | null) => string | null
-  onSelectThread: (tabId: number, thread: ThreadSummary) => void
+  /** Opens a list item: beside the list when split, else as a new step; `head` when the list has it. */
+  onSelectThread: (tabId: number, threadId: ThreadId, head: Post | null) => void
   onShowPane: (tabId: number, pane: Region) => void
   /**
    * A list item resolved to an explicit target (a located reminder event): shows it from the list
@@ -99,8 +101,12 @@ export function TabView({
       ((focused === null || focused === document.body) && lastRegion.current === hiddenRegion)
     if (!stranded) return
     const target =
-      // A list pane may hide its list behind another view (订阅 › 同步与合并).
-      (pane === 'list' ? shown.querySelector<HTMLElement>('.list-scroll:not([hidden]) .thread-row.is-selected') : null) ??
+      // A list pane may hide its list behind another view (订阅 › 同步与合并). PROTOTYPE: 历史 / 离线 rows.
+      (pane === 'list'
+        ? shown.querySelector<HTMLElement>(
+            '.list-scroll:not([hidden]) .thread-row.is-selected, .list-scroll:not([hidden]) .retained-row.is-selected > .retained-open'
+          )
+        : null) ??
       shown.querySelector<HTMLElement>('[data-pane-focus]') ??
       shown
     target.focus({ preventScroll: pane === 'reader' })
@@ -162,18 +168,29 @@ export function TabView({
   } else {
     const feed = entry.feed
     const selectedThreadId = tab.split ? (entry.thread?.threadId ?? null) : null
-    const info = feed.kind === 'subscriptions' || feed.kind === 'reminders' ? null : feedInfo(feed)
+    const info = isLocalList(feed) ? null : feedInfo(feed)
     // New threads go to forums only; timelines and subscriptions have no post target.
     const forumTarget: PostTarget | null = feed.kind === 'forum' ? { kind: 'thread', forumId: feed.id } : null
     // PROTOTYPE: the panel floats over the tab, so it stays shown whichever pane the single-pane
-    // fallback shows (App reserves a drawer's width from the same pane-independent targets).
+    // fallback shows.
     if (PROTOTYPE_ENABLED && forumTarget !== null) composeTargets.push({ target: forumTarget, displayed: active })
     const listDock =
       forumTarget !== null && !PROTOTYPE_ENABLED ? (
         <EditorDock tabId={tab.id} target={forumTarget} displayed={active && listVisible} />
       ) : null
     let list
-    if (feed.kind === 'reminders') {
+    if (feed.kind === 'history' || feed.kind === 'offline') {
+      list = (
+        <RetainedPane
+          key={`${entry.key}:${feed.kind}`}
+          entryKey={entry.key}
+          kind={feed.kind}
+          forumNames={forumNames}
+          selectedThreadId={selectedThreadId}
+          onOpenThread={(threadId) => onSelectThread(tab.id, threadId, null)}
+        />
+      )
+    } else if (feed.kind === 'reminders') {
       list = (
         <ReminderPane
           key={`${entry.key}:reminders`}
@@ -189,7 +206,7 @@ export function TabView({
           entryKey={entry.key}
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}
-          onOpenThread={(summary) => onSelectThread(tab.id, summary)}
+          onOpenThread={(summary) => onSelectThread(tab.id, summary.head.id, summary.head)}
         />
       )
     } else if (info !== null) {
@@ -200,7 +217,7 @@ export function TabView({
           info={info}
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}
-          onOpenThread={(summary) => onSelectThread(tab.id, summary)}
+          onOpenThread={(summary) => onSelectThread(tab.id, summary.head.id, summary.head)}
           footer={listDock}
           compose={PROTOTYPE_ENABLED && forumTarget !== null ? composeEntry(tab.id, forumTarget, 'btn btn-small') : null}
         />

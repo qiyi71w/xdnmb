@@ -49,6 +49,8 @@ export type ListMemory =
     }
   /** The 提醒 list reads its overview again on mount; only where it was scrolled is kept. */
   | { kind: 'reminders'; scrollTop: number }
+  /** PROTOTYPE 历史 / 离线 pages: read again on mount, likewise only the scroll position is kept. */
+  | { kind: 'retained'; scrollTop: number }
 
 /**
  * Mounted readers, lists and online search pages, keyed by the history entry key that shows them,
@@ -107,7 +109,7 @@ export function captureLists(tabs: TabsState, registry: ContentRegistry): Worksp
         })
       } else if (memory?.kind === 'subscriptions') {
         lists.push({ entryKey: entry.key, pages: 1, anchor: null, scrollTop: Math.max(0, memory.scrollTop), subscriptionView: memory.view })
-      } else if (memory?.kind === 'reminders') {
+      } else if (memory?.kind === 'reminders' || memory?.kind === 'retained') {
         lists.push({ entryKey: entry.key, pages: 1, anchor: null, scrollTop: Math.max(0, memory.scrollTop) })
       } else if (saved !== undefined) {
         lists.push(saved)

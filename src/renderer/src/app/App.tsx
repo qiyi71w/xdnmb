@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import type { AppPlatform, StorageStatus } from '../../../shared/api'
 import type { RetainedList } from '../../../shared/content'
 import { sameTarget, type DraftId, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
-import type { FeedRef, ThreadId, ThreadSummary } from '../../../shared/forum'
+import type { FeedRef, Post, ThreadId } from '../../../shared/forum'
 import type { WorkspaceLoadResult } from '../../../shared/lifecycle'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/settings'
 import { Icon } from '../components/Icon'
@@ -40,6 +40,7 @@ import {
   currentEntry,
   entryThread,
   initialTabsState,
+  isLocalList,
   listKey,
   tabsReducer,
   type EntryInit,
@@ -63,7 +64,7 @@ import { SettingsOpenerContext } from '../lib/settingsOpener'
 import { useSettingsWriter } from './useSettingsWriter'
 import './layout.css'
 // PROTOTYPE (throwaway): navigation variants, active only with VITE_XIDAO_PROTOTYPE=1.
-import { PrototypeSegment, PrototypeSwitcher } from '../components/PrototypeSwitcher'
+import { PrototypeSwitcher } from '../components/PrototypeSwitcher'
 import { PrototypeNavB } from '../features/directory/prototype/PrototypeNavB'
 import { BoardPanelEmptyPage, BoardPanelTitle, PrototypeNavD } from '../features/directory/prototype/PrototypeNavD'
 import { BoardChooserPage, BoardStrip, PrototypeNavE } from '../features/directory/prototype/PrototypeNavE'
@@ -72,21 +73,16 @@ import type { FeatureHost, PrototypeNavProps } from '../features/directory/proto
 import { RAIL_WIDTH } from '../features/directory/prototype/PrototypeRail'
 import { PrototypeSettingsPage } from '../features/directory/prototype/PrototypeSettings'
 import {
-  EDITOR_VARIANTS,
   ListHostContext,
-  expectedDrawerWidth,
   NAV_VARIANTS,
   closeBoardPanel,
   isShown,
   openBoardPanel,
   PROTOTYPE_ENABLED,
   setBoardPanelHost,
-  setEditorVariant,
   setNavVariant,
   useBoardColumnCollapsed,
   useBoardColumnWidth,
-  useEditorVariant,
-  useComposeDrawerWidth,
   useNavVariant,
   type FeatureId,
   type ListHost
@@ -265,7 +261,6 @@ export function App() {
   const current = tabs === null ? null : activeTab(tabs)
   /** PROTOTYPE: the navigation variant; `null` (the regular navigation and settings dialog) unless built in. */
   const navVariant = useNavVariant()
-  const editorVariant = useEditorVariant()
   const protoColumnCollapsed = useBoardColumnCollapsed()
   const protoColumnWidth = useBoardColumnWidth()
   /**
@@ -278,21 +273,8 @@ export function App() {
       ? null
       : 8 + RAIL_WIDTH + (navVariant === 'F' && !protoColumnCollapsed ? protoColumnWidth : 0)
   const navFull = protoNavFull ?? LAYOUT_DEFAULTS.navFull + (navVariant === 'B' ? RAIL_WIDTH : 0)
-  /**
-   * PROTOTYPE: width an open editor drawer takes beside the active tab's content: measured once
-   * shown, its CSS width until then; 0 while it floats over a narrow window. Its targets do not
-   * depend on the pane shown, so the layout this changes cannot hide the drawer again.
-   */
-  const measuredDrawer = useComposeDrawerWidth()
-  const drawerReserve =
-    navVariant !== null &&
-    editorVariant === 'drawer' &&
-    current !== null &&
-    shownTargets(current, false).some((target) => editorFor(editors.state, current.id, target)?.expanded === true)
-      ? (measuredDrawer ?? expectedDrawerWidth(window.innerWidth))
-      : 0
   const layout = computeLayout({
-    width: width - drawerReserve,
+    width,
     view: current === null ? 'list' : viewOf(current),
     navFull,
     navCompactMin: protoNavFull ?? navCompactMin + (navVariant === 'B' ? RAIL_WIDTH : 0),
@@ -593,12 +575,12 @@ export function App() {
   }, [])
 
   const selectThread = useCallback(
-    (tabId: number, summary: ThreadSummary) => {
+    (tabId: number, threadId: ThreadId, head: Post | null) => {
       const tab = stateRef.current.tabs?.tabs.find((item) => item.id === tabId)
       if (tab === undefined) return
       const entry = currentEntry(tab)
       if (!(entry.kind === 'list' && tab.split)) leave(tab)
-      const thread: ThreadOpen = { threadId: summary.head.id, head: summary.head, target: null, snapshot: null, unlocatedPostId: null }
+      const thread: ThreadOpen = { threadId, head, target: null, snapshot: null, unlocatedPostId: null }
       dispatch({ type: 'select-thread', tabId, thread })
     },
     [leave]
@@ -1012,12 +994,17 @@ export function App() {
       if (entry.kind === 'thread') return threadTitle(entry.thread)
       if (entry.kind === 'online-search') return registry.onlineSearches.title(entry.key)
       if (entry.feed === null) return '新标签'
+      const feed = entry.feed
       const name =
-        entry.feed.kind === 'subscriptions'
+        feed.kind === 'subscriptions'
           ? '订阅'
-          : entry.feed.kind === 'reminders'
+          : feed.kind === 'reminders'
             ? '提醒'
-            : (feedInfo(entry.feed)?.name ?? (entry.feed.kind === 'timeline' ? '时间线' : '版面'))
+            : feed.kind === 'history'
+              ? '历史'
+              : feed.kind === 'offline'
+                ? '离线'
+                : (feedInfo(feed)?.name ?? (feed.kind === 'timeline' ? '时间线' : '版面'))
       return entry.thread !== null && tab.split ? `${name} › ${threadTitle(entry.thread)}` : name
     },
     [feedInfo, registry]
@@ -1055,28 +1042,36 @@ export function App() {
     },
     [protoSettingsShown, endSettings, selectFeed]
   )
+  /** Lists of the tab (订阅的串, 提醒, 历史, 离线) and 联网搜索 are pages; the rest open dialogs. */
   const openProtoFeature = useCallback(
     (id: FeatureId, focusTarget = false) => {
-      if (id === 'subscriptions' || id === 'reminders') protoSelect({ kind: id }, focusTarget ? 'list' : 'nav')
-      else if (id === 'search') openLocalSearch()
-      else if (id === 'history' || id === 'offline') openRetained(id)
+      if (id === 'subscriptions' || id === 'reminders' || id === 'history' || id === 'offline') {
+        protoSelect({ kind: id }, focusTarget ? 'list' : 'nav')
+      } else if (id === 'onlineSearch') {
+        // The page focuses its search box when it mounts.
+        if (protoSettingsShown) endSettings(false)
+        openOnlineSearch()
+      } else if (id === 'search') openLocalSearch()
       else if (id === 'drafts') openDrafts()
       else openAttempts()
     },
-    [protoSelect, openLocalSearch, openRetained, openDrafts, openAttempts]
+    [protoSelect, protoSettingsShown, endSettings, openOnlineSearch, openLocalSearch, openDrafts, openAttempts]
   )
   const protoFeatures = useMemo<FeatureHost>(
     () => ({
       open: openProtoFeature,
-      current:
-        !protoSettingsShown && selectedFeed !== null && (selectedFeed.kind === 'subscriptions' || selectedFeed.kind === 'reminders')
-          ? selectedFeed.kind
-          : null,
+      current: protoSettingsShown
+        ? null
+        : onlineSearchCurrent
+          ? 'onlineSearch'
+          : selectedFeed !== null && isLocalList(selectedFeed)
+            ? selectedFeed.kind
+            : null,
       reminderBadge,
       pendingAttempts,
       searchShortcut: shortcutLabel('search-local', platform)
     }),
-    [openProtoFeature, protoSettingsShown, selectedFeed, reminderBadge, pendingAttempts, platform]
+    [openProtoFeature, protoSettingsShown, onlineSearchCurrent, selectedFeed, reminderBadge, pendingAttempts, platform]
   )
 
   /**
@@ -1426,13 +1421,7 @@ export function App() {
             />
           )}
           {navVariant !== null && (
-            <PrototypeSwitcher
-              variants={NAV_VARIANTS}
-              current={navVariant}
-              onChange={setNavVariant}
-              avoidRight={drawerReserve > 0 ? drawerReserve + 8 : 0}
-              extra={<PrototypeSegment label="编辑" options={EDITOR_VARIANTS} current={editorVariant} onChange={setEditorVariant} />}
-            />
+            <PrototypeSwitcher variants={NAV_VARIANTS} current={navVariant} onChange={setNavVariant} />
           )}
           <LifecycleHost
             platform={platform}

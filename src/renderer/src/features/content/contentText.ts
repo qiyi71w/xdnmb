@@ -1,6 +1,6 @@
-import type { ContentResult, OfflineCopy } from '../../../../shared/content'
+import type { ContentResult, OfflineCopy, RetainedEntry } from '../../../../shared/content'
 import type { ImageError } from '../../../../shared/images'
-import { describeReadError } from '../../lib/format'
+import { describeReadError, meaningfulTitle } from '../../lib/format'
 
 /** Decimal units: the cache limit is set in decimal gigabytes (1 GB = 1,000,000,000 bytes). */
 export const BYTES_PER_GB = 1_000_000_000
@@ -121,4 +121,25 @@ export function offlineImagesText(copy: OfflineCopy): string {
   const counts = `原图 ${copy.savedImages} / ${copy.imageCount} 张已保存${copy.imageFailures.length > 0 ? `，${copy.imageFailures.length} 张失败` : ''}`
   if (copy.includeImages) return counts
   return `${counts}；最近一次仅保存文字，${copy.savedImages > 0 ? '之前保存的原图保留' : '未下载原图'}`
+}
+
+export interface RetainedHeading {
+  text: string
+  /** `number`: the heading is `No.<id>`, so the row's meta leaves the number out (it appears once). */
+  source: 'title' | 'excerpt' | 'number'
+}
+
+/**
+ * How a 收藏／历史／离线 row names its thread: the title, else the first line of the head post held
+ * locally (`excerpt`, shown on one line), else the number.
+ */
+export function retainedHeading(entry: RetainedEntry): RetainedHeading {
+  const title = meaningfulTitle(entry.title)
+  if (title !== null) return { text: title, source: 'title' }
+  const line = entry.excerpt
+    ?.split('\n')
+    .map((part) => part.trim())
+    .find((part) => part !== '')
+  if (line !== undefined) return { text: line, source: 'excerpt' }
+  return { text: `No.${entry.threadId}`, source: 'number' }
 }
