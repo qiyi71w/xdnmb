@@ -13,6 +13,7 @@ import type { DirectoryState } from '../useDirectory'
 import {
   boardGroups,
   FEATURES,
+  hiddenBoardGroups,
   navActions,
   useNavPrefs,
   visibleBoards,
@@ -118,12 +119,13 @@ type ItemProps = (key: string) => RovingItemProps
 
 export const groupKey = (id: string) => `group:${id}`
 
-/** The in-memory preferences, every board group and what the navigation lists. */
+/** The in-memory preferences, every board group, what the navigation lists and what it hides. */
 export function useBoardView(directory: BoardDirectory | null) {
   const prefs = useNavPrefs()
   const all = useMemo(() => boardGroups(directory, prefs.order), [directory, prefs.order])
   const view = useMemo(() => visibleBoards(all, prefs), [all, prefs])
-  return { prefs, all, view }
+  const hidden = useMemo(() => hiddenBoardGroups(all, prefs), [all, prefs])
+  return { prefs, all, view, hidden }
 }
 
 /** Roving keys of the board tree in display order (collapsed groups keep only their heading). */

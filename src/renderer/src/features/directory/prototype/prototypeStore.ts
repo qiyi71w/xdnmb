@@ -271,3 +271,11 @@ export function visibleBoards(all: BoardGroup[], prefs: NavPrefs): BoardView {
     .filter((group) => group.boards.length > 0)
   return { favorites, groups }
 }
+
+/** The hidden boards, still in their groups (empty groups left out). */
+export function hiddenBoardGroups(all: BoardGroup[], prefs: NavPrefs): BoardGroup[] {
+  const hidden = new Set(prefs.hiddenBoards)
+  return all
+    .map((group) => ({ ...group, boards: group.boards.filter((item) => hidden.has(item.key)) }))
+    .filter((group) => group.boards.length > 0)
+}

@@ -716,9 +716,30 @@
   outline-offset: -2px;
 }
 
-.proto-picker-empty {
-  padding: 12px 8px;
-  color: var(--ink-3);
+/* No match, hidden matches: one quiet line, its buttons right after the text. */
+.proto-picker-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.proto-picker-status:not(:empty) {
+  padding: 10px 8px;
+}
+
+/* Below results: set off like 收藏 is from the groups. */
+.proto-picker-status.is-below:not(:empty) {
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.proto-picker-note {
+  min-width: 0;
+  margin: 0 4px 0 0;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
 }
 
 /* Columns (D): favorites flow as one wrapping row, groups side by side. */
@@ -1051,6 +1072,10 @@
 
 :root[data-density='compact'] .proto-picker-input {
   min-height: 26px;
+}
+
+:root[data-density='compact'] .proto-picker-status:not(:empty) {
+  padding-block: 6px;
 }
 
 :root[data-density='compact'] .proto-strip {

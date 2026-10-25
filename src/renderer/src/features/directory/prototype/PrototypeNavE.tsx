@@ -39,7 +39,7 @@ export function BoardStrip({
   directory: BoardDirectory | null
   onSelect: (ref: ListRef) => void
 }) {
-  const { all, view } = useBoardView(directory)
+  const { all, view, hidden } = useBoardView(directory)
   const currentKey = current === null ? null : listKey(current)
   const currentBoard = useMemo(
     () => all.flatMap((group) => group.boards).find((item) => item.key === currentKey) ?? null,
@@ -121,6 +121,7 @@ export function BoardStrip({
         <div ref={dropRef} id="proto-strip-drop" className="proto-pop proto-strip-drop" role="dialog" aria-label="全部版块">
           <BoardPicker
             view={view}
+            hidden={hidden}
             selectedKey={currentKey}
             onSelect={(ref) => {
               drop.close()
@@ -137,13 +138,14 @@ export function BoardStrip({
 
 /** A tab without a list: choose its board right on the page. */
 export function BoardChooserPage({ directory, onSelect }: { directory: BoardDirectory | null; onSelect: (ref: ListRef) => void }) {
-  const { view } = useBoardView(directory)
+  const { view, hidden } = useBoardView(directory)
   return (
     <div className="proto-chooser-page">
       <div className="proto-chooser-column">
         <h2 className="proto-chooser-title">选择版块</h2>
         <BoardPicker
           view={view}
+          hidden={hidden}
           selectedKey={null}
           onSelect={onSelect}
           shape="list"

@@ -63,7 +63,7 @@ function BoardPanel({
   onSelect: (ref: ListRef) => void
   onRetry: () => void
 }) {
-  const { all, view } = useBoardView(state.directory)
+  const { all, view, hidden } = useBoardView(state.directory)
   const panelRef = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
@@ -108,11 +108,14 @@ function BoardPanel({
     <div ref={panelRef} id={PANEL_ID} className="proto-pop proto-board-panel" role="dialog" aria-label="版块">
       <BoardPicker
         view={view}
+        hidden={hidden}
         selectedKey={selectedKey}
         onSelect={choose}
         shape="columns"
         autoFocus
-        placeholder={<DirectoryPlaceholder state={state} onRetry={onRetry} empty={all.length === 0} />}
+        placeholder={
+          state.directory === null || all.length === 0 ? <DirectoryPlaceholder state={state} onRetry={onRetry} empty={all.length === 0} /> : undefined
+        }
       />
       <DirectoryStatus state={state} />
     </div>

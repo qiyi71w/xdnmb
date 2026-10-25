@@ -1,33 +1,50 @@
 // PROTOTYPE (throwaway): choosing a board by name, shared by D's board panel and E's 全部版块 list
 // and empty tab page. A filter field, 收藏 first, then every group. `columns` lays the groups side by
 // side so the whole directory is seen at once (D); `list` stacks them, each group collapsible (E).
-// Keyboard: ↓ from the field enters the boards, ↑/↓/Home/End move, → reaches a board's star (收藏),
-// ← returns; Enter in the field opens the first match.
+// Hidden boards are never listed: filter matches among them (or all of them, when nothing else is
+// left) are named below the results with 显示 to bring them back; no match offers 清除筛选.
+// Keyboard: ↓ from the field enters the boards (or those buttons when there are none), ↑/↓/Home/End
+// move, → reaches a board's star (收藏), ← returns; Enter in the field opens the first match.
 
 import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Icon } from '../../../components/Icon'
 import { useRovingFocus } from '../../../lib/useRovingFocus'
 import type { ListRef } from '../../tabs/tabsState'
 import { groupKey, type RovingItemProps } from './PrototypeNavParts'
-import { navActions, type Board, type BoardView } from './prototypeStore'
+import { navActions, type Board, type BoardGroup, type BoardView } from './prototypeStore'
 
 function matches(text: string, query: string): boolean {
   return text.toLowerCase().includes(query)
 }
 
-/** The view narrowed to `query`: a matching group title keeps the whole group. */
+/** Groups narrowed to `query`: a matching group title keeps the whole group. */
+function matchingGroups(groups: BoardGroup[], query: string): BoardGroup[] {
+  return groups
+    .map((group) => (matches(group.title, query) ? group : { ...group, boards: group.boards.filter((item) => matches(item.label, query)) }))
+    .filter((group) => group.boards.length > 0)
+}
+
+/** The view narrowed to `query`. */
 function filtered(view: BoardView, query: string): BoardView {
   if (query === '') return view
   return {
     favorites: view.favorites.filter((item) => matches(item.label, query)),
-    groups: view.groups
-      .map((group) => (matches(group.title, query) ? group : { ...group, boards: group.boards.filter((item) => matches(item.label, query)) }))
-      .filter((group) => group.boards.length > 0)
+    groups: matchingGroups(view.groups, query)
   }
+}
+
+/** Up to three names, then 等. */
+function someNames(boards: Board[]): string {
+  const names = boards
+    .slice(0, 3)
+    .map((item) => item.label)
+    .join('、')
+  return boards.length > 3 ? `${names}等` : names
 }
 
 export function BoardPicker({
   view,
+  hidden,
   selectedKey,
   onSelect,
   shape,
@@ -35,15 +52,18 @@ export function BoardPicker({
   placeholder
 }: {
   view: BoardView
+  /** Hidden boards in their groups (`useBoardView().hidden`): offered back, never listed. */
+  hidden: BoardGroup[]
   selectedKey: string | null
   onSelect: (ref: ListRef) => void
   shape: 'columns' | 'list'
   /** The field takes focus when a popup opens (`data-autofocus`). */
   autoFocus?: boolean
-  /** Directory loading / failure, shown instead of the boards while there are none. */
+  /** Directory not obtained, failed or empty: shown in place of the boards, filtering or not. */
   placeholder?: ReactNode
 }) {
   const fieldId = useId()
+  const noteId = `${fieldId}-note`
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
@@ -64,23 +84,51 @@ export function BoardPicker({
   )
   const roving = useRovingFocus(ids, selectedKey)
 
-  // Favoriting moves the row between sections: keep focus on its star.
-  const refocusStar = useRef<string | null>(null)
+  // Favoriting moves the row between sections: keep focus on its star. Showing hidden boards
+  // removes 显示: focus goes to the first board shown.
+  const refocus = useRef<{ key: string; star: boolean } | null>(null)
   useLayoutEffect(() => {
-    const key = refocusStar.current
-    if (key === null) return
-    refocusStar.current = null
-    rootRef.current?.querySelector<HTMLElement>(`[data-star-key="${CSS.escape(key)}"]`)?.focus()
+    const target = refocus.current
+    if (target === null) return
+    refocus.current = null
+    const star = rootRef.current?.querySelector<HTMLElement>(`[data-star-key="${CSS.escape(target.key)}"]`)
+    const focused = target.star ? star : star?.parentElement?.querySelector<HTMLElement>('[data-roving-item]')
+    focused?.focus()
   })
 
   const first = shown.favorites[0] ?? shown.groups[0]?.boards[0]
   const nothing = shown.favorites.length === 0 && shown.groups.length === 0
 
+  // Hidden filter matches, or every hidden board when they are all there is.
+  const hiddenShown = useMemo(
+    () => (filtering ? matchingGroups(hidden, normalized) : nothing ? hidden : []),
+    [hidden, normalized, filtering, nothing]
+  )
+  const offered = useMemo(() => hiddenShown.flatMap((group) => group.boards), [hiddenShown])
+
+  const showOffered = () => {
+    const firstOffered = offered[0]
+    if (firstOffered === undefined) return
+    refocus.current = { key: firstOffered.key, star: false }
+    setCollapsed((previous) => {
+      if (!hiddenShown.some((group) => previous.has(group.id))) return previous
+      const next = new Set(previous)
+      for (const group of hiddenShown) next.delete(group.id)
+      return next
+    })
+    for (const item of offered) navActions.setBoardHidden(item.key, false)
+  }
+
+  const clearFilter = () => {
+    setQuery('')
+    inputRef.current?.focus()
+  }
+
   const onFieldKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing) return
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      rootRef.current?.querySelector<HTMLElement>('[data-roving-item]')?.focus()
+      rootRef.current?.querySelector<HTMLElement>('[data-roving-item], .proto-picker-status button')?.focus()
     } else if (event.key === 'Enter' && filtering && first !== undefined) {
       event.preventDefault()
       onSelect(first.ref)
@@ -107,6 +155,14 @@ export function BoardPicker({
       inputRef.current?.focus()
       return
     }
+    // From 显示 / 清除筛选: ↑ goes back to the last board, or to the field when there is none.
+    if (event.key === 'ArrowUp' && target.closest('.proto-picker-status') !== null) {
+      event.preventDefault()
+      const boards = rootRef.current?.querySelectorAll<HTMLElement>('[data-roving-item]') ?? []
+      const last = boards.length > 0 ? boards[boards.length - 1] : inputRef.current
+      last?.focus()
+      return
+    }
     roving.onKeyDown(event)
   }
 
@@ -118,7 +174,7 @@ export function BoardPicker({
       current={item.key === selectedKey}
       onSelect={onSelect}
       onStar={() => {
-        refocusStar.current = item.key
+        refocus.current = { key: item.key, star: true }
         navActions.setFavorite(item.key, !favorite)
       }}
       itemProps={roving.itemProps(item.key)}
@@ -193,7 +249,26 @@ export function BoardPicker({
             })}
           </div>
         )}
-        {nothing && (placeholder ?? <p className="proto-picker-empty">{filtering ? '没有匹配的版块。' : '没有可浏览的版面。'}</p>)}
+        {placeholder ?? (
+          <div className={nothing ? 'proto-picker-status' : 'proto-picker-status is-below'} role="status">
+            {nothing && offered.length === 0 && <p className="proto-picker-note">{filtering ? '没有匹配的版块' : '没有可浏览的版面。'}</p>}
+            {offered.length > 0 && (
+              <p className="proto-picker-note" id={noteId}>
+                {filtering ? `已隐藏 ${offered.length} 个匹配：${someNames(offered)}` : '版块都已隐藏'}
+              </p>
+            )}
+            {offered.length > 0 && (
+              <button type="button" className="btn btn-quiet btn-small" aria-describedby={noteId} onClick={showOffered}>
+                显示
+              </button>
+            )}
+            {filtering && nothing && (
+              <button type="button" className="btn btn-quiet btn-small" onClick={clearFilter}>
+                清除筛选
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
