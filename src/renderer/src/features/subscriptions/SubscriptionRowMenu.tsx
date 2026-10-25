@@ -58,7 +58,7 @@ export function SubscriptionRowMenu({
     {
       type: 'action',
       key: 'remove',
-      label: '取消订阅…',
+      label: '取消订阅',
       disabled: removeBlocked !== null,
       title: removeBlocked ?? undefined,
       onSelect: onRemove

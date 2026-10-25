@@ -156,6 +156,9 @@ export function ContextMenu({
     item.onSelect()
   }
 
+  // One label column per menu: when any item is a check, every item reserves the check column.
+  const hasCheck = items.some((item) => item.type === 'check')
+
   return createPortal(
     <div
       ref={boxRef}
@@ -184,9 +187,9 @@ export function ContextMenu({
               tabIndex={-1}
               onClick={() => choose(item)}
             >
-              {item.type === 'check' && (
+              {hasCheck && (
                 <span className="context-menu-check" aria-hidden="true">
-                  {item.checked && <Icon name="check" size={14} />}
+                  {item.type === 'check' && item.checked && <Icon name="check" size={14} />}
                 </span>
               )}
               <span className="context-menu-label">{item.label}</span>

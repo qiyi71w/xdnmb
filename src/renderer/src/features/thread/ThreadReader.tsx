@@ -755,7 +755,12 @@ export function ThreadReader({
               <span>No.{threadId}</span>
               {mode === 'po' && <span className="tag tag-po">只看 PO</span>}
             </p>
-            <h1 className="thread-title">{title ?? `No.${threadId}`}</h1>
+            {/* PROTOTYPE: the head post carries the h1; until it loads a hidden one keeps the reader's single h1. */}
+            {!PROTOTYPE_ENABLED ? (
+              <h1 className="thread-title">{title ?? `No.${threadId}`}</h1>
+            ) : (
+              head === null && <h1 className="visually-hidden">No.{threadId}</h1>
+            )}
           </header>
 
           {head !== null && (

@@ -494,6 +494,25 @@
   font-family: var(--font-reading);
 }
 
+/* PROTOTYPE: the list-row order. Meta line, title, name each on their own line, tight together;
+   the usual gap before the image and body. The head's title keeps the thread-title size. */
+.post-head {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 6px;
+}
+
+.post-head .post-meta,
+.post-head .post-title {
+  margin-bottom: 0;
+}
+
+.post-head .post-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
 .page-divider {
   display: flex;
   align-items: center;
