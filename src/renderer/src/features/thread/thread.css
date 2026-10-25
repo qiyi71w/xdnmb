@@ -543,6 +543,39 @@
   justify-self: stretch;
 }
 
+/* PROTOTYPE: the page before the range loading — a thin text-free bar on the toolbar's lower edge. */
+.prepend-progress {
+  position: absolute;
+  inset: auto 0 -1px;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.prepend-progress::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 32%;
+  background: var(--accent);
+  animation: prepend-progress 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes prepend-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(320%);
+  }
+}
+
+/* Reduced motion: the bar stays still, faint and full width. */
+:root[data-motion='reduce'] .prepend-progress::before {
+  width: 100%;
+  opacity: 0.45;
+}
+
 .end-candidate {
   display: grid;
   justify-items: center;

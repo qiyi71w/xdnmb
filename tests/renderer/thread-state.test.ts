@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Post, ThreadCoverage, ThreadPage } from '../../src/shared/forum'
-import { initialThreadState, threadReducer } from '../../src/renderer/src/features/thread/threadState'
+import { canPrependPrevious, initialThreadState, showsHead, threadReducer, type ThreadState } from '../../src/renderer/src/features/thread/threadState'
 import { threadTotalPages } from '../../src/shared/threadPages'
 
 const head: Post = {
@@ -78,5 +78,40 @@ describe('thread reading state: located end', () => {
     })
     expect(state.pages.map((p) => p.page)).toEqual([1])
     expect(state.coverage).toBe(updated)
+  })
+})
+
+describe('thread reading state: range opened after page 1', () => {
+  const load = (state: ThreadState, task: { type: 'initial'; page: number } | { type: 'prepend'; page: number } | { type: 'jump'; page: number }) =>
+    threadReducer(threadReducer(state, { type: 'start', task }), { type: 'page-loaded', task, page: page(task.page, 19), coverage, source })
+
+  it('shows the main post only once page 1 is loaded into the range', () => {
+    expect(showsHead(initialThreadState(head))).toBe(false)
+    const opened = load(initialThreadState(head), { type: 'initial', page: 3 })
+    expect(opened.head).toEqual(head)
+    expect(showsHead(opened)).toBe(false)
+    const second = load(opened, { type: 'prepend', page: 2 })
+    expect(second.pages.map((p) => p.page)).toEqual([2, 3])
+    expect(showsHead(second)).toBe(false)
+    const first = load(second, { type: 'prepend', page: 1 })
+    expect(first.pages.map((p) => p.page)).toEqual([1, 2, 3])
+    expect(first.rangeVersion).toBe(opened.rangeVersion)
+    expect(showsHead(first)).toBe(true)
+    expect(showsHead(load(first, { type: 'jump', page: 5 }))).toBe(false)
+    expect(showsHead(load(initialThreadState(null), { type: 'initial', page: 1 }))).toBe(true)
+  })
+
+  it('allows an automatic previous page only while idle, before page 1, and not after it failed', () => {
+    const opened = load(initialThreadState(head), { type: 'initial', page: 3 })
+    expect(canPrependPrevious(opened)).toBe(true)
+    const task = { type: 'prepend', page: 2 } as const
+    const running = threadReducer(opened, { type: 'start', task })
+    expect(canPrependPrevious(running)).toBe(false)
+    const failed = threadReducer(running, { type: 'failed', task, failure: { type: 'read', error: { kind: 'network', detail: 'timeout' } } })
+    expect(canPrependPrevious(failed)).toBe(false)
+    const retried = threadReducer(failed, { type: 'start', task })
+    const loaded = threadReducer(retried, { type: 'page-loaded', task, page: page(2, 19), coverage, source })
+    expect(canPrependPrevious(loaded)).toBe(true)
+    expect(canPrependPrevious(load(loaded, { type: 'prepend', page: 1 }))).toBe(false)
   })
 })

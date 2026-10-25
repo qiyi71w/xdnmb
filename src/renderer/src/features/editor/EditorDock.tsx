@@ -23,6 +23,9 @@ import {
 import { editorFor, identityStatus, isUnsaved, type Editor, type IdentityStatus } from './editorsState'
 import { focusKey } from './useEditorsStore'
 import { useEditorWorkspace } from './workspace'
+import { AttachmentPreview } from './AttachmentPreview'
+import { useComposeTips } from './composeTips'
+import { KaomojiPicker } from './KaomojiPicker'
 import './editor.css'
 
 /** Identity of an existing editor; a reference waiting for the overview is “读取中”, not unknown. */
@@ -216,6 +219,12 @@ export function EditorPanel({
   const [retargeting, setRetargeting] = useState(false)
   const [identityNotice, setIdentityNotice] = useState<string | null>(null)
   const [reportError, setReportError] = useState(false)
+  /** Float layout: the attached image shown large, opened from its thumbnail chip. */
+  const [previewing, setPreviewing] = useState(false)
+  const thumbRef = useRef<HTMLButtonElement>(null)
+  const attachmentId = editor.attachment?.id ?? null
+  useEffect(() => setPreviewing(false), [attachmentId])
+  useComposeTips(panelRef)
   const hasExtraFields = editor.fields.title !== '' || editor.fields.name !== '' || editor.fields.email !== ''
   /** Float layout: the 标题／名称／E-mail row is shown whenever one of its fields holds something. */
   const [fieldsOpen, setFieldsOpen] = useState(hasExtraFields)
@@ -264,6 +273,34 @@ export function EditorPanel({
   }, [focusBar])
 
   const edit = (patch: Partial<PostFields>) => store.dispatch({ type: 'edit', editorId, patch })
+
+  /** Caret to place once a text written without the editing command has rendered. */
+  const pendingCaret = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    const caret = pendingCaret.current
+    const textarea = textareaRef.current
+    if (caret === null || textarea === null) return
+    pendingCaret.current = null
+    textarea.setSelectionRange(caret, caret)
+  })
+
+  /**
+   * Float layout (颜文字): `inserted` goes into the text at its caret, over its selection, even when
+   * focus was elsewhere (标题／名称); focus ends in the text with the caret after the insertion.
+   */
+  const insertText = (inserted: string) => {
+    const textarea = textareaRef.current
+    if (textarea === null || locked) return
+    const { selectionStart: start, selectionEnd: end, value } = textarea
+    textarea.focus()
+    textarea.setSelectionRange(start, end)
+    // As if typed: one native undo step, the caret after it, the change through onChange.
+    if (document.execCommand('insertText', false, inserted)) return
+    const next = value.slice(0, start) + inserted + value.slice(end)
+    pendingCaret.current = start + inserted.length
+    if (report !== undefined) store.dispatch({ type: 'edit-report', editorId, patch: { text: next } })
+    else edit({ content: next })
+  }
 
   const collapse = () => {
     focusBar.current = true
@@ -629,24 +666,29 @@ export function EditorPanel({
               </button>
               {attachment !== null && (
                 <span className="compose-attachment">
-                  <span
-                    className="compose-thumb"
-                    data-tip={`${attachment.width}×${attachment.height} · ${attachment.format.toUpperCase()} · ${formatBytes(attachment.bytes)}`}
-                    data-tip-place="start"
-                  >
-                    {attach.previewFailed === attachment.id ? (
-                      <>
-                        <Icon name="image" size={14} />
-                        <span className="visually-hidden">无法显示预览：{attachment.originalName}</span>
-                      </>
-                    ) : (
-                      <img
-                        src={attachment.url}
-                        alt={`附图预览：${attachment.originalName}`}
-                        onError={() => attach.markPreviewFailed(attachment.id)}
-                      />
-                    )}
-                  </span>
+                  {attach.previewFailed === attachment.id ? (
+                    <span
+                      className="compose-thumb is-failed"
+                      data-tip={`${attachment.width}×${attachment.height} · ${attachment.format.toUpperCase()} · ${formatBytes(attachment.bytes)}`}
+                      data-tip-place="start"
+                    >
+                      <Icon name="image" size={16} />
+                      <span className="visually-hidden">无法显示预览：{attachment.originalName}</span>
+                    </span>
+                  ) : (
+                    <button
+                      ref={thumbRef}
+                      type="button"
+                      className="compose-thumb"
+                      aria-label={`查看附图：${attachment.originalName}`}
+                      aria-haspopup="dialog"
+                      data-tip={`${attachment.width}×${attachment.height} · ${attachment.format.toUpperCase()} · ${formatBytes(attachment.bytes)}`}
+                      data-tip-place="start"
+                      onClick={() => setPreviewing(true)}
+                    >
+                      <img src={attachment.url} alt="" onError={() => attach.markPreviewFailed(attachment.id)} />
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="compose-chip-remove"
@@ -658,6 +700,9 @@ export function EditorPanel({
                   >
                     <Icon name="close" size={12} />
                   </button>
+                  {previewing && attach.previewFailed !== attachment.id && (
+                    <AttachmentPreview attachment={attachment} returnFocus={thumbRef} onClose={() => setPreviewing(false)} />
+                  )}
                 </span>
               )}
               {attachment !== null && <WatermarkSwitch editor={editor} helpId={`${ids}-wm`} hint={false} />}
@@ -676,6 +721,7 @@ export function EditorPanel({
                 <Icon name="fields" />
                 {fieldsHidden && <span className="compose-dot" aria-hidden="true" />}
               </button>
+              <KaomojiPicker disabled={locked} onInsert={insertText} />
               {status}
             </div>
             {actions}
@@ -932,24 +978,27 @@ function AttachmentRow({ editor, attach }: { editor: Editor; attach: AttachImage
 
 function WatermarkSwitch({ editor, helpId, hint }: { editor: Editor; helpId: string; hint: boolean }) {
   const { store } = useEditorWorkspace()
+  const ids = useId()
   const hasImage = editor.attachment !== null
   const on = editor.fields.watermark
+  const disabled = !hasImage || editor.publication !== null
   return (
-    <span className="editor-watermark">
+    <span className={`editor-watermark${disabled ? ' is-disabled' : ''}`}>
+      <label className="editor-watermark-label" id={`${ids}-label`} htmlFor={`${ids}-switch`}>
+        水印
+      </label>
       <button
+        id={`${ids}-switch`}
         type="button"
         role="switch"
         className="switch"
         aria-checked={on}
+        aria-labelledby={`${ids}-label`}
         aria-describedby={hasImage || !hint ? undefined : helpId}
-        disabled={!hasImage || editor.publication !== null}
+        disabled={disabled}
         onClick={() => store.dispatch({ type: 'edit', editorId: editor.id, patch: { watermark: !on } })}
       >
         <span className="switch-thumb" aria-hidden="true" />
-        <span>水印</span>
-        <span className="switch-state" aria-hidden="true">
-          {on ? '开' : '关'}
-        </span>
       </button>
       {!hasImage && hint && (
         <span className="editor-hint" id={helpId}>

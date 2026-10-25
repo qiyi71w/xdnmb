@@ -157,6 +157,13 @@ const PATHS = {
       <circle cx="12" cy="12" r="1" />
       <circle cx="18" cy="12" r="1" />
     </>
+  ),
+  /** 颜文字: a face. */
+  kaomoji: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M8.6 9.8v.6M15.4 9.8v.6M8.5 14c.9 1.3 2.1 2 3.5 2s2.6-.7 3.5-2" />
+    </>
   )
 } as const
 

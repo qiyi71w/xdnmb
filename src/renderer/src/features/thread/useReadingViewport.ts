@@ -30,6 +30,8 @@ export interface ReadingViewportOptions {
    * remembered anchor (snapshot, saved position) whose post is gone; `post`: an explicit post.
    */
   onNearby: (kind: 'anchor' | 'post') => void
+  /** The reader scrolled the content itself (not a position or anchor applied by this hook). */
+  onUserScroll: () => void
 }
 
 function sameAnchor(a: ReadingAnchor, b: ReadingAnchor | null): boolean {
@@ -45,8 +47,9 @@ function sameAnchor(a: ReadingAnchor, b: ReadingAnchor | null): boolean {
 /**
  * Reading line, anchors and read judgement of one reader scroller.
  * - The last captured anchor (user scroll, rAF) is re-applied whenever anything resizes — late
- *   images, a prepended page, reflow after a width change, the toolbar growing — so the reading
- *   line stays on the same spot of the same post. Content appended below never moves the view.
+ *   images, reflow after a width change, the toolbar growing — so the reading line stays on the
+ *   same spot of the same post. Content appended below never moves the view. A page inserted above
+ *   is kept still exactly with `exactAnchor` (read before the insertion) and `keepAnchor`.
  * - Nothing is captured, judged or saved until the first position has been applied.
  * - The read judge is active only while the reader is displayed and uncovered (`useAppCovered`)
  *   and the window is visible and focused; it is fed full geometry snapshots of the rendered posts
@@ -295,8 +298,34 @@ export function useReadingViewport(options: ReadingViewportOptions) {
       }
     }
     expectedTopRef.current = null
+    opts.current.onUserScroll()
     schedule(true)
   }, [scrollRef, measurable, schedule])
+
+  /**
+   * Anchor of exactly what is on screen now, taken before content is inserted above it: the post
+   * under the reading line, or, when the line falls above or between posts, the next post at its
+   * own distance from the viewport top (a plain capture would move that post up to the line).
+   */
+  const exactAnchor = useCallback((): ReadingAnchor | null => {
+    const scroller = scrollRef.current
+    if (!measurable() || !restoredRef.current || scroller === null) return null
+    const all = boxes()
+    const anchor = captureAnchor(all, scroller.scrollTop, lineOffset())
+    if (anchor === null || anchor.offsetRatio > 0) return anchor
+    const box = all.find((item) => item.postId === anchor.postId)
+    return box === undefined ? anchor : { ...anchor, viewportOffset: Math.max(anchor.viewportOffset, box.top - scroller.scrollTop) }
+  }, [scrollRef, measurable, boxes, lineOffset])
+
+  /** Puts `anchor` (from `exactAnchor`) back on screen right after layout and keeps it until the reader scrolls. */
+  const keepAnchor = useCallback(
+    (anchor: ReadingAnchor) => {
+      if (!measurable() || !restoredRef.current) return
+      anchorRef.current = anchor
+      reapplyAnchor(anchor)
+    },
+    [measurable, reapplyAnchor]
+  )
 
   // Re-shown (tab activated, single pane switched back): the browser may have dropped scrollTop
   // while the pane was hidden, so re-apply the pending position or the last anchor.
@@ -386,5 +415,5 @@ export function useReadingViewport(options: ReadingViewportOptions) {
     [scrollRef, contentRef, measurable, toolbarHeight]
   )
 
-  return { onScroll, position, currentAnchor, saveNow, hasPost, isVisible }
+  return { onScroll, position, currentAnchor, saveNow, hasPost, isVisible, exactAnchor, keepAnchor }
 }

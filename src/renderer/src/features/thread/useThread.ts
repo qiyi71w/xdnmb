@@ -3,7 +3,7 @@ import type { ReadError, ThreadEndResult, ThreadPageResult } from '../../../../s
 import type { Post, ReadingMode, ThreadId } from '../../../../shared/forum'
 import { threadTotalPages } from '../../../../shared/threadPages'
 import { OperationScope } from '../../lib/operations'
-import { initialThreadState, threadReducer, type ThreadTask } from './threadState'
+import { canPrependPrevious, initialThreadState, threadReducer, type ThreadTask } from './threadState'
 
 type PageTask = Exclude<ThreadTask, { type: 'locate' }>
 
@@ -158,11 +158,20 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     void readPage({ type: 'append', page: last.page + 1 })
   }, [readPage])
 
+  /** Explicit 加载上一页: supersedes whatever is running. */
   const prependPrevious = useCallback(() => {
     const first = stateRef.current.pages[0]
     if (first === undefined || first.page <= 1) return
     supersede({ type: 'prepend', page: first.page - 1 })
   }, [supersede])
+
+  /** Automatic previous page (scrolling up near the top); never interrupts another read. */
+  const prependAuto = useCallback(() => {
+    const current = stateRef.current
+    const first = current.pages[0]
+    if (scope.current.busy || !canPrependPrevious(current) || first === undefined) return
+    void readPage({ type: 'prepend', page: first.page - 1 })
+  }, [readPage])
 
   /** Re-reads the last loaded page (including an end-candidate page) and merges it. */
   const refresh = useCallback(() => {
@@ -192,8 +201,10 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     firstPage: loadedFirst,
     lastPage,
     canAppend,
+    canPrepend: canPrependPrevious(state),
     appendNext,
     prependPrevious,
+    prependAuto,
     refresh,
     jump,
     locateEnd,

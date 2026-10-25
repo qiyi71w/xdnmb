@@ -67,6 +67,23 @@ export function initialThreadState(head: Post | null): ThreadState {
   return { head, pages: [], coverage: null, task: null, error: null, endProbe: null, pageCap: null, rangeVersion: 0 }
 }
 
+/**
+ * The main post belongs to page 1: a range opened further in (末尾, a page jump, a resumed page)
+ * shows it only once page 1 has been loaded into the range.
+ */
+export function showsHead(state: ThreadState): boolean {
+  return state.head !== null && state.pages[0]?.page === 1
+}
+
+/**
+ * An automatic read of the page before the range may start: the range starts after page 1, nothing
+ * is running and the last such read did not fail (a failure waits for an explicit 重试).
+ */
+export function canPrependPrevious(state: ThreadState): boolean {
+  const first = state.pages[0]
+  return first !== undefined && first.page > 1 && state.task === null && state.error?.task.type !== 'prepend'
+}
+
 function toLoaded(page: ThreadPage, source: Source): LoadedPage {
   return { page: page.page, replies: page.replies, skippedItems: page.skippedItems, endCandidate: page.endCandidate, source }
 }

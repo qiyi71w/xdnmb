@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import type { Post, PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
 import { threadTotalPages } from '../../../../shared/threadPages'
 import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
@@ -16,7 +16,7 @@ import type { SourceFocus } from '../tabs/tabsState'
 import { CoverageLine, pageLabel } from './CoverageLine'
 import { PostView } from './PostView'
 import { startPage, unreadInMode, type ReaderPosition } from './readingStart'
-import type { ThreadTask } from './threadState'
+import { showsHead, type ThreadTask } from './threadState'
 import { useReadingViewport } from './useReadingViewport'
 import { useThread } from './useThread'
 import { FavoriteButton, OfflineButton } from '../content/ThreadRetention'
@@ -187,6 +187,37 @@ function PagePopover({
   )
 }
 
+interface PrependAnchorProps {
+  /** Number of the first loaded page. */
+  first: number | undefined
+  /** `rangeVersion`: a replaced range is positioned by its action instead. */
+  range: number
+  snapshot: () => ReadingAnchor | null
+  keep: (anchor: ReadingAnchor) => void
+}
+
+/**
+ * Keeps the view still when the page before the range is inserted above it. `getSnapshotBeforeUpdate`
+ * is the one point that runs before React mutates the DOM of a commit, so the post on screen is read
+ * there and put back at the same spot right after layout, before anything is painted (nothing inserted
+ * above is ever on screen, so nothing there can be judged read by the insertion).
+ */
+class PrependAnchor extends Component<PrependAnchorProps> {
+  override getSnapshotBeforeUpdate(previous: Readonly<PrependAnchorProps>): ReadingAnchor | null {
+    const { first, range, snapshot } = this.props
+    const prepended = range === previous.range && first !== undefined && previous.first !== undefined && first < previous.first
+    return prepended ? snapshot() : null
+  }
+
+  override componentDidUpdate(_previous: Readonly<PrependAnchorProps>, _state: unknown, anchor: ReadingAnchor | null): void {
+    if (anchor !== null) this.props.keep(anchor)
+  }
+
+  override render(): null {
+    return null
+  }
+}
+
 export interface ThreadReaderProps {
   entryKey: number
   threadId: ThreadId
@@ -277,11 +308,19 @@ export function ThreadReader({
   const contentRef = useRef<HTMLDivElement>(null)
   const toolbarRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
+  /** PROTOTYPE: near the top, scrolling up loads the page before the range. */
+  const topSentinelRef = useRef<HTMLDivElement>(null)
   /** Where the reading line goes when the next replaced range arrives. */
   const nextPosition = useRef<ReaderPosition | null>(startRef.current)
   const [pageInput, setPageInput] = useState('')
   const [nearby, setNearby] = useState<'anchor' | 'post' | null>(null)
   const temporary = temporaryOf !== null
+  /**
+   * PROTOTYPE: the user moved up (wheel, key or scroll) since the range was placed. Placing a range
+   * never loads the page before it by itself.
+   */
+  const [prependArmed, setPrependArmed] = useState(false)
+  const lastScrollTop = useRef(0)
 
   const [near] = useState(() => new NearViewport(() => scrollRef.current))
   const [viewer, setViewer] = useState<ViewerRequest | null>(null)
@@ -321,7 +360,7 @@ export function ThreadReader({
     else scrollRef.current?.focus({ preventScroll: true })
   }, [viewer])
 
-  const { position, onScroll, currentAnchor, hasPost, isVisible } = useReadingViewport({
+  const { position, onScroll, currentAnchor, hasPost, isVisible, exactAnchor, keepAnchor } = useReadingViewport({
     scrollRef,
     contentRef,
     toolbarRef,
@@ -330,14 +369,29 @@ export function ThreadReader({
     knownRead: readingState?.readPostIds ?? NO_POSTS,
     onRead,
     onSave: (anchor) => onSavePosition(mode, anchor),
-    onNearby: setNearby
+    onNearby: setNearby,
+    onUserScroll: () => {
+      if ((scrollRef.current?.scrollTop ?? 0) < lastScrollTop.current) setPrependArmed(true)
+    }
   })
 
   useNearEnd(scrollRef, sentinelRef, thread.canAppend, `${state.pages.length}:${lastPage?.page ?? 0}`, thread.appendNext)
 
+  // PROTOTYPE: within about one viewport of the top, the page before the range follows the reader up.
+  // A failed read stops here until 重试 (`canPrepend` stays false while its failure is shown).
+  useNearEnd(
+    scrollRef,
+    topSentinelRef,
+    PROTOTYPE_ENABLED && prependArmed && thread.canPrepend,
+    firstPage?.page ?? 0,
+    thread.prependAuto,
+    '100% 0px 0px 0px'
+  )
+
   // A replaced range (first load, jump, 开头, 末尾, 首条未读) gets the position its action asked for.
   useLayoutEffect(() => {
     if (state.rangeVersion === 0) return
+    setPrependArmed(false)
     const target: ReaderPosition = nextPosition.current ?? { kind: 'top' }
     nextPosition.current = null
     // A capped tail still goes to the readable page's end; a capped page jump goes to its top.
@@ -434,11 +488,32 @@ export function ThreadReader({
     load()
   }
 
+  /** Explicit entry already in the range; like a new range, it waits for the user to move up again. */
+  const placeHere = (target: ReaderPosition) => {
+    setNearby(null)
+    setPrependArmed(false)
+    position(target)
+  }
+
   const toStart = () => {
-    if (firstPage?.page === 1) {
-      setNearby(null)
-      position({ kind: 'top' })
-    } else goTo({ kind: 'top' }, () => thread.jump(1))
+    if (firstPage?.page === 1) placeHere({ kind: 'top' })
+    else goTo({ kind: 'top' }, () => thread.jump(1))
+  }
+
+  /**
+   * PROTOTYPE: keys on the reading content. Home goes to the start of page 1 like 开头 (the top of a
+   * range opened further in is not the start of the thread); moving up lets the page before follow.
+   */
+  const onReaderKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!PROTOTYPE_ENABLED || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return
+    const target = event.target as HTMLElement
+    if (toolbarRef.current?.contains(target) || target.isContentEditable || target.closest('input, textarea, select') !== null) return
+    if (event.key === 'Home' && !event.shiftKey) {
+      event.preventDefault()
+      toStart()
+    } else if (event.key === 'ArrowUp' || event.key === 'PageUp' || (event.key === ' ' && event.shiftKey)) {
+      setPrependArmed(true)
+    }
   }
 
   const unreadHere = useMemo(() => unreadInMode(readingState, mode, readNow), [readingState, mode, readNow])
@@ -447,10 +522,8 @@ export function ThreadReader({
     if (firstUnread === undefined) return
     const page = firstUnread.pages[mode] ?? 1
     const target: ReaderPosition = { kind: 'post', postId: firstUnread.postId, page }
-    if (hasPost(firstUnread.postId)) {
-      setNearby(null)
-      position(target)
-    } else goTo(target, () => thread.jump(page))
+    if (hasPost(firstUnread.postId)) placeHere(target)
+    else goTo(target, () => thread.jump(page))
   }
 
   const totalPages = threadTotalPages(state.coverage?.reportedReplyCount ?? null)
@@ -467,6 +540,7 @@ export function ThreadReader({
   }, [state.rangeVersion, state.pages, currentAnchor])
   const onReaderScroll = () => {
     onScroll()
+    lastScrollTop.current = scrollRef.current?.scrollTop ?? 0
     if (PROTOTYPE_ENABLED) setReadingPage(currentAnchor()?.page ?? null)
   }
   const shownPage = readingPage ?? firstPage?.page ?? 1
@@ -485,14 +559,22 @@ export function ThreadReader({
   const task = state.task
   const error = state.error
   const shownIds = new Set<string>(head === null ? [] : [head.id])
+  // PROTOTYPE: the main post comes with page 1; until then a hidden h1 keeps the reader's single h1.
+  const headShown = !PROTOTYPE_ENABLED || showsHead(state)
   const loadedRange =
     firstPage === undefined || lastPage === undefined
       ? null
       : firstPage.page === lastPage.page
         ? pageLabel(mode, firstPage.page)
         : pageLabel(mode, `${firstPage.page}–${lastPage.page}`)
+  // PROTOTYPE: a failed automatic previous page is reported here, at the top, with its 重试.
   const toolbarError =
-    error !== null && error.task.type !== 'append' && error.task.type !== 'prepend' && error.task.type !== 'initial' ? error : null
+    error !== null &&
+    error.task.type !== 'append' &&
+    error.task.type !== 'initial' &&
+    (PROTOTYPE_ENABLED || error.task.type !== 'prepend')
+      ? error
+      : null
   // Initial, append and prepend progress is shown where the content will appear. PROTOTYPE: only the
   // cancellable 定位末尾 is shown; other loads stay quiet until they fail.
   const toolbarTask =
@@ -655,6 +737,14 @@ export function ThreadReader({
         className="reader-scroll"
         ref={scrollRef}
         onScroll={onReaderScroll}
+        onWheel={
+          PROTOTYPE_ENABLED
+            ? (event) => {
+                if (event.deltaY < 0) setPrependArmed(true)
+              }
+            : undefined
+        }
+        onKeyDown={onReaderKeyDown}
         tabIndex={-1}
         data-pane-focus=""
         inert={viewer !== null}
@@ -787,25 +877,32 @@ export function ThreadReader({
               </div>
             </div>
           )}
+          {/* PROTOTYPE: the page before the range loads quietly; a thin bar under the toolbar, no text. */}
+          {PROTOTYPE_ENABLED && task?.type === 'prepend' && <div className="prepend-progress" aria-hidden="true" />}
         </div>
 
         <QuoteEntryContext.Provider value={entryKey}>
-        <div className="reader-column" ref={contentRef}>
+        <div
+          className="reader-column"
+          ref={contentRef}
+          aria-busy={PROTOTYPE_ENABLED && task?.type === 'prepend' ? true : undefined}
+        >
+          {PROTOTYPE_ENABLED && <div ref={topSentinelRef} className="scroll-sentinel" aria-hidden="true" />}
+          <PrependAnchor first={firstPage?.page} range={state.rangeVersion} snapshot={exactAnchor} keep={keepAnchor} />
           <header className="thread-header">
             <p className="thread-crumb">
               {head !== null && forumName(head.forumId) !== null && <span>{forumName(head.forumId)}</span>}
               <span>No.{threadId}</span>
               {mode === 'po' && <span className="tag tag-po">只看 PO</span>}
             </p>
-            {/* PROTOTYPE: the head post carries the h1; until it loads a hidden one keeps the reader's single h1. */}
             {!PROTOTYPE_ENABLED ? (
               <h1 className="thread-title">{title ?? `No.${threadId}`}</h1>
             ) : (
-              head === null && <h1 className="visually-hidden">No.{threadId}</h1>
+              (head === null || !headShown) && <h1 className="visually-hidden">{title ?? `No.${threadId}`}</h1>
             )}
           </header>
 
-          {head !== null && (
+          {head !== null && headShown && (
             <PostView
               post={head}
               isHead
@@ -817,18 +914,12 @@ export function ThreadReader({
             />
           )}
 
-          {firstPage !== undefined && firstPage.page > 1 && (
+          {!PROTOTYPE_ENABLED && firstPage !== undefined && firstPage.page > 1 && (
             <div className="load-previous">
-              {task?.type === 'prepend' && !PROTOTYPE_ENABLED ? (
+              {task?.type === 'prepend' ? (
                 <Loading>{taskText(task, mode)}</Loading>
               ) : (
-                // PROTOTYPE: the button stays (focus with it) and waits quietly while the page loads.
-                <button
-                  type="button"
-                  className="btn"
-                  aria-disabled={task?.type === 'prepend' ? true : undefined}
-                  onClick={task?.type === 'prepend' ? undefined : thread.prependPrevious}
-                >
+                <button type="button" className="btn" onClick={thread.prependPrevious}>
                   <Icon name="arrowUp" />
                   加载上一页（{pageLabel(mode, firstPage.page - 1)}）
                 </button>

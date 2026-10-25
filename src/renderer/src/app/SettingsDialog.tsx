@@ -708,9 +708,6 @@ export function TabsSection({ settings, write }: { settings: AppSettings; write:
           onClick={() => write({ newTabSplitDefault: !settings.newTabSplitDefault })}
         >
           <span className="switch-thumb" aria-hidden="true" />
-          <span className="switch-state" aria-hidden="true">
-            {settings.newTabSplitDefault ? '开' : '关'}
-          </span>
         </button>
       </div>
     </Section>
@@ -908,9 +905,6 @@ export function PublicationSection() {
           onClick={() => void toggle()}
         >
           <span className="switch-thumb" aria-hidden="true" />
-          <span className="switch-state" aria-hidden="true">
-            {enabled === null ? '…' : enabled ? '开' : '关'}
-          </span>
         </button>
       </div>
       {readFailed && (
