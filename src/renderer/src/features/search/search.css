@@ -61,10 +61,6 @@
   caret-color: var(--accent);
 }
 
-.search-input::placeholder {
-  color: var(--ink-3);
-}
-
 .search-input:focus-visible {
   outline-offset: 0;
   border-color: var(--accent);

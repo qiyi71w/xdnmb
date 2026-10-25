@@ -141,7 +141,7 @@
 }
 
 .list-empty-title {
-  font-size: 0.9375rem;
+  font-size: var(--text-md);
   font-weight: 600;
   color: var(--ink-2);
 }
@@ -190,9 +190,21 @@
   background: var(--hover);
 }
 
-/* Selected row: tint; aria-current names it. */
+/* Selected row: tint, bold author line and darker excerpt (not colour alone); aria-current names it. */
 .thread-row.is-selected {
   background: var(--selected);
+}
+
+.thread-row.is-selected .row-top {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.thread-row.is-selected .row-name,
+.thread-row.is-selected .row-time,
+.thread-row.is-selected .user-hash,
+.thread-row.is-selected .row-excerpt {
+  color: var(--ink);
 }
 
 .thread-row.is-selected::before,

@@ -52,10 +52,6 @@
   font-size: var(--text-md);
 }
 
-.online-search-input::placeholder {
-  color: var(--ink-3);
-}
-
 .online-search-input:focus-visible {
   outline-offset: 0;
   border-color: transparent;

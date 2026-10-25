@@ -106,13 +106,13 @@
   position: absolute;
   top: 1px;
   right: 0;
-  min-width: 15px;
-  height: 15px;
+  min-width: 16px;
+  height: 16px;
   padding: 0 4px;
   border-radius: 999px;
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-weight: 700;
-  line-height: 15px;
+  line-height: 16px;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
@@ -190,6 +190,10 @@
 .proto-rail-btn.is-current {
   background: var(--nav-current);
   color: var(--accent-ink);
+}
+
+.proto-rail-btn.is-current .icon {
+  stroke-width: 2.3;
 }
 
 .proto-rail-btn.is-open {
@@ -319,8 +323,9 @@
 }
 
 .proto-settings-title {
-  font-size: 1.25rem;
-  font-weight: 700;
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 /* Focus handed to a heading (page entered, directory entry chosen) shows as the page itself: the
@@ -352,8 +357,9 @@
 .proto-category-title {
   padding: 12px 0 6px;
   border-bottom: 2px solid var(--accent-soft);
-  font-size: 1.125rem;
-  font-weight: 700;
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   color: var(--accent-ink);
 }
 

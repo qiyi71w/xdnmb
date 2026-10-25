@@ -114,10 +114,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.page-input::placeholder {
-  color: var(--ink-3);
-}
-
 .page-input[aria-invalid='true'] {
   border-color: var(--danger-ink);
   border-width: 2px;
