@@ -4,6 +4,28 @@
  * closes one layer and the next Esc the layer below it (spec I11).
  */
 const stack: symbol[] = []
+const listeners = new Set<() => void>()
+let notifying = false
+
+/**
+ * Listeners hear about layer changes once the opening or closing code has finished: a dialog that
+ * opens its layer and then calls `showModal()` (or releases it and is then removed) is already in
+ * its new state by then.
+ */
+function changed(): void {
+  if (notifying || listeners.size === 0) return
+  notifying = true
+  queueMicrotask(() => {
+    notifying = false
+    for (const listener of listeners) listener()
+  })
+}
+
+/** Calls `listener` after layers open or close; returns the unsubscribe. */
+export function onLayersChange(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
 
 export interface Layer {
   isTop(): boolean
@@ -14,11 +36,14 @@ export interface Layer {
 export function openLayer(): Layer {
   const token = Symbol('layer')
   stack.push(token)
+  changed()
   return {
     isTop: () => stack[stack.length - 1] === token,
     release: () => {
       const at = stack.indexOf(token)
-      if (at >= 0) stack.splice(at, 1)
+      if (at < 0) return
+      stack.splice(at, 1)
+      changed()
     }
   }
 }

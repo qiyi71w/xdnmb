@@ -566,6 +566,17 @@
   color: var(--ink-3);
 }
 
+/* PROTOTYPE: the end of a fully read thread is a single quiet 刷新. */
+.thread-end {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 4px;
+}
+
+.thread-end .btn[aria-busy='true'] {
+  cursor: progress;
+}
+
 .reader-footer {
   padding-top: 8px;
 }

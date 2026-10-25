@@ -144,6 +144,13 @@ const PATHS = {
       <path d="M4.5 12h15M12 4.5c2.1 2.1 3.2 4.6 3.2 7.5s-1.1 5.4-3.2 7.5c-2.1-2.1-3.2-4.6-3.2-7.5s1.1-5.4 3.2-7.5Z" />
     </>
   ),
+  /** 标题 / 名称 / E-mail: two stacked input fields. */
+  fields: (
+    <>
+      <rect x="4" y="5.5" width="16" height="5" rx="1.5" />
+      <rect x="4" y="13.5" width="16" height="5" rx="1.5" />
+    </>
+  ),
   more: (
     <>
       <circle cx="6" cy="12" r="1" />

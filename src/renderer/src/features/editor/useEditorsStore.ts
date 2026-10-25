@@ -129,7 +129,7 @@ export function useEditorsStore(): EditorsStore {
 
   const dispatch = useCallback(
     (action: EditorsAction) => {
-      if (action.type === 'discard') clearError(action.editorId)
+      if (action.type === 'discard' || action.type === 'discard-undoable') clearError(action.editorId)
       if (action.type === 'close-tab') {
         const prefix = `${action.tabId}|`
         setPublished((previous) => {
@@ -245,7 +245,11 @@ export function useEditorsStore(): EditorsStore {
         const postId = attempt.postId
         if (editor !== undefined && postId !== null) {
           const note: PublishedNote = { postId, threadId: attempt.threadId ?? postId, isThread: attempt.payload.target.kind === 'thread' }
-          setPublished((previous) => new Map(previous).set(focusKey(editor.tabId, editor.target), note))
+          setPublished((previous) => {
+            const next = new Map(previous)
+            for (const tabId of editor.tabIds) next.set(focusKey(tabId, editor.target), note)
+            return next
+          })
         }
         rawDispatch({ type: 'publish-ended', editorId })
         return

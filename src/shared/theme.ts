@@ -187,7 +187,7 @@ function rgbaCss(color: Rgba, alpha: number): string {
 }
 
 /** Source-over compositing in gamma-encoded sRGB, as the page draws it. */
-function over(top: Rgba, bottom: Rgba): Rgba {
+export function over(top: Rgba, bottom: Rgba): Rgba {
   const a = top.a + bottom.a * (1 - top.a)
   if (a === 0) return { r: 0, g: 0, b: 0, a: 0 }
   const blend = (t: number, b: number) => (t * top.a + b * bottom.a * (1 - top.a)) / a

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import type { Post, PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
 import { threadTotalPages } from '../../../../shared/threadPages'
 import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
-import { Icon } from '../../components/Icon'
+import { Icon, Spinner } from '../../components/Icon'
 import { FailureNotice, IdentitySettingsAction, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
 import { useCover } from '../../lib/appCovered'
 import { describeReadError, formatPageList, meaningfulTitle } from '../../lib/format'
@@ -38,6 +38,8 @@ const HIGHLIGHT_MS = 2400
 /** How long a settled reader waits for an automatic next page that may bring the quote to refocus. */
 const FOCUS_WAIT_MS = 1500
 const NO_POSTS: readonly PostId[] = []
+/** Posts in reading order, blocked placeholders included. */
+const SHOWN_POSTS = '[data-post-id], [data-blocked-post-id]'
 
 function taskText(task: ThreadTask, mode: ReadingMode): string {
   switch (task.type) {
@@ -533,6 +535,28 @@ export function ThreadReader({
     </button>
   )
 
+  // PROTOTYPE: the end of a fully read thread is only a quiet 刷新. It stays focusable while it
+  // works (aria-disabled); if new replies replace it, focus moves to the first new reply.
+  const endRefreshRef = useRef<HTMLButtonElement>(null)
+  /** Posts shown when the focused end 刷新 was pressed; null when it was not the focus. */
+  const endRefreshFrom = useRef<number | null>(null)
+  const endRefreshing = task?.type === 'refresh'
+  const refreshAtEnd = () => {
+    if (endRefreshing) return
+    endRefreshFrom.current =
+      document.activeElement === endRefreshRef.current ? (contentRef.current?.querySelectorAll(SHOWN_POSTS).length ?? 0) : null
+    thread.refresh()
+  }
+  useEffect(() => {
+    const shown = endRefreshFrom.current
+    if (shown === null || state.task?.type === 'refresh') return
+    endRefreshFrom.current = null
+    if (endRefreshRef.current !== null) return
+    const posts = contentRef.current?.querySelectorAll<HTMLElement>(SHOWN_POSTS)
+    const next = posts?.[shown] ?? posts?.[posts.length - 1]
+    next?.focus()
+  }, [state.task, state.pages])
+
   // The prototype's position control uses the small quiet form of the same buttons.
   const positionButton = PROTOTYPE_ENABLED ? 'btn btn-small btn-quiet' : 'btn'
   const positionIcon = PROTOTYPE_ENABLED ? 14 : 16
@@ -824,7 +848,7 @@ export function ThreadReader({
             const label = pageLabel(mode, page.page)
             return (
               <section key={page.page} className="page-section" data-page={page.page} aria-label={label}>
-                <h2 className="page-divider">{label}</h2>
+                {!(PROTOTYPE_ENABLED && page.endCandidate) && <h2 className="page-divider">{label}</h2>}
                 <SourceNotice source={page.source} subject={label} />
                 <PartialNotice skipped={page.skippedItems} subject={label} />
                 {replies.map((reply) => PROTOTYPE_ENABLED && isPostBlocked(reply, blocks.blocks) && !revealed.has(reply.id) ? (
@@ -841,7 +865,21 @@ export function ThreadReader({
                     actions={PROTOTYPE_ENABLED ? { own: postActions.ownIds.has(reply.id), reply: (opener) => postActions.reply(reply.id, opener), report: (opener) => postActions.report(reply.id, opener) } : undefined}
                   />
                 ))}
-                {page.endCandidate && (
+                {page.endCandidate && (PROTOTYPE_ENABLED ? (
+                  <div className="thread-end">
+                    <button
+                      ref={endRefreshRef}
+                      type="button"
+                      className="btn btn-quiet"
+                      aria-busy={endRefreshing || undefined}
+                      aria-disabled={endRefreshing || undefined}
+                      onClick={refreshAtEnd}
+                    >
+                      {endRefreshing ? <Spinner /> : <Icon name="refresh" />}
+                      刷新
+                    </button>
+                  </div>
+                ) : (
                   <div className="end-candidate" role="status">
                     <p>
                       {page.page === 1 ? '暂无回复：' : ''}已读取到末尾候选：{label}为空
@@ -852,7 +890,7 @@ export function ThreadReader({
                       再检查新回复
                     </button>
                   </div>
-                )}
+                ))}
               </section>
             )
           })}

@@ -14,9 +14,10 @@ export interface EditorWorkspace {
   forumName: (forumId: string | null) => string | null
   /**
    * Explicit 更改目标: moves the editor to `target` (identity unchanged) and shows that target in
-   * the editor's tab. `occupied`: the tab already edits that target; nothing changed.
+   * the active tab. `occupied`: another editor already edits that target; nothing changed.
    */
   retarget: (editorId: EditorId, target: PostTarget) => 'done' | 'occupied'
+  showTarget: (tabId: number, target: PostTarget) => void
   /** Opens 发送记录, where every attempt (including ended editors') can be reviewed. */
   openAttempts: () => void
 }

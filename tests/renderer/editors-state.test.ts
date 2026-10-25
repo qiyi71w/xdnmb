@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { EMPTY_FIELDS, type IdentityChoice, type PostTarget, type SavedDraft } from '../../src/shared/drafts'
 import type { IdentityOverview } from '../../src/shared/identity'
 import {
+  attachmentHolds,
   editorFor,
   editorForDraft,
   editorsReducer,
@@ -22,8 +23,9 @@ const newThread: PostTarget = { kind: 'thread', forumId: '4' }
 const byDefault = (credentialId: string): IdentityChoice => ({ source: 'default', selection: { state: 'selected', credentialId } })
 
 function only(state: EditorsState, tabId: number, target: PostTarget): Editor {
-  const editor = editorFor(state, tabId, target)
+  const editor = editorFor(state, target)
   if (editor === null) throw new Error('no editor')
+  expect(editor.tabIds).toContain(tabId)
   return editor
 }
 
@@ -48,20 +50,28 @@ describe('editors across threads and tabs', () => {
       { type: 'edit', editorId: a.id, patch: { content: 'A 的回复' } },
       { type: 'open', tabId: 1, target: replyB, identity: byDefault('1') }
     )
+    expect(state.editors).toHaveLength(2)
     expect(only(state, 1, replyB).id).not.toBe(a.id)
     // Back on A: the reply entry restores the same editor and its text instead of starting over.
     state = run(state, { type: 'open', tabId: 1, target: replyA, identity: byDefault('2') })
     expect(only(state, 1, replyA)).toMatchObject({ id: a.id, credentialId: '1', fields: { content: 'A 的回复' } })
   })
 
-  it('gives another tab its own editor for the same thread', () => {
+  it('shares one editor and its content across tabs showing the same thread', () => {
     let state = run(INITIAL_EDITORS,
       { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') },
       { type: 'open', tabId: 2, target: replyA, identity: byDefault('1') }
     )
     state = run(state, { type: 'edit', editorId: only(state, 1, replyA).id, patch: { content: '标签一' } })
-    expect(only(state, 2, replyA).fields.content).toBe('')
+    expect(state.editors).toHaveLength(1)
+    expect(only(state, 2, replyA).fields.content).toBe('标签一')
     expect(unsavedInTab(state, 2)).toEqual([])
+    state = run(state, { type: 'close-tab', tabId: 2 })
+    expect(only(state, 1, replyA).fields.content).toBe('标签一')
+    expect(only(state, 1, replyA).tabIds).toEqual([1])
+    expect(unsavedInTab(state, 1)).toHaveLength(1)
+    state = run(state, { type: 'close-tab', tabId: 1 })
+    expect(state.editors).toEqual([])
   })
 
   it('fixes the identity at creation: later default changes only reach editors started afterwards', () => {
@@ -90,23 +100,25 @@ describe('editors across threads and tabs', () => {
   it('changes the target only explicitly, keeps the identity and never makes two editors for one target', () => {
     let state = run(INITIAL_EDITORS,
       { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') },
-      { type: 'open', tabId: 1, target: replyB, identity: byDefault('2') }
+      { type: 'open', tabId: 2, target: replyB, identity: byDefault('2') }
     )
     const a = only(state, 1, replyA)
     expect(run(state, { type: 'retarget', editorId: a.id, target: replyB })).toBe(state)
     state = run(state, { type: 'retarget', editorId: a.id, target: newThread })
     expect(only(state, 1, newThread)).toMatchObject({ id: a.id, credentialId: '1' })
-    expect(editorFor(state, 1, replyA)).toBeNull()
+    expect(editorFor(state, replyA)).toBeNull()
   })
 })
 
 describe('drafts in editors', () => {
-  it('continues a saved draft in one editor only and never picks it up for a plain reply entry', () => {
+  it('continues each saved draft in one shared editor without replacing its content on a plain reply', () => {
     let state = run(INITIAL_EDITORS, { type: 'open-draft', tabId: 3, draft: draft() })
     expect(editorForDraft(state, '7')).toMatchObject({ tabId: 3, fields: { content: '已保存' }, credentialId: '1' })
-    expect(run(state, { type: 'open-draft', tabId: 4, draft: draft() })).toBe(state)
+    state = run(state, { type: 'open-draft', tabId: 4, draft: draft() })
+    expect(only(state, 4, replyA).draft?.id).toBe('7')
     state = run(state, { type: 'open', tabId: 5, target: replyA, identity: byDefault('2') })
-    expect(only(state, 5, replyA)).toMatchObject({ draft: null, fields: { content: '' }, credentialId: '2' })
+    expect(state.editors).toHaveLength(1)
+    expect(only(state, 5, replyA)).toMatchObject({ draft: { id: '7' }, fields: { content: '已保存' }, credentialId: '1' })
   })
 
   it('discarding returns a draft editor to its saved version; only a new editor disappears', () => {
@@ -125,7 +137,7 @@ describe('drafts in editors', () => {
     state = run(state, { type: 'open', tabId: 1, target: newThread, identity: byDefault('1') })
     const fresh = only(state, 1, newThread)
     state = run(state, { type: 'discard', editorId: fresh.id })
-    expect(editorFor(state, 1, newThread)).toBeNull()
+    expect(editorFor(state, newThread)).toBeNull()
   })
 
   it('discarding a retargeted draft whose saved target is now edited by another editor keeps both reachable', () => {
@@ -143,7 +155,7 @@ describe('drafts in editors', () => {
     expect(only(state, 1, replyA)).toMatchObject({ id: other.id, fields: { content: '另一份' } })
     // The saved version is untouched in the library; continuing it again is possible from there.
     expect(editorForDraft(state, '7')).toBeNull()
-    expect(editorFor(state, 1, replyB)).toBeNull()
+    expect(editorFor(state, replyB)).toBeNull()
   })
 
   it('a new editor needs saving once it has text or an image, not for identity or target alone', () => {
@@ -169,7 +181,7 @@ describe('drafts in editors', () => {
     expect(saveInput(only(state, 1, replyA)).draftId).toBe('7')
   })
 
-  it('collects every unsaved editor of the closing tab, including hidden ones, and drops only that tab', () => {
+  it('collects only last-owner unsaved editors, including hidden ones', () => {
     let state = run(INITIAL_EDITORS,
       { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') },
       { type: 'open', tabId: 1, target: replyB, identity: byDefault('1') },
@@ -177,12 +189,84 @@ describe('drafts in editors', () => {
       { type: 'open', tabId: 2, target: replyA, identity: byDefault('1') }
     )
     state = run(state,
-      { type: 'edit', editorId: only(state, 1, replyA).id, patch: { content: '收起的 A' } },
+      { type: 'edit', editorId: only(state, 1, replyB).id, patch: { content: '隐藏的 B' } },
       { type: 'edit', editorId: only(state, 2, replyA).id, patch: { content: '另一标签' } }
     )
-    expect(unsavedInTab(state, 1).map((editor) => editor.target)).toEqual([replyA])
+    expect(unsavedInTab(state, 1).map((editor) => editor.target)).toEqual([replyB])
     state = run(state, { type: 'close-tab', tabId: 1 })
     expect(state.editors.map((editor) => editor.tabId)).toEqual([2])
     expect(only(state, 2, replyA).fields.content).toBe('另一标签')
+  })
+
+  it('restores duplicate targets by newest saved time, retaining the older saved draft', () => {
+    const older = draft({ id: '7', fields: { ...EMPTY_FIELDS, content: '旧内容' } })
+    const newer = draft({ id: '8', savedAt: '2026-10-25T00:00:00.000Z', fields: { ...EMPTY_FIELDS, content: '新内容' } })
+    const items = [{ tabId: 1, expanded: false, draft: older }, { tabId: 2, expanded: true, draft: newer }]
+    for (const ordered of [items, [...items].reverse()]) {
+      const state = run(INITIAL_EDITORS, { type: 'restore-drafts', items: ordered })
+      expect(state.editors).toHaveLength(1)
+      expect(only(state, 1, replyA)).toMatchObject({ draft: newer, fields: { content: '新内容' }, expanded: true })
+      expect(only(state, 2, replyA).id).toBe(only(state, 1, replyA).id)
+      expect(older.fields.content).toBe('旧内容')
+      expect(editorForDraft(state, older.id)).toBeNull()
+    }
+    const tied = run(INITIAL_EDITORS, { type: 'restore-drafts', items: [
+      { tabId: 2, expanded: true, draft: { ...newer, savedAt: older.savedAt } },
+      { tabId: 1, expanded: false, draft: older }
+    ] })
+    expect(editorFor(tied, replyA)?.draft?.id).toBe(older.id)
+  })
+
+  it('immediately discards and undoes fields of saved and never-saved editors', () => {
+    for (const saved of [true, false]) {
+      let state = run(INITIAL_EDITORS, saved
+        ? { type: 'open-draft', tabId: 1, draft: draft() }
+        : { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') })
+      const id = only(state, 1, replyA).id
+      state = run(state, { type: 'edit', editorId: id, patch: { content: '未保存', title: '标题' } })
+      const fields = only(state, 1, replyA).fields
+      state = run(state, { type: 'discard-undoable', editorId: id })
+      expect(only(state, 1, replyA).fields.content).toBe(saved ? '已保存' : '')
+      expect(only(state, 1, replyA).discarded?.fields).toEqual(fields)
+      state = run(state, { type: 'undo-discard', editorId: id })
+      expect(only(state, 1, replyA).fields).toEqual(fields)
+      expect(only(state, 1, replyA).discarded).toBeUndefined()
+      state = run(state, { type: 'discard-undoable', editorId: id }, { type: 'edit', editorId: id, patch: { content: '接着写' } })
+      expect(only(state, 1, replyA).discarded).toBeUndefined()
+      state = run(state, { type: 'discard-undoable', editorId: id }, { type: 'set-expanded', editorId: id, expanded: false })
+      expect(only(state, 1, replyA).discarded).toBeUndefined()
+    }
+  })
+
+  it('shares new-thread boards, keeps other boards independent, and preserves send locks across tabs', () => {
+    let state = run(INITIAL_EDITORS,
+      { type: 'open', tabId: 1, target: newThread, identity: byDefault('1') },
+      { type: 'open', tabId: 2, target: newThread, identity: byDefault('2') },
+      { type: 'open', tabId: 3, target: { kind: 'thread', forumId: '18' }, identity: byDefault('1') })
+    expect(state.editors).toHaveLength(2)
+    const editor = only(state, 2, newThread)
+    expect(editor.credentialId).toBe('1')
+    state = run(state, { type: 'publish-start', editorId: editor.id, requestId: 'shared-send' })
+    const locked = only(state, 1, newThread)
+    state = run(state,
+      { type: 'edit', editorId: editor.id, patch: { content: '不能改' } },
+      { type: 'discard-undoable', editorId: editor.id },
+      { type: 'undo-discard', editorId: editor.id })
+    expect(only(state, 2, newThread)).toEqual(locked)
+    state = run(state, { type: 'close-tab', tabId: 2 })
+    expect(only(state, 1, newThread).publication?.phase).toBe('submitting')
+  })
+
+  it('holds discarded attachments for undo, releasing the undo hold on the next edit', () => {
+    let state = run(INITIAL_EDITORS, { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') })
+    const editor = only(state, 1, replyA)
+    const attachment = { id: '12', format: 'png' as const, bytes: 100, width: 10, height: 10, originalName: 'image.png', url: 'xidao-image://draft/image.png' }
+    state = run(state, { type: 'set-attachment', editorId: editor.id, attachment }, { type: 'discard-undoable', editorId: editor.id })
+    expect([...attachmentHolds(state)]).toEqual([[`${editor.id}-undo`, '12'], [editor.id, null]])
+    state = run(state, { type: 'undo-discard', editorId: editor.id })
+    expect(only(state, 1, replyA).attachment).toEqual(attachment)
+    expect([...attachmentHolds(state)]).toEqual([[editor.id, '12']])
+    state = run(state, { type: 'discard-undoable', editorId: editor.id }, { type: 'edit', editorId: editor.id, patch: { content: '继续' } })
+    expect([...attachmentHolds(state)]).toEqual([[editor.id, null]])
   })
 })

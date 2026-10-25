@@ -35,12 +35,15 @@ describe('post actions editor transitions', () => {
   it('opens a reply with a quote, preserving the current editor and identity', () => {
     const target = { kind: 'reply' as const, threadId: '100' }
     let state = editorsReducer(INITIAL_EDITORS, { type: 'open-quote', tabId: 1, target, identity, postId: '101' })
-    let editor = editorFor(state, 1, target)!
+    let editor = editorFor(state, target)!
     expect(editor.fields.content).toBe('>>No.101\n')
+    expect(editor.caret?.offset).toBe(editor.fields.content.length)
     state = editorsReducer(state, { type: 'edit', editorId: editor.id, patch: { content: '已有文字' } })
-    state = editorsReducer(state, { type: 'open-quote', tabId: 1, target, identity: { source: 'unknown' }, postId: '100' })
-    editor = editorFor(state, 1, target)!
+    state = editorsReducer(state, { type: 'open-quote', tabId: 2, target, identity: { source: 'unknown' }, postId: '100' })
+    editor = editorFor(state, target)!
     expect(editor.fields.content).toBe('已有文字\n>>No.100\n')
+    expect(editor.caret?.offset).toBe(editor.fields.content.length)
+    expect(editor.tabIds).toEqual([1, 2])
     expect(editor.credentialId).toBe('7')
     expect(state.editors).toHaveLength(1)
     expect(editor.publication).toBeNull()
@@ -49,11 +52,11 @@ describe('post actions editor transitions', () => {
   it('prepares a report as an ordinary new-thread publication in fid 18, without starting a send', () => {
     let state = editorsReducer(INITIAL_EDITORS, { type: 'open-report', tabId: 1, identity, postId: '123456' })
     const target = { kind: 'thread' as const, forumId: '18' }
-    let editor = editorFor(state, 1, target)!
+    let editor = editorFor(state, target)!
     expect(editor.report?.reason).toBe('')
     expect(editor.publication).toBeNull()
     state = editorsReducer(state, { type: 'edit-report', editorId: editor.id, patch: { reason: '广告q群', text: '链接刷屏\n' } })
-    editor = editorFor(state, 1, target)!
+    editor = editorFor(state, target)!
     expect(saveInput(editor)).toMatchObject({ target, credentialId: '7', fields: { content: '举报理由：广告q群\n>>No.123456\n链接刷屏' } })
     expect(editor.publication).toBeNull()
   })
@@ -62,22 +65,24 @@ describe('post actions editor transitions', () => {
     const fields = { ...report, reason: '串版', text: '已保存的说明' }
     const draft: SavedDraft = { id: '77', version: 1, createdAt: '2026-10-25T00:00:00Z', savedAt: '2026-10-25T00:00:00Z', target: { kind: 'thread', forumId: '18' }, credentialId: '7', attachment: null, fields: { ...EMPTY_FIELDS, content: reportDraftContent(fields) } }
     let state = editorsReducer(INITIAL_EDITORS, { type: 'open-draft', tabId: 1, draft })
-    const editor = editorFor(state, 1, draft.target)!
+    const editor = editorFor(state, draft.target)!
     expect(editor.report).toEqual(fields)
     state = editorsReducer(state, { type: 'edit-report', editorId: editor.id, patch: { text: '未保存' } })
-    state = editorsReducer(state, { type: 'discard', editorId: editor.id })
-    expect(editorFor(state, 1, draft.target)?.report).toEqual(fields)
+    state = editorsReducer(state, { type: 'discard-undoable', editorId: editor.id })
+    expect(editorFor(state, draft.target)?.report).toEqual(fields)
+    state = editorsReducer(state, { type: 'undo-discard', editorId: editor.id })
+    expect(editorFor(state, draft.target)?.report?.text).toBe('未保存')
   })
 
   it('never changes the payload of a sending reply or report', () => {
     const target = { kind: 'thread' as const, forumId: '18' }
     let state = editorsReducer(INITIAL_EDITORS, { type: 'open-report', tabId: 1, identity, postId: '123456' })
-    const editor = editorFor(state, 1, target)!
+    const editor = editorFor(state, target)!
     state = editorsReducer(state, { type: 'publish-start', editorId: editor.id, requestId: 'synthetic-send' })
-    const locked = editorFor(state, 1, target)!
+    const locked = editorFor(state, target)!
     state = editorsReducer(state, { type: 'edit-report', editorId: editor.id, patch: { reason: '串版' } })
     state = editorsReducer(state, { type: 'open-report', tabId: 1, identity, postId: '999' })
-    expect(editorFor(state, 1, target)).toEqual(locked)
+    expect(editorFor(state, target)).toEqual(locked)
   })
 })
 

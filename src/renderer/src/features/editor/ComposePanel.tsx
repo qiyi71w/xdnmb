@@ -30,7 +30,7 @@ export interface ComposeEntry {
 
 /** Tab content plus the panels of the targets it shows. */
 export function ComposeFrame({ tabId, targets, children }: { tabId: number; targets: readonly ComposeTarget[]; children: ReactNode }) {
-  useOnePanelPerTab(tabId)
+  useOnePanelPerTab(targets)
   return (
     <div className="compose-frame">
       <div className="compose-frame-main">{children}</div>
@@ -48,25 +48,30 @@ export function ComposeFrame({ tabId, targets, children }: { tabId: number; targ
  * At most one expanded editor per tab: whichever editor expands (an entry, 继续 from 草稿, 更改目标)
  * collapses the others of its tab. Collapsing keeps their content.
  */
-function useOnePanelPerTab(tabId: number): void {
+function useOnePanelPerTab(targets: readonly ComposeTarget[]): void {
   const { store } = useEditorWorkspace()
   const { state, dispatch } = store
   const previous = useRef<ReadonlySet<EditorId>>(new Set())
   useLayoutEffect(() => {
-    const expanded = state.editors.filter((editor) => editor.tabId === tabId && editor.expanded)
+    const visible = targets.filter(({ displayed }) => displayed).map(({ target }) => targetKey(target))
+    if (visible.length > 0) visible.push(targetKey({ kind: 'thread', forumId: '18' }))
+    const expanded = state.editors.filter((editor) => visible.includes(targetKey(editor.target)) && editor.expanded)
     const before = previous.current
     previous.current = new Set(expanded.map((editor) => editor.id))
     if (expanded.length < 2) return
     const keep = expanded.filter((editor) => !before.has(editor.id)).at(-1)
     if (keep === undefined) return
     for (const editor of expanded) if (editor.id !== keep.id) dispatch({ type: 'set-expanded', editorId: editor.id, expanded: false })
-  }, [state, tabId, dispatch])
+  }, [state, targets, dispatch])
 }
 
 function ComposePanel({ tabId, target, displayed }: { tabId: number; target: PostTarget; displayed: boolean }) {
   const workspace = useEditorWorkspace()
   const { store } = workspace
-  const editor = editorFor(store.state, tabId, target)
+  const editor = editorFor(store.state, target)
+  useLayoutEffect(() => {
+    if (editor !== null) store.dispatch({ type: 'attach-tab', editorId: editor.id, tabId })
+  }, [editor?.id, tabId, store.dispatch])
   const key = focusKey(tabId, target)
   /** Set when the panel goes away by the user's action or with focus inside. */
   const focusBar = useRef(false)
@@ -87,9 +92,9 @@ function ComposePanel({ tabId, target, displayed }: { tabId: number; target: Pos
     store.dispatch({ type: 'set-expanded', editorId: editor.id, expanded: false })
   }
   const label = targetText(target, workspace.forumName)
-  const panel = <EditorPanel key={editor.id} editor={editor} label={label} displayed={displayed} focusBar={focusBar} layout="float" />
+  const panel = <EditorPanel key={editor.id} tabId={tabId} editor={editor} label={label} displayed={displayed} focusBar={focusBar} layout="float" />
   return (
-    <ComposeModal label={`发言编辑：${label}`} onCollapse={collapse}>
+    <ComposeModal label={editor.report !== undefined ? `举报 >>No.${editor.report.postId}` : `发言编辑：${label}`} onCollapse={collapse}>
       {panel}
     </ComposeModal>
   )
@@ -182,7 +187,7 @@ function hasContent(editor: Editor): boolean {
 /** 回复 / 发新串 of one target in one tab; 继续编辑 while a collapsed editor holds content. */
 export function ComposeButton({ tabId, target, className = 'btn' }: { tabId: number; target: PostTarget; className?: string }) {
   const { store } = useEditorWorkspace()
-  const editor = editorFor(store.state, tabId, target)
+  const editor = editorFor(store.state, target)
   const { opening, expand } = useComposeOpen(tabId, target, editor)
   const key = focusKey(tabId, target)
   const resume = editor !== null && hasContent(editor)
@@ -208,7 +213,7 @@ export function ComposeButton({ tabId, target, className = 'btn' }: { tabId: num
 /** The last send from this tab to this target was confirmed: said until a new editor opens there. */
 export function ComposeSentNote({ tabId, target }: { tabId: number; target: PostTarget }) {
   const { store } = useEditorWorkspace()
-  const editor = editorFor(store.state, tabId, target)
+  const editor = editorFor(store.state, target)
   const sent = editor === null ? store.published.get(focusKey(tabId, target)) : undefined
   if (sent === undefined) return null
   return (

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import type { AppPlatform, StorageStatus } from '../../../shared/api'
 import type { RetainedList } from '../../../shared/content'
-import { sameTarget, type DraftId, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
+import { sameTarget, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
 import type { FeedRef, Post, ThreadId } from '../../../shared/forum'
 import type { WorkspaceLoadResult } from '../../../shared/lifecycle'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/settings'
@@ -344,17 +344,6 @@ export function App() {
   /** Settles once the startup restore is done: tabs exist and saved drafts were reopened. */
   const [restored] = useState(() => Promise.withResolvers<void>())
   const whenRestored = useCallback(() => restored.promise, [restored])
-  /** Drafts reopened collapsed: collapsed in the commit that adds their editors, before painting. */
-  const collapseOnOpen = useRef(new Set<DraftId>())
-
-  useLayoutEffect(() => {
-    if (collapseOnOpen.current.size === 0) return
-    for (const draftId of collapseOnOpen.current) {
-      const editor = editorForDraft(editors.state, draftId)
-      if (editor !== null) dispatchEditors({ type: 'set-expanded', editorId: editor.id, expanded: false })
-    }
-    collapseOnOpen.current.clear()
-  }, [editors.state, dispatchEditors])
 
   /**
    * Reopens the drafts the workspace's tabs were continuing. A draft that no longer exists, or that
@@ -376,12 +365,11 @@ export function App() {
       const byId = new Map(drafts.value.drafts.map((draft) => [draft.id, draft]))
       // A tab closed meanwhile takes its drafts' editors with it.
       const tabIds = new Set((stateRef.current.tabs ?? workspace.tabs).tabs.map((tab) => tab.id))
-      for (const item of workspace.editors) {
+      const items = workspace.editors.flatMap((item) => {
         const draft = byId.get(item.draftId)
-        if (draft === undefined || locked.has(draft.id) || !tabIds.has(item.tabId)) continue
-        dispatchEditors({ type: 'open-draft', tabId: item.tabId, draft })
-        if (!item.expanded) collapseOnOpen.current.add(draft.id)
-      }
+        return draft === undefined || locked.has(draft.id) || !tabIds.has(item.tabId) ? [] : [{ ...item, draft }]
+      })
+      dispatchEditors({ type: 'restore-drafts', items })
     },
     [dispatchEditors]
   )
@@ -760,10 +748,11 @@ export function App() {
       const state = currentEditors()
       const editor = state.editors.find((item) => item.id === editorId)
       if (editor === undefined) return 'done'
-      if (editorFor(state, editor.tabId, target) !== null) return 'occupied'
+      if (editorFor(state, target) !== null) return 'occupied'
+      const tabId = stateRef.current.tabs?.activeId ?? editor.tabId
       dispatchEditors({ type: 'retarget', editorId, target })
-      showTarget(editor.tabId, target)
-      requestFocus(focusKey(editor.tabId, target))
+      showTarget(tabId, target)
+      requestFocus(focusKey(tabId, target))
       return 'done'
     },
     [currentEditors, dispatchEditors, showTarget, requestFocus]
@@ -777,7 +766,7 @@ export function App() {
     (draft: SavedDraft) => {
       setAttemptsOpen(false)
       setDraftsOpen(false)
-      const existing = editorForDraft(currentEditors(), draft.id)
+      const existing = editorForDraft(currentEditors(), draft.id) ?? editorFor(currentEditors(), draft.target)
       if (existing !== null) {
         showTarget(existing.tabId, existing.target)
         dispatchEditors({ type: 'set-expanded', editorId: existing.id, expanded: true })
@@ -842,7 +831,7 @@ export function App() {
     if (PROTOTYPE_ENABLED) {
       const tabId = stateRef.current.tabs?.activeId
       for (const editor of currentEditors().editors) {
-        if (editor.tabId === tabId && editor.expanded) dispatchEditors({ type: 'set-expanded', editorId: editor.id, expanded: false })
+        if (tabId !== undefined && editor.tabIds.includes(tabId) && editor.expanded) dispatchEditors({ type: 'set-expanded', editorId: editor.id, expanded: false })
       }
       openHistoryView('attempts')
     } else setAttemptsOpen(true)
@@ -935,7 +924,7 @@ export function App() {
     const editor =
       editorsState.editors.find((item) => item.id === focused) ??
       shownTargets(tab, stateRef.current.singlePane)
-        .map((target) => editorFor(editorsState, tab.id, target))
+        .map((target) => editorFor(editorsState, target))
         .find((item) => item !== null && item.expanded)
     if (editor !== undefined && editor !== null && isUnsaved(editor)) void saveEditor(editor.id)
   }, [currentEditors, saveEditor])
@@ -1124,8 +1113,8 @@ export function App() {
   } as CSSProperties
 
   const editorWorkspace = useMemo<EditorWorkspace>(
-    () => ({ store: editors, identities, platform, directory: dirData, forumName, retarget, openAttempts }),
-    [editors, identities, platform, dirData, forumName, retarget, openAttempts]
+    () => ({ store: editors, identities, platform, directory: dirData, forumName, retarget, showTarget, openAttempts }),
+    [editors, identities, platform, dirData, forumName, retarget, showTarget, openAttempts]
   )
 
   const tabTitle = (tabId: number) => {
