@@ -31,6 +31,7 @@ import { PoPromptDialog } from '../features/publication/PoPromptDialog'
 import { usePendingAttempts } from '../features/publication/usePendingAttempts'
 import { LaunchNotice } from '../features/lifecycle/LaunchNotice'
 import { LifecycleHost } from '../features/lifecycle/LifecycleHost'
+import { EditContextMenuHost } from '../components/EditContextMenu'
 import { useIdentities } from '../features/identity/useIdentities'
 import { SubscriptionsContext, useSubscriptions } from '../features/subscriptions/useSubscriptions'
 import { clearThreadReminders, RemindersContext, useReminderOverview } from '../features/reminders/useReminders'
@@ -1368,6 +1369,7 @@ export function App() {
             buildWorkspace={buildWorkspace}
             whenRestored={whenRestored}
           />
+          <EditContextMenuHost />
         </div>
       </HistoryPageContext>
       </ThreadTabOpenerContext>

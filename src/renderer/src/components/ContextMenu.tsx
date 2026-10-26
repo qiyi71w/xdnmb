@@ -44,7 +44,7 @@ export function contextMenuPoint(event: MouseEvent | KeyboardEvent | null, owner
 }
 
 /** The ContextMenu key or Shift+F10: the keyboard asks for the focused element's context menu. */
-export function isContextMenuKey(event: KeyboardEvent): boolean {
+export function isContextMenuKey(event: Pick<globalThis.KeyboardEvent, 'key' | 'shiftKey' | 'ctrlKey' | 'altKey' | 'metaKey'>): boolean {
   return event.key === 'ContextMenu' || (event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && event.key === 'F10')
 }
 
@@ -52,13 +52,16 @@ export function isContextMenuKey(event: KeyboardEvent): boolean {
  * A themed context menu at a viewport point, kept inside the window. Opening focuses its first
  * item; arrow keys, Home and End move between items; Enter or Space chooses. Esc, Tab, a press
  * outside, scrolling, resizing or leaving the window closes it; `onClose(true)` asks the owner to
- * take focus back. Choosing an action closes the menu (focus back first) before it runs.
+ * take focus back. Choosing an action closes the menu (focus back first) before it runs. It shows
+ * in the top layer, inside `container`: an owner in an open modal dialog passes that dialog, as
+ * everything outside it is inert.
  */
 export function ContextMenu({
   point,
   label,
   items,
   footer,
+  container,
   onClose
 }: {
   point: ContextMenuPoint
@@ -67,6 +70,8 @@ export function ContextMenu({
   items: readonly ContextMenuItem[]
   /** Status shown under the items (e.g. why a toggle did not apply); outside the menu role. */
   footer?: ReactNode
+  /** Where the menu is mounted; the body by default. */
+  container?: Element
   onClose: (returnFocus: boolean) => void
 }) {
   const boxRef = useRef<HTMLDivElement>(null)
@@ -81,6 +86,7 @@ export function ContextMenu({
   useLayoutEffect(() => {
     const box = boxRef.current
     if (box === null) return
+    if (!box.matches(':popover-open')) box.showPopover()
     const margin = 8
     const { width, height } = box.getBoundingClientRect()
     const maxLeft = window.innerWidth - margin - width
@@ -163,6 +169,7 @@ export function ContextMenu({
     <div
       ref={boxRef}
       className="context-menu"
+      popover="manual"
       style={{ left: point.x, top: point.y, visibility: 'hidden' }}
       onKeyDown={onKeyDown}
       onContextMenu={(event) => {
@@ -199,6 +206,6 @@ export function ContextMenu({
       </div>
       {footer !== undefined && footer !== null && footer !== false && <div className="context-menu-footer">{footer}</div>}
     </div>,
-    document.body
+    container ?? document.body
   )
 }

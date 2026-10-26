@@ -1,7 +1,11 @@
-/* Context menu: a floating layer (strong glass, large radius, float shadow) at the pointer. */
+/* Context menu: a floating layer (strong glass, large radius, float shadow) at the pointer. A
+   manual popover in the top layer, so an open modal dialog holding it neither covers nor clips it. */
 .context-menu {
   position: fixed;
+  inset: auto;
   z-index: 60;
+  margin: 0;
+  border: 0;
   display: grid;
   min-width: 12rem;
   max-width: min(22rem, calc(100vw - 16px));
