@@ -1194,11 +1194,6 @@ dialog.compose-image-preview:not([open]) {
   outline: none;
 }
 
-.kaomoji-add-form .btn-primary:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .compose-tools .editor-status {
   min-width: 0;
   margin-left: 8px;

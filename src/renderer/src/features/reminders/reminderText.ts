@@ -2,7 +2,6 @@ import {
   REMINDER_KINDS,
   type CheckRequestResult,
   type CoverageIssue,
-  type ReminderCloseReason,
   type ReminderKind,
   type ReminderRule,
   type ReminderThreadRow
@@ -20,18 +19,6 @@ export const KIND_SHORT: Record<ReminderKind, string> = {
   all: '全串',
   po: 'PO',
   quote: '引用'
-}
-
-const CLOSED_BY: Record<ReminderCloseReason, string> = {
-  user: '已关闭',
-  unsubscribe: '取消订阅时关闭',
-  'sync-delete': '同步删除时关闭'
-}
-
-/** State of one rule, in words: never just a color. */
-export function ruleStateText(rule: ReminderRule): string {
-  if (rule.enabled) return '已开启'
-  return rule.closedBy === null ? '未开启' : CLOSED_BY[rule.closedBy]
 }
 
 export function enabledKinds(rules: Record<ReminderKind, ReminderRule>): ReminderKind[] {
