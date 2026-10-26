@@ -3,6 +3,7 @@ import type { AppPlatform, StorageStatus } from '../../../shared/api'
 import { sameTarget, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
 import type { FeedRef, Post, ThreadId } from '../../../shared/forum'
 import type { WorkspaceLoadResult } from '../../../shared/lifecycle'
+import type { PublicationAttempt } from '../../../shared/publication'
 import { DEFAULT_SETTINGS, LIST_WIDTH_LIMITS, type AppSettings } from '../../../shared/settings'
 import { Icon } from '../components/Icon'
 import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/directory/feeds'
@@ -25,7 +26,8 @@ import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
 import { editorFor, editorForDraft, isUnsaved, unsavedInTab } from '../features/editor/editorsState'
 import { targetText } from '../features/editor/editorText'
 import { UnsavedEditorsDialog } from '../features/editor/UnsavedEditorsDialog'
-import { focusKey, useEditorsStore } from '../features/editor/useEditorsStore'
+import { planSendFollowUp, runSendFollowUp, type SendFollowUp, type SendOrigin, type ShownEntry } from '../features/editor/sendFollowUp'
+import { focusKey, useEditorsStore, type SendHooks } from '../features/editor/useEditorsStore'
 import { EditorWorkspaceContext, type EditorWorkspace } from '../features/editor/workspace'
 import { PoPromptDialog } from '../features/publication/PoPromptDialog'
 import { usePendingAttempts } from '../features/publication/usePendingAttempts'
@@ -167,7 +169,12 @@ export function App() {
   const directory = useDirectory()
   const { start: startDirectory } = directory
   const identities = useIdentities()
-  const editors = useEditorsStore()
+  /** What a send does in the tab it came from; set once the navigation below exists. */
+  const sendHooks = useRef<SendHooks | null>(null)
+  const editors = useEditorsStore({
+    origin: (tabId) => sendHooks.current?.origin(tabId) ?? { tabId, entryKey: null, source: null },
+    settled: (attempt, origin) => sendHooks.current?.settled(attempt, origin)
+  })
   const { current: currentEditors, dispatch: dispatchEditors, requestFocus, save: saveEditor, resolvePrompt } = editors
   const subscriptions = useSubscriptions()
   const { refreshOverview: refreshSubscriptions, refreshOperations: refreshSubscriptionJournal } = subscriptions
@@ -611,6 +618,84 @@ export function App() {
     [leave]
   )
 
+  // ---------- After a send (spec 刷新与发送后的更新) ----------
+  /** The tab's current entry and the post targets it shows now; null when the tab is gone. */
+  const shownEntry = useCallback((tabId: number): ShownEntry | null => {
+    const tab = stateRef.current.tabs?.tabs.find((item) => item.id === tabId)
+    if (tab === undefined) return null
+    return { tabId, entryKey: currentEntry(tab).key, targets: shownTargets(tab, stateRef.current.singlePane) }
+  }, [])
+
+  /** The sending tab's entry and reading position when a send starts there. */
+  const sendOrigin = useCallback(
+    (tabId: number): SendOrigin => {
+      const tab = stateRef.current.tabs?.tabs.find((item) => item.id === tabId)
+      if (tab === undefined) return { tabId, entryKey: null, source: null }
+      const entryKey = currentEntry(tab).key
+      return { tabId, entryKey, source: registry.readers.get(entryKey)?.current.capture() ?? null }
+    },
+    [registry]
+  )
+
+  const followSend = useCallback(
+    (attempt: PublicationAttempt, origin: SendOrigin) => {
+      const plan = planSendFollowUp(attempt, origin, shownEntry(origin.tabId))
+      if (plan === null) return
+      const stillShown = (step: SendFollowUp): boolean => {
+        const now = shownEntry(step.tabId)
+        const target: PostTarget = step.kind === 'reply' ? { kind: 'reply', threadId: step.threadId } : { kind: 'thread', forumId: step.forumId }
+        return now !== null && now.entryKey === step.entryKey && now.targets.some((item) => sameTarget(item, target))
+      }
+      const operationId = () => `send-follow-up-${crypto.randomUUID()}`
+      void runSendFollowUp(plan, {
+        stillShown,
+        refreshThread: (entryKey) => registry.readers.get(entryKey)?.current.refresh() ?? Promise.resolve(),
+        refreshList: (entryKey) => registry.lists.get(entryKey)?.current.refresh(),
+        locate: (postId) => window.xidao.quotes.locate({ operationId: operationId(), postId }),
+        readThreadEnd: async (threadId) => {
+          await window.xidao.reading.locateThreadEnd({ operationId: operationId(), threadId, mode: 'all' })
+        },
+        // Like a located quote: a new step of the tab; back returns to where the send started.
+        openLocated: (step, location) => {
+          const tab = stateRef.current.tabs?.tabs.find((item) => item.id === step.tabId)
+          if (tab === undefined) return
+          const entry = currentEntry(tab)
+          const source = step.source ?? registry.readers.get(entry.key)?.current.capture() ?? null
+          // The split list beside the target keeps its loaded pages and scroll position.
+          if (entry.kind === 'list' && entry.feed !== null && tab.split) {
+            const memory = registry.listMemory.get(entry.key)
+            const nextKey = stateRef.current.tabs?.nextKey
+            if (memory !== undefined && nextKey !== undefined) registry.listMemory.set(nextKey, memory)
+          }
+          const target = { postId: location.target.postId, page: location.target.page, mode: location.target.mode }
+          const thread: ThreadOpen = { threadId: location.threadId, head: location.head, target, snapshot: null, unlocatedPostId: null }
+          dispatch({ type: 'quote-navigate', tabId: tab.id, entryKey: entry.key, source, thread })
+        },
+        // A new step either way: back returns to the list as it was before the send.
+        openThread: (step, threadId) => {
+          const state = stateRef.current.tabs
+          const tab = state?.tabs.find((item) => item.id === step.tabId)
+          if (state == null || tab === undefined) return
+          const entry = currentEntry(tab)
+          if (!(entry.kind === 'list' && tab.split)) {
+            selectThread(step.tabId, threadId, null)
+            return
+          }
+          // Split: choosing a list item would only replace the thread beside the list (no step).
+          leave(tab)
+          const memory = registry.listMemory.get(entry.key)
+          if (memory !== undefined) registry.listMemory.set(state.nextKey, memory)
+          const thread: ThreadOpen = { threadId, head: null, target: null, snapshot: null, unlocatedPostId: null }
+          dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'list', feed: entry.feed, thread } })
+        }
+      }).catch(() => undefined)
+    },
+    [shownEntry, registry, selectThread, leave]
+  )
+  useLayoutEffect(() => {
+    sendHooks.current = { origin: sendOrigin, settled: followSend }
+  })
+
   const showPane = useCallback((tabId: number, pane: 'list' | 'reader') => dispatch({ type: 'show-pane', tabId, pane }), [])
 
   /**
@@ -890,7 +975,7 @@ export function App() {
       withActive((tab) => {
         const entry = currentEntry(tab)
         const reader = readerShown(tab, entry, stateRef.current.singlePane) ? registry.readers.get(entry.key) : undefined
-        if (reader !== undefined) reader.current.refresh()
+        if (reader !== undefined) void reader.current.refresh()
         else registry.lists.get(entry.key)?.current.refresh()
       }),
     [withActive, registry]

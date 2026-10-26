@@ -132,13 +132,13 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     }
   }, [showCap])
 
-  /** Explicit action: supersede whatever is running, then read. */
+  /** Explicit action: supersede whatever is running, then read; settles when that read has ended. */
   const supersede = useCallback(
-    (task: ThreadTask) => {
+    (task: ThreadTask): Promise<void> => {
       scope.current.cancelAll()
-      if (task.type === 'locate') void locate()
-      else if (task.type === 'refresh') void refreshThread(stateRef.current, readThreadPage, dispatch)
-      else void readPage(task)
+      if (task.type === 'locate') return locate()
+      if (task.type === 'refresh') return refreshThread(stateRef.current, readThreadPage, dispatch)
+      return readPage(task)
     },
     [locate, readPage, readThreadPage]
   )
@@ -171,17 +171,18 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     void readPage({ type: 'prepend', page: first.page - 1 })
   }, [readPage])
 
-  /** 刷新 (toolbar, end of the thread, Ctrl/Cmd+R); an empty reader loads its first page again. */
-  const refresh = useCallback(() => {
-    supersede(stateRef.current.pages.length === 0 ? { type: 'initial', page: firstPageRef.current } : { type: 'refresh' })
-  }, [supersede])
+  /**
+   * 刷新 (toolbar, end of the thread, Ctrl/Cmd+R); an empty reader loads its first page again.
+   * Settles when the refresh has ended, however it ended.
+   */
+  const refresh = useCallback(() => supersede(stateRef.current.pages.length === 0 ? { type: 'initial', page: firstPageRef.current } : { type: 'refresh' }), [supersede])
 
   const jump = useCallback((page: number) => {
     const total = threadTotalPages(stateRef.current.coverage?.reportedReplyCount ?? null)
     if (!Number.isSafeInteger(page) || page < 1 || (total !== null && page > total)) return
-    supersede({ type: 'jump', page })
+    void supersede({ type: 'jump', page })
   }, [supersede])
-  const locateEnd = useCallback(() => supersede({ type: 'locate' }), [supersede])
+  const locateEnd = useCallback(() => void supersede({ type: 'locate' }), [supersede])
 
   const cancel = useCallback(() => {
     scope.current.cancelAll()
@@ -190,7 +191,7 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
 
   const retry = useCallback(() => {
     const error = stateRef.current.error
-    if (error !== null) supersede(error.task)
+    if (error !== null) void supersede(error.task)
   }, [supersede])
 
   return {

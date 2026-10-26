@@ -15,7 +15,8 @@ export type RetainedPage = 'history' | 'offline'
 export interface ReaderHandle {
   /** Mode and anchor to come back to; null before the reader has placed its first position. */
   capture(): ThreadSnapshot | null
-  refresh(): void
+  /** 刷新; settles when that refresh has ended, however it ended. */
+  refresh(): Promise<void>
   /**
    * A located quote target: when this reader shows the same thread in the same mode and the target
    * post is visible in its viewport, highlights it and returns true (no navigation needed). A

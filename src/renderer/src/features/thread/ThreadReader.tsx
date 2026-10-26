@@ -558,7 +558,7 @@ export function ThreadReader({
   )
 
   const refreshButton = (
-    <button type="button" className={barButton} onClick={thread.refresh} title="刷新" aria-busy={task?.type === 'refresh' || undefined}>
+    <button type="button" className={barButton} onClick={() => void thread.refresh()} title="刷新" aria-busy={task?.type === 'refresh' || undefined}>
       <Icon name="refresh" />
       <span className="btn-label">刷新</span>
     </button>
@@ -575,7 +575,7 @@ export function ThreadReader({
     if (endRefreshing) return
     endRefreshFrom.current =
       document.activeElement === endRefreshRef.current ? (contentRef.current?.querySelectorAll(SHOWN_POSTS).length ?? 0) : null
-    thread.refresh()
+    void thread.refresh()
   }
   useEffect(() => {
     const shown = endRefreshFrom.current
