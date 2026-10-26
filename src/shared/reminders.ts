@@ -67,8 +67,6 @@ export interface ReminderEvent {
   /** Own post IDs this reply explicitly quotes (`quote` kind), ascending. */
   quotedOwnIds: PostId[]
   discoveredAt: string
-  /** Whether the post is in the read records. Lists, checks and notifications never change it. */
-  read: boolean
 }
 
 export interface ThreadReminderGroup {
@@ -80,10 +78,9 @@ export interface ThreadReminderGroup {
   issues: CoverageIssue[]
   lastError: ReadError | null
   lastCheckedAt: string | null
-  /** Confirmed events whose post is unread. Display through `formatReminderCount`. */
-  unreadCount: number
   /** Matching replies with an unprovable start boundary; never counted as events. */
   uncertainCount: number
+  /** Confirmed events. Display through `formatReminderCount`. */
   eventCount: number
   /** Newest first; at most `MAX_EVENTS_PER_GROUP`. */
   events: ReminderEvent[]
@@ -131,7 +128,6 @@ export interface ReminderOverview {
   lastNotification: ReminderNotificationRecord | null
   /** Threads with an enabled rule or recorded events, most recent event first. */
   threads: ThreadReminderGroup[]
-  totalUnread: number
 }
 
 export type CheckRequestResult =

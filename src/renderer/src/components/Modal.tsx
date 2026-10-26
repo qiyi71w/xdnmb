@@ -11,7 +11,7 @@ const FOCUSABLE =
  * Modal dialog: mount it to open (`showModal`), unmount it to close. Focus returns to whatever
  * had it when the dialog opened, or to `fallbackFocus` when that control is gone. Tab stays
  * inside; Esc asks `onClose`, which may ignore it (e.g. while an action runs). While mounted it
- * covers the whole app: nothing behind it is judged read.
+ * covers the whole app (`useCover`).
  */
 export function Modal({
   className,
@@ -33,7 +33,7 @@ export function Modal({
   useLayoutEffect(() => {
     fallback.current = fallbackFocus
   })
-  useCover(true, 'app')
+  useCover(true)
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current

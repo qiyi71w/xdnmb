@@ -2,7 +2,7 @@
 // corner buttons), 举报 (the head post), 提醒 and 离线保存; choosing 提醒 or 离线保存 opens its panel
 // (the 提醒 panel anchored to 更多, the 离线副本 dialog).
 
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
+import { useId, useRef, useState, type KeyboardEvent } from 'react'
 import type { ReadingMode, ThreadId } from '../../../../shared/forum'
 import type { ReminderKind, ReminderRule, ThreadReminders } from '../../../../shared/reminders'
 import { Icon } from '../../components/Icon'
@@ -20,7 +20,6 @@ export function ThreadMoreMenu({
   failure,
   onRetry,
   onUpdated,
-  onReminderOpenChange,
   onReport,
   onToStart,
   onToEnd
@@ -33,8 +32,6 @@ export function ThreadMoreMenu({
   failure: LoadFailure | null
   onRetry: () => void
   onUpdated: (thread: ThreadReminders) => void
-  /** The 提醒 panel opened or closed (the reader stops judging reading while it covers posts). */
-  onReminderOpenChange: (open: boolean) => void
   onReport?: (opener: HTMLElement | null) => void
   /** The reader's 开头 and 末尾. */
   onToStart: () => void
@@ -54,15 +51,6 @@ export function ThreadMoreMenu({
   const reminderWarn = !reminders.known && failure !== null
   const saving = useReminderToggle(threadId, onUpdated, reminder.open)
   const warn = reminderWarn || offline.warn
-
-  const report = useRef(onReminderOpenChange)
-  useEffect(() => {
-    report.current = onReminderOpenChange
-  })
-  useEffect(() => {
-    report.current(reminder.open)
-  }, [reminder.open])
-  useEffect(() => () => report.current(false), [])
 
   const chooseReminder = () => {
     menu.close(false)

@@ -58,7 +58,7 @@ describe('encrypted local account lifecycle', () => {
     } finally { previous.close() }
     const db = openReadingDatabase(path)
     databases.push(db)
-    expect(db.status).toMatchObject({ state: 'ready', schemaVersion: 13 })
+    expect(db.status).toMatchObject({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((item) => item.version)) })
     expect(db.listCredentials().map((item) => item.name)).toEqual(['合成旧饼干'])
     expect(db.loadAccountSession()).toBeNull()
     db.saveAccountSession({ ciphertext: Uint8Array.of(0x81, 0x92), expiresAt: '2099-01-01T00:00:00Z' })

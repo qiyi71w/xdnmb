@@ -40,7 +40,7 @@ function Status({ tone, children }: { tone: 'info' | 'error'; children: ReactNod
 
 /**
  * Floating card of one quote. Lives outside every reader's content (no post IDs on its nodes), so
- * showing it never counts as reading. Number, 复制编号 and 关闭 are available in every state.
+ * it never takes part in a reader's position. Number, 复制编号 and 关闭 are available in every state.
  */
 export function QuoteCard({
   card,

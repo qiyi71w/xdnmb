@@ -1,7 +1,6 @@
 import { useCallback, useContext, useEffect, useRef, useState } from 'react'
-import type { PostId, ReadingMode } from '../../../../shared/forum'
+import type { ReadingMode } from '../../../../shared/forum'
 import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
-import { AppCoveredContext, useCoverageScope } from '../../lib/appCovered'
 import { createReadingResets, useReadingGeneration } from '../content/readingResets'
 import { ContentRegistryContext } from '../tabs/contentRegistry'
 import type { ThreadOpen } from '../tabs/tabsState'
@@ -48,7 +47,6 @@ export function ThreadPane({
   const resets = registry?.readingResets ?? ownResets
   const generation = useReadingGeneration(resets, threadId)
   const [readingState, setReadingState] = useState<ThreadReadingState | null>(null)
-  const coverage = useCoverageScope()
   /**
    * Mode and start of the mounted reader. `temporaryOf` names the saved preference while a temporary
    * target display is shown (an explicit target in another mode, or coming back to an entry left
@@ -114,17 +112,6 @@ export function ThreadPane({
       cancelled = true
     }
   }, [viewGeneration, generation, refetch])
-
-  const onRead = useCallback(
-    (at: number, postIds: PostId[]) => {
-      if (!resets.writable(threadId, at)) return
-      window.xidao.readingState
-        .markRead({ threadId, postIds })
-        .catch(() => undefined)
-        .finally(() => void refetch())
-    },
-    [threadId, refetch, resets]
-  )
 
   const onSavePosition = useCallback(
     (at: number, mode: ReadingMode, anchor: ReadingAnchor) => {
@@ -199,8 +186,6 @@ export function ThreadPane({
   }
 
   return (
-    // The reader's own coverage scope: its image viewer and 提醒 panel cover it (inside the app's).
-    <AppCoveredContext value={coverage}>
     <ThreadReader
       key={`${view.start.mode}:${view.seq}`}
       entryKey={entryKey}
@@ -211,11 +196,9 @@ export function ThreadPane({
       start={view.start.position}
       initialHead={open.head}
       displayed={displayed}
-      readingState={readingState}
       notice={notice}
       forumName={forumName}
       onChooseMode={(mode) => void chooseMode(mode)}
-      onRead={(postIds) => onRead(view.generation, postIds)}
       onSavePosition={(mode, anchor) => onSavePosition(view.generation, mode, anchor)}
       onObserved={onObserved}
       onBackToList={onBackToList}
@@ -230,6 +213,5 @@ export function ThreadPane({
       }
       highlightPostId={view.seq === 0 ? (openRef.current.target?.postId ?? null) : null}
     />
-    </AppCoveredContext>
   )
 }

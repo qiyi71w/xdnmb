@@ -157,11 +157,6 @@ export function createContentService(deps: {
 
   return {
     list: ({ kind }) => result(async () => (await store.listRetained(kind)).map((entry) => ({ ...entry, offline: visibleCopy(entry.offline) }))),
-    isFavorite: ({ threadId }) => result(() => store.isFavorite(threadId)),
-    favorite: ({ threadId, favorite }) => result(async () => {
-      await store.setFavorite(threadId, favorite, now())
-      return favorite
-    }),
     clearHistory: ({ threadId, clearReading }) => result(() => store.clearHistory(threadId, clearReading)),
     usage: () => result(usage),
     setCacheLimit: ({ bytes }) => result(async () => {

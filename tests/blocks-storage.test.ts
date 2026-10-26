@@ -36,7 +36,7 @@ describe('local blocks migration and storage', () => {
       old.prepare('INSERT INTO settings (key, value_json) VALUES (?, ?)').run('newTabSplitDefault', 'false')
     } finally { old.close() }
     const db = open(file)
-    expect(db.status).toEqual({ state: 'ready', schemaVersion: 13 })
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((item) => item.version)) })
     expect(db.loadSettings().newTabSplitDefault).toBe(false)
     expect(db.listBlocks()).toEqual([])
   })
@@ -63,7 +63,7 @@ describe('local blocks migration and storage', () => {
     db.setBlock('post', '123', true, at)
     db.close()
     const raw = new Database(file)
-    raw.pragma('user_version = 14')
+    raw.pragma(`user_version = ${Math.max(...MIGRATIONS.map((item) => item.version)) + 1}`)
     raw.close()
     const readonly = open(file)
     expect(readonly.status.state).toBe('read-only')

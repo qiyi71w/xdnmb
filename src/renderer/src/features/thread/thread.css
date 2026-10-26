@@ -610,7 +610,7 @@
 }
 
 /* Quote jump target: a brief static tint (no blinking) that fades out; with reduced motion it
-   simply disappears. Background only, so the text never moves and nothing counts as read. */
+   simply disappears. Background only, so the text never moves. */
 .post {
   transition: background-color 0.6s var(--ease-out), box-shadow 0.6s var(--ease-out);
 }

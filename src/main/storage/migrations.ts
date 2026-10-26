@@ -516,6 +516,16 @@ export const MIGRATIONS: readonly Migration[] = [
         PRIMARY KEY (kind, value)
       );`)
     }
+  },
+  {
+    // Thread favourites and read/unread tracking are gone. Their records are dropped, not migrated;
+    // reading positions, visits, end/reading observations (reminder evidence) and reminders stay.
+    version: 14,
+    up(db) {
+      db.exec(`DROP TABLE IF EXISTS favorites;
+        DROP TABLE IF EXISTS post_reads;
+        DROP TABLE IF EXISTS thread_attention;`)
+    }
   }
 ]
 

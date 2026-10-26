@@ -48,9 +48,6 @@ export interface ThreadFilterMetadata {
   forumId: string | null
   createdAt: string | null
   hasImage: boolean | null
-  /** Actual retained/observed unread content, not a total-reply-count estimate. */
-  unreadCount: number | null
-  coverageUnknown: boolean
 }
 export interface SearchApi {
   /** Starts a session and returns one bounded worker batch, even if the batch has no hits. No network. */
@@ -59,11 +56,11 @@ export interface SearchApi {
   next(input: { operationId: OperationId }): Promise<SearchResult<SearchBatch>>
   /** Cancels search, fetch or rebuild; preserves already saved contents. */
   cancel(input: { operationId: OperationId }): Promise<void>
-  /** Explicit only. Ordinary cached text, never offline ownership or read marking. */
+  /** Explicit only. Ordinary cached text, never offline ownership. */
   fetchThread(input: { operationId: OperationId; threadId: ThreadId }): Promise<SearchResult<SearchFetch>>
   fetchStatus(input: { operationId: OperationId }): Promise<SearchResult<SearchFetch>>
   /** Bounded batches yield to worker foreground persistence; user can cancel with operationId. */
   rebuild(input: { operationId: OperationId }): Promise<SearchResult<{ rebuilt: boolean }>>
-  /** Local metadata for <=200 IDs; no download or read-state writes. */
+  /** Local metadata for <=200 IDs; no download. */
   threadMetadata(input: { threadIds: ThreadId[] }): Promise<SearchResult<ThreadFilterMetadata[]>>
 }

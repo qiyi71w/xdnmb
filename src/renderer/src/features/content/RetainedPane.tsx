@@ -4,11 +4,13 @@
 
 import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ForumId, ThreadId } from '../../../../shared/forum'
+import type { ContentFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
 import { formatLocalTime, meaningfulName, meaningfulTitle } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ListFilterBar, UncertainTag } from '../search/FilterFields'
-import { filterList, listFilterCount, NO_LIST_FILTERS, type ListFilters } from '../search/listFilters'
+import { contentFilterCount, filterList } from '../search/listFilters'
+import { NO_CONTENT_FILTERS } from '../search/searchState'
 import { useThreadMetadata } from '../search/useThreadMetadata'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import { AttemptsBody, type AttemptsBodyProps } from '../publication/AttemptsDialog'
@@ -116,7 +118,7 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
   const registry = useContext(ContentRegistryContext)
   // Outside the shell (no registry) nothing else clears reading data: a private store never resets.
   const [ownResets] = useState(createReadingResets)
-  const [ownFilters] = useState(() => new Map<'history' | 'offline', ListFilters>())
+  const [ownFilters] = useState(() => new Map<'history' | 'offline', ContentFilters>())
   const filterMemory = registry?.retainedFilters ?? ownFilters
   const { list, entries, load, confirming, setConfirming, busy, failure, done, listRef, bodyRef, confirmRef, ask, clearHistory } =
     useRetainedList(kind, registry?.readingResets ?? ownResets)
@@ -152,12 +154,12 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
 
   // ---------- Filters ----------
   const [, setFilterVersion] = useState(0)
-  const listFilters = filterMemory.get(kind) ?? NO_LIST_FILTERS
-  const changeFilters = (next: ListFilters) => {
+  const listFilters = filterMemory.get(kind) ?? NO_CONTENT_FILTERS
+  const changeFilters = (next: ContentFilters) => {
     filterMemory.set(kind, next)
     setFilterVersion((version) => version + 1)
   }
-  const filtering = listFilterCount(listFilters) > 0
+  const filtering = contentFilterCount(listFilters) > 0
   const entryIds = useMemo(() => entries.map((entry) => entry.threadId), [entries])
   const metadata = useThreadMetadata(entryIds, filtering)
   const filtered = useMemo(

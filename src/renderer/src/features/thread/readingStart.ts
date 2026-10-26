@@ -1,4 +1,4 @@
-import { MAX_MARK_READ_IDS, type OperationId, type ReadOutcome, type ThreadPageResult } from '../../../../shared/api'
+import type { OperationId, ReadOutcome, ThreadPageResult } from '../../../../shared/api'
 import type { PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
 import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
 import type { ThreadOpen } from '../tabs/tabsState'
@@ -88,35 +88,4 @@ export function decideView(
   const snapshot = open.snapshot !== null && open.snapshot.generation === generation ? open.snapshot : null
   const wasTemporary = open.target !== null || (snapshot !== null && snapshot.temporaryOf !== null)
   return { start, temporaryOf: wasTemporary && start.mode !== preference ? preference : null }
-}
-
-/** IDs for one `markRead` call each. */
-export function markReadChunks(postIds: readonly PostId[]): PostId[][] {
-  const chunks: PostId[][] = []
-  for (let start = 0; start < postIds.length; start += MAX_MARK_READ_IDS) {
-    chunks.push(postIds.slice(start, start + MAX_MARK_READ_IDS))
-  }
-  return chunks
-}
-
-/**
- * 全部标为已读 in bounded chunks. `writable` is asked before every chunk and once after the last:
- * a history clear that blocked or reset the thread meanwhile stops the batch, so no later chunk is
- * sent and the caller must not show the posts as read. `markRead` resolves to whether it saved.
- */
-export async function markAllInChunks(
-  postIds: readonly PostId[],
-  writable: () => boolean,
-  markRead: (chunk: PostId[]) => Promise<boolean>
-): Promise<{ failed: boolean; stopped: boolean }> {
-  let failed = false
-  for (const chunk of markReadChunks(postIds)) {
-    if (!writable()) return { failed, stopped: true }
-    try {
-      if (!(await markRead(chunk))) failed = true
-    } catch {
-      failed = true
-    }
-  }
-  return { failed, stopped: !writable() }
 }

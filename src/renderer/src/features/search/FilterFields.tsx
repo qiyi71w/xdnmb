@@ -2,7 +2,8 @@ import { useId, useState, type ReactNode } from 'react'
 import type { ForumId } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
-import { listFilterCount, type FilteredList, type ListFilters, NO_LIST_FILTERS } from './listFilters'
+import { contentFilterCount, type FilteredList } from './listFilters'
+import { NO_CONTENT_FILTERS } from './searchState'
 import type { MetadataState } from './useThreadMetadata'
 import '../identity/identity.css'
 import './search.css'
@@ -132,8 +133,8 @@ export function ListFilterBar({
   metadata,
   coverage
 }: {
-  filters: ListFilters
-  onChange: (next: ListFilters) => void
+  filters: ContentFilters
+  onChange: (next: ContentFilters) => void
   forums: ReadonlyMap<ForumId, string> | null
   noun: string
   total: number
@@ -143,7 +144,7 @@ export function ListFilterBar({
   /** What the list covers, e.g. “已加载的第 1–3 页”. */
   coverage: ReactNode
 }) {
-  const count = listFilterCount(filters)
+  const count = contentFilterCount(filters)
   const [open, setOpen] = useState(count > 0)
   const panelId = useId()
   return (
@@ -168,13 +169,13 @@ export function ListFilterBar({
           </p>
         )}
         {count > 0 && (
-          <button type="button" className="btn btn-small btn-quiet" onClick={() => onChange(NO_LIST_FILTERS)}>
+          <button type="button" className="btn btn-small btn-quiet" onClick={() => onChange(NO_CONTENT_FILTERS)}>
             清除筛选
           </button>
         )}
       </div>
       <div className="list-filters-panel" id={panelId} hidden={!open}>
-        <FilterFields value={filters.content} onChange={(content) => onChange({ ...filters, content })} forums={forums} />
+        <FilterFields value={filters} onChange={onChange} forums={forums} />
       </div>
       {count > 0 && (
         <p className="list-filters-scope">

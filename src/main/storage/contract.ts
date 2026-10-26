@@ -13,7 +13,7 @@ import type {
   ThreadPage
 } from '../../shared/forum'
 import type { ImageFormat, ImageKind } from '../../shared/images'
-import type { AttentionSource, AttentionState, ReadingAnchor, ThreadReadingState } from '../../shared/reading'
+import type { ReadingAnchor, ThreadReadingState } from '../../shared/reading'
 import type { AppSettings } from '../../shared/settings'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
 import type { AttachmentId, DraftId, DraftSaveInput, PostFields, PostTarget } from '../../shared/drafts'
@@ -94,19 +94,11 @@ export interface ReadingStore {
   /** Recorded thread of a post and where stored pages contain it; `null` when never observed in a thread or list. */
   findPostThread(postId: PostId): Promise<PostThreadRelation | null>
 
-  /** Mode preference, positions, read/unread posts, attention and both coverages of one thread. */
+  /** Mode preference, positions and both coverages of one thread. */
   getReadingState(threadId: ThreadId): Promise<ThreadReadingState>
   setReadingMode(threadId: ThreadId, mode: ReadingMode, at: string): Promise<void>
   saveReadingPosition(threadId: ThreadId, mode: ReadingMode, anchor: ReadingAnchor, at: string): Promise<void>
-  /** Records posts observed in this thread as read; returns the ones newly recorded. */
-  markPostsRead(threadId: ThreadId, postIds: PostId[], at: string): Promise<PostId[]>
   recordVisit(threadId: ThreadId, at: string): Promise<void>
-  /**
-   * Establishes the local attention start the first time attention begins (subscription, favorite,
-   * reminder or import). Later calls, whatever their source, keep the original start and return it.
-   * Never marks anything read.
-   */
-  establishAttention(threadId: ThreadId, source: AttentionSource, at: string): Promise<AttentionState>
   loadSettings(): Promise<AppSettings>
   listBlocks(): Promise<LocalBlock[]>
   setBlock(kind: BlockKind, value: string, blocked: boolean, at: string): Promise<void>
@@ -237,8 +229,7 @@ export interface SubscriptionStore {
   setSubscriptionSource(source: SubscriptionSource): Promise<void>
   loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly?: boolean): Promise<SubscriptionObservation | null>
   loadSubscriptionObservationById(id: string): Promise<SubscriptionObservation | null>
-  /** Saves the observation and first attention starts in the same transaction. */
-  saveSubscriptionObservation(observation: SubscriptionObservation, attention: AttentionSource): Promise<void>
+  saveSubscriptionObservation(observation: SubscriptionObservation): Promise<void>
   saveSubscriptionOperation(operation: SubscriptionOperation): Promise<void>
   loadSubscriptionOperations(): Promise<SubscriptionOperation[]>
   recoverSubscriptionOperations(): Promise<void>

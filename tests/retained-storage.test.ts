@@ -65,28 +65,6 @@ afterEach(() => {
 })
 
 describe('retained content storage', () => {
-  it('adds favorites without fetching content and keeps the first attention through remove/re-add and restart', () => {
-    const { db, path } = fixture()
-    db.setFavorite('100', true, t0)
-    expect(db.loadThreadPage('100', 'all', 1)).toBeNull()
-    expect(db.getReadingState('100').attention).toMatchObject({ startedAt: t0, source: 'favorite' })
-    db.setFavorite('100', true, t1)
-    db.setFavorite('100', false, t1)
-    db.setFavorite('100', true, t2)
-    db.close()
-    const reopened = openReadingDatabase(path)
-    connections.push(reopened)
-    expect(reopened.isFavorite('100')).toBe(true)
-    expect(reopened.getReadingState('100').attention?.startedAt).toBe(t0)
-  })
-
-  it('rolls back the favorite too when its atomic attention write fails', () => {
-    const { db, path } = fixture()
-    raw(path).exec("CREATE TRIGGER fail_attention BEFORE INSERT ON thread_attention BEGIN SELECT RAISE(ABORT, 'injected'); END")
-    expect(() => db.setFavorite('100', true, t0)).toThrow()
-    expect(db.isFavorite('100')).toBe(false)
-  })
-
   it('returns only locally retained head metadata for list rows and keeps missing heads unknown', () => {
     const { db } = fixture()
     db.recordVisit('200', t0)
@@ -104,49 +82,38 @@ describe('retained content storage', () => {
     expect(db.listRetained('history')[0]).toMatchObject({ threadId: '100', title: '标题100', head: null, excerpt: null })
   })
 
-  it('retains entry titles and unread observation evidence after clearing all cache', () => {
-    const { db } = fixture()
+  it('retains entry titles and reminder observation evidence after clearing all cache', () => {
+    const { db, path } = fixture()
     db.saveThreadPage(page(), t0)
-    db.setFavorite('100', true, t1)
     db.recordVisit('100', t1)
-    const before = db.getReadingState('100')
     clear(db)
     expect(db.loadThreadPage('100', 'all', 1)).toBeNull()
-    expect(db.listRetained('favorites')[0]?.title).toBe('标题100')
     expect(db.listRetained('history')[0]?.title).toBe('标题100')
-    expect(db.getReadingState('100').unread).toEqual(before.unread)
-    expect(db.getReadingState('100').attention).toEqual(before.attention)
     expect(db.getThreadCoverage('100', 'all').pages).toEqual([])
-    db.setFavorite('200', true, t2)
-    expect(db.getReadingState('200').attention?.watermarkPostId).toBe('101')
+    expect(raw(path).prepare('SELECT count(*) AS n FROM reading_observations').get()).toEqual({ n: 1 })
   })
 
-  it('clears visits alone by default and only the selected visit scope reading records when requested', () => {
+  it('clears visits alone by default and only the selected visit scope reading positions when requested', () => {
     const { db, path } = fixture()
     for (const id of ['100', '200', '300']) {
       db.saveThreadPage(page(id, [post(`${id}1`)]), t0)
       db.saveReadingPosition(id, 'all', { postId: id, page: 1, offsetRatio: 0.5, viewportOffset: 10 }, t0)
-      db.markPostsRead(id, [id], t0)
-      db.setFavorite(id, true, t0)
     }
     db.recordVisit('100', t0)
     db.recordVisit('200', t0)
     raw(path).prepare('INSERT INTO end_observations VALUES (?, ?, ?)').run('100', t1, '1001')
     expect(db.clearHistory('100', false)).toEqual([])
     expect(db.getReadingState('100').positions.all).not.toBeNull()
-    expect(db.getReadingState('100').readPostIds).toEqual(['100'])
     expect(db.listRetained('history').map((entry) => entry.threadId)).toEqual(['200'])
     db.recordVisit('100', t1)
     expect(db.clearHistory('100', true)).toEqual(['100'])
     expect(db.getReadingState('100').positions.all).toBeNull()
-    expect(db.getReadingState('100').readPostIds).toEqual([])
     expect(db.getReadingState('200').positions.all).not.toBeNull()
     expect(db.clearHistory('300', true)).toEqual([])
     expect(db.getReadingState('300').positions.all).not.toBeNull()
     expect(db.clearHistory(null, true)).toEqual(['200'])
     expect(db.getReadingState('200').positions.all).toBeNull()
     expect(db.getReadingState('300').positions.all).not.toBeNull()
-    expect(db.getReadingState('100').attention?.startedAt).toBe(t0)
     expect(raw(path).prepare('SELECT count(*) AS n FROM end_observations').get()).toEqual({ n: 1 })
   })
 
@@ -216,7 +183,6 @@ describe('retained content storage', () => {
     expect(db.findPostThread('101')).toMatchObject({ threadId: '100', pages: { all: 1, po: null } })
     expect(db.getOfflineCopy('100')).toMatchObject({ postCount: 2, imageCount: 1, savedImages: 1 })
     expect(db.getContentUsage().protectedImageBytes).toBe(original.bytes)
-    expect(db.getReadingState('100').readPostIds).toEqual([])
     expect(readFileSync(join(folder, original.fileName)).byteLength).toBe(original.bytes)
   })
 
@@ -374,7 +340,7 @@ describe('retained content storage', () => {
     const absent = openReadingDatabase(join(folder, 'missing', 'reading.sqlite'))
     connections.push(newer, absent)
     for (const store of [newer, absent]) {
-      expect(() => store.listRetained('favorites')).toThrow(StorageWriteRefusedError)
+      expect(() => store.listRetained('history')).toThrow(StorageWriteRefusedError)
       expect(() => store.getContentUsage()).toThrow(StorageWriteRefusedError)
       expect(() => store.beginOfflineCopy('100', true, t0)).toThrow(StorageWriteRefusedError)
       expect(() => store.evictContentBatch(true)).toThrow(StorageWriteRefusedError)

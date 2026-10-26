@@ -28,8 +28,7 @@ import './search.css'
  * 串内搜索 of one tab (spec I10 / I11): searches the thread on screen in either mode without
  * changing how it is read, and can fetch the whole thread on request. Everything retained is
  * searched on the 搜索 page instead (its 本机 side, `SearchBody` with the `local` view). The sheet
- * is modal; results shown here never count as reading. Esc cancels a running locate first, then
- * closes.
+ * is modal. Esc cancels a running locate first, then closes.
  */
 export function SearchSheet({
   tabId,

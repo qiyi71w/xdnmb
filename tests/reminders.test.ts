@@ -4,12 +4,13 @@ import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Post, ReadingMode, ThreadPage } from '../src/shared/forum'
-import type { ReminderKind } from '../src/shared/reminders'
+import { formatReminderCount, type ReminderKind } from '../src/shared/reminders'
 import { ForumReadError, ReadCancelledError } from '../src/main/forum/contract'
 import { createReminderService } from '../src/main/reminders/service'
 import { createReminderNotifier } from '../src/main/reminders/notifier'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
+import { MIGRATIONS } from '../src/main/storage/migrations'
 import { asStore } from './helpers/store'
 
 const t0 = '2026-10-24T00:00:00.000Z'
@@ -35,10 +36,12 @@ function proof(db: ReadingDatabase): void {
   db.saveThreadPage(page('1', 1, [post('102'), post('103')]), t3)
   expect(db.firstProvenNewPost(start)).toBe('103')
 }
-function fixture() {
+/** `prepare` writes an older database at `path` before the current app opens (and upgrades) it. */
+function fixture(prepare?: (path: string) => void) {
   const folder = mkdtempSync(join(tmpdir(), 'xidao-reminders-'))
   folders.push(folder)
   const path = join(folder, 'app.sqlite')
+  prepare?.(path)
   const db = openReadingDatabase(path)
   databases.push(db)
   db.saveThreadPage(page('100', 1, [post('101')]), t0)
@@ -95,7 +98,6 @@ describe('reminder rules and durable events', () => {
     const s = fixture()
     await s.enable('all')
     await s.enable('quote')
-    expect(s.db.getReadingState('100').attention).toMatchObject({ startedAt: start, source: 'reminder', watermarkPostId: '101' })
     s.setRead(async () => { throw new ForumReadError({ kind: 'network', detail: 'connection' }) })
     await s.run()
     expect(s.db.getReminderRules(['100'])[0]?.rules.all.startedAt).toBe(start)
@@ -107,7 +109,6 @@ describe('reminder rules and durable events', () => {
       { threadId: '100', kind: 'all', generation: 3, startedAt: later, watermarkPostId: '250' },
       { threadId: '100', kind: 'quote', generation: 1, startedAt: start, watermarkPostId: '101' }
     ]))
-    expect(s.db.getReadingState('100').attention?.startedAt).toBe(start)
     expect(s.requests).toHaveLength(1) // Neither toggling a rule nor re-enabling performs a check.
   })
 
@@ -126,7 +127,7 @@ describe('reminder rules and durable events', () => {
     await s.run()
     const overview = s.db.reminderOverview()
     expect(overview.threads[0]?.eventCount).toBe(1)
-    expect(overview.threads[0]?.events[0]).toMatchObject({ postId: '200', kinds: ['all', 'po', 'quote'], quotedOwnIds: ['90'], read: false, excerpt: '正文 200 >>No.90' })
+    expect(overview.threads[0]?.events[0]).toMatchObject({ postId: '200', kinds: ['all', 'po', 'quote'], quotedOwnIds: ['90'], excerpt: '正文 200 >>No.90' })
     expect(s.notifications).toHaveLength(1)
     expect(s.raw<{ notification_id: number }>('SELECT notification_id FROM reminder_events')[0]?.notification_id).toBe(1)
   })
@@ -180,8 +181,7 @@ describe('reminder rules and durable events', () => {
     await s.run()
     await nextTask()
     expect(s.db.reminderOverview().lastNotification?.state).toBe(outcome)
-    expect(s.db.reminderOverview().totalUnread).toBe(1)
-    expect(s.db.getReadingState('100').readPostIds).toEqual([])
+    expect(s.db.reminderOverview().threads[0]?.eventCount).toBe(1)
     s.next()
     await s.run()
     expect(s.notifications).toHaveLength(1)
@@ -267,24 +267,22 @@ describe('reminder rules and durable events', () => {
     expect(s.requests).toEqual([])
   })
 
-  it('leaves starts, checkpoints, events and notification records intact when history and read state are cleared', async () => {
+  it('leaves starts, checkpoints, events and notification records intact when history and reading positions are cleared', async () => {
     const s = fixture()
     await s.enable()
     proof(s.db)
     await s.run()
     s.db.recordVisit('100', later)
-    s.db.markPostsRead('100', ['200'], later)
     const rules = s.db.reminderRuleSnapshots()
     const coverage = s.db.getReminderCoverage('100', 'all')
     const events = s.raw('SELECT * FROM reminder_events')
     const notifications = s.raw('SELECT * FROM reminder_notifications')
-    expect(s.db.reminderOverview().totalUnread).toBe(0)
     s.db.clearHistory('100', true)
     expect(s.db.reminderRuleSnapshots()).toEqual(rules)
     expect(s.db.getReminderCoverage('100', 'all')).toEqual(coverage)
     expect(s.raw('SELECT * FROM reminder_events')).toEqual(events)
     expect(s.raw('SELECT * FROM reminder_notifications')).toEqual(notifications)
-    expect(s.db.reminderOverview().totalUnread).toBe(1)
+    expect(s.db.reminderOverview().threads[0]?.eventCount).toBe(1)
     const usage = s.db.getContentUsage()
     expect(usage.personalDataBytes).toBeGreaterThan(0)
     for (let count = 0; count < 100; count++) if (!s.db.evictContentBatch(true).more) break
@@ -292,6 +290,53 @@ describe('reminder rules and durable events', () => {
     s.next()
     await s.run()
     expect(s.notifications).toHaveLength(1)
+  })
+})
+
+describe('after the schema v14 upgrade', () => {
+  it('confirms and notifies a new event once and counts every event, read records of v13 included', async () => {
+    const s = fixture((path) => {
+      const old = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 13))
+      try { old.saveThreadPage(page('100', 1, [post('101')]), t0) } finally { old.close() }
+      const raw = new Database(path)
+      try {
+        raw.prepare("INSERT INTO reminder_rules VALUES ('100', 'all', 1, 1, ?, '101', NULL, ?)").run(start, start)
+        raw.prepare(`INSERT INTO reminder_rounds(id, trigger, started_at, finished_at, state, threads_total, threads_done, new_events)
+          VALUES (1, 'manual', ?, ?, 'finished', 1, 1, 98)`).run(start, start)
+        raw.prepare("INSERT INTO reminder_notifications VALUES (1, 1, 98, 1, 'complete', 'shown', ?)").run(start)
+        const event = raw.prepare(`INSERT INTO reminder_events VALUES (?, '100', '{"all":1}', 'all', 1, '旧提醒', NULL,
+          '{"isAdmin":false,"isSage":false,"userHash":null}', '[]', 1, ?, 1)`)
+        const read = raw.prepare("INSERT INTO post_reads VALUES (?, '100', ?)")
+        // 98 earlier events, all read under v13; the next new reply makes 99, a further one 100.
+        for (let index = 0; index < 98; index++) {
+          event.run(String(1000 + index), t0)
+          read.run(String(1000 + index), start)
+        }
+        read.run('200', start)
+        raw.prepare("INSERT INTO favorites VALUES ('100', ?)").run(t0)
+        raw.prepare("INSERT INTO thread_attention VALUES ('100', ?, 'favorite', '101')").run(t0)
+      } finally { raw.close() }
+    })
+    expect(s.db.status).toMatchObject({ state: 'ready', schemaVersion: 14 })
+    proof(s.db)
+    await s.run()
+    const group = s.db.reminderOverview().threads[0]!
+    expect(group).toMatchObject({ threadId: '100', state: 'done', eventCount: 99 })
+    expect(group.events[0]).toMatchObject({ postId: '200', kinds: ['all'] })
+    expect(formatReminderCount(group.eventCount)).toBe('99')
+    expect(s.notifications).toHaveLength(1)
+
+    s.next()
+    s.setRead(async (threadId, mode, number) => page(threadId, number, number === 1 ? [post('101'), post('200'), post('201')] : [], 3, mode))
+    await s.run()
+    const after = s.db.reminderOverview().threads[0]!
+    expect(after.eventCount).toBe(100)
+    expect(formatReminderCount(after.eventCount)).toBe('99+')
+    expect(s.notifications).toHaveLength(2)
+    s.next()
+    s.setClock(180_000)
+    await s.run()
+    expect(s.notifications).toHaveLength(2)
   })
 })
 
@@ -469,7 +514,7 @@ describe('effective triggers and bounded catch-up', () => {
     expect(s.notifications[0]?.body).toContain('本轮检查未完成，仅含已确认的命中')
   })
 
-  it('keeps unproven boundaries out of events and reports uncertainty separately without marking read', async () => {
+  it('keeps unproven boundaries out of events and reports uncertainty separately', async () => {
     const s = fixture()
     await s.enable('all')
     await s.enable('po')
@@ -477,10 +522,9 @@ describe('effective triggers and bounded catch-up', () => {
     const group = s.db.reminderOverview().threads[0]!
     // The first check observed the thread's end after the start (baseline), but one reply cannot be
     // proven newer than the start: coverage is uncertain, not "waiting for a baseline".
-    expect(group).toMatchObject({ state: 'uncertain', eventCount: 0, unreadCount: 0, uncertainCount: 1 })
+    expect(group).toMatchObject({ state: 'uncertain', eventCount: 0, uncertainCount: 1 })
     expect(group.issues).toContain('boundary-uncertain')
     expect(s.notifications).toEqual([])
-    expect(s.db.getReadingState('100').readPostIds).toEqual([])
   })
 })
 

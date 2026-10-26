@@ -3,9 +3,7 @@ import type { ThreadId, ThreadPage } from '../../shared/forum'
 
 export interface ContentStore {
   listRetained(kind: RetainedList): Promise<RetainedEntry[]>
-  isFavorite(threadId: ThreadId): Promise<boolean>
-  setFavorite(threadId: ThreadId, favorite: boolean, at: string): Promise<void>
-  /** Threads whose reading data the same transaction cleared; empty when `clearReading` is false. */
+  /** Threads whose reading positions the same transaction cleared; empty when `clearReading` is false. */
   clearHistory(threadId: ThreadId | null, clearReading: boolean): Promise<ThreadId[]>
   getContentUsage(): Promise<ContentUsage>
   setCacheLimit(bytes: number): Promise<void>

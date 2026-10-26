@@ -1,10 +1,9 @@
 import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { Post, PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
 import { threadTotalPages } from '../../../../shared/threadPages'
-import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
+import type { ReadingAnchor } from '../../../../shared/reading'
 import { Icon, Spinner } from '../../components/Icon'
 import { FailureNotice, IdentitySettingsAction, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
-import { useCover } from '../../lib/appCovered'
 import { describeReadError, meaningfulTitle } from '../../lib/format'
 import { useNearEnd } from '../../lib/useNearEnd'
 import { NearViewport, type ImageView, type ViewerRequest } from '../image/imageView'
@@ -34,7 +33,6 @@ const MODE_NAMES: Record<ReadingMode, string> = { all: '全部回复', po: '只�
 const HIGHLIGHT_MS = 2400
 /** How long a settled reader waits for an automatic next page that may bring the quote to refocus. */
 const FOCUS_WAIT_MS = 1500
-const NO_POSTS: readonly PostId[] = []
 /** Posts in reading order, blocked placeholders included. */
 const SHOWN_POSTS = '[data-post-id], [data-blocked-post-id]'
 
@@ -78,8 +76,7 @@ function PagePopover({
   name,
   placeholder,
   max,
-  onJump,
-  onOpenChange
+  onJump
 }: {
   inputId: string
   mode: ReadingMode
@@ -90,7 +87,6 @@ function PagePopover({
   placeholder: string
   max: number | null
   onJump: (page: number) => void
-  onOpenChange: (open: boolean) => void
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -98,15 +94,6 @@ function PagePopover({
   const panelId = useId()
   const [input, setInput] = useState('')
   const { page, valid, invalid } = parsePage(input, max)
-
-  const report = useRef(onOpenChange)
-  useEffect(() => {
-    report.current = onOpenChange
-  })
-  useEffect(() => {
-    report.current(popover.open)
-  }, [popover.open])
-  useEffect(() => () => report.current(false), [])
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -185,8 +172,7 @@ interface PrependAnchorProps {
 /**
  * Keeps the view still when the page before the range is inserted above it. `getSnapshotBeforeUpdate`
  * is the one point that runs before React mutates the DOM of a commit, so the post on screen is read
- * there and put back at the same spot right after layout, before anything is painted (nothing inserted
- * above is ever on screen, so nothing there can be judged read by the insertion).
+ * there and put back at the same spot right after layout, before anything is painted.
  */
 class PrependAnchor extends Component<PrependAnchorProps> {
   override getSnapshotBeforeUpdate(previous: Readonly<PrependAnchorProps>): ReadingAnchor | null {
@@ -220,13 +206,10 @@ export interface ThreadReaderProps {
   initialHead: Post | null
   /** Tab active and reader pane actually shown. */
   displayed: boolean
-  /** Latest `readingState.get` result, or null when unavailable. */
-  readingState: ThreadReadingState | null
   /** Status of reading-state writes (mode preference, reset). */
   notice: string | null
   forumName: (forumId: string | null) => string | null
   onChooseMode: (mode: ReadingMode) => void
-  onRead: (postIds: PostId[]) => void
   onSavePosition: (mode: ReadingMode, anchor: ReadingAnchor) => void
   /** A page was observed: reading state should be fetched again. */
   onObserved: () => void
@@ -251,11 +234,9 @@ export function ThreadReader({
   start,
   initialHead,
   displayed,
-  readingState,
   notice,
   forumName,
   onChooseMode,
-  onRead,
   onSavePosition,
   onObserved,
   onBackToList,
@@ -305,11 +286,6 @@ export function ThreadReader({
   const closeViewer = useCallback(() => setViewer(null), [])
   const ruleThreads = useMemo(() => [threadId], [threadId])
   const rules = useThreadRules(ruleThreads)
-  /** The 提醒 panel floats over the top of the content: nothing is judged read while it is open. */
-  const [reminderPanelOpen, setReminderPanelOpen] = useState(false)
-  /** So does the page popover of the toolbar. */
-  const [pagePanelOpen, setPagePanelOpen] = useState(false)
-  useCover(reminderPanelOpen || pagePanelOpen)
   useEffect(
     () => () => {
       near.disconnect()
@@ -341,8 +317,6 @@ export function ThreadReader({
     toolbarRef,
     displayed,
     canSave: !temporary,
-    knownRead: readingState?.readPostIds ?? NO_POSTS,
-    onRead,
     onSave: (anchor) => onSavePosition(mode, anchor),
     onNearby: setNearby,
     onUserScroll: (delta) => {
@@ -709,7 +683,6 @@ export function ThreadReader({
                   placeholder={String(totalPages ?? lastPage?.page ?? 1)}
                   max={totalPages}
                   onJump={(page) => goTo({ kind: 'page', page }, () => thread.jump(page))}
-                  onOpenChange={setPagePanelOpen}
                 />
               </div>
               <div className="thread-bar-actions">
@@ -725,7 +698,6 @@ export function ThreadReader({
                   failure={rules.failure}
                   onRetry={rules.reload}
                   onUpdated={rules.updated}
-                  onReminderOpenChange={setReminderPanelOpen}
                   onReport={head === null || postActions.ownIds.has(head.id) ? undefined : (opener) => postActions.report(head.id, opener)}
                   onToStart={toStart}
                   onToEnd={toEnd}

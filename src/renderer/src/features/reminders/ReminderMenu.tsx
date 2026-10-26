@@ -10,7 +10,7 @@ import './reminders.css'
 /**
  * 提醒 control of one thread: a button stating which kinds are on, opening a small panel with one
  * real checkbox per kind and its start (提醒起点). Toggling only saves the rule: it never starts a
- * check and never marks anything read. Esc, a press outside or Tab leaving the panel closes it;
+ * check. Esc, a press outside or Tab leaving the panel closes it;
  * Esc returns focus to the button.
  */
 export function ReminderMenu({
@@ -21,8 +21,7 @@ export function ReminderMenu({
   onRetry,
   onUpdated,
   small = false,
-  tabIndex,
-  onOpenChange
+  tabIndex
 }: {
   threadId: ThreadId
   /** Thread title or `No.x`, for accessible names. */
@@ -34,26 +33,13 @@ export function ReminderMenu({
   onUpdated: (thread: ThreadReminders) => void
   small?: boolean
   tabIndex?: number
-  /** The panel opened or closed (a reader stops judging reading while it covers posts). */
-  onOpenChange?: (open: boolean) => void
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const popover = usePopover(triggerRef, panelRef)
   const panelId = useId()
-
-  const report = useRef(onOpenChange)
-  useEffect(() => {
-    report.current = onOpenChange
-  })
-  const open = popover.open
-  useEffect(() => {
-    report.current?.(open)
-  }, [open])
-  useEffect(() => () => report.current?.(false), [])
-
   const { on, known, text, state } = reminderSummary(rules, failure)
-  const saving = useReminderToggle(threadId, onUpdated, open)
+  const saving = useReminderToggle(threadId, onUpdated, popover.open)
 
   return (
     <span

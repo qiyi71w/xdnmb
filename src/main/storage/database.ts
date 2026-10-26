@@ -15,7 +15,7 @@ import type {
   ThreadId,
   ThreadPage
 } from '../../shared/forum'
-import type { AttentionSource, AttentionState, ReadingAnchor, SavedPosition, ThreadReadingState } from '../../shared/reading'
+import type { ReadingAnchor, SavedPosition, ThreadReadingState } from '../../shared/reading'
 import { DEFAULT_SETTINGS, settingsFromStored, type AppSettings } from '../../shared/settings'
 import type { ImageFormat, ImageKind } from '../../shared/images'
 import { IDENTITY_ROLES } from '../../shared/identity'
@@ -30,7 +30,7 @@ import type {
   AppStore, DraftAttachmentRecord, DraftRecord, DraftWriteOutcome, ImageHolder, ImageResourceRecord, NewImageResource, PostThreadRelation, Stored
 } from './contract'
 import { assertReadablePage, computeCoverage } from './coverage'
-import { buildReadingState, emptyReadingState, endObservation, type AttentionRecord } from './reading-state'
+import { emptyReadingState, endObservation } from './reading-state'
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
 import { RetainedContentDatabase, contentTick, touchThread } from './retained'
@@ -290,13 +290,10 @@ class SqliteReadingDatabase implements ReadingDatabase {
 
   private readonly content = new RetainedContentDatabase(
     () => this.writable(),
-    (page, at) => this.saveThreadPage(page, at),
-    (threadId, at) => this.establishAttention(threadId, 'favorite', at)
+    (page, at) => this.saveThreadPage(page, at)
   )
 
   listRetained: ReadingDatabase['listRetained'] = (kind) => this.content.listRetained(kind)
-  isFavorite: ReadingDatabase['isFavorite'] = (threadId) => this.content.isFavorite(threadId)
-  setFavorite: ReadingDatabase['setFavorite'] = (threadId, favorite, at) => this.content.setFavorite(threadId, favorite, at)
   clearHistory: ReadingDatabase['clearHistory'] = (threadId, clearReading) => this.content.clearHistory(threadId, clearReading)
   getContentUsage: ReadingDatabase['getContentUsage'] = () => this.content.getContentUsage()
   setCacheLimit: ReadingDatabase['setCacheLimit'] = (bytes) => this.content.setCacheLimit(bytes)
@@ -314,7 +311,6 @@ class SqliteReadingDatabase implements ReadingDatabase {
   private readonly reminders = new ReminderDatabase(
     () => this.writable(),
     () => this.publicationDatabase(),
-    (threadId, at) => this.establishAttention(threadId, 'reminder', at),
     (since) => this.firstProvenNewPost(since),
     (postId) => this.loadPost(postId)?.value ?? null,
     (threadId, mode) => this.getThreadCoverage(threadId, mode)
@@ -339,11 +335,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
   searchBatch: ReadingDatabase['searchBatch'] = (input) => this.search.batch(input)
   beginSearchRebuild: ReadingDatabase['beginSearchRebuild'] = () => this.search.begin()
   rebuildSearchBatch: ReadingDatabase['rebuildSearchBatch'] = () => this.search.step()
-  searchMetadata: ReadingDatabase['searchMetadata'] = (ids) => this.search.metadata(ids).map((metadata) => {
-    const reading = this.getReadingState(metadata.threadId)
-    return { ...metadata, unreadCount: reading.attention === null ? null : reading.attention.newUnreadIds.length,
-      coverageUnknown: metadata.coverageUnknown || (reading.attention?.uncertainUnreadIds.length ?? 0) > 0 }
-  })
+  searchMetadata: ReadingDatabase['searchMetadata'] = (ids) => this.search.metadata(ids)
 
   listBlocks: ReadingDatabase['listBlocks'] = () => this.publicationDatabase()
     .prepare('SELECT kind, value, created_at AS createdAt FROM local_blocks ORDER BY created_at DESC, kind, value')
@@ -693,35 +685,12 @@ class SqliteReadingDatabase implements ReadingDatabase {
           savedAt: row.saved_at
         }
       }
-      const readPostIds = db.prepare<[string], { post_id: string }>('SELECT post_id FROM post_reads WHERE thread_id = ?')
-        .all(threadId)
-        .map((row) => row.post_id)
-      const attentionRow = db.prepare<[string], { started_at: string; source: AttentionSource; watermark_post_id: string | null }>(
-        'SELECT started_at, source, watermark_post_id FROM thread_attention WHERE thread_id = ?'
-      ).get(threadId)
-      const attention: AttentionRecord | null = attentionRow
-        ? {
-            startedAt: attentionRow.started_at,
-            source: attentionRow.source,
-            watermarkPostId: attentionRow.watermark_post_id,
-            firstProvenNewPostId: this.firstProvenNewPost(attentionRow.started_at)
-          }
-        : null
-      const coverage = { all: this.getThreadCoverage(threadId, 'all'), po: this.getThreadCoverage(threadId, 'po') }
-      const observedCoverage = (mode: ReadingMode): ThreadCoverage => {
-        const rows = db.prepare<[string, string], ThreadPageRow>('SELECT * FROM reading_observations WHERE thread_id = ? AND mode = ? ORDER BY page').all(threadId, mode)
-        return computeCoverage(threadId, mode, rows.map((row) => ({ page: row.page, fetchedAt: row.fetched_at,
-          replyIds: JSON.parse(row.reply_ids_json) as string[], endCandidate: row.end_candidate !== 0, skippedItems: row.skipped_items })), coverage[mode].reportedReplyCount)
-      }
-      const state = buildReadingState({
+      return {
         threadId,
         mode: modeRow?.mode ?? 'all',
         positions,
-        readPostIds,
-        attention,
-        coverage: { all: observedCoverage('all'), po: observedCoverage('po') }
-      })
-      return { ...state, coverage }
+        coverage: { all: this.getThreadCoverage(threadId, 'all'), po: this.getThreadCoverage(threadId, 'po') }
+      }
     })()
   }
 
@@ -744,26 +713,6 @@ class SqliteReadingDatabase implements ReadingDatabase {
     `).run({ threadId, mode, ...anchor, at })
   }
 
-  markPostsRead(threadId: ThreadId, postIds: PostId[], at: string): PostId[] {
-    const db = this.writable()
-    return db.transaction(() => {
-      // Only posts actually observed as part of this thread can be read in it.
-      const belongs = db.prepare<[string, string], { found: number }>(
-        'SELECT 1 AS found FROM post_threads WHERE post_id = ? AND thread_id = ?'
-      )
-      const insert = db.prepare(`
-        INSERT INTO post_reads (post_id, thread_id, read_at) VALUES (?, ?, ?)
-        ON CONFLICT(post_id) DO NOTHING
-      `)
-      const marked: PostId[] = []
-      for (const postId of new Set(postIds)) {
-        if (!belongs.get(postId, threadId)) continue
-        if (insert.run(postId, threadId, at).changes === 1) marked.push(postId)
-      }
-      return marked
-    })()
-  }
-
   recordVisit(threadId: ThreadId, at: string): void {
     const db = this.writable()
     db.prepare(`
@@ -771,19 +720,6 @@ class SqliteReadingDatabase implements ReadingDatabase {
       ON CONFLICT(thread_id) DO UPDATE SET
         last_visited_at = excluded.last_visited_at, visit_count = thread_visits.visit_count + 1
     `).run(threadId, at, at)
-  }
-
-  establishAttention(threadId: ThreadId, source: AttentionSource, at: string): AttentionState {
-    const db = this.writable()
-    return db.transaction(() => {
-      // The highest post ID observed anywhere so far: every post at or below it existed before now.
-      const watermark = db.prepare<[], { id: string }>('SELECT post_id AS id FROM post_threads ORDER BY length(post_id) DESC, post_id DESC LIMIT 1').get()
-      db.prepare(`
-        INSERT INTO thread_attention (thread_id, started_at, source, watermark_post_id) VALUES (?, ?, ?, ?)
-        ON CONFLICT(thread_id) DO NOTHING
-      `).run(threadId, at, source, watermark?.id ?? null)
-      return this.getReadingState(threadId).attention as AttentionState
-    })()
   }
 
   /**
@@ -1395,7 +1331,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     return row ? JSON.parse(row.observation_json) as SubscriptionObservation : null
   }
 
-  saveSubscriptionObservation(observation: SubscriptionObservation, attention: AttentionSource): void {
+  saveSubscriptionObservation(observation: SubscriptionObservation): void {
     const db = this.writable()
     db.transaction(() => {
       const serialized = JSON.stringify(observation)
@@ -1417,7 +1353,6 @@ class SqliteReadingDatabase implements ReadingDatabase {
           for (const reply of thread.recentReplies) {
             writePost(reply, thread.head.id, { ...source, observedAs: 'feed-recent-reply' })
           }
-          this.establishAttention(thread.head.id, attention, page.fetchedAt)
         }
       }
     })()

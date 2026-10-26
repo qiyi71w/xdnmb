@@ -137,8 +137,7 @@ function Status({ tone, children }: { tone: 'info' | 'error'; children: ReactNod
  * The 联网 side of the 搜索 page (spec I10): a search box that requests only on submit, the
  * third-party notice, plain-text results with paging over the session's chain, and result opening
  * through the existing reader navigation. Its query, pages and view live in the entry's
- * OnlineSearchSession, so leaving and coming back restores them without any request. Nothing here
- * marks posts read.
+ * OnlineSearchSession, so leaving and coming back restores them without any request.
  */
 export function OnlineSearchPane({
   entryKey,

@@ -22,7 +22,7 @@ interface CoverageRow {
 }
 interface EventRow {
   post_id: string; thread_id: string; kinds_json: string; mode: ReadingMode; page: number; excerpt: string
-  created_at: string | null; quoted_own_ids_json: string; round_id: number; discovered_at: string; notification_id: number | null; read: number
+  created_at: string | null; quoted_own_ids_json: string; round_id: number; discovered_at: string; notification_id: number | null
 }
 interface RoundRow {
   id: number; trigger: CheckTrigger; started_at: string; finished_at: string | null; state: CheckRound['state']
@@ -60,7 +60,6 @@ export class ReminderDatabase {
     private readonly database: () => Database.Database,
     /** Read access: also allowed on a newer-schema database opened read-only. */
     private readonly readable: () => Database.Database,
-    private readonly attention: (threadId: string, at: string) => unknown,
     private readonly threshold: (since: string) => string | null,
     private readonly loadPost: (postId: string) => Post | null,
     private readonly coverage: (threadId: string, mode: ReadingMode) => ThreadCoverage
@@ -95,13 +94,12 @@ export class ReminderDatabase {
       const current = db.prepare<[string, string], RuleRow>('SELECT * FROM reminder_rules WHERE thread_id = ? AND kind = ?').get(threadId, kind)
       if (Boolean(current?.enabled) === enabled) return this.getRules([threadId])[0]!
       if (enabled) {
-        // Identical global observation watermark to establishAttention; one transaction covers both.
+        // The highest post ID observed anywhere so far: every post at or below it existed before now.
         const watermark = db.prepare<[], { id: string }>('SELECT post_id AS id FROM post_threads ORDER BY length(post_id) DESC, post_id DESC LIMIT 1').get()?.id ?? null
         db.prepare(`INSERT INTO reminder_rules VALUES (?, ?, 1, 1, ?, ?, NULL, ?)
           ON CONFLICT(thread_id, kind) DO UPDATE SET enabled = 1, generation = generation + 1,
           started_at = excluded.started_at, watermark_post_id = excluded.watermark_post_id, closed_by = NULL, changed_at = excluded.changed_at`)
           .run(threadId, kind, at, watermark, at)
-        this.attention(threadId, at)
       } else db.prepare("UPDATE reminder_rules SET enabled = 0, generation = generation + 1, closed_by = 'user', changed_at = ? WHERE thread_id = ? AND kind = ?")
         .run(at, threadId, kind)
       return this.getRules([threadId])[0]!
@@ -254,28 +252,26 @@ export class ReminderDatabase {
         const states = coverages.map((item) => item.state)
         const state: ThreadCheckState = states.includes('checking') ? 'checking' : states.includes('failed') ? 'failed'
           : baseline ? 'baseline-pending' : states.includes('incomplete') ? 'incomplete' : issues.length ? 'uncertain' : 'done'
-        const counts = db.prepare<[string], { total: number; unread: number }>(`SELECT count(*) AS total,
-          coalesce(sum(NOT EXISTS(SELECT 1 FROM post_reads p WHERE p.post_id = e.post_id)), 0) AS unread FROM reminder_events e WHERE thread_id = ?`).get(threadId)!
-        const events = db.prepare<[string, number], EventRow>(`SELECT e.*, EXISTS(SELECT 1 FROM post_reads p WHERE p.post_id = e.post_id) AS read
-          FROM reminder_events e WHERE thread_id = ? ORDER BY discovered_at DESC, length(post_id) DESC, post_id DESC LIMIT ?`).all(threadId, MAX_EVENTS_PER_GROUP)
+        const eventCount = db.prepare<[string], { total: number }>('SELECT count(*) AS total FROM reminder_events WHERE thread_id = ?').get(threadId)!.total
+        const events = db.prepare<[string, number], EventRow>(`SELECT * FROM reminder_events WHERE thread_id = ?
+          ORDER BY discovered_at DESC, length(post_id) DESC, post_id DESC LIMIT ?`).all(threadId, MAX_EVENTS_PER_GROUP)
         const head = this.loadPost(threadId)
         const title = head ? head.title || head.plainText.replace(/\s+/gu, ' ').trim().slice(0, 80) || null : null
         const latest = coverages.map((item) => item.updatedAt).filter((at): at is string => at !== null).sort().at(-1) ?? null
         return { threadId, title, rules: threadRules, state, issues,
           lastError: coverages.find((item) => item.lastError !== null)?.lastError ?? null, lastCheckedAt: latest,
-          unreadCount: counts.unread, uncertainCount: uncertainIds.size, eventCount: counts.total,
+          uncertainCount: uncertainIds.size, eventCount,
           events: events.map((event) => ({ postId: event.post_id, threadId: event.thread_id,
             kinds: REMINDER_KINDS.filter((kind) => kind in (JSON.parse(event.kinds_json) as object)), mode: event.mode, page: event.page,
             excerpt: event.excerpt, createdAt: event.created_at, quotedOwnIds: JSON.parse(event.quoted_own_ids_json) as string[],
-            discoveredAt: event.discovered_at, read: event.read !== 0 })) }
+            discoveredAt: event.discovered_at })) }
       })
       groups.sort((a, b) => (b.events[0]?.discoveredAt ?? '').localeCompare(a.events[0]?.discoveredAt ?? '') || comparePostIds(b.threadId, a.threadId))
       const current = db.prepare<[], RoundRow>("SELECT * FROM reminder_rounds WHERE state = 'running' ORDER BY id DESC LIMIT 1").get()
       const last = db.prepare<[], RoundRow>("SELECT * FROM reminder_rounds WHERE state <> 'running' ORDER BY id DESC LIMIT 1").get()
       const lastNotification = db.prepare<[], NotificationRow>('SELECT * FROM reminder_notifications ORDER BY id DESC LIMIT 1').get()
       return { currentRound: current ? round(current) : null, lastRound: last ? round(last) : null,
-        lastNotification: lastNotification ? notification(lastNotification) : null, threads: groups,
-        totalUnread: groups.reduce((sum, group) => sum + group.unreadCount, 0) }
+        lastNotification: lastNotification ? notification(lastNotification) : null, threads: groups }
     })()
   }
 }

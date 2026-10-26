@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ForumId, ThreadSummary } from '../../../../shared/forum'
+import type { ContentFilters } from '../../../../shared/search'
 import { Content, contentText } from '../../components/Content'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, PartialNotice, SourceNotice } from '../../components/Notices'
@@ -7,7 +8,8 @@ import { formatPageList } from '../../lib/format'
 import { useNearEnd } from '../../lib/useNearEnd'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ListFilterBar } from '../search/FilterFields'
-import { filterList, headMeta, listFilterCount, NO_LIST_FILTERS, type ListFilters } from '../search/listFilters'
+import { contentFilterCount, filterList, headMeta } from '../search/listFilters'
+import { NO_CONTENT_FILTERS } from '../search/searchState'
 import type { FeedInfo } from '../directory/feeds'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import type { WorkspaceList } from '../tabs/workspaceSnapshot'
@@ -77,8 +79,8 @@ export function FeedPane({
   const [saved] = useState(() => (remembered === null ? (registry?.savedLists.get(entryKey) ?? null) : null))
   const restorePages = saved === null ? null : Math.min(saved.pages, info.maxPage ?? saved.pages)
   const { state, hasMore, canAppend, loadMore, refresh, retry } = useFeed(info.ref, info.maxPage, remembered?.state ?? null, restorePages)
-  const [filters, setFilters] = useState<ListFilters>(() => remembered?.filters ?? NO_LIST_FILTERS)
-  const filtering = listFilterCount(filters) > 0
+  const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
+  const filtering = contentFilterCount(filters) > 0
   const scrollRef = useRef<HTMLDivElement>(null)
   const images = useImageScope(scrollRef)
   const sentinelRef = useRef<HTMLDivElement>(null)

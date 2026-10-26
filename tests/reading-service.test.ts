@@ -207,7 +207,6 @@ describe('readThreadPage', () => {
     expect(await reading.locateThreadEnd(THREAD, 'all', signal)).toMatchObject({
       status: 'failed', error: { kind: 'page-cap', highestReadablePage: 100 }
     })
-    expect(db.getReadingState(THREAD).readPostIds).toEqual([])
   })
 
   it('rejects an overlapping predecessor even when the response is not an exact duplicate', async () => {
@@ -358,17 +357,14 @@ describe('quote preview', () => {
     const f = quoteForum({ '700': { all: [['701', '702']] } })
     const reading = service(f.client)
     await reading.readThreadPage('700', 'all', 1, signal())
-    db.establishAttention('700', 'favorite', '2026-10-24T00:00:00.000Z')
-    db.markPostsRead('700', ['701'], '2026-10-24T00:01:00.000Z')
+    db.saveReadingPosition('700', 'all', { postId: '701', page: 1, offsetRatio: 0.5, viewportOffset: 0 }, '2026-10-24T00:01:00.000Z')
     const before = db.getReadingState('700')
 
     await reading.previewQuote('702', signal())
     expect(await reading.locateQuote('702', signal())).toMatchObject({ status: 'located' })
     const after = db.getReadingState('700')
-    expect(after.readPostIds).toEqual(before.readPostIds)
     expect(after.positions).toEqual(before.positions)
-    expect(after.attention).toEqual(before.attention)
-    expect(after.unread).toEqual(before.unread)
+    expect(after.mode).toBe(before.mode)
     expect(db.listRetained('history')).toEqual([])
   })
 })
@@ -462,7 +458,6 @@ describe('quote location', () => {
       status: 'located', source: 'cached', threadId: '700', target: { postId: '701', page: 2, mode: 'all' }
     })
     expect(f.requests).toEqual(['ref/701', '700/all/2'])
-    expect(db.getReadingState('700').readPostIds).toEqual([])
   })
 
   it('returns cancelled, not a location, when cancelled during the verifying read', async () => {

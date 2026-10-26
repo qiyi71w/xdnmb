@@ -8,7 +8,7 @@ import type {
   AttachmentId, AttachResult, DraftDeleteResult, DraftId, DraftListResult, DraftSaveInput, DraftSaveResult, EditorId,
   IdentityChoice, PostTarget
 } from './drafts'
-import type { MarkReadResult, ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
+import type { ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
 import type { SubscriptionsApi } from './subscriptions'
 import type { PublicationApi } from './publication'
 import type { LifecycleApi } from './lifecycle'
@@ -164,9 +164,6 @@ export interface AppStatus {
   platform: AppPlatform
 }
 
-/** Upper bound of post IDs per `markRead` call. */
-export const MAX_MARK_READ_IDS = 2000
-
 /**
  * Result of a settings update. Non-empty `issues` means the update was refused as a whole and nothing
  * changed; `saved: false` with no issues means local storage refused the write. `settings` is always
@@ -216,8 +213,8 @@ export interface XidaoApi {
     cancel(input: { operationId: OperationId }): Promise<void>
   }
   /**
-   * Quote preview and location. Both are foreground reads that never mark anything read and never
-   * navigate; the renderer decides what to do with a result.
+   * Quote preview and location. Both are foreground reads that never navigate; the renderer decides
+   * what to do with a result.
    */
   quotes: {
     /** Network first (`/api/ref`), falling back to the stored post with the failure reason. */
@@ -252,18 +249,13 @@ export interface XidaoApi {
   }
   /** Local reading context. Never touches the network; downloads and previews never call it. */
   readingState: {
-    /** Mode preference, per-mode positions, read/unread posts, attention and coverage of one thread. */
+    /** Mode preference, per-mode positions and coverage of one thread. */
     get(input: { threadId: ThreadId }): Promise<ThreadReadingState>
     /** Saves the thread's mode preference. Temporary target display must not call this. */
     setMode(input: { threadId: ThreadId; mode: ReadingMode }): Promise<WriteResult>
     /** Saves the position of one mode; the other mode's position is untouched. */
     savePosition(input: { threadId: ThreadId; mode: ReadingMode; anchor: ReadingAnchor }): Promise<WriteResult>
-    /**
-     * Records posts as read. Called only by the foreground reader's dwell judgement and by the explicit
-     * “全部标为已读” with the confirmed unread IDs it showed. Posts not observed in this thread are ignored.
-     */
-    markRead(input: { threadId: ThreadId; postIds: PostId[] }): Promise<MarkReadResult>
-    /** Records a visit to the thread (browsing history). Not a navigation step and not a read. */
+    /** Records a visit to the thread (browsing history). Not a navigation step. */
     recordVisit(input: { threadId: ThreadId }): Promise<WriteResult>
   }
   settings: {
@@ -380,8 +372,6 @@ export const IpcChannel = {
   closeOnlineSearch: 'online-search:close',
   openOnlineSearchSite: 'online-search:open-site',
   listRetained: 'content:list',
-  favorite: 'content:favorite',
-  isFavorite: 'content:is-favorite',
   clearHistory: 'content:clear-history',
   contentUsage: 'content:usage',
   setCacheLimit: 'content:set-cache-limit',
@@ -401,7 +391,6 @@ export const IpcChannel = {
   getReadingState: 'reading-state:get',
   setReadingMode: 'reading-state:set-mode',
   saveReadingPosition: 'reading-state:save-position',
-  markRead: 'reading-state:mark-read',
   recordVisit: 'reading-state:record-visit',
   getSettings: 'settings:get',
   updateSettings: 'settings:update',

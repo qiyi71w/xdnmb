@@ -123,10 +123,7 @@ export function createSubscriptionService(deps: {
     const bounded = AbortSignal.any([signal, AbortSignal.timeout(20_000)])
     while (result.nextPage !== null && !result.error && !result.cancelled) {
       await fetchPage(result, secret, bounded)
-      if (operation.action === 'add' && result.ids.includes(operation.threadId)) {
-        await store.establishAttention(operation.threadId, 'subscription', result.pages.at(-1)!.fetchedAt)
-      }
-      await store.saveSubscriptionObservation(result, 'import')
+      await store.saveSubscriptionObservation(result)
       // Presence is directly observable; absence requires the entire contiguous readback.
       if (result.ids.includes(operation.threadId)) break
     }
@@ -207,7 +204,7 @@ export function createSubscriptionService(deps: {
     const pageLimit = range ? range.pages.length + (range.error || range.cancelled ? 1 : 0) : Infinity
     while (value.nextPage !== null && !value.error && !value.cancelled && value.pages.length < pageLimit) {
       await fetchPage(value, secret, bounded)
-      await store.saveSubscriptionObservation(value, 'import')
+      await store.saveSubscriptionObservation(value)
     }
     return value
   }
@@ -390,7 +387,7 @@ export function createSubscriptionService(deps: {
         const secret = await identity(input.source, value.context)
         const bounded = AbortSignal.any([signal, AbortSignal.timeout(20_000)])
         await fetchPage(value, secret, bounded)
-        await store.saveSubscriptionObservation(value, 'import')
+        await store.saveSubscriptionObservation(value)
         return { ok: true, value }
       } catch (error) { return { ok: false, reason: error instanceof UnavailableIdentity ? error.reason : 'storage' } }
       finally { reading.delete(key) }

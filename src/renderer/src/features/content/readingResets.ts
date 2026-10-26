@@ -3,7 +3,7 @@ import type { ThreadId } from '../../../../shared/forum'
 
 /**
  * Clearing reading progress from history must not be undone by readers that are still open: they
- * would save their position or mark posts read again. While a clear runs the threads it may affect
+ * would save their position again. While a clear runs the threads it may affect
  * are blocked (`null`: every thread, until storage reports the actual scope); once it succeeded the
  * generation of exactly the cleared threads advances, and every reader, pending write and
  * navigation snapshot made under an older generation is dropped. Other threads keep theirs.

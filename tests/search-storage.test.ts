@@ -64,7 +64,7 @@ describe('real SQLite retained search', () => {
     const { db, path } = fixture()
     const evidence = observation(post('100', 'head needle', { userHash: 'po-id' }))
     evidence.pages[0]!.threads[0]!.recentReplies = [post('101', 'reply needle', { userHash: 'po-id' }), post('102', 'other needle', { userHash: 'other-id' })]
-    db.saveSubscriptionObservation(evidence, 'subscription')
+    db.saveSubscriptionObservation(evidence)
     clear(db)
     expect(search(db, 'needle', { kind: 'thread', threadId: '100', mode: 'po' }).map((hit) => hit.postId)).toEqual(['100', '101'])
     db.close()
@@ -130,8 +130,8 @@ describe('real SQLite retained search', () => {
     const hits = search(db, 'matching', { kind: 'local' }, { forumId: '2', fromDate: '2026-10-24', toDate: '2026-10-24', image: 'with' })
     expect(hits.map((hit) => [hit.postId, hit.uncertainFilters])).toEqual([['101', true], ['102', false]])
     expect(db.getReadingState('100').mode).toBe('all')
-    expect(db.getReadingState('100').readPostIds).toEqual([])
-    expect(db.searchMetadata(['100', '999'])).toMatchObject([{ forumId: '1', hasImage: false }, { forumId: null, hasImage: null, unreadCount: null, coverageUnknown: true }])
+    expect(db.searchMetadata(['100', '999'])).toEqual([{ threadId: '100', forumId: '1', createdAt: expect.anything(), hasImage: false },
+      { threadId: '999', forumId: null, createdAt: null, hasImage: null }])
   })
 
   it('updates transactionally, refuses stale observations, and removes cache-only hits but preserves offline and journal ownership', () => {
@@ -139,7 +139,7 @@ describe('real SQLite retained search', () => {
     db.saveThreadPage(page(post('100', 'cache-only'), []), at)
     db.beginOfflineCopy('200', false, at)
     db.saveOfflinePage(page(post('200', 'offline-needle'), []), at)
-    db.saveSubscriptionObservation(observation(post('300', 'journal-needle')), 'subscription')
+    db.saveSubscriptionObservation(observation(post('300', 'journal-needle')))
     const operation: SubscriptionOperation = { id: 'op', source: 'app', threadId: '400', action: 'add',
       context: { generation: 0, appCredentialId: null, webCredentialId: null }, createdAt: at, objectLabel: 'not-searched-label',
       state: 'settled', report: 'success', reportError: null, before: observation(post('400', 'operation-needle')), after: null, verification: 'present' }
@@ -172,12 +172,12 @@ describe('real SQLite retained search', () => {
 
   it('replaces an observation projection while retaining its separately saved valid evidence', () => {
     const { db } = fixture()
-    db.saveSubscriptionObservation(observation(post('100', 'old-retained')), 'subscription')
-    db.saveSubscriptionObservation({ ...observation(post('200', 'new-retained')), error: { page: 2, detail: { kind: 'network', detail: 'connection' } } }, 'subscription')
+    db.saveSubscriptionObservation(observation(post('100', 'old-retained')))
+    db.saveSubscriptionObservation({ ...observation(post('200', 'new-retained')), error: { page: 2, detail: { kind: 'network', detail: 'connection' } } })
     clear(db)
     expect(search(db, 'old-retained')[0]?.postId).toBe('100')
     expect(search(db, 'new-retained')[0]?.postId).toBe('200')
-    db.saveSubscriptionObservation(observation(post('300', 'replacement')), 'subscription')
+    db.saveSubscriptionObservation(observation(post('300', 'replacement')))
     clear(db)
     expect(search(db, 'old-retained')).toEqual([])
     expect(search(db, 'new-retained')).toEqual([])

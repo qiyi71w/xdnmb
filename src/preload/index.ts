@@ -55,8 +55,6 @@ const api: XidaoApi = {
   },
   content: {
     list: (input) => ipcRenderer.invoke(IpcChannel.listRetained, input),
-    favorite: (input) => ipcRenderer.invoke(IpcChannel.favorite, input),
-    isFavorite: (input) => ipcRenderer.invoke(IpcChannel.isFavorite, input),
     clearHistory: (input) => ipcRenderer.invoke(IpcChannel.clearHistory, input),
     usage: () => ipcRenderer.invoke(IpcChannel.contentUsage),
     setCacheLimit: (input) => ipcRenderer.invoke(IpcChannel.setCacheLimit, input),
@@ -106,7 +104,6 @@ const api: XidaoApi = {
     get: (input) => ipcRenderer.invoke(IpcChannel.getReadingState, input),
     setMode: (input) => ipcRenderer.invoke(IpcChannel.setReadingMode, input),
     savePosition: (input) => ipcRenderer.invoke(IpcChannel.saveReadingPosition, input),
-    markRead: (input) => ipcRenderer.invoke(IpcChannel.markRead, input),
     recordVisit: (input) => ipcRenderer.invoke(IpcChannel.recordVisit, input)
   },
   settings: {

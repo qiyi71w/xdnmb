@@ -24,15 +24,13 @@ interface CopyRow {
 export class RetainedContentDatabase {
   constructor(
     private readonly database: () => Database.Database,
-    private readonly savePage: (page: ThreadPage, at: string) => unknown,
-    private readonly attention: (threadId: string, at: string) => unknown
+    private readonly savePage: (page: ThreadPage, at: string) => unknown
   ) {}
 
   listRetained(kind: RetainedList): RetainedEntry[] {
     const db = this.database()
-    const query = kind === 'favorites' ? 'SELECT thread_id, added_at AS at FROM favorites'
-      : kind === 'history' ? 'SELECT thread_id, last_visited_at AS at FROM thread_visits'
-        : 'SELECT thread_id, updated_at AS at FROM offline_copies'
+    const query = kind === 'history' ? 'SELECT thread_id, last_visited_at AS at FROM thread_visits'
+      : 'SELECT thread_id, updated_at AS at FROM offline_copies'
     // Read only the retained head fields needed by list rows; never fetch missing content.
     return db.transaction(() => db.prepare<[], {
       thread_id: string; at: string; title: string | null; excerpt: string | null
@@ -56,21 +54,7 @@ export class RetainedContentDatabase {
       offline: this.getOfflineCopy(row.thread_id) })))()
   }
 
-  isFavorite(threadId: ThreadId): boolean {
-    return this.database().prepare('SELECT 1 FROM favorites WHERE thread_id = ?').get(threadId) !== undefined
-  }
-
-  setFavorite(threadId: ThreadId, favorite: boolean, at: string): void {
-    const db = this.database()
-    db.transaction(() => {
-      if (favorite) {
-        db.prepare('INSERT INTO favorites VALUES (?, ?) ON CONFLICT DO NOTHING').run(threadId, at)
-        this.attention(threadId, at)
-      } else db.prepare('DELETE FROM favorites WHERE thread_id = ?').run(threadId)
-    }).immediate()
-  }
-
-  /** Returns the threads whose reading data was cleared: the deleted visit scope, or none when `clearReading` is false. */
+  /** Returns the threads whose reading positions were cleared: the deleted visit scope, or none when `clearReading` is false. */
   clearHistory(threadId: ThreadId | null, clearReading: boolean): ThreadId[] {
     const db = this.database()
     return db.transaction(() => {
@@ -82,7 +66,6 @@ export class RetainedContentDatabase {
       if (clearReading) {
         cleared = db.prepare<[], { thread_id: string }>('SELECT thread_id FROM cleared_visits ORDER BY thread_id').all().map((row) => row.thread_id)
         db.exec('DELETE FROM reading_positions WHERE thread_id IN (SELECT thread_id FROM cleared_visits)')
-        db.exec('DELETE FROM post_reads WHERE thread_id IN (SELECT thread_id FROM cleared_visits)')
       }
       db.exec('DELETE FROM thread_visits WHERE thread_id IN (SELECT thread_id FROM cleared_visits)')
       db.exec('DELETE FROM cleared_visits')
@@ -111,7 +94,7 @@ export class RetainedContentDatabase {
       const protectedImageBytes = scalar('SELECT coalesce(sum(bytes), 0) AS bytes FROM image_resources r WHERE EXISTS(SELECT 1 FROM image_holders h WHERE h.resource_id = r.id) OR EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)')
         + scalar('SELECT coalesce(sum(bytes), 0) AS bytes FROM draft_attachments')
       // Logical record bytes, independent of SQLite pages, freelists and indexes.
-      const personalTables = ['thread_reading', 'reading_positions', 'post_reads', 'thread_attention', 'end_observations', 'thread_visits', 'settings', 'credentials', 'identity_roles', 'drafts', 'thread_post_identities', 'favorites', 'retained_titles', 'post_threads', 'reading_observations', 'offline_copies', 'offline_pages', 'offline_page_posts', 'offline_images', 'image_holders', 'content_readers', 'draft_attachments']
+      const personalTables = ['thread_reading', 'reading_positions', 'end_observations', 'thread_visits', 'settings', 'credentials', 'identity_roles', 'drafts', 'thread_post_identities', 'retained_titles', 'post_threads', 'reading_observations', 'offline_copies', 'offline_pages', 'offline_page_posts', 'offline_images', 'image_holders', 'content_readers', 'draft_attachments']
       // Observations and fixed-context write/readback evidence are durable, not ordinary cache.
       personalTables.push('subscription_app_credentials', 'subscription_configuration', 'subscription_observations', 'subscription_operations')
       personalTables.push('reminder_rules', 'reminder_coverage', 'reminder_events', 'reminder_rounds', 'reminder_notifications')

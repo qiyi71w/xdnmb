@@ -320,8 +320,7 @@ describe('reading database', () => {
     expect(() => newer.saveDirectory({ groups: [], timelines: [], skippedItems: 0 }, later)).toThrow(StorageWriteRefusedError)
     expect(() => newer.saveFeedPage({ feed: { kind: 'forum', id: '4' }, page: 1, threads: [], skippedItems: 0 }, later))
       .toThrow(StorageWriteRefusedError)
-    expect(newer.getReadingState(threadId).unread.map((item) => item.postId)).toEqual(['1001', threadId])
-    expect(() => newer.markPostsRead(threadId, ['1001'], later)).toThrow(StorageWriteRefusedError)
+    expect(newer.getReadingState(threadId).coverage.all.pages.map((page) => page.page)).toEqual([1])
     expect(() => newer.setReadingMode(threadId, 'po', later)).toThrow(StorageWriteRefusedError)
     newer.close()
     expect(readFileSync(path)).toEqual(before)
@@ -374,68 +373,28 @@ describe('reading context', () => {
     })
   })
 
-  it('lists only observed posts as confirmed unread: a later page read leaves the middle unread and PO reading leaves others', () => {
+  it('reports each mode’s observed coverage with the reading state', () => {
     const db = open(databasePath())
     db.saveThreadPage(threadPage(1, [post('1001'), post('1002'), post('1003')]), fetchedAt)
     db.saveThreadPage(threadPage(3, [post('3001'), post('3002')]), fetchedAt)
     db.saveThreadPage(threadPage(1, [post('1002')], { mode: 'po' }), fetchedAt)
-    expect(db.markPostsRead(threadId, ['3001', '3002'], later)).toEqual(['3001', '3002'])
-    expect(db.markPostsRead(threadId, ['1002', '1002', '3001', '424242'], later)).toEqual(['1002'])
-
     const state = db.getReadingState(threadId)
-    expect(state.readPostIds).toEqual(['1002', '3001', '3002'])
-    expect(state.unread).toEqual([
-      { postId: '1001', pages: { all: 1, po: null } },
-      { postId: '1003', pages: { all: 1, po: null } },
-      { postId: threadId, pages: { all: 1, po: 1 } }
-    ])
     expect(state.coverage.all.gaps).toEqual([2])
     expect(state.coverage.po.pages.map((page) => page.page)).toEqual([1])
   })
 
-  it('ignores posts that were never observed in the thread', () => {
-    const db = open(databasePath())
-    db.saveThreadPage(threadPage(1, [post('1001')]), fetchedAt)
-    db.saveThreadPage(pageOf('88', 'all', 1, ['8801']), fetchedAt)
-    expect(db.markPostsRead(threadId, ['8801', '9999'], later)).toEqual([])
-    expect(db.getReadingState(threadId).readPostIds).toEqual([])
-    expect(db.getReadingState('88').readPostIds).toEqual([])
-  })
-
-  it('marking the confirmed set read leaves posts observed afterwards unread', () => {
-    const db = open(databasePath())
-    db.saveThreadPage(threadPage(1, [post('1001'), post('1002')]), fetchedAt)
-    const confirmed = db.getReadingState(threadId).unread.map((item) => item.postId)
-    db.saveThreadPage(threadPage(1, [post('1001'), post('1002'), post('1003')]), later)
-    db.markPostsRead(threadId, confirmed, latest)
-    expect(db.getReadingState(threadId).unread.map((item) => item.postId)).toEqual(['1003'])
-  })
-
-  it('keeps the subscription time as the start; replies first seen later are new only once proven', () => {
+  it('proves replies first seen after a start new only from an end observed after it', () => {
     const db = open(databasePath())
     const thread = '50000000'
     const t = (minute: number) => `2026-10-23T09:${String(minute).padStart(2, '0')}:00.000Z`
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002']), t(0))
-    expect(db.establishAttention(thread, 'subscription', t(1))).toEqual({
-      startedAt: t(1), source: 'subscription', watermarkPostId: '50000002', firstProvenNewPostId: null,
-      newUnreadIds: [], uncertainUnreadIds: []
-    })
-    expect(db.getReadingState(thread).readPostIds).toEqual([])
-
-    // 50000003 may have been posted before attention began: first seen later, but not provably new.
+    // 50000003 may have been posted before the start at t(1): first seen later, but not provably new.
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002', '50000003']), t(2))
-    expect(db.getReadingState(thread).attention).toMatchObject({ newUnreadIds: [], uncertainUnreadIds: ['50000003'] })
-
+    expect(db.firstProvenNewPost(t(1))).toBeNull()
     // Page 1 then an empty page 2, both after the start: nothing above 50000003 existed at t(2).
     db.saveThreadPage(pageOf(thread, 'all', 2, []), t(3))
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002', '50000003', '50000004']), t(4))
-    expect(db.establishAttention(thread, 'reminder', t(5))).toEqual({
-      startedAt: t(1), source: 'subscription', watermarkPostId: '50000002', firstProvenNewPostId: '50000004',
-      newUnreadIds: ['50000004'], uncertainUnreadIds: ['50000003']
-    })
-    db.markPostsRead(thread, ['50000004'], t(5))
-    expect(db.getReadingState(thread).attention).toMatchObject({ newUnreadIds: [], uncertainUnreadIds: ['50000003'] })
-    expect(db.getReadingState(thread).unread.map((item) => item.postId)).toEqual([thread, '50000001', '50000002', '50000003'])
+    expect(db.firstProvenNewPost(t(1))).toBe('50000004')
   })
 
   it('does not use end observations made before the start as proof', () => {
@@ -443,57 +402,33 @@ describe('reading context', () => {
     const thread = '50000000'
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001']), fetchedAt)
     db.saveThreadPage(pageOf(thread, 'all', 2, []), fetchedAt)
-    db.establishAttention(thread, 'favorite', later)
     db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002']), latest)
-    expect(db.getReadingState(thread).attention).toMatchObject({
-      firstProvenNewPostId: null, newUnreadIds: [], uncertainUnreadIds: ['50000002']
-    })
+    expect(db.firstProvenNewPost(later)).toBeNull()
   })
 
   it('confirms new replies from another thread’s evidence before this thread has its own', () => {
     const db = open(databasePath())
     const t = (minute: number) => `2026-10-23T10:${String(minute).padStart(2, '0')}:00.000Z`
     db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001']), t(0))
-    db.establishAttention('60000000', 'subscription', t(1))
-    // Another thread's end is seen after the start; a later reply there was posted after the start.
+    // Another thread's end is seen after the start t(1); a later reply there was posted after it.
     db.saveThreadPage(pageOf('60000002', 'all', 1, ['60000003']), t(2))
     db.saveThreadPage(pageOf('60000002', 'all', 2, []), t(2))
     db.saveThreadPage(pageOf('60000002', 'all', 1, ['60000003', '60000005']), t(4))
     // This thread's end has never been observed.
     db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001', '60000004', '60000006']), t(5))
-    expect(db.getReadingState('60000000').attention).toMatchObject({
-      watermarkPostId: '60000001', firstProvenNewPostId: '60000005',
-      newUnreadIds: ['60000006'], uncertainUnreadIds: ['60000004']
-    })
+    expect(db.firstProvenNewPost(t(1))).toBe('60000005')
   })
 
   it('does not take a reply that vanished before the end observation as proof of a new one', () => {
     const db = open(databasePath())
     const t = (minute: number) => `2026-10-23T11:${String(minute).padStart(2, '0')}:00.000Z`
     db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001', '60000003']), t(0))
-    db.establishAttention('50000000', 'subscription', t(1))
-    // 60000003 was removed from the other thread; its end is then observed without it.
+    // 60000003 was removed from the thread after the start t(1); its end is then observed without it.
     db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001']), t(2))
     db.saveThreadPage(pageOf('60000000', 'all', 2, []), t(3))
     // 60000004 existed before the start but is only fetched now.
     db.saveThreadPage(pageOf('50000000', 'all', 1, ['60000004']), t(4))
-    expect(db.getReadingState('50000000').attention).toMatchObject({
-      watermarkPostId: '60000003', firstProvenNewPostId: null, newUnreadIds: [], uncertainUnreadIds: ['60000004']
-    })
-    expect(db.getReadingState('50000000').readPostIds).toEqual([])
-  })
-
-  it('an import before anything was observed starts from the first local observation', () => {
-    const db = open(databasePath())
-    const thread = '50000000'
-    expect(db.establishAttention(thread, 'import', fetchedAt).watermarkPostId).toBeNull()
-    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001']), later)
-    db.saveThreadPage(pageOf(thread, 'all', 2, []), later)
-    expect(db.getReadingState(thread).attention).toMatchObject({
-      source: 'import', firstProvenNewPostId: null, newUnreadIds: [], uncertainUnreadIds: ['50000001']
-    })
-    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002']), latest)
-    expect(db.getReadingState(thread).attention).toMatchObject({ newUnreadIds: ['50000002'] })
+    expect(db.firstProvenNewPost(t(1))).toBeNull()
   })
 
   it('upgrades a version 1 database without losing content and starts with empty reading state', () => {
@@ -517,8 +452,9 @@ describe('reading context', () => {
     const upgraded = open(path)
     expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: SUPPORTED_VERSION })
     expect(upgraded.loadThreadPage(threadId, 'all', 1)?.value.replies.map((reply) => reply.id)).toEqual(['1001'])
-    expect(upgraded.getReadingState(threadId)).toMatchObject({ mode: 'all', readPostIds: [], attention: null })
-    expect(upgraded.markPostsRead(threadId, ['1001'], later)).toEqual(['1001'])
+    expect(upgraded.getReadingState(threadId)).toMatchObject({ mode: 'all', positions: { all: null, po: null } })
+    upgraded.saveReadingPosition(threadId, 'all', anchorA, later)
+    expect(upgraded.getReadingState(threadId).positions.all?.anchor).toEqual(anchorA)
   })
 
   it('defaults new tabs to split and the close button to asking, and persists both settings', () => {

@@ -13,12 +13,10 @@ export type MetadataState =
   | { status: 'failed' }
 
 /**
- * Local filter metadata (main post fields, unread count) of the threads a list shows, read only
- * while `enabled`, and again when `refreshKey` changes (e.g. another thread was chosen, so unread
- * counts may have changed). Local only: no download, no read-state write. Results for an older ID
- * list are dropped.
+ * Local filter metadata (main post fields) of the threads a list shows, read only while `enabled`.
+ * Local only: no download, no reading-state write. Results for an older ID list are dropped.
  */
-export function useThreadMetadata(threadIds: readonly ThreadId[], enabled: boolean, refreshKey: string | number | null = null): MetadataState {
+export function useThreadMetadata(threadIds: readonly ThreadId[], enabled: boolean): MetadataState {
   const key = useMemo(() => threadIds.join(','), [threadIds])
   const [state, setState] = useState<{ key: string; value: MetadataState }>({ key: '', value: { status: 'idle' } })
 
@@ -26,7 +24,7 @@ export function useThreadMetadata(threadIds: readonly ThreadId[], enabled: boole
     if (!enabled || key === '') return
     let alive = true
     const ids = key.split(',')
-    // A refresh of the same list keeps what it showed until the new answer arrives.
+    // Enabled again for the same list: what it showed stays until the new answer arrives.
     setState((previous) => (previous.key === key && previous.value.status === 'ready' ? previous : { key, value: { status: 'loading' } }))
     const run = async () => {
       const byId = new Map<ThreadId, ThreadFilterMetadata>()
@@ -47,7 +45,7 @@ export function useThreadMetadata(threadIds: readonly ThreadId[], enabled: boole
     return () => {
       alive = false
     }
-  }, [key, enabled, refreshKey])
+  }, [key, enabled])
 
   if (!enabled || key === '') return { status: 'idle' }
   return state.key === key ? state.value : { status: 'loading' }

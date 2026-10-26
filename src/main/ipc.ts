@@ -1,6 +1,6 @@
 import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { IpcChannel, MAX_MARK_READ_IDS, type AppStatus, type DirectoryStrategy, type ReadOutcome, type LocateHint } from '../shared/api'
-import type { FeedRef, PostId, ReadingMode } from '../shared/forum'
+import { IpcChannel, type AppStatus, type DirectoryStrategy, type ReadOutcome, type LocateHint } from '../shared/api'
+import type { FeedRef, ReadingMode } from '../shared/forum'
 import type { ImageFormat, ImageKind } from '../shared/images'
 import { IDENTITY_ROLES, type CredentialId, type IdentityRole } from '../shared/identity'
 import {
@@ -227,11 +227,6 @@ function anchor(value: unknown): ReadingAnchor {
   return { postId: forumId(input.postId), page: page(input.page), offsetRatio, viewportOffset }
 }
 
-function postIds(value: unknown): PostId[] {
-  if (!Array.isArray(value) || value.length > MAX_MARK_READ_IDS) throw new InvalidRequestError()
-  return value.map(forumId)
-}
-
 /** Optional search-link clue: absent/undefined means none. */
 function locateHint(value: unknown): LocateHint | null {
   if (value === undefined) return null
@@ -390,19 +385,12 @@ export function registerIpc({
   })
   handle(IpcChannel.listRetained, async (_event, raw) => {
     const kind = record(raw).kind
-    if (kind !== 'favorites' && kind !== 'history' && kind !== 'offline') throw new InvalidRequestError()
+    if (kind !== 'history' && kind !== 'offline') throw new InvalidRequestError()
     return content.list({ kind })
   })
-  handle(IpcChannel.favorite, async (_event, raw) => {
-    const input = record(raw)
-    return content.favorite({ threadId: forumId(input.threadId), favorite: boolean(input.favorite) })
-  })
-  handle(IpcChannel.isFavorite, async (_event, raw) => content.isFavorite({ threadId: forumId(record(raw).threadId) }))
   handle(IpcChannel.clearHistory, async (_event, raw) => {
     const input = record(raw)
-    const result = await content.clearHistory({ threadId: input.threadId === null ? null : forumId(input.threadId), clearReading: boolean(input.clearReading) })
-    remindersChanged()
-    return result
+    return content.clearHistory({ threadId: input.threadId === null ? null : forumId(input.threadId), clearReading: boolean(input.clearReading) })
   })
   handle(IpcChannel.contentUsage, async () => content.usage())
   handle(IpcChannel.setCacheLimit, async (_event, raw) => {
@@ -534,19 +522,6 @@ export function registerIpc({
     const mode = readingMode(input.mode)
     const position = anchor(input.anchor)
     return { saved: await attempt(() => store.saveReadingPosition(threadId, mode, position, new Date().toISOString())) }
-  })
-
-  handle(IpcChannel.markRead, async (_event, raw) => {
-    const input = record(raw)
-    const threadId = forumId(input.threadId)
-    const ids = postIds(input.postIds)
-    try {
-      const marked = await store.markPostsRead(threadId, ids, new Date().toISOString())
-      if (marked.length > 0) remindersChanged()
-      return { saved: true, marked }
-    } catch {
-      return { saved: false, marked: [] }
-    }
   })
 
   handle(IpcChannel.recordVisit, async (_event, raw) => {

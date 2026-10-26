@@ -110,7 +110,6 @@ describe('owned search service over real SQLite and controlled HTTP', () => {
     await service.stop()
     expect(requests).toEqual([1, 2])
     expect(db.loadPost('101')?.value.plainText).toBe('retained searchable')
-    expect(db.getReadingState('100').readPostIds).toEqual([])
     expect(await api.start({ operationId: 'closed', query: 'searchable', scope: { kind: 'local' }, filters })).toEqual({ ok: false, reason: 'busy' })
     service.resume()
     await service.recover()
@@ -139,7 +138,6 @@ describe('owned search service over real SQLite and controlled HTTP', () => {
     release.resolve()
     expect(await advancing).toEqual({ ok: false, reason: 'cancelled' })
     expect(requests).toEqual([])
-    expect(db.getReadingState('100').readPostIds).toEqual([])
   })
 
   it('does not let superseded queries leak old results or renderer ownership survive release', async () => {
@@ -161,13 +159,12 @@ describe('owned search service over real SQLite and controlled HTTP', () => {
     expect(await api.next({ operationId: 'same' })).toEqual({ ok: false, reason: 'expired' })
   })
 
-  it('fetches sequential background pages only after explicit action, stops at a valid empty candidate and never marks read', async () => {
+  it('fetches sequential background pages only after explicit action and stops at a valid empty candidate', async () => {
     const { api, db, requests } = await setup((page, _request, reply) => {
       reply.setHeader('Content-Type', 'application/json')
       reply.end(JSON.stringify({ id: '100', content: 'head searchable', ReplyCount: 2,
         Replies: page <= 2 ? [{ id: String(100 + page), content: 'searchable fetched' }] : [] }))
     })
-    db.setFavorite('100', true, at)
     await api.start({ operationId: 'local', query: 'searchable', scope: { kind: 'local' }, filters })
     expect(requests).toEqual([])
     expect(await api.fetchThread({ operationId: 'fetch', threadId: '100' })).toMatchObject({ ok: true, value: { state: 'running' } })
@@ -176,9 +173,7 @@ describe('owned search service over real SQLite and controlled HTTP', () => {
     expect(final).toMatchObject({ state: 'stopped', pages: [1, 2, 3], failedPage: null,
       coverage: { endCandidatePage: 3, gaps: [], obtainedReplyCount: 2 } })
     expect(db.getOfflineCopy('100')).toBeNull()
-    expect(db.getReadingState('100').readPostIds).toEqual([])
     expect(db.listRetained('history')).toEqual([])
-    expect(await api.threadMetadata({ threadIds: ['100'] })).toMatchObject({ ok: true, value: [{ unreadCount: 0 }] })
     expect(await api.start({ operationId: 'after', query: 'searchable', scope: { kind: 'thread', threadId: '100', mode: 'all' }, filters }))
       .toMatchObject({ ok: true, value: { hits: [{ postId: '100' }, { postId: '101' }, { postId: '102' }] } })
   })
@@ -196,7 +191,6 @@ describe('owned search service over real SQLite and controlled HTTP', () => {
     expect(await settled(api)).toMatchObject({ state: 'cancelled', pages: [1], coverage: { endCandidatePage: null, obtainedReplyCount: 1 } })
     expect(requests).toEqual([1, 2])
     expect(db.loadPost('101')?.value.plainText).toBe('kept searchable')
-    expect(db.getReadingState('100').readPostIds).toEqual([])
   })
 
   it('stops a repeated lower page without saving it or reporting an end candidate', async () => {
@@ -212,7 +206,7 @@ describe('owned search service over real SQLite and controlled HTTP', () => {
   })
 
   it('stops without retries on rate limits and retains partial pages with the failed page', async () => {
-    const { api, requests, db } = await setup((page, _request, reply) => {
+    const { api, requests } = await setup((page, _request, reply) => {
       if (page === 2) { reply.writeHead(429); reply.end(); return }
       reply.setHeader('Content-Type', 'application/json')
       reply.end(JSON.stringify({ id: '100', content: 'head', Replies: [{ id: '101', content: 'partial' }] }))
@@ -220,7 +214,6 @@ describe('owned search service over real SQLite and controlled HTTP', () => {
     await api.fetchThread({ operationId: 'fetch', threadId: '100' })
     expect(await settled(api)).toMatchObject({ state: 'failed', pages: [1], failedPage: 2, error: { kind: 'rate-limited' } })
     expect(requests).toEqual([1, 2])
-    expect(db.getReadingState('100').readPostIds).toEqual([])
   })
 
   it('enforces ordinary quota without deleting active readers and reports fetched rather than retained coverage honestly', async () => {
@@ -252,6 +245,5 @@ describe('owned search service over real SQLite and controlled HTTP', () => {
     expect(await api.start({ operationId: 'partial', query: 'searchable', scope: { kind: 'local' }, filters })).toEqual({ ok: false, reason: 'index-unavailable' })
     expect(await api.rebuild({ operationId: 'complete' })).toEqual({ ok: true, value: { rebuilt: true } })
     expect(await api.start({ operationId: 'working', query: 'searchable', scope: { kind: 'local' }, filters })).toMatchObject({ ok: true })
-    expect(db.getReadingState('100').readPostIds).toEqual([])
   })
 })

@@ -200,7 +200,6 @@ describe('combined predecessor migration', () => {
     const result = db.searchBatch({ query: '旧正文', scope: { kind: 'local' },
       filters: { forumId: null, fromDate: null, toDate: null, image: 'any' }, after: 0, upper: db.searchBoundary() })
     expect(result.batch.hits.map((hit) => hit.postId)).toEqual(['100', '101'])
-    expect(db.getReadingState('100').readPostIds).toEqual(['101'])
     expect(db.getContentUsage().protectedTextBytes).toBeGreaterThan(0)
     const raw = new Database(path, { readonly: true })
     try {
@@ -240,8 +239,8 @@ describe('combined predecessor migration', () => {
     expect(db.loadSettings()).toEqual({ ...DEFAULT_SETTINGS, newTabSplitDefault: false })
     expect(db.loadThreadPage('100', 'all', 1)?.value.replies).toEqual([post('101')])
     expect(db.findPostThread('101')).toEqual({ threadId: '100', isHead: false, preferredMode: 'po', pages: { all: 1, po: null } })
-    expect(db.getReadingState('100')).toMatchObject({ mode: 'po', readPostIds: ['101'],
-      positions: { all: { anchor: { postId: '101', offsetRatio: 0.4, viewportOffset: 12 } } }, attention: { startedAt: at } })
+    expect(db.getReadingState('100')).toMatchObject({ mode: 'po',
+      positions: { all: { anchor: { postId: '101', offsetRatio: 0.4, viewportOffset: 12 } } } })
     expect(db.listRetained('history')[0]).toMatchObject({ threadId: '100', at: later })
     if (hasSubscriptions(kind)) {
       expect(db.loadSubscriptionConfiguration()).toEqual({ source: 'web', context })
@@ -256,7 +255,6 @@ describe('combined predecessor migration', () => {
       expect(db.getThreadPostIdentity('100')).toEqual({ state: 'selected', credentialId: '7' })
     } else expect(db.listDrafts()).toEqual([])
     if (hasRetained(kind)) {
-      expect(db.isFavorite('100')).toBe(true)
       expect(db.getOfflineCopy('100')).toMatchObject({ pages: [1], postCount: 2, state: 'stopped' })
     }
     if (kind === 'reconciliation-v6' || kind === 'integrated-v8' || kind === 'reminders-v9') {
@@ -271,7 +269,7 @@ describe('combined predecessor migration', () => {
     if (!hasSubscriptions(kind)) {
       expect(db.loadSubscriptionConfiguration()).toEqual({ source: 'app', context: { generation: 0, appCredentialId: null, webCredentialId: '7' } })
       db.setSubscriptionAppCredential(context.appCredentialId, ciphertext)
-      db.saveSubscriptionObservation({ ...observation(), context: db.loadSubscriptionConfiguration().context }, 'import')
+      db.saveSubscriptionObservation({ ...observation(), context: db.loadSubscriptionConfiguration().context })
       db.saveSubscriptionOperation({ ...operation(), context: db.loadSubscriptionConfiguration().context })
     }
     const requests: string[] = []
@@ -285,7 +283,7 @@ describe('combined predecessor migration', () => {
     const result = await service.reconcile({ id: operation().id, operationId: 'check' }, new AbortController().signal)
     expect(result).toMatchObject({ ok: true, value: { state: 'settled', report: 'unknown', verification: 'present' } })
     expect(requests).toEqual(['/Api/feed'])
-    expect(db.getReadingState('100').readPostIds).toEqual(['101'])
+    expect(db.getReadingState('100').positions.all?.anchor.postId).toBe('101')
     expect(db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: '7',
       fields: { content: '新草稿', title: '', name: '', email: '', watermark: false }, attachmentId: null }, later)).toMatchObject({ ok: true })
     db.close()
@@ -323,7 +321,7 @@ describe('combined predecessor migration', () => {
     folders.push(folder)
     const db = open(join(folder, 'app.sqlite'))
     const before = db.getContentUsage()
-    db.saveSubscriptionObservation(observation(), 'import')
+    db.saveSubscriptionObservation(observation())
     db.saveSubscriptionOperation(operation())
     db.savePost(post('999'), at)
     expect(db.loadPost('101')?.value).toEqual(post('101'))
@@ -342,6 +340,71 @@ describe('combined predecessor migration', () => {
     expect(db.findPostThread('101')).toMatchObject({ threadId: '100', pages: { all: null, po: null } })
     expect(db.loadSubscriptionObservationById(observation().id)).toEqual(observation())
     expect(db.loadSubscriptionOperations()).toEqual([operation()])
-    expect(db.getReadingState('100').attention?.startedAt).toBe(at)
+  })
+})
+
+describe('schema v14: thread favourites and read state removed', () => {
+  const removed = ['favorites', 'post_reads', 'thread_attention']
+  const kept = ['thread_reading', 'reading_positions', 'thread_visits', 'end_observations', 'reading_observations', 'post_threads',
+    'reminder_rules', 'reminder_events', 'reminder_rounds', 'reminder_notifications', 'local_blocks', 'drafts', 'draft_attachments',
+    'publication_attempts', 'settings', 'credentials', 'subscription_operations', 'offline_copies', 'workspace']
+
+  /** A v13 database with favourites, read records, attention starts and reminder observation data. */
+  function v13(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 13)).close()
+    const raw = new Database(path)
+    try {
+      expect(raw.pragma('user_version', { simple: true })).toBe(13)
+      raw.prepare("INSERT INTO local_blocks VALUES ('cookie', 'blocked-id', ?)").run(at)
+      raw.prepare("INSERT INTO end_observations VALUES ('100', ?, '101')").run(later)
+      expect(raw.prepare('SELECT count(*) AS n FROM favorites').get()).toEqual({ n: 1 })
+      expect(raw.prepare('SELECT count(*) AS n FROM post_reads').get()).toEqual({ n: 1 })
+      expect(raw.prepare('SELECT count(*) AS n FROM thread_attention').get()).toEqual({ n: 1 })
+    } finally { raw.close() }
+    return path
+  }
+  function snapshot(path: string) {
+    const raw = new Database(path, { readonly: true })
+    try {
+      const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
+      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(`SELECT * FROM ${table}`).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
+      return { version: raw.pragma('user_version', { simple: true }), tables, rows }
+    } finally { raw.close() }
+  }
+
+  it('drops only the removed tables and keeps positions, history, reminders, blocks, drafts and observations', () => {
+    const path = v13()
+    const before = snapshot(path)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: 14 })
+    const after = snapshot(path)
+    expect(after.version).toBe(14)
+    for (const table of removed) expect(after.tables.has(table)).toBe(false)
+    expect(after.rows).toEqual(before.rows)
+    expect(before.rows.reading_observations?.length).toBeGreaterThan(0)
+    expect(db.getReadingState('100')).toMatchObject({ mode: 'po', positions: { all: { anchor: { postId: '101', offsetRatio: 0.4 } }, po: null } })
+    expect(db.listRetained('history').map((entry) => entry.threadId)).toEqual(['100'])
+    expect(db.reminderOverview().threads[0]).toMatchObject({ threadId: '100', eventCount: 1 })
+    expect(db.listBlocks()).toEqual([{ kind: 'cookie', value: 'blocked-id', createdAt: at }])
+    expect(db.listDrafts()[0]?.fields.content).toBe('未发送草稿')
+    expect(db.firstProvenNewPost(at)).toBeNull()
+  })
+
+  it('leaves the v13 file byte-for-byte unchanged when the v14 migration fails', () => {
+    const path = v13()
+    const original = readFileSync(path)
+    const failing = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 13), { version: 14, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 14)!.up(connection)
+      throw new Error('injected failure after dropping the tables')
+    } }])
+    connections.push(failing)
+    expect(failing.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failing.close()
+    expect(readFileSync(path)).toEqual(original)
+    const unchanged = snapshot(path)
+    expect(unchanged.version).toBe(13)
+    for (const table of removed) expect(unchanged.tables.has(table)).toBe(true)
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: 14 })
   })
 })

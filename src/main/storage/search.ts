@@ -165,10 +165,8 @@ export class SearchDatabase {
     const db = this.database()
     return ids.map((threadId) => {
       const row = db.prepare<[string], { forum_id: string | null; created_at: string | null; has_image: number | null }>('SELECT forum_id,created_at,has_image FROM search_documents WHERE post_id=?').get(threadId)
-      const coverage = this.coverage(threadId, 'all')
       return { threadId, forumId: row?.forum_id ?? null, createdAt: row?.created_at ?? null,
-        hasImage: row?.has_image === null || row?.has_image === undefined ? null : row.has_image === 1,
-        unreadCount: null, coverageUnknown: !row || coverage.endCandidatePage === null || coverage.gaps.length > 0 || coverage.countMismatch !== false }
+        hasImage: row?.has_image === null || row?.has_image === undefined ? null : row.has_image === 1 }
     })
   }
 }

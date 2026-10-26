@@ -108,7 +108,7 @@ export function SettingsPage(props: SettingsPageProps) {
   })
 
   // The page covers the tabs as a modal would.
-  useCover(true, 'app')
+  useCover(true)
 
   useEffect(() => {
     void refresh()

@@ -13,6 +13,7 @@ import {
   type MouseEvent as ReactMouseEvent
 } from 'react'
 import type { ForumId, ThreadId, ThreadSummary } from '../../../../shared/forum'
+import type { ContentFilters } from '../../../../shared/search'
 import type {
   SubscriptionAction,
   SubscriptionObservation,
@@ -30,7 +31,8 @@ import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
 import { useImageScope } from '../image/useImageLoad'
 import { ListFilterBar } from '../search/FilterFields'
-import { filterList, headMeta, listFilterCount, NO_LIST_FILTERS, type ListFilters } from '../search/listFilters'
+import { contentFilterCount, filterList, headMeta } from '../search/listFilters'
+import { NO_CONTENT_FILTERS } from '../search/searchState'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 import { UnsettledLine, unsettledEntryOf, unsettledText, WriteStatus } from './SubscriptionActivity'
@@ -120,7 +122,7 @@ export function SubscriptionPane({
     (start: SubscriptionListState): SubscriptionListState => ({ ...start, activity: 'idle', stopRequested: false })
   )
   /** This view's filters; kept across source switches, never resetting the thread being read. */
-  const [filters, setFilters] = useState<ListFilters>(() => remembered?.filters ?? NO_LIST_FILTERS)
+  const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtersRef = useRef(filters)
 
   const selection = overview === null ? null : selectionKey(overview)
@@ -300,7 +302,7 @@ export function SubscriptionPane({
     return [...seen.values()]
   }, [displayed])
   const filtered = useMemo(() => filterList(threads, (thread) => headMeta(thread.head), filters), [threads, filters])
-  const filtering = listFilterCount(filters) > 0
+  const filtering = contentFilterCount(filters) > 0
   const uncertainById = useMemo(() => new Map(filtered.shown.map(({ item, uncertain }) => [item.head.id, uncertain])), [filtered])
   const ids = useMemo(() => filtered.shown.map(({ item }) => item.head.id), [filtered])
   const roving = useRovingFocus(ids, selectedThreadId)

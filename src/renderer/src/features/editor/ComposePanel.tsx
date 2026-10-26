@@ -103,14 +103,14 @@ const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])'
 
 /**
- * Centred over a dimmed app. Focus stays inside; Esc or a press on the backdrop collapses it.
- * Nothing behind it is judged read while it is shown.
+ * Centred over a dimmed app, which it covers (`useCover`). Focus stays inside; Esc or a press on the
+ * backdrop collapses it.
  */
 function ComposeModal({ label, onCollapse, children }: { label: string; onCollapse: () => void; children: ReactNode }) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const layerRef = useRef<Layer | null>(null)
   const pressedBackdrop = useRef(false)
-  useCover(true, 'app')
+  useCover(true)
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current

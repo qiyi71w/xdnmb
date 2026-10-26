@@ -17,7 +17,7 @@ function quotedIds(nodes: ContentNode[], ownIds: ReadonlySet<PostId>, result: Se
   }
 }
 
-/** Uses observation evidence, never ReplyCount, server time, public author hashes or read state. */
+/** Uses observation evidence, never ReplyCount, server time or public author hashes. */
 export function evaluateObservedReplies(input: {
   observations: ReminderObservation[]
   rules: RuleSnapshot[]

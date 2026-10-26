@@ -41,7 +41,7 @@ export function PostView({
 }) {
   const articleRef = useRef<HTMLElement>(null)
   const [menu, setMenu] = useState<ContextMenuPoint | null>(null)
-  useCover(menu !== null, 'app')
+  useCover(menu !== null)
   const block = (kind: 'post' | 'cookie', value: string) => {
     const reader = articleRef.current?.closest('.reader')
     void setBlocked(kind, value, true).then(() => requestAnimationFrame(() => {

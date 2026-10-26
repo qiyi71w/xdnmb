@@ -40,7 +40,6 @@ it('runs the production database worker with real trigram search, batched rebuil
     const upper = await store.searchBoundary()
     const input = { query: '中文标', scope: { kind: 'local' as const }, filters: { forumId: null, fromDate: null, toDate: null, image: 'any' as const }, after: 0, upper }
     expect(await store.searchBatch(input)).toMatchObject({ batch: { hits: [{ postId: '100', retention: 'cache', hasImage: false }] } })
-    expect((await store.getReadingState('100')).readPostIds).toEqual([])
     for (let step = 0; step < 100; step++) if (!(await store.evictContentBatch(true)).more) break
     expect(await store.searchBatch({ ...input, query: 'worker' })).toMatchObject({ batch: { hits: [], done: true } })
     expect((await store.getContentUsage()).cacheTextBytes).toBe(0)

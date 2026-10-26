@@ -199,14 +199,12 @@ describe('protected subscription configuration and observations', () => {
     expect(remote.requests).toEqual([])
   })
 
-  it('reads App/web separately through short pages, records fixed contexts, and establishes attention without clearing reads', async () => {
+  it('reads App/web separately through short pages and records fixed contexts', async () => {
     const { service, db, remote, a, b, setTime } = await setup()
     await service.configureApp({ uuid: UUID_A })
-    db.establishAttention('1001', 'favorite', '2026-10-22T00:00:00.000Z')
     const head = parseAppList({ mediaType: 'application/json', text: JSON.stringify([{ id: '1001', content: '已有正文' }]) })[0]!.head
     db.saveThreadPage({ threadId: '1001', mode: 'all', page: 1, head, replies: [], replyCount: null,
       skippedItems: 0, endCandidate: true }, '2026-10-22T00:30:00.000Z')
-    db.markPostsRead('1001', ['1001'], '2026-10-22T01:00:00.000Z')
     const app = await scan(service, 'app')
     expect(app.ids).toEqual(['1001', '1002'])
     expect(app.pages.map((page) => page.endCandidate)).toEqual([false, false, true])
@@ -217,10 +215,6 @@ describe('protected subscription configuration and observations', () => {
     const web = await scan(service, 'web')
     expect(web.ids).toEqual(['3001'])
     expect(remote.requests.filter((request) => request.path.startsWith('/Forum/')).every((request) => request.cookie === `userhash=${COOKIE_A}`)).toBe(true)
-    const state = db.getReadingState('1001')
-    expect(state.attention?.startedAt).toBe('2026-10-22T00:00:00.000Z')
-    expect(state.readPostIds).toContain('1001')
-    expect(db.getReadingState('1002').attention).toMatchObject({ source: 'import', startedAt: '2026-10-23T12:00:00.000Z' })
     expect(db.listCredentials()[0]?.id).toBe(b.id)
     await service.configureApp({ uuid: UUID_B })
     expect(await service.read({ source: 'app', observationId: app.id, operationId: 'read' }, signal())).toEqual({ ok: false, reason: 'stale' })
@@ -322,12 +316,11 @@ describe('protected subscription configuration and observations', () => {
 
 describe('subscription intent, reports, readback and read-only recovery', () => {
   it('confirms presence, repeat success and supported absence without claiming counts or touching unrelated data', async () => {
-    const { service, db, remote } = await setup()
+    const { service, remote } = await setup()
     await service.configureApp({ uuid: UUID_A })
     await scan(service, 'app')
     const added = unwrap(await change(service, 'app', '1003', 'add'))
     expect(added).toMatchObject({ report: 'success', verification: 'present', state: 'settled' })
-    expect(db.getReadingState('1003').attention?.source).toBe('subscription')
     const repeated = unwrap(await change(service, 'app', '1003', 'add'))
     expect(repeated).toMatchObject({ report: 'success', verification: 'present' })
     expect(remote.app.get(UUID_A)?.size).toBe(3)
@@ -335,7 +328,6 @@ describe('subscription intent, reports, readback and read-only recovery', () => 
     expect(removed).toMatchObject({ report: 'success', verification: 'absent-supported', state: 'settled' })
     expect(removed.before?.ids).toContain('1003')
     expect(removed.after?.pages.map((page) => page.page)).toEqual([1, 2, 3])
-    expect(db.getReadingState('1003').attention?.source).toBe('subscription')
     expect(writes(remote.requests)).toHaveLength(3)
   })
 
@@ -785,11 +777,9 @@ describe('previewed subscription reconciliation', () => {
     const original = unwrap(await service.configureApp({ uuid: UUID_A }))
     const head = parseAppList({ mediaType: 'application/json', text: JSON.stringify([{ id: '1001', content: '已有正文' }]) })[0]!.head
     db.saveThreadPage({ threadId: '1001', mode: 'all', page: 1, head, replies: [], replyCount: 0, skippedItems: 0, endCandidate: false }, '2026-10-23T10:00:00.000Z')
-    db.establishAttention('1001', 'favorite', '2026-10-23T10:00:00.000Z')
     db.setReadingMode('1001', 'po', '2026-10-23T10:00:00.000Z')
     db.saveReadingPosition('1001', 'po', { postId: '1001', page: 1, offsetRatio: 0.4, viewportOffset: 80 }, '2026-10-23T10:00:00.000Z')
     db.recordVisit('1001', '2026-10-23T10:00:00.000Z')
-    db.markPostsRead('1001', ['1001'], '2026-10-23T10:00:00.000Z')
     const reading = db.getReadingState('1001')
     unwrap(await service.configureApp({ uuid: UUID_B }))
     expect(writes(remote.requests)).toHaveLength(0)

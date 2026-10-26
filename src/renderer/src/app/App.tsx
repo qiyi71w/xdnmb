@@ -61,7 +61,7 @@ import {
   type ThreadOpen
 } from '../features/tabs/tabsState'
 import { parseWorkspace, type Workspace } from '../features/tabs/workspaceSnapshot'
-import { AppCoveredContext, useCoverageScope } from '../lib/appCovered'
+import { AppCoveredContext, useAppCoverage } from '../lib/appCovered'
 import { meaningfulTitle } from '../lib/format'
 import { SettingsContext, type SettingsAccess } from '../lib/settingsContext'
 import { SettingsOpenerContext, type SettingsSectionId } from '../lib/settingsOpener'
@@ -169,8 +169,8 @@ export function App() {
     () => (reminderOverview === null ? null : { coverageProblem: overviewHasCoverageProblem(reminderOverview) }),
     [reminderOverview]
   )
-  /** The app's coverage scope: every modal dialog (`Modal`) and the settings page cover it while open. */
-  const coverage = useCoverageScope()
+  /** The app's coverage: every modal dialog (`Modal`) and the settings page cover it while open. */
+  const coverage = useAppCoverage()
   const [draftsOpen, setDraftsOpen] = useState(false)
   const closeDrafts = useCallback(() => setDraftsOpen(false), [])
   const [historyRequest, setHistoryRequest] = useState<HistoryPageHost['request']>(null)
