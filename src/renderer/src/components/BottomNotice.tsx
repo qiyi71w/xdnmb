@@ -63,9 +63,10 @@ export function BottomNotice({
   const visible = useSyncExternalStore(subscribeVisibility, documentVisible)
   const shown = open && visible
 
+  // Taken when first shown and kept while open, so hiding and showing the window keeps the order.
   const order = useRef<number | null>(null)
-  if (!shown) order.current = null
-  else order.current ??= ++appeared
+  if (!open) order.current = null
+  else if (shown) order.current ??= ++appeared
 
   const focusInside = useRef(false)
   const returnTo = useRef<HTMLElement | null>(null)
