@@ -130,6 +130,9 @@ const api: XidaoApi = {
     zoom: (input) => ipcRenderer.invoke(IpcChannel.zoom, input),
     updateTitleBar: (input) => ipcRenderer.invoke(IpcChannel.updateTitleBar, input)
   },
+  clipboard: {
+    run: (input) => ipcRenderer.invoke(IpcChannel.clipboard, input)
+  },
   links: {
     openExternal: (input) => ipcRenderer.invoke(IpcChannel.openExternal, input)
   },
