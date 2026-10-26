@@ -22,8 +22,11 @@ export interface FailureNotifier {
 export function createFailureNotifier(deps: {
   /** The window is visible, not minimized and focused. */
   foreground(): boolean
-  /** Hands the notice to the window's renderer; `false` when there is no window to take it. */
-  showInApp(notice: SendFailureNotice): boolean
+  /**
+   * Hands the notice to the window's renderer; `false` when there is no window to take it. `missed`:
+   * owed for a system notification that did not show (else the window was in front at the failure).
+   */
+  showInApp(notice: SendFailureNotice, missed: boolean): boolean
   isSupported(): boolean
   create(message: { title: string; body: string }): SystemNotification
   forumName(forumId: string): Promise<string | null>
@@ -36,7 +39,7 @@ export function createFailureNotifier(deps: {
   const missed = new Map<string, SendFailureNotice>()
 
   const miss = (notice: SendFailureNotice) => {
-    if (deps.foreground() && deps.showInApp(notice)) return
+    if (deps.foreground() && deps.showInApp(notice, true)) return
     missed.set(notice.attemptId, notice)
   }
 
@@ -72,7 +75,7 @@ export function createFailureNotifier(deps: {
     async recorded(attempt) {
       const notice = sendFailureNotice(attempt)
       if (notice === null) return
-      if (deps.foreground() && deps.showInApp(notice)) return
+      if (deps.foreground() && deps.showInApp(notice, false)) return
       let shown = false
       try {
         shown = await system(notice)
@@ -83,7 +86,7 @@ export function createFailureNotifier(deps: {
     },
     windowShown() {
       for (const [attemptId, notice] of missed) {
-        if (!deps.showInApp(notice)) return
+        if (!deps.showInApp(notice, true)) return
         missed.delete(attemptId)
       }
     }

@@ -239,7 +239,7 @@ it('notifies only explicit failures with their saved draft, never refusals, unkn
   s.remote.setMode('reject')
   const rejected = await send('front')
   await Promise.all(recorded)
-  expect(inApp).toEqual([{ attemptId: rejected.id, draftId: rejected.savedDraftId, problem: 'rate-limited', target: { kind: 'thread', forumId: '1' } }])
+  expect(inApp).toEqual([{ attemptId: rejected.id, editorId: 'front', draftId: rejected.savedDraftId, problem: 'rate-limited', target: { kind: 'thread', forumId: '1' } }])
   expect(s.db.listDrafts().map(draft => draft.id)).toEqual([rejected.savedDraftId])
 
   front = false

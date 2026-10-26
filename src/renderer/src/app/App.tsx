@@ -23,7 +23,7 @@ import {
 import { useDirectory } from '../features/directory/useDirectory'
 import { HistoryPageContext, type HistoryPageHost, type HistoryView } from '../features/content/RetainedPane'
 import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
-import { editorFor, editorForDraft, isUnsaved, unsavedInTab } from '../features/editor/editorsState'
+import { editorFor, editorForDraft, editorOnScreen, isUnsaved, unsavedInTab } from '../features/editor/editorsState'
 import { UnsavedEditorsDialog } from '../features/editor/UnsavedEditorsDialog'
 import { focusKey, useEditorsStore } from '../features/editor/useEditorsStore'
 import { EditorWorkspaceContext, type EditorWorkspace } from '../features/editor/workspace'
@@ -864,6 +864,22 @@ export function App() {
     [whenRestored, closeNav, currentEditors, continueDraft]
   )
 
+  /**
+   * The failed send's editor is on screen now (expanded in the active tab, settings page not over
+   * it): it already shows the failure and holds the draft, so no bottom notice is added. The
+   * report editor is displayed whenever the tab displays any target (see `ComposeFrame`).
+   */
+  const failureShownInEditor = useCallback(
+    (notice: SendFailureNotice): boolean => {
+      const tabs = stateRef.current.tabs
+      if (tabs === null || settingsShownRef.current) return false
+      const displayed = shownTargets(activeTab(tabs), stateRef.current.singlePane)
+      if (displayed.length > 0) displayed.push({ kind: 'thread', forumId: '18' })
+      return editorOnScreen(currentEditors(), notice.editorId, displayed)
+    },
+    [currentEditors]
+  )
+
   /** A real quit closes every layer that would compete with its questions. */
   const closeForQuit = useCallback(() => {
     closeBoardPanel('dismiss')
@@ -1327,7 +1343,12 @@ export function App() {
               {/* Bottom centre of the content column, beside the inline rail and under the overlay one. */}
               <BottomNoticeStack>
                 <RateLimitNotice fallbackFocus={activeTabFocus} />
-                <SendFailureNotices forumName={forumName} openDraft={openFailedDraft} fallbackFocus={activeTabFocus} />
+                <SendFailureNotices
+                  forumName={forumName}
+                  shownInEditor={failureShownInEditor}
+                  openDraft={openFailedDraft}
+                  fallbackFocus={activeTabFocus}
+                />
               </BottomNoticeStack>
 
               {navOverlay && navPopover.open && (

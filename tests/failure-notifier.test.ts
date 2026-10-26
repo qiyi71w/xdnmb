@@ -20,9 +20,9 @@ function harness(options: { supported?: boolean; showThrows?: boolean } = {}) {
   const created: Array<{ title: string; body: string; listeners: Map<string, () => void> }> = []
   const notifier = createFailureNotifier({
     foreground: () => state.front,
-    showInApp(notice) {
+    showInApp(notice, missed) {
       if (!state.renderer) return false
-      inApp.push(notice.attemptId)
+      inApp.push(missed ? `${notice.attemptId} (missed)` : notice.attemptId)
       return true
     },
     isSupported: () => options.supported ?? true,
@@ -47,7 +47,7 @@ describe('send failure notifier', () => {
     expect(h.inApp).toEqual([])
     expect(h.created.map(({ title, body }) => ({ title, body }))).toEqual([{ title: '发送失败：论坛拒绝了这次发言', body: '回复 No.42，内容已存为草稿' }])
     h.created[0]!.listeners.get('click')!()
-    expect(h.opened).toEqual([{ attemptId: 'a', draftId: 'draft-a', problem: 'rejected', target: { kind: 'reply', threadId: '42' } }])
+    expect(h.opened).toEqual([{ attemptId: 'a', editorId: 'editor-a', draftId: 'draft-a', problem: 'rejected', target: { kind: 'reply', threadId: '42' } }])
     // A shown system notification owes no in-app notice later.
     h.state.front = true
     h.notifier.windowShown()
@@ -63,7 +63,7 @@ describe('send failure notifier', () => {
     expect(h.inApp).toEqual([])
     h.notifier.windowShown()
     h.notifier.windowShown()
-    expect(h.inApp).toEqual(['a'])
+    expect(h.inApp).toEqual(['a (missed)'])
   })
 
   it('keeps a notice owed for a failed system notification until a renderer takes it', async () => {
@@ -77,7 +77,7 @@ describe('send failure notifier', () => {
     expect(h.inApp).toEqual([])
     h.state.renderer = true
     h.notifier.windowShown()
-    expect(h.inApp).toEqual(['a', 'b'])
+    expect(h.inApp).toEqual(['a (missed)', 'b (missed)'])
   })
 
   it('reports a system notification that fails while the window is in front in the app at once', async () => {
@@ -85,7 +85,7 @@ describe('send failure notifier', () => {
     await h.notifier.recorded(failed('a'))
     h.state.front = true
     h.created[0]!.listeners.get('failed')!()
-    expect(h.inApp).toEqual(['a'])
+    expect(h.inApp).toEqual(['a (missed)'])
   })
 
   it('shows failures in the app while the window is in front, and nothing for other results', async () => {

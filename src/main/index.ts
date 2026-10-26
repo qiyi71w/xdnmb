@@ -305,9 +305,9 @@ async function start(): Promise<void> {
   const drafts = createDraftService({ store: openedStore, files: draftFiles })
   const failures = createFailureNotifier({
     foreground: () => mainWindow !== null && mainWindow.isVisible() && !mainWindow.isMinimized() && mainWindow.isFocused(),
-    showInApp(notice) {
+    showInApp(notice, missed) {
       if (mainWindow === null || mainWindow.webContents.isDestroyed()) return false
-      mainWindow.webContents.send(PUBLICATION_FAILURE_CHANNEL, notice)
+      mainWindow.webContents.send(PUBLICATION_FAILURE_CHANNEL, notice, missed)
       return true
     },
     isSupported: () => Notification.isSupported(),

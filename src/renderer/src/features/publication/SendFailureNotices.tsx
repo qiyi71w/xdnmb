@@ -13,16 +13,22 @@ interface Shown {
 /**
  * In-app notices of explicit send failures, one per attempt, each closed on its own: 打开草稿 opens
  * (or focuses) the automatically saved draft, 知道了 just closes it. The main process sends them
- * while the window is in front, or when it is shown after a system notification could not show; a
- * clicked system notification opens the draft directly and closes its in-app notice if there is one,
- * or, when the draft cannot be opened, shows the notice with the reason.
+ * while the window is in front, or when it is shown after a system notification could not show.
+ * A notice sent at the failure itself (`missed` false) is dropped for good when the editor that
+ * sent it is on screen: that editor already shows the failure and holds the draft. A notice owed
+ * for a system notification that did not show always appears. A clicked system notification opens
+ * the draft directly and closes its in-app notice if there is one, or, when the draft cannot be
+ * opened, shows the notice with the reason.
  */
 export function SendFailureNotices({
   forumName,
+  shownInEditor,
   openDraft,
   fallbackFocus
 }: {
   forumName: (forumId: string | null) => string | null
+  /** The editor that sent it is expanded and on screen now. */
+  shownInEditor: (notice: SendFailureNotice) => boolean
   /** Opens or focuses the failure's draft; resolves to why it could not, or null when it did. */
   openDraft: (notice: SendFailureNotice) => Promise<string | null>
   fallbackFocus: () => HTMLElement | null
@@ -42,8 +48,10 @@ export function SendFailureNotices({
     setShown((list) => list.map((item) => (item.notice.attemptId === attemptId ? { ...item, ...patch } : item)))
 
   const openRef = useRef(openDraft)
+  const shownInEditorRef = useRef(shownInEditor)
   useEffect(() => {
     openRef.current = openDraft
+    shownInEditorRef.current = shownInEditor
   })
 
   /** Adds the notice, or updates the one already shown for its attempt. */
@@ -54,7 +62,13 @@ export function SendFailureNotices({
         : [...list, { notice, opening: false, failure }]
     )
 
-  useEffect(() => window.xidao.publication.onFailureNotice((notice) => show(notice, null)), [])
+  useEffect(
+    () =>
+      window.xidao.publication.onFailureNotice((notice, missed) => {
+        if (missed || !shownInEditorRef.current(notice)) show(notice, null)
+      }),
+    []
+  )
 
   // A clicked system notification: open the draft; when that fails, say why in the app.
   useEffect(

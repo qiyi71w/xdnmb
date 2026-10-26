@@ -72,11 +72,13 @@ export const ATTEMPT_PROBLEM_TEXT: Record<PublicationProblem, string> = {
 }
 
 /**
- * An explicit failure (a `failed` attempt: the forum rejected it, rate limit, captcha, unusable
- * identity), whose content was saved as a draft. Carries no content and no cookie.
+ * An explicit failure (a `failed` attempt: the forum's own verdict after the request was sent —
+ * rejection, rate limit, captcha, unusable identity), whose content was saved as a draft. Carries
+ * no content and no cookie; `editorId` is the renderer's editor that sent it.
  */
 export interface SendFailureNotice {
   attemptId: string
+  editorId: string
   draftId: DraftId
   problem: PublicationProblem
   target: PostTarget
@@ -85,7 +87,7 @@ export interface SendFailureNotice {
 /** The failure notice of a recorded attempt; `null` unless it failed and its draft was saved. */
 export function sendFailureNotice(attempt: PublicationAttempt): SendFailureNotice | null {
   if (attempt.state !== 'failed' || attempt.problem === null || attempt.savedDraftId === null) return null
-  return { attemptId: attempt.id, draftId: attempt.savedDraftId, problem: attempt.problem, target: attempt.payload.target }
+  return { attemptId: attempt.id, editorId: attempt.editorId, draftId: attempt.savedDraftId, problem: attempt.problem, target: attempt.payload.target }
 }
 
 /** “发送失败：<原因>” — the in-app notice's message and the system notification's title. */
@@ -106,10 +108,10 @@ export interface PublicationApi {
   getPoWarning(): Promise<{ enabled: boolean }>
   setPoWarning(input: { enabled: boolean }): Promise<{ ok: boolean; enabled: boolean }>
   /**
-   * An explicit failure to show as an in-app notice: the window was in front when it happened, or
-   * is shown again after its system notification could not be shown.
+   * An explicit failure to show as an in-app notice. `missed` false: the window was in front when
+   * it happened; true: the window is shown again after its system notification could not be shown.
    */
-  onFailureNotice(listener: (notice: SendFailureNotice) => void): () => void
+  onFailureNotice(listener: (notice: SendFailureNotice, missed: boolean) => void): () => void
   /** A failure's system notification was clicked (the window is already shown): open its draft. */
   onOpenDraft(listener: (notice: SendFailureNotice) => void): () => void
 }

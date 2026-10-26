@@ -4,6 +4,7 @@ import type { IdentityOverview } from '../../src/shared/identity'
 import {
   attachmentHolds,
   editorFor,
+  editorOnScreen,
   editorForDraft,
   editorsReducer,
   identityStatus,
@@ -268,5 +269,23 @@ describe('drafts in editors', () => {
     expect([...attachmentHolds(state)]).toEqual([[editor.id, '12']])
     state = run(state, { type: 'discard-undoable', editorId: editor.id }, { type: 'edit', editorId: editor.id, patch: { content: '继续' } })
     expect([...attachmentHolds(state)]).toEqual([[editor.id, null]])
+  })
+})
+
+describe('failed send editor on screen', () => {
+  it('counts an explicitly failed editor as on screen only while it stays expanded on a displayed target', () => {
+    let state = run(INITIAL_EDITORS, { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') })
+    const editor = only(state, 1, replyA)
+    state = run(state, { type: 'publish-start', editorId: editor.id, requestId: 'r1' },
+      { type: 'publish-failed', editorId: editor.id, problem: 'rejected', draft: draft({ fields: { ...EMPTY_FIELDS, content: '会被拒绝' } }) })
+    // The failure keeps the editor expanded, bound to its draft: its own notice is on screen.
+    expect(only(state, 1, replyA)).toMatchObject({ expanded: true, publication: null, draft: { id: '7' } })
+    expect(editorOnScreen(state, editor.id, [replyA])).toBe(true)
+    // Another tab, another thread or the settings page displays something else.
+    expect(editorOnScreen(state, editor.id, [replyB])).toBe(false)
+    expect(editorOnScreen(state, editor.id, [])).toBe(false)
+    // Collapsed, or gone: not on screen.
+    expect(editorOnScreen(run(state, { type: 'set-expanded', editorId: editor.id, expanded: false }), editor.id, [replyA])).toBe(false)
+    expect(editorOnScreen(state, 'other-editor', [replyA])).toBe(false)
   })
 })

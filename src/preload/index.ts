@@ -19,27 +19,27 @@ ipcRenderer.on(REMINDERS_OPEN_CHANNEL, () => {
 })
 
 /**
- * Main → renderer notices that must not be lost to a window React has not mounted yet: kept here,
- * in arrival order, until a subscriber takes them.
+ * Main → renderer messages that must not be lost to a window React has not mounted yet: kept here,
+ * in arrival order, until a subscriber takes them. Each message is the channel's argument list.
  */
-function bufferedChannel(channel: string) {
-  const pending: SendFailureNotice[] = []
-  const listeners = new Set<(notice: SendFailureNotice) => void>()
-  ipcRenderer.on(channel, (_event: IpcRendererEvent, notice: SendFailureNotice) => {
-    if (listeners.size === 0) pending.push(notice)
-    else for (const listener of listeners) listener(notice)
+function bufferedChannel<Args extends unknown[]>(channel: string) {
+  const pending: Args[] = []
+  const listeners = new Set<(...args: Args) => void>()
+  ipcRenderer.on(channel, (_event: IpcRendererEvent, ...args: unknown[]) => {
+    if (listeners.size === 0) pending.push(args as Args)
+    else for (const listener of listeners) listener(...(args as Args))
   })
-  return (listener: (notice: SendFailureNotice) => void) => {
+  return (listener: (...args: Args) => void) => {
     listeners.add(listener)
     if (pending.length > 0) queueMicrotask(() => {
       if (!listeners.has(listener)) return
-      for (const notice of pending.splice(0)) listener(notice)
+      for (const args of pending.splice(0)) listener(...args)
     })
     return () => { listeners.delete(listener) }
   }
 }
-const onFailureNotice = bufferedChannel(PUBLICATION_FAILURE_CHANNEL)
-const onOpenDraft = bufferedChannel(PUBLICATION_OPEN_DRAFT_CHANNEL)
+const onFailureNotice = bufferedChannel<[notice: SendFailureNotice, missed: boolean]>(PUBLICATION_FAILURE_CHANNEL)
+const onOpenDraft = bufferedChannel<[notice: SendFailureNotice]>(PUBLICATION_OPEN_DRAFT_CHANNEL)
 
 // Named operations only: no generic invoke/send, no Electron objects, URLs, SQL or file access.
 const api: XidaoApi = {
