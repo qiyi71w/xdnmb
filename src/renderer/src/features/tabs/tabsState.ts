@@ -2,7 +2,7 @@ import type { FeedRef, Post, PostId, ReadingMode, ThreadId } from '../../../../s
 import type { ReadingAnchor } from '../../../../shared/reading'
 
 /**
- * Explicit target inside a thread (首条未读, a located quote or search hit, a reminder event). It
+ * Explicit target inside a thread (a located quote or search hit, a reminder event). It
  * takes priority over every remembered position. When `mode` differs from the thread's saved
  * preference the reader shows the target in `mode` temporarily and leaves the preference unchanged.
  */
@@ -55,9 +55,8 @@ export interface ThreadOpen {
 
 /**
  * `quote`: the entry was produced by a located quote or by 打开原串, so the back control reads
- * 返回引用处. `local-search`: produced by a located hit of the local / thread search sheet (PROTOTYPE:
- * or of the 搜索 page's 本机 side); back reads 返回搜索结果 and shows that tab's search sheet (or
- * page) again with the search the source entry had.
+ * 返回引用处. `local-search`: produced by a located hit of the thread search sheet or of
+ * the 搜索 page's 本机 side; back reads 返回搜索结果 and shows that tab's search sheet or page again with the search the source entry had.
  * `online-search`: opened from a result of an `online-search` page; back reads 返回搜索结果 and the
  * page comes back from its session (query, obtained pages, scroll, focused result) without any new
  * request. Choosing another list item in the entry clears the origin; history is kept either way.
@@ -68,7 +67,7 @@ export type EntryOrigin = 'quote' | 'local-search' | 'online-search' | null
 /**
  * What a list entry shows: a forum/timeline feed, the remote subscription list of whichever
  * source (App / 网页) is currently selected, the local 提醒 list (reminder events by thread), or
- * the local 历史 / 离线 list (PROTOTYPE pages). Renderer-only; forum reads still take a `FeedRef`.
+ * the local 历史 / 离线 page. Renderer-only; forum reads still take a `FeedRef`.
  */
 export type ListRef = FeedRef | { kind: 'subscriptions' } | { kind: 'reminders' } | { kind: 'history' } | { kind: 'offline' }
 
@@ -90,7 +89,7 @@ export function listKey(ref: ListRef): string {
  *   single-pane fallback shows.
  * - `thread`: a thread opened as a whole page (split off).
  * - `online-search`: an online search page. Its session (query chain, obtained pages) belongs to
- *   this entry and is released when the entry leaves every tab's history. PROTOTYPE: the 搜索 page,
+ *   this entry and is released when the entry leaves every tab's history. It is the 搜索 page,
  *   with the tab's local search as its 本机 side and this session as its 联网 side.
  */
 export type TabEntry =

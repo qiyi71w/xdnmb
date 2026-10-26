@@ -282,11 +282,6 @@
 
 /* ---------- Import entries ---------- */
 
-.cookie-imports {
-  display: grid;
-  gap: 10px;
-}
-
 .cookie-official {
   display: grid;
   justify-items: start;

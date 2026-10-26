@@ -1,10 +1,11 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSettingsService, type SettingsStore } from '../src/main/appearance'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
-import { applySettingsPatch, DEFAULT_SETTINGS, nextZoomFactor, resolveAppearance, settingsFromStored } from '../src/shared/settings'
+import { applySettingsPatch, DEFAULT_SETTINGS, nextZoomFactor, resolveAppearance, settingsFromStored, type AppSettings } from '../src/shared/settings'
 import {
   BUILTIN_PALETTES,
   contrastRatio,
@@ -221,6 +222,50 @@ describe('settings', () => {
       ['reading', { font: 'serif', fontSize: 12, readingWidth: 42 }]
     ])
     expect(settingsFromStored(stored)).toEqual({ ...DEFAULT_SETTINGS, density: 'compact', colorScheme: 'system', customTheme: null })
+  })
+
+  const navigation: Pick<AppSettings, 'rail' | 'boards' | 'listWidth' | 'customKaomoji'> = {
+    rail: { order: ['history', 'search'], hidden: ['drafts'] },
+    boards: { favorites: ['forum:4', 'timeline:1'], hidden: ['forum:20'], order: { 'group-1': ['forum:9', 'forum:4'] }, collapsed: ['group-2', 'timelines'] },
+    listWidth: 512,
+    customKaomoji: ['(｀・ω・)', '多行\n颜文字']
+  }
+
+  it('keeps navigation, list width and custom kaomoji across a restart', async () => {
+    const path = join(folder(), 'settings.sqlite')
+    const first = open(path)
+    const result = await createSettingsService(storeOf(first)).update(navigation)
+    expect(result).toMatchObject({ saved: true, issues: [] })
+    first.close()
+    databases.splice(databases.indexOf(first), 1)
+    expect(open(path).loadSettings()).toEqual({ ...DEFAULT_SETTINGS, ...navigation })
+  })
+
+  it('uses the default for each navigation value that is missing, corrupt or no longer valid', () => {
+    const path = join(folder(), 'settings.sqlite')
+    const first = open(path)
+    first.saveSettings({ ...DEFAULT_SETTINGS, ...navigation, density: 'compact' })
+    first.close()
+    databases.splice(databases.indexOf(first), 1)
+    const raw = new Database(path)
+    const set = raw.prepare('UPDATE settings SET value_json = ? WHERE key = ?')
+    set.run('{not json', 'rail')
+    set.run(JSON.stringify({ ...navigation.boards, hidden: ['forum:20', 'forum:20'] }), 'boards')
+    set.run(JSON.stringify(99), 'listWidth')
+    raw.prepare('DELETE FROM settings WHERE key = ?').run('customKaomoji')
+    raw.close()
+    expect(open(path).loadSettings()).toEqual({ ...DEFAULT_SETTINGS, density: 'compact' })
+  })
+
+  it.each([
+    ['a timeline order', { boards: { ...navigation.boards, order: { timelines: ['timeline:1'] } } }, 'boards.order'],
+    ['a timeline in a group order', { boards: { ...navigation.boards, order: { 'group-1': ['timeline:1'] } } }, 'boards.order'],
+    ['a repeated favorite', { boards: { ...navigation.boards, favorites: ['forum:4', 'forum:4'] } }, 'boards.favorites'],
+    ['an unknown feature', { rail: { order: ['settings'], hidden: [] } }, 'rail.order'],
+    ['a blank kaomoji', { customKaomoji: ['  '] }, 'customKaomoji'],
+    ['a list narrower than the minimum', { listWidth: 100 }, 'listWidth']
+  ])('refuses %s', (_label, patch, field) => {
+    expect(applySettingsPatch(DEFAULT_SETTINGS, patch)).toMatchObject({ ok: false, issues: [{ field }] })
   })
 
   it('steps interface zoom through exactly 200% and stops at both ends', () => {

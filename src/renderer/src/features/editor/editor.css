@@ -1,95 +1,4 @@
-/* Bottom editor (发言编辑): a frosted strip below the content scroller, never over it, so the
-   reading viewport ends where the editor begins. Expanded, it takes at most 70% of the pane and
-   scrolls inside; the text field sits on a solid surface. */
-
-.editor-dock {
-  flex: none;
-  position: relative;
-  z-index: 4;
-  border-top: 1px solid var(--line-soft);
-  background: color-mix(in oklch, var(--paper) 82%, transparent);
-  backdrop-filter: blur(20px) saturate(1.5);
-  box-shadow: 0 -8px 20px -16px oklch(0.25 0.03 240 / 0.35);
-}
-
-.editor-dock.is-expanded {
-  display: flex;
-  flex-direction: column;
-  max-height: 70%;
-}
-
-/* Aligned with the reading column (and simply full width in the narrow list column). */
-.editor-bar,
-.editor-head,
-.editor-body,
-.editor-foot {
-  width: 100%;
-  max-width: calc(var(--reading-width) + 2 * var(--gutter-min));
-  margin: 0 auto;
-  padding-inline: var(--gutter-min);
-}
-
-/* ---------- Collapsed bar ---------- */
-
-.editor-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-  padding-block: 8px;
-}
-
-.editor-bar-icon {
-  flex: none;
-  color: var(--accent);
-}
-
-.editor-bar-text {
-  flex: 1 1 12em;
-  min-width: 0;
-  display: grid;
-  line-height: 1.35;
-}
-
-.editor-bar-target {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.editor-bar-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0 4px;
-  font-size: var(--text-xs);
-  color: var(--ink-2);
-}
-
-.editor-bar-state::before {
-  content: '·';
-  margin-right: 4px;
-}
-
-.editor-bar-action {
-  flex: none;
-  margin-left: auto;
-}
-
-.editor-identity {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-weight: 600;
-  color: var(--ink-2);
-  overflow-wrap: anywhere;
-}
-
-.editor-identity.is-warning {
-  color: var(--warn-ink);
-}
-
-/* ---------- Expanded panel ---------- */
+/* ---------- Editor panel ---------- */
 
 .editor-panel {
   flex: 1;
@@ -98,67 +7,9 @@
   flex-direction: column;
 }
 
-.editor-head {
-  flex: none;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px 10px;
-  padding-block: 8px 6px;
-}
-
-.editor-head-text {
-  flex: 1 1 12em;
-  min-width: 0;
-  display: grid;
-  line-height: 1.35;
-}
-
-.editor-target {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--text-sm);
-  font-weight: 650;
-  overflow-wrap: anywhere;
-}
-
-.editor-target .icon {
-  flex: none;
-  color: var(--accent);
-}
-
-.editor-meta {
-  font-size: var(--text-xs);
-  color: var(--ink-2);
-}
-
-.editor-head-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.editor-collapse-icon {
-  transform: rotate(180deg);
-}
-
-.editor-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: grid;
-  gap: 8px;
-  align-content: start;
-  overflow: hidden auto;
-  overscroll-behavior: contain;
-  padding-block: 2px 8px;
-}
-
 .editor-content,
 .editor-field input,
-.editor-field select,
-.editor-identity-row select {
+.editor-field select {
   border: 1px solid var(--line);
   border-radius: var(--radius-m);
   background: var(--paper);
@@ -178,16 +29,9 @@
 
 .editor-content:focus-visible,
 .editor-field input:focus-visible,
-.editor-field select:focus-visible,
-.editor-identity-row select:focus-visible {
+.editor-field select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 0;
-}
-
-.editor-fields {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9em, 1fr));
-  gap: 6px 8px;
 }
 
 .editor-field {
@@ -196,83 +40,22 @@
   gap: 2px;
 }
 
-.editor-field label,
-.editor-identity-row label {
+.editor-field label {
   font-size: var(--text-xs);
   font-weight: 600;
   color: var(--ink-2);
 }
 
 .editor-field input,
-.editor-field select,
-.editor-identity-row select {
+.editor-field select {
   min-width: 0;
   min-height: 28px;
   padding: 2px 8px;
   font-size: var(--text-sm);
 }
 
-.editor-field input[aria-invalid='true'],
-.editor-identity-row select[aria-invalid='true'] {
+.editor-field input[aria-invalid='true'] {
   border-color: var(--warn-ink);
-}
-
-.editor-hint {
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-}
-
-/* ---------- Attachment ---------- */
-
-.editor-attachment {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.editor-thumb {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 64px;
-  height: 64px;
-  border-radius: var(--radius-m);
-  background: var(--pane);
-  box-shadow: inset 0 0 0 1px var(--line-soft);
-  overflow: hidden;
-}
-
-.editor-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.editor-thumb-failed {
-  padding: 4px;
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  text-align: center;
-}
-
-.editor-attachment-text {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.editor-attachment-name {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.editor-attachment-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
 }
 
 .editor-watermark {
@@ -293,23 +76,8 @@
   cursor: default;
 }
 
-.editor-attachment .notice-inline,
-.editor-identity-row .notice-inline,
 .editor-retarget .notice-inline {
   margin: 0;
-}
-
-/* ---------- Identity ---------- */
-
-.editor-identity-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-}
-
-.editor-identity-row .notice-inline {
-  flex-basis: 100%;
 }
 
 /* ---------- Retarget ---------- */
@@ -333,19 +101,8 @@
   gap: 6px;
 }
 
-.editor-retarget-note,
 .editor-retarget .notice-inline {
   flex-basis: 100%;
-}
-
-/* ---------- Footer ---------- */
-
-.editor-foot {
-  flex: none;
-  display: grid;
-  gap: 6px;
-  padding-block: 6px 10px;
-  border-top: 1px solid var(--line-soft);
 }
 
 .editor-status {
@@ -407,45 +164,11 @@
   font-size: var(--text-xs);
 }
 
-/* Confirmed send on the collapsed bar. */
-.editor-bar-sent:not(:empty) {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--accent-ink);
-}
-
-.editor-bar-sent .icon {
-  flex: none;
-}
-
 .editor-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-}
-
-.btn:not(.btn-primary) .editor-kbd {
-  background: var(--hover);
-  color: var(--ink-2);
-}
-
-.editor-kbd {
-  padding: 0 4px;
-  border-radius: 4px;
-  font-family: inherit;
-  font-size: var(--text-xs);
-  font-weight: 500;
-}
-
-/* Shortcut on the primary button: an outline in the button's own text colour, so the keys read
-   at the button label's contrast in light, dark and custom themes. */
-.btn-primary .editor-kbd {
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--on-accent) 55%, transparent);
-  color: var(--on-accent);
 }
 
 /* ---------- Unsaved editors dialog (关闭标签) ---------- */
@@ -497,7 +220,7 @@
   margin: 0;
 }
 
-/* ---------- PROTOTYPE (throwaway): floating editor panel ---------- */
+/* ---------- Floating editor panel ---------- */
 
 /* Tab content; the modal panels it holds render in the top layer. */
 .compose-frame {

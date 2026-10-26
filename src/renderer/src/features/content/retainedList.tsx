@@ -4,10 +4,8 @@ import type { ThreadId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
 import { attempt, contentFailureText, type Refused } from './contentText'
 import type { ReadingResets } from './readingResets'
-// PROTOTYPE (throwaway): no read/unread tracking surface, so only 阅读进度 is named.
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 
-const READING = PROTOTYPE_ENABLED ? '阅读进度' : '阅读进度与已读记录'
+const READING = '阅读进度'
 
 export type RetainedListState =
   | { status: 'loading' }
@@ -18,11 +16,11 @@ export type RetainedListState =
 export type Confirming = { threadId: ThreadId | null; clearReading: boolean }
 
 /**
- * One 收藏／历史／离线 list as stored, read again whenever `kind` changes, with history deletion.
+ * One 历史／离线 list as stored, read again whenever `kind` changes, with history deletion.
  * Focus: a confirmation takes it, leaving one returns it to the control that asked; after a row
  * disappears it goes to the first enabled button of the row now at that position in `listRef`
  * (rows carry `data-retained-row`), else of `bodyRef`. History deletion removes visit records only
- * unless the reader's progress and read records are explicitly included.
+ * unless the reader's progress is explicitly included.
  */
 export function useRetainedList(kind: RetainedList, resets: ReadingResets) {
   const [list, setList] = useState<RetainedListState>({ status: 'loading' })
@@ -111,7 +109,7 @@ export function useRetainedList(kind: RetainedList, resets: ReadingResets) {
     if (!alive.current) return
     setBusy(false)
     if (result?.ok !== true) {
-      setFailure({ threadId, text: `删除未完成：${contentFailureText(result?.ok === false ? result : null)}，记录仍保留` })
+      setFailure({ threadId, text: `删除未完成：${contentFailureText(result?.ok === false ? result : null)}` })
       return
     }
     askedBy.current = null

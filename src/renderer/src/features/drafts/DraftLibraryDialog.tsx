@@ -140,13 +140,12 @@ export function DraftLibraryDialog({
         {list.status === 'ready' && locks === null && list.drafts.length > 0 && (
           <p className="notice-inline is-warning" role="status">
             <Icon name="alert" size={14} />
-            发送记录读取失败，无法显示哪些草稿因发送待确认而锁定；锁定的草稿仍不能修改或删除。
+            发送记录读取失败，锁定状态未知
           </p>
         )}
         {list.status === 'ready' && list.drafts.length === 0 && (
           <div className="drafts-empty" role="status">
             <p className="drafts-empty-title">还没有草稿</p>
-            <p className="drafts-empty-text">在串或版面底部编辑后点“保存草稿”，草稿会保存在这里。</p>
           </div>
         )}
         {list.status === 'ready' && list.drafts.length > 0 && (
@@ -192,15 +191,15 @@ export function DraftLibraryDialog({
                     {locked && (
                       <p className="draft-locked" id={`${rowId}-locked`}>
                         <Icon name="alert" size={13} />
-                        有一次发送尚无结果，已锁定：不能继续编辑或删除，请在发送记录中核对
+                        发送结果待核对，已锁定
                       </p>
                     )}
                     {deleteFailed?.draftId === draft.id && (
                       <p className="notice-inline is-warning" role="alert">
                         <Icon name="alert" size={14} />
                         {deleteFailed.locked
-                          ? '删除失败：这份草稿有一次发送尚无结果，已锁定'
-                          : '删除失败：本地存储不可用，草稿仍保留'}
+                          ? '删除失败：草稿已锁定'
+                          : '删除失败：本地存储不可用'}
                       </p>
                     )}
                   </div>

@@ -62,7 +62,6 @@ export function QuitWorkingDialog({ work }: { work: QuitWork }) {
           <Icon name="info" size={14} />
           {QUIT_WORK_TEXT[work]}
         </p>
-        <p className="lifecycle-note">这段时间不能编辑；需要你决定的事会在这里询问。</p>
       </div>
     </Modal>
   )
@@ -79,10 +78,7 @@ export function QuitUncheckedDialog({ onClose }: { onClose: () => void }) {
         </h2>
       </header>
       <div className="modal-body">
-        <p className="lifecycle-intro">
-          有一次发送没能确认是否已经记录，它的编辑仍然锁定，所以汐岛没有退出。请在那个编辑中再次检查发送状态，之后再退出。
-        </p>
-        <p className="lifecycle-note">没有发送或重发任何内容。</p>
+        <p className="lifecycle-intro">有一次发送没能确认是否已经记录，请在它的编辑中再次检查后再退出。</p>
       </div>
       <div className="modal-actions">
         <button type="button" className="btn btn-primary" onClick={onClose}>
@@ -118,9 +114,7 @@ export function WorkspaceSaveFailedDialog({
         </h2>
       </header>
       <div className="modal-body" ref={stay.ref}>
-        <p className="lifecycle-intro">
-          标签、导航历史和阅读位置没能写入本地存储。可以重试，或取消退出继续使用；草稿已经处理，不受影响。
-        </p>
+        <p className="lifecycle-intro">标签、导航历史和阅读位置没能写入本地存储。</p>
         {saving && (
           <p className="notice-inline" role="status">
             <Icon name="info" size={14} />
@@ -150,7 +144,7 @@ export function WorkspaceSaveFailedDialog({
 
 /** The result each listed send should have recorded. */
 function resultText(attempt: PublicationAttempt): string {
-  if (attempt.state === 'unknown') return '结果待确认，不会自动重发'
+  if (attempt.state === 'unknown') return '结果待确认'
   return ATTEMPT_STATE_LABEL[attempt.state]
 }
 
@@ -211,13 +205,11 @@ export function UnstoredResultsDialog({
         </h2>
       </header>
       <div className="modal-body" ref={stay.ref}>
-        <p className="lifecycle-intro">
-          上次退出时，下面 {attempts.length} 个发送的结果没能写入本地存储，所以汐岛没有退出。没有再次发送任何内容；结果保存之前，发送记录里可能仍显示“正在发送”。
-        </p>
+        <p className="lifecycle-intro">下面 {attempts.length} 个发送的结果没能写入本地存储。</p>
         {failed && (
           <p className="notice-inline is-warning" role="alert">
             <Icon name="alert" size={14} />
-            仍未能保存，汐岛没有退出。可以稍后重试，或取消退出继续使用。
+            仍未能保存
           </p>
         )}
         <ul className="lifecycle-list" aria-labelledby={titleId}>
@@ -234,7 +226,6 @@ export function UnstoredResultsDialog({
             正在保存发送结果…
           </p>
         )}
-        <p className="lifecycle-note">重试只保存这些结果，不发送任何内容；全部保存后汐岛会继续退出。</p>
       </div>
       <div className="modal-actions">
         <button type="button" className="btn" aria-disabled={retrying || undefined} onClick={cancel}>

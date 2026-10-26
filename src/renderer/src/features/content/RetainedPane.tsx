@@ -1,5 +1,6 @@
-// PROTOTYPE (throwaway): 历史 and 离线 as list pages of a tab, like 订阅 and 提醒. Choosing a row opens
-// the thread the way the thread lists do (beside the list when split, else a new step).
+// 历史 and 离线 as list pages of a tab, like 订阅 and 提醒. Choosing a row opens the thread the way
+// the thread lists do (beside the list when split, else a new step). 历史 switches between
+// 浏览记录 and 发送记录.
 
 import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ForumId, ThreadId } from '../../../../shared/forum'
@@ -10,8 +11,8 @@ import { ListFilterBar, UncertainTag } from '../search/FilterFields'
 import { filterList, listFilterCount, NO_LIST_FILTERS, type ListFilters } from '../search/listFilters'
 import { useThreadMetadata } from '../search/useThreadMetadata'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import { AttemptsBody, type AttemptsBodyProps } from '../publication/AttemptsDialog'
+import type { PendingAttempts } from '../publication/usePendingAttempts'
 import { RowThumbnail } from '../image/RowThumbnail'
 import { useImageScope } from '../image/useImageLoad'
 import { useThreadTabMenu } from '../tabs/ThreadTabMenu'
@@ -29,6 +30,8 @@ const PAGES = {
 export type HistoryView = 'browsing' | 'attempts'
 export interface HistoryPageHost extends AttemptsBodyProps {
   request: { tabId: number; view: HistoryView; seq: number } | null
+  /** Attempts still to be checked, badged on 发送记录. */
+  pendingAttempts: PendingAttempts
 }
 export const HistoryPageContext = createContext<HistoryPageHost | null>(null)
 
@@ -44,7 +47,7 @@ interface RetainedPaneProps {
 
 export function RetainedPane(props: RetainedPaneProps) {
   const host = useContext(HistoryPageContext)
-  if (!PROTOTYPE_ENABLED || props.kind !== 'history' || host === null) return <RetainedListPane {...props} />
+  if (props.kind !== 'history' || host === null) return <RetainedListPane {...props} />
   return <HistoryPage {...props} host={host} />
 }
 
@@ -61,6 +64,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
     if (request.view === 'attempts') setAttemptsVisited(true)
     headingRef.current?.focus({ preventScroll: true })
   }, [request])
+  const pending = host.pendingAttempts.count ?? 0
 
   return (
     <section className="list-pane history-page" aria-labelledby={headingId}>
@@ -70,11 +74,23 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
         </h2>
         <div className="segmented history-view-switch" role="group" aria-label="历史记录类型" data-view={view}>
           {(['browsing', 'attempts'] as const).map((item) => (
-            <button key={item} type="button" className="segmented-item" aria-pressed={view === item} onClick={() => {
-              setView(item)
-              if (item === 'attempts') setAttemptsVisited(true)
-            }}>
+            <button
+              key={item}
+              type="button"
+              className="segmented-item"
+              aria-pressed={view === item}
+              aria-label={item === 'attempts' && pending > 0 ? `发送记录，${pending} 项待核对` : undefined}
+              onClick={() => {
+                setView(item)
+                if (item === 'attempts') setAttemptsVisited(true)
+              }}
+            >
               {item === 'browsing' ? '浏览记录' : '发送记录'}
+              {item === 'attempts' && pending > 0 && (
+                <span className="history-view-badge" aria-hidden="true">
+                  {pending > 99 ? '99+' : pending}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -218,7 +234,6 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
             filters={listFilters}
             onChange={changeFilters}
             forums={forumNames}
-            unreadOffered={false}
             noun="串"
             total={entries.length}
             result={filtered}

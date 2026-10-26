@@ -1,30 +1,24 @@
 import { useContext, useLayoutEffect, useRef } from 'react'
-import { EditorDock } from '../features/editor/EditorDock'
 import type { FeedRef, ForumId, Post, ThreadId } from '../../../shared/forum'
-import { feedKey, type FeedInfo } from '../features/directory/feeds'
-import { useSearchOpener } from '../features/search/SearchContext'
-import { SubscriptionPane } from '../features/subscriptions/SubscriptionPane'
-import { ReminderPane } from '../features/reminders/ReminderPane'
+import type { PostTarget } from '../../../shared/drafts'
+import { FailureNotice } from '../components/Notices'
 import { RetainedPane } from '../features/content/RetainedPane'
+import { ListHostContext } from '../features/directory/navStore'
+import { feedKey, type FeedInfo } from '../features/directory/feeds'
 import type { DirectoryState } from '../features/directory/useDirectory'
-import { forumLabel } from '../features/editor/editorText'
+import { ComposeButton, ComposeFrame, ComposeSentNote, type ComposeTarget } from '../features/editor/ComposePanel'
 import { FeedPane } from '../features/feed/FeedPane'
 import type { LayoutResult } from '../features/layout/layout'
-import { OnlineSearchPane } from '../features/search/OnlineSearchPane'
+import { ReminderPane } from '../features/reminders/ReminderPane'
 import { SearchPage } from '../features/search/SearchPage'
+import { SubscriptionPane } from '../features/subscriptions/SubscriptionPane'
 import { currentEntry, isLocalList, type EntryInit, type Tab, type ThreadOpen } from '../features/tabs/tabsState'
 import { ThreadPane } from '../features/thread/ThreadPane'
-import { FailureNotice } from '../components/Notices'
-import { Icon } from '../components/Icon'
-// PROTOTYPE (throwaway): D / E add to the list top and the empty tab page; the editor floats.
-import { ListHostContext, PROTOTYPE_ENABLED } from '../features/directory/prototype/prototypeStore'
-import { ComposeButton, ComposeFrame, ComposeSentNote, type ComposeTarget } from '../features/editor/ComposePanel'
-import type { PostTarget } from '../../../shared/drafts'
 import { ListDivider } from './ListDivider'
 
 type Region = 'list' | 'reader'
 
-/** PROTOTYPE: a target's entry (回复 / 发新串) and its confirmed-send note, placed by the pane. */
+/** A target's entry (回复 / 发新串) and its confirmed-send note, placed by the pane. */
 function composeEntry(tabId: number, target: PostTarget, className?: string) {
   return {
     tabId,
@@ -33,13 +27,14 @@ function composeEntry(tabId: number, target: PostTarget, className?: string) {
   }
 }
 
-/** PROTOTYPE: 回复 in the thread toolbar is its one emphasised action (thread.css `.tb-btn.is-primary`). */
+/** 回复 in the thread toolbar is its one emphasised action (thread.css `.tb-btn.is-primary`). */
 const READER_ENTRY = 'btn tb-btn is-primary'
 
 /**
  * Content of one tab: its current history entry. Inactive tabs stay mounted but hidden, keeping
  * their lists, readers and reading positions. In the single-pane fallback both panes stay
- * mounted and the entry's `pane` decides which one is displayed.
+ * mounted and the entry's `pane` decides which one is displayed. The editors of the targets it
+ * shows float over it (centred compose panel).
  */
 export function TabView({
   tab,
@@ -53,10 +48,9 @@ export function TabView({
   onSelectThread,
   onShowPane,
   onOpenTarget,
-  onOpenNav,
   onOpenFromOnlineSearch,
-  composeHidden = false,
-  onResizeList = null
+  composeHidden,
+  onResizeList
 }: {
   tab: Tab
   active: boolean
@@ -75,24 +69,21 @@ export function TabView({
    * entry `entryKey`. False when that entry is no longer the tab's current one.
    */
   onOpenTarget: (tabId: number, entryKey: number, thread: ThreadOpen) => boolean
-  /** Opens the navigation overlay; null while the navigation is a column. */
-  onOpenNav: (() => void) | null
   /**
    * An online search result opened from entry `entryKey` as a new `online-search` step; false when
    * that entry is no longer current.
    */
   onOpenFromOnlineSearch: (entryKey: number, init: EntryInit) => boolean
-  /** PROTOTYPE: something covers the tab content (the settings page); its compose modal stays closed. */
-  composeHidden?: boolean
-  /** PROTOTYPE: the list width divider of the split view changed the width (`done` at the end of a change). */
-  onResizeList?: ((width: number, done: boolean) => void) | null
+  /** Something covers the tab content (the settings page): its compose panels stay closed. */
+  composeHidden: boolean
+  /** The list width divider of the split view changed the width (`done` at the end of a change). */
+  onResizeList: (width: number, done: boolean) => void
 }) {
   const entry = currentEntry(tab)
   const listRef = useRef<HTMLDivElement>(null)
   const readerRef = useRef<HTMLElement>(null)
   const lastRegion = useRef<Region | null>(null)
-  const openSearch = useSearchOpener()
-  const protoHost = useContext(ListHostContext)
+  const listHost = useContext(ListHostContext)
 
   const splitShown = entry.kind === 'list' && entry.feed !== null && tab.split
   const single = splitShown && layout.singlePane
@@ -113,7 +104,7 @@ export function TabView({
       ((focused === null || focused === document.body) && lastRegion.current === hiddenRegion)
     if (!stranded) return
     const target =
-      // A list pane may hide its list behind another view (订阅 › 同步与合并). PROTOTYPE: 历史 / 离线 rows.
+      // A list pane may hide its list behind another view (订阅 › 同步与合并); 历史 / 离线 rows.
       (pane === 'list'
         ? shown.querySelector<HTMLElement>(
             '.list-scroll:not([hidden]) .thread-row.is-selected, .list-scroll:not([hidden]) .retained-row.is-selected > .retained-open'
@@ -124,7 +115,7 @@ export function TabView({
     target.focus({ preventScroll: pane === 'reader' })
   }, [active, single, pane])
 
-  /** PROTOTYPE: targets whose floating panel this tab can show. */
+  /** Targets whose floating panel this tab can show. */
   const composeTargets: ComposeTarget[] = []
 
   let body
@@ -140,15 +131,13 @@ export function TabView({
           displayed={active}
           forumName={forumName}
           onBackToList={null}
-          footer={PROTOTYPE_ENABLED ? null : <EditorDock tabId={tab.id} target={target} displayed={active} />}
-          compose={PROTOTYPE_ENABLED ? composeEntry(tab.id, target, READER_ENTRY) : null}
+          compose={composeEntry(tab.id, target, READER_ENTRY)}
         />
       </main>
     )
   } else if (entry.kind === 'online-search') {
-    // The board directory recognizes board results of the page. PROTOTYPE: the 搜索 page, whose
-    // 联网 side this entry's online search is.
-    body = PROTOTYPE_ENABLED ? (
+    // The 搜索 page; the board directory recognizes board results of its 联网 side.
+    body = (
       <SearchPage
         key={entry.key}
         tabId={tab.id}
@@ -157,54 +146,17 @@ export function TabView({
         directory={directory.directory}
         onOpen={onOpenFromOnlineSearch}
       />
-    ) : (
-      <OnlineSearchPane
-        key={entry.key}
-        entryKey={entry.key}
-        displayed={active}
-        directory={directory.directory}
-        onOpen={onOpenFromOnlineSearch}
-      />
     )
-  } else if (entry.feed === null && protoHost?.emptyPage != null) {
-    body = protoHost.emptyPage()
   } else if (entry.feed === null) {
-    body = (
-      <div className="pane-empty">
-        <p className="pane-empty-title">选择订阅、时间线或版面</p>
-        <p className="pane-empty-text">从导航中选择后，串列表会显示在这个标签里；也可以搜索本机保有的内容。</p>
-        {onOpenNav !== null && (
-          <button type="button" className="btn pane-empty-action" onClick={onOpenNav}>
-            <Icon name="sidebar" />
-            打开导航
-          </button>
-        )}
-        {openSearch !== null && (
-          <button
-            type="button"
-            className="btn pane-empty-action"
-            aria-haspopup={PROTOTYPE_ENABLED ? undefined : 'dialog'}
-            onClick={() => openSearch({ view: 'local' })}
-          >
-            <Icon name="search" />
-            搜索本机内容
-          </button>
-        )}
-      </div>
-    )
+    body = listHost?.emptyPage() ?? null
   } else {
     const feed = entry.feed
     const selectedThreadId = tab.split ? (entry.thread?.threadId ?? null) : null
     const info = isLocalList(feed) ? null : feedInfo(feed)
-    // New threads go to forums only; timelines and subscriptions have no post target.
+    // New threads go to forums only; timelines and subscriptions have no post target. The panel
+    // floats over the tab, so it stays shown whichever pane the single-pane fallback shows.
     const forumTarget: PostTarget | null = feed.kind === 'forum' ? { kind: 'thread', forumId: feed.id } : null
-    // PROTOTYPE: the panel floats over the tab, so it stays shown whichever pane the single-pane
-    // fallback shows.
-    if (PROTOTYPE_ENABLED && forumTarget !== null) composeTargets.push({ target: forumTarget, displayed: active && !composeHidden })
-    const listDock =
-      forumTarget !== null && !PROTOTYPE_ENABLED ? (
-        <EditorDock tabId={tab.id} target={forumTarget} displayed={active && listVisible} />
-      ) : null
+    if (forumTarget !== null) composeTargets.push({ target: forumTarget, displayed: active && !composeHidden })
     let list
     if (feed.kind === 'history' || feed.kind === 'offline') {
       list = (
@@ -246,56 +198,27 @@ export function TabView({
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}
           onOpenThread={(summary) => onSelectThread(tab.id, summary.head.id, summary.head)}
-          footer={listDock}
-          compose={PROTOTYPE_ENABLED && forumTarget !== null ? composeEntry(tab.id, forumTarget, 'btn btn-small') : null}
+          compose={forumTarget !== null ? composeEntry(tab.id, forumTarget, 'btn btn-small') : null}
         />
       )
     } else {
       // A feed without details is pending only until the directory settles; then the tab stays
       // on it as missing (or unreadable) instead of moving elsewhere. The forum's editor remains.
-      const target = feed.kind === 'forum' ? `「${forumLabel(feed.id, forumName)}」` : `「时间线 ${feed.id}」`
       let state
       if (directory.directory === null && directory.failure !== null) {
-        state = (
-          <>
-            <FailureNotice title="版面目录读取失败" failure={directory.failure} onRetry={onRetryDirectory} compact />
-            <p className="pane-empty-text">读取目录后才能显示{target}，标签会停留在这里。</p>
-          </>
-        )
+        state = <FailureNotice title="版面目录读取失败" failure={directory.failure} onRetry={onRetryDirectory} compact />
       } else if (directory.directory === null) {
         state = <div className="list-placeholder" aria-busy="true" />
       } else {
-        state = (
-          <>
-            <p className="pane-empty-title">{feed.kind === 'forum' ? '这个版面已不在目录中' : '这条时间线已不在目录中'}</p>
-            <p className="pane-empty-text">
-              {target}没有出现在当前版面目录里。标签会停留在这里，可以从导航中选择其他版面或时间线。
-            </p>
-            {onOpenNav !== null && (
-              <button type="button" className="btn pane-empty-action" onClick={onOpenNav}>
-                <Icon name="sidebar" />
-                打开导航
-              </button>
-            )}
-          </>
-        )
+        state = listHost?.emptyPage(feed.kind === 'forum' ? '这个版面已不在目录中' : '这条时间线已不在目录中') ?? null
       }
       list = (
         <div className="list-pane">
           <div className="pane-empty list-pending">{state}</div>
-          {listDock}
         </div>
       )
     }
-    if (protoHost?.listTop != null) {
-      list = (
-        <div className="proto-list-with-top">
-          {protoHost.listTop(feed)}
-          {list}
-        </div>
-      )
-    }
-    if (PROTOTYPE_ENABLED && splitShown && entry.thread !== null) {
+    if (splitShown && entry.thread !== null) {
       composeTargets.push({ target: { kind: 'reply', threadId: entry.thread.threadId }, displayed: active && !composeHidden })
     }
     body = splitShown ? (
@@ -303,9 +226,7 @@ export function TabView({
         <div className="list-column" ref={listRef} hidden={!listVisible} onFocus={() => (lastRegion.current = 'list')}>
           {list}
         </div>
-        {onResizeList !== null && active && !single && layout.listWidth > 0 && (
-          <ListDivider width={layout.listWidth} max={layout.listWidthMax} onResize={onResizeList} />
-        )}
+        {active && !single && layout.listWidth > 0 && <ListDivider width={layout.listWidth} max={layout.listWidthMax} onResize={onResizeList} />}
         <main
           className="reader-wrap"
           ref={readerRef}
@@ -315,8 +236,7 @@ export function TabView({
         >
           {entry.thread === null ? (
             <div className="pane-empty">
-              <p className="pane-empty-title">选择一个串开始阅读</p>
-              <p className="pane-empty-text">主帖与回复会显示在这里，接近底部时自动读取下一页。</p>
+              <p className="pane-empty-title">选择一个串</p>
             </div>
           ) : (
             <ThreadPane
@@ -326,16 +246,7 @@ export function TabView({
               displayed={active && readerVisible}
               forumName={forumName}
               onBackToList={single ? () => onShowPane(tab.id, 'list') : null}
-              footer={
-                PROTOTYPE_ENABLED ? null : (
-                  <EditorDock
-                    tabId={tab.id}
-                    target={{ kind: 'reply', threadId: entry.thread.threadId }}
-                    displayed={active && readerVisible}
-                  />
-                )
-              }
-              compose={PROTOTYPE_ENABLED ? composeEntry(tab.id, { kind: 'reply', threadId: entry.thread.threadId }, READER_ENTRY) : null}
+              compose={composeEntry(tab.id, { kind: 'reply', threadId: entry.thread.threadId }, READER_ENTRY)}
             />
           )}
         </main>
@@ -347,13 +258,9 @@ export function TabView({
 
   return (
     <div className="tab-panel" role="tabpanel" id={`tabpanel-${tab.id}`} aria-labelledby={`tab-${tab.id}`} hidden={!active}>
-      {PROTOTYPE_ENABLED ? (
-        <ComposeFrame tabId={tab.id} targets={composeTargets}>
-          {body}
-        </ComposeFrame>
-      ) : (
-        body
-      )}
+      <ComposeFrame tabId={tab.id} targets={composeTargets}>
+        {body}
+      </ComposeFrame>
     </div>
   )
 }

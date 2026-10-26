@@ -1,34 +1,92 @@
-import { useId } from 'react'
 import type { SubscriptionOperation } from '../../../../shared/subscriptions'
 import { Icon, Spinner } from '../../components/Icon'
-import { formatLocalTime } from '../../lib/format'
-import { isReconcilable, isRunningChange } from './subscriptionListState'
-import {
-  ACTION_NAME,
-  SOURCE_NAME,
-  contextText,
-  evidenceText,
-  failureText,
-  needsReconcile,
-  reportSummary,
-  verificationText
-} from './subscriptionText'
+import { isReconcilable } from './subscriptionListState'
+import { ACTION_NAME, SOURCE_NAME, failureText, needsReconcile } from './subscriptionText'
 import { useSubscriptionsContext, type ActiveWrite, type WriteNotice } from './useSubscriptions'
-import { LinkageLine } from '../reminders/ReminderLinkage'
-// PROTOTYPE (throwaway): automatic reads are silent; only failures show. A write and its result
-// are one line each (the press itself wrote, without a confirmation that explained it first).
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 
 function objectLine(write: Pick<ActiveWrite, 'source' | 'threadId' | 'label'>): string {
   const label = write.label.trim()
   return `${SOURCE_NAME[write.source]} · No.${write.threadId}${label === '' || label === `No.${write.threadId}` ? '' : `「${label}」`}`
 }
 
+/** One sentence for a journal entry whose result is not settled; its 核对订阅 sits beside it. */
+export function unsettledText(operation: SubscriptionOperation): string {
+  const what = ACTION_NAME[operation.action]
+  if (operation.state === 'pending' || operation.report === 'unknown') return `${what}结果未知`
+  return operation.reportError?.kind === 'rate-limited' ? `${what}结果未确认：限流或需要验证` : `${what}结果未确认`
+}
+
+/**
+ * The journal entry a finished write left to be checked: the entry itself for a recorded result,
+ * else the newest entry of the same write (an orphan intent after a failed or unsaved result).
+ */
+export function unsettledEntryOf(
+  notice: WriteNotice,
+  operations: readonly SubscriptionOperation[] | null,
+  active: ActiveWrite | null
+): SubscriptionOperation | null {
+  const { write, outcome } = notice
+  if (outcome.type === 'done') {
+    const current = operations?.find((item) => item.id === outcome.operation.id) ?? outcome.operation
+    return isReconcilable(current, active) ? current : null
+  }
+  if (write.kind !== 'change' || (outcome.type === 'refused' && outcome.reason !== 'result-storage')) return null
+  return (
+    operations?.find(
+      (item) =>
+        item.threadId === write.threadId &&
+        item.source === write.source &&
+        item.action === write.action &&
+        item.context.generation === write.generation &&
+        isReconcilable(item, active)
+    ) ?? null
+  )
+}
+
+/**
+ * 核对订阅 of one journal entry: a read-only check with the entry's own fixed identity, never a
+ * second write. Disabled while any subscription work runs.
+ */
+export function ReconcileButton({ operation, tabIndex }: { operation: SubscriptionOperation; tabIndex?: number }) {
+  const { active, busy, reconcile } = useSubscriptionsContext()
+  const running = active?.kind === 'reconcile' && active.threadId === operation.threadId && active.source === operation.source
+  return (
+    <button
+      type="button"
+      className="btn btn-small"
+      tabIndex={tabIndex}
+      aria-disabled={busy || undefined}
+      aria-busy={running || undefined}
+      aria-label={`核对订阅 No.${operation.threadId}`}
+      onClick={() => {
+        if (!busy) void reconcile(operation)
+      }}
+    >
+      {running ? '核对中…' : '核对订阅'}
+    </button>
+  )
+}
+
+/**
+ * One sentence plus 核对订阅, where the unsettled write belongs (its row, or under 加入). `tabIndex`
+ * follows the row's roving tab stop.
+ */
+export function UnsettledLine({ operation, text, tabIndex }: { operation: SubscriptionOperation; text?: string; tabIndex?: number }) {
+  return (
+    <div className="sub-inline is-warn">
+      <Icon name="alert" size={14} className="sub-inline-icon" />
+      <span className="sub-inline-text">{text ?? unsettledText(operation)}</span>
+      <ReconcileButton operation={operation} tabIndex={tabIndex} />
+    </div>
+  )
+}
+
 /**
  * The active write / 核对 and the result of the last one. Always rendered (a polite live region),
- * so a change of state is announced wherever the user is.
+ * so a change of state is announced wherever the user is. `placed`: results shown in place by the
+ * view (in a row) and so not repeated here.
  */
-export function WriteStatus() {
+export function WriteStatus({ placed }: { placed?: (notice: WriteNotice) => boolean }) {
   const { active, lastWrite, dismissLastWrite, stopReadback } = useSubscriptionsContext()
   return (
     <div className="sub-write-region" role="status">
@@ -39,28 +97,19 @@ export function WriteStatus() {
             <p className="sub-write-title">
               {active.kind === 'change' ? `正在${ACTION_NAME[active.action]}` : '正在核对'}：{objectLine(active)}
             </p>
-            {!PROTOTYPE_ENABLED && (
-              <p className="sub-write-detail">
-                {active.kind === 'change' ? '等待服务端报告，之后回读核对。' : '只读核对，不会再次写入。'}
-              </p>
-            )}
-            {active.reminders !== null && <LinkageLine linkage={active.reminders} className="sub-write-detail" />}
-            {active.stopRequested && <p className="sub-write-detail">已停止读取；已发出的写入不会撤回。</p>}
+            {active.stopRequested && <p className="sub-write-detail">已停止回读</p>}
           </div>
           <button type="button" className="btn btn-small" onClick={stopReadback} disabled={active.stopRequested}>
             {active.kind === 'change' ? '停止回读' : '停止核对'}
           </button>
         </div>
       )}
-      {active === null && lastWrite !== null && <WriteResult notice={lastWrite} onDismiss={dismissLastWrite} />}
+      {active === null && lastWrite !== null && placed?.(lastWrite) !== true && <WriteResult notice={lastWrite} onDismiss={dismissLastWrite} />}
     </div>
   )
 }
 
-/** Prototype: there is no 操作记录 list; 核对 runs from the thread's 核对订阅 or from the result itself. */
-const RECHECK_ELSEWHERE = '请打开这个串核对订阅，不要直接重复操作。'
-
-/** Prototype: the result as one line; details stay with 核对. */
+/** The result as one line. */
 function resultLine(notice: WriteNotice): { tone: 'done' | 'warn' | 'error'; text: string } {
   const { write, outcome } = notice
   const what = write.kind === 'change' ? ACTION_NAME[write.action] : '核对'
@@ -71,194 +120,27 @@ function resultLine(notice: WriteNotice): { tone: 'done' | 'warn' | 'error'; tex
       if (needsReconcile(outcome.operation)) return { tone: 'warn', text: `${what}结果未确认：${object}` }
       return { tone: 'done', text: write.kind === 'change' ? `已${what}：${object}` : `核对完成：${object}` }
     case 'refused':
-      if (outcome.reason === 'result-storage') return { tone: 'warn', text: `${what}结果未知：${object}。${RECHECK_ELSEWHERE}` }
+      if (outcome.reason === 'result-storage') return { tone: 'warn', text: `${what}结果未知：${object}` }
       return { tone: 'error', text: `${what}未执行：${failureText(outcome.reason)}` }
     case 'failed':
-      return write.kind === 'change'
-        ? { tone: 'error', text: `${what}结果未知：${object}。${RECHECK_ELSEWHERE}` }
-        : { tone: 'error', text: '核对请求失败，没有发出写入' }
+      return write.kind === 'change' ? { tone: 'error', text: `${what}结果未知：${object}` } : { tone: 'error', text: '核对请求失败' }
   }
 }
 
 function WriteResult({ notice, onDismiss }: { notice: WriteNotice; onDismiss: () => void }) {
-  const { operations, active, busy, reconcile } = useSubscriptionsContext()
-  const { write, outcome } = notice
-  const what = write.kind === 'change' ? ACTION_NAME[write.action] : '核对'
-  let tone: 'done' | 'warn' | 'error' = 'done'
-  let title: string
-  let lines: string[] = []
-  /** The journal entry this result can be 核对'd against (prototype only). */
-  let reconcilable: SubscriptionOperation | null = null
-  switch (outcome.type) {
-    case 'done': {
-      const operation = outcome.operation
-      title = `${what}已记录：${objectLine(write)}`
-      lines = [`服务端报告：${reportSummary(operation)}`, `回读核对：${verificationText(operation)}`]
-      if (operation.reportError?.kind === 'rate-limited') {
-        tone = 'warn'
-        lines.push('因限流或需要验证，已停止回读；可在操作记录中手动核对。')
-      } else if (needsReconcile(operation)) {
-        tone = 'warn'
-        lines.push('结果未确认，可在操作记录中手动核对。')
-      }
-      if (PROTOTYPE_ENABLED && tone === 'warn') {
-        const current = operations?.find((item) => item.id === operation.id) ?? operation
-        if (isReconcilable(current, active)) reconcilable = current
-      }
-      break
-    }
-    case 'refused':
-      if (outcome.reason === 'result-storage') {
-        // The write was dispatched; only its local record failed. Never present this as 未执行.
-        tone = 'warn'
-        title = `${what}的结果未知：${failureText(outcome.reason)}`
-        lines = [objectLine(write), '请在操作记录中核对，不要直接重复操作。']
-        break
-      }
-      tone = 'error'
-      title = `${what}未执行：${failureText(outcome.reason)}`
-      lines = [objectLine(write)]
-      break
-    case 'failed':
-      tone = 'error'
-      title = write.kind === 'change' ? `${what}的结果未知：应用内部请求失败` : '核对请求失败：应用内部请求失败'
-      lines =
-        write.kind === 'change'
-          ? [objectLine(write), '写入可能已发出，请在操作记录中核对。']
-          : [objectLine(write), '没有发出写入，可以稍后再核对。']
-      break
-  }
-  if (PROTOTYPE_ENABLED) {
-    const line = resultLine(notice)
-    tone = line.tone
-    title = line.text
-    lines = []
-  }
-  const recheck = reconcilable
+  const { operations, active } = useSubscriptionsContext()
+  const { tone, text } = resultLine(notice)
+  const unsettled = tone === 'done' ? null : unsettledEntryOf(notice, operations, active)
   return (
     <div className={`sub-write is-${tone}`}>
       <Icon name={tone === 'done' ? 'check' : 'alert'} className="sub-write-icon" />
       <div className="sub-write-text">
-        <p className="sub-write-title">{title}</p>
-        {lines.map((line) => (
-          <p key={line} className="sub-write-detail">
-            {line}
-          </p>
-        ))}
-        {/* The local reminder choice is its own statement, true whatever the remote outcome was. */}
-        {write.reminders !== null && <LinkageLine linkage={write.reminders} className="sub-write-detail" />}
-        {recheck !== null && (
-          <div className="sub-write-actions">
-            <button type="button" className="btn btn-small" onClick={() => void reconcile(recheck)} disabled={busy}>
-              核对
-            </button>
-          </div>
-        )}
+        <p className="sub-write-title">{text}</p>
       </div>
+      {unsettled !== null && <ReconcileButton operation={unsettled} />}
       <button type="button" className="icon-btn" onClick={onDismiss} aria-label="关闭这条结果">
         <Icon name="close" size={14} />
       </button>
     </div>
-  )
-}
-
-/** Local journal of every write, including ones made under earlier sources, UUIDs or bindings. */
-export function OperationJournal() {
-  const { operations, operationsFailed, refreshOperations, active } = useSubscriptionsContext()
-  const headingId = useId()
-  const unresolved = operations?.filter((operation) => isReconcilable(operation, active)).length ?? 0
-
-  return (
-    <details className="sub-journal">
-      <summary>
-        <Icon name="chevron" size={14} className="disclosure-icon" />
-        <span className="sub-journal-label" id={headingId}>
-          操作记录
-        </span>
-        {unresolved > 0 && <span className="tag tag-warn">{unresolved} 条待核对</span>}
-      </summary>
-      <div className="sub-journal-body">
-        {operationsFailed && (
-          <div className="notice notice-cached is-compact" role="status">
-            <Icon name="alert" className="notice-icon" />
-            <p className="notice-text">操作记录读取失败，下面可能不是最新状态</p>
-            <button type="button" className="btn btn-small" onClick={() => void refreshOperations()}>
-              重试
-            </button>
-          </div>
-        )}
-        {!PROTOTYPE_ENABLED && operations === null && !operationsFailed && <p className="settings-empty">正在读取操作记录…</p>}
-        {operations !== null && operations.length === 0 && <p className="sub-journal-empty">还没有加入或取消订阅的记录。</p>}
-        {operations !== null && operations.length > 0 && (
-          <ul className="sub-journal-list" aria-labelledby={headingId}>
-            {operations.map((operation) => (
-              <JournalItem key={operation.id} operation={operation} />
-            ))}
-          </ul>
-        )}
-      </div>
-    </details>
-  )
-}
-
-const STATE_TAG: Record<SubscriptionOperation['state'], { text: string; className: string }> = {
-  // A pending entry is only shown as running while its own change is active; see isRunningChange.
-  pending: { text: '待核对', className: 'tag tag-warn' },
-  settled: { text: '已记录', className: 'tag' },
-  'needs-reconciliation': { text: '待核对', className: 'tag tag-warn' }
-}
-const RUNNING_TAG = { text: '进行中', className: 'tag' }
-
-function JournalItem({ operation }: { operation: SubscriptionOperation }) {
-  const { active, busy, reconcile } = useSubscriptionsContext()
-  const tag = isRunningChange(operation, active) ? RUNNING_TAG : STATE_TAG[operation.state]
-  const canReconcile = isReconcilable(operation, active)
-  const reconciling = active?.kind === 'reconcile' && active.threadId === operation.threadId && active.source === operation.source
-  return (
-    <li className="sub-journal-item">
-      <div className="sub-journal-head">
-        <p className="sub-journal-title">
-          {ACTION_NAME[operation.action]} · {objectLine({ source: operation.source, threadId: operation.threadId, label: operation.objectLabel })}
-        </p>
-        <span className={tag.className}>{tag.text}</span>
-      </div>
-      <p className="sub-journal-meta">
-        {formatLocalTime(operation.createdAt)} · {contextText(operation.context, operation.source)}
-      </p>
-      <dl className="sub-facts">
-        <div>
-          <dt>服务端报告</dt>
-          <dd>
-            {reportSummary(operation)}
-          </dd>
-        </div>
-        <div>
-          <dt>回读核对</dt>
-          <dd>{verificationText(operation)}</dd>
-        </div>
-        <div>
-          <dt>操作前观察</dt>
-          <dd>{evidenceText(operation.before)}</dd>
-        </div>
-        <div>
-          <dt>回读观察</dt>
-          <dd>{evidenceText(operation.after)}</dd>
-        </div>
-      </dl>
-      {canReconcile && (
-        <div className="sub-journal-actions">
-          <button
-            type="button"
-            className="btn btn-small"
-            onClick={() => void reconcile(operation)}
-            disabled={busy}
-            aria-label={`核对：${ACTION_NAME[operation.action]} No.${operation.threadId}`}
-          >
-            {reconciling ? '正在核对…' : '核对'}
-          </button>
-          <span className="field-hint">只读取，使用这条记录当时的身份与代次，不重发写入。</span>
-        </div>
-      )}
-    </li>
   )
 }

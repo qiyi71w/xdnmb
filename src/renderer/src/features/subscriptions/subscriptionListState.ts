@@ -121,9 +121,9 @@ export function isReconcilable(operation: SubscriptionOperation, active: ActiveC
 export type ChangeDecision = { kind: 'write'; request: ChangeRequest } | { kind: 'blocked'; reason: string }
 
 /**
- * PROTOTYPE: a press writes at once, with no confirmation step. The request targets the source and
- * identity combination shown at the press; it is sent once and never retried. Reminders of an
- * unsubscribed thread stay as they are (nothing is asked). Blocked presses keep their reasons.
+ * A press writes at once, with no confirmation step. The request targets the source and identity
+ * combination shown at the press; it is sent once and never retried. Reminders of an unsubscribed
+ * thread stay as they are (nothing is asked). Blocked presses keep their reasons.
  */
 export function decideChange({
   overview,
@@ -155,7 +155,7 @@ export function decideChange({
   }
   return {
     kind: 'write',
-    request: { source: overview.source, threadId, action, expectedGeneration: overview.context.generation, label, reminders: null }
+    request: { source: overview.source, threadId, action, expectedGeneration: overview.context.generation, label }
   }
 }
 

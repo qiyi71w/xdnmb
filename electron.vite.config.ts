@@ -51,7 +51,6 @@ function contentSecurityPolicy(): Plugin {
 
 export default defineConfig({
   main: {
-    define: { 'process.env.VITE_XIDAO_PROTOTYPE': JSON.stringify(process.env.VITE_XIDAO_PROTOTYPE ?? '') },
     build: {
       externalizeDeps: true
     }

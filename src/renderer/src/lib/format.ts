@@ -13,9 +13,9 @@ const KIND_TEXT: Record<ReadError['kind'], string> = {
 
 /** Copy for errors whose detail alone decides the text. */
 const DETAIL_TEXT: Partial<Record<ReadError['detail'], string>> = {
-  'identity-missing': '浏览饼干已移除，请在设置中重新选择',
-  'identity-locked': '浏览饼干无法使用（系统凭据保护不可用或无法解密）',
-  'identity-unknown': '本地存储不可用，无法确定浏览饼干，读取未发出'
+  'identity-missing': '浏览饼干已移除',
+  'identity-locked': '浏览饼干无法解密',
+  'identity-unknown': '本地存储不可用，读取未发出'
 }
 
 /** One-line reason for a read error, including the forum's own short message when present. */

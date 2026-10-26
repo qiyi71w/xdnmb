@@ -32,8 +32,6 @@ export interface OnlineSearchResults {
 export interface OnlineSearchState {
   /** Text in the search box. */
   draft: string
-  /** Most recently submitted query (tab title), `null` before the first search. */
-  lastQuery: string | null
   results: OnlineSearchResults | null
   /** Request whose result is still awaited. */
   pending: OnlineSearchRequest | null
@@ -47,7 +45,7 @@ export interface OnlineSearchViewMemory {
   focus: { page: number; index: number } | null
 }
 
-const INITIAL: OnlineSearchState = { draft: '', lastQuery: null, results: null, pending: null, notice: null }
+const INITIAL: OnlineSearchState = { draft: '', results: null, pending: null, notice: null }
 
 const ignore = (): undefined => undefined
 
@@ -65,11 +63,9 @@ export class OnlineSearchSession {
   private seq = 0
   private disposed = false
   private readonly listeners = new Set<() => void>()
-  private readonly onQueryChange: () => void
 
-  constructor(entryKey: number, onQueryChange: () => void) {
+  constructor(entryKey: number) {
     this.sessionId = `search-${entryKey}`
-    this.onQueryChange = onQueryChange
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -80,10 +76,8 @@ export class OnlineSearchSession {
   getState = (): OnlineSearchState => this.state
 
   private set(next: OnlineSearchState): void {
-    const queryChanged = next.lastQuery !== this.state.lastQuery
     this.state = next
     for (const listener of this.listeners) listener()
-    if (queryChanged) this.onQueryChange()
   }
 
   setDraft(draft: string): void {
@@ -99,7 +93,6 @@ export class OnlineSearchSession {
     // The new chain replaces the old one in the main process: old pages stay shown, not turnable.
     this.set({
       ...this.state,
-      lastQuery: query,
       pending: request,
       notice: null,
       results: results === null || !results.live ? results : { ...results, live: false }
@@ -234,23 +227,15 @@ export class OnlineSearchSession {
  */
 export class OnlineSearchSessions {
   private readonly sessions = new Map<number, OnlineSearchSession>()
-  private readonly listeners = new Set<() => void>()
-  private version = 0
 
   /** The entry's session, created on first use. */
   session(entryKey: number): OnlineSearchSession {
     let session = this.sessions.get(entryKey)
     if (session === undefined) {
-      session = new OnlineSearchSession(entryKey, this.bump)
+      session = new OnlineSearchSession(entryKey)
       this.sessions.set(entryKey, session)
     }
     return session
-  }
-
-  /** Tab title of a search entry. */
-  title(entryKey: number): string {
-    const query = this.sessions.get(entryKey)?.getState().lastQuery ?? null
-    return query === null ? '联网搜索' : `联网搜索：${query}`
   }
 
   /** Releases every session whose entry is not in `live`. */
@@ -260,18 +245,5 @@ export class OnlineSearchSessions {
       session.dispose()
       this.sessions.delete(key)
     }
-  }
-
-  /** Changes whenever a session's submitted query changes (tab titles). */
-  subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener)
-    return () => this.listeners.delete(listener)
-  }
-
-  getVersion = (): number => this.version
-
-  private bump = (): void => {
-    this.version += 1
-    for (const listener of this.listeners) listener()
   }
 }

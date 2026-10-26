@@ -1,5 +1,4 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react'
-import type { AppPlatform } from '../../../../shared/api'
 import type { ForumId, ThreadId } from '../../../../shared/forum'
 import type { SearchHit } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
@@ -7,7 +6,7 @@ import { Modal } from '../../components/Modal'
 import { Loading } from '../../components/Notices'
 import { meaningfulTitle } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
-import { FilterFields, FilterRules, UncertainTag } from './FilterFields'
+import { FilterFields, UncertainTag } from './FilterFields'
 import { contentFilterCount } from './listFilters'
 import {
   coverageText,
@@ -22,20 +21,15 @@ import {
 } from './searchText'
 import type { HitLocate, RebuildState, SearchRun, SearchView, TabSearch } from './searchState'
 import { filtersSearchable, MAX_QUERY_LENGTH, type SearchCommands } from './useSearch'
-import { shortcutLabel } from '../../app/shortcuts'
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import { useThreadTabMenu, type ThreadTabMenu } from '../tabs/ThreadTabMenu'
 import './search.css'
 
-const VIEW_TEXT: Record<SearchView, string> = { local: '本机内容', thread: '当前串' }
-
 /**
- * Search sheet of one tab (spec I10 / I11): 本机内容 searches every retained title and body
- * (normal cache, offline copies, subscription records); 当前串 searches the thread on screen in
- * either mode without changing how it is read, and can fetch the whole thread on request. The
- * sheet is modal: the reader below judges nothing read while it is open, and results shown here
- * never count as reading. Esc cancels a running locate first, then closes. PROTOTYPE: 本机内容 is
- * the 搜索 page instead, so the sheet is 串内搜索 only.
+ * 串内搜索 of one tab (spec I10 / I11): searches the thread on screen in either mode without
+ * changing how it is read, and can fetch the whole thread on request. Everything retained is
+ * searched on the 搜索 page instead (its 本机 side, `SearchBody` with the `local` view). The sheet
+ * is modal; results shown here never count as reading. Esc cancels a running locate first, then
+ * closes.
  */
 export function SearchSheet({
   tabId,
@@ -46,7 +40,6 @@ export function SearchSheet({
   restoreSeq,
   commands,
   forums,
-  platform,
   fallbackFocus
 }: {
   tabId: number
@@ -58,12 +51,10 @@ export function SearchSheet({
   restoreSeq: number
   commands: SearchCommands
   forums: ReadonlyMap<ForumId, string>
-  platform: AppPlatform | null
   fallbackFocus: () => HTMLElement | null
 }) {
   const titleId = useId()
-  const view = tab.view
-  const scope = tab.thread.scope
+  const view: SearchView = 'thread'
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
 
@@ -83,31 +74,8 @@ export function SearchSheet({
     <Modal className="search-sheet" labelledBy={titleId} onClose={onEscape} fallbackFocus={fallbackFocus}>
       <header className="modal-header search-header">
         <h2 className="modal-title" id={titleId}>
-          {PROTOTYPE_ENABLED ? '串内搜索' : '搜索'}
+          串内搜索
         </h2>
-        {!PROTOTYPE_ENABLED && (
-          <div className="segmented" role="group" aria-label="搜索什么">
-            {(['local', 'thread'] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                className="segmented-item"
-                aria-pressed={view === item}
-                disabled={item === 'thread' && scope === null}
-                title={
-                  item === 'thread'
-                    ? scope === null
-                      ? '先打开一个串，再搜索它的内容'
-                      : `搜索 No.${scope.threadId}（${shortcutLabel('search-thread', platform)}）`
-                    : `搜索本机保有的全部内容（${shortcutLabel('search-local', platform)}）`
-                }
-                onClick={() => commands.setView(tabId, item)}
-              >
-                {VIEW_TEXT[item]}
-              </button>
-            ))}
-          </div>
-        )}
         <button type="button" className="icon-btn search-close" onClick={() => commands.close()} aria-label="关闭搜索" title="关闭（Esc）">
           <Icon name="close" />
         </button>
@@ -150,9 +118,9 @@ export function focusSearch(refs: SearchFocusRefs, tab: TabSearch, view: SearchV
 
 /**
  * What one view of a tab's search shows: query, filters, coverage, index state, run status and
- * hits. The sheet shows it for either view; the PROTOTYPE 搜索 page shows its 本机 side with it.
- * Typing stays here (the shell does not re-render per key); the text is handed to the tab's search
- * on submit, on switching views and on unmount. Its owner moves focus (`focusSearch`).
+ * hits. The sheet shows the `thread` view; the 搜索 page's 本机 side shows the `local` one. Typing
+ * stays here (the shell does not re-render per key); the text is handed to the tab's search on
+ * submit, on switching views and on unmount. Its owner moves focus (`focusSearch`).
  */
 export function SearchBody({
   className,
@@ -164,7 +132,6 @@ export function SearchBody({
   commands,
   forums,
   focusRefs,
-  brief = false,
   tabMenu = false
 }: {
   className: string
@@ -177,14 +144,11 @@ export function SearchBody({
   commands: SearchCommands
   forums: ReadonlyMap<ForumId, string>
   focusRefs: SearchFocusRefs
-  /** Only what is needed to search (PROTOTYPE page): no hint or explanatory sentences. */
-  brief?: boolean
   /** Hits offer 在新标签页打开 (not in the modal sheet, whose top layer would hide the menu). */
   tabMenu?: boolean
 }) {
   const inputId = useId()
   const filtersId = useId()
-  const hintId = useId()
   const session = tab[view]
   const run = session.run
   const scope = tab.thread.scope
@@ -245,7 +209,6 @@ export function SearchBody({
             autoComplete="off"
             spellCheck={false}
             placeholder={view === 'local' ? '标题或正文中的文字' : '这个串里的文字'}
-            aria-describedby={brief ? undefined : hintId}
             onChange={(event) => setDraft({ view, text: event.target.value })}
           />
         </div>
@@ -272,16 +235,9 @@ export function SearchBody({
           {filterCount > 0 && <span className="btn-count">{filterCount}</span>}
         </button>
       </form>
-      {!brief && (
-        <p className="search-hint" id={hintId}>
-          按字面文字查找（不区分大小写，引号、星号等符号也按原样），提交后才搜索。不搜索草稿和饼干。
-        </p>
-      )}
 
       <div className="search-filters" id={filtersId} hidden={!filtersOpen}>
         <FilterFields value={session.filters} onChange={(filters) => commands.setFilters(tabId, view, filters)} forums={forums} />
-        <FilterRules />
-        {!brief && <p className="filter-rules">筛选按命中的那条发言自己的版面、日期和图片判断。</p>}
       </div>
 
       {view === 'thread' && scope !== null && (
@@ -304,12 +260,11 @@ export function SearchBody({
                 </button>
               ))}
             </div>
-            <span className="search-scope-note">只改变搜索范围，不改变阅读模式</span>
           </div>
           {run?.coverage?.thread != null && (
             <p className="search-coverage">
               <Icon name="info" size={14} />
-              <span>{coverageText(run.coverage.thread)}。只搜索这些已取得的页，不代表整串。</span>
+              <span>{coverageText(run.coverage.thread)}</span>
             </p>
           )}
           <FetchBlock tab={tab} tabId={tabId} commands={commands} />
@@ -320,9 +275,7 @@ export function SearchBody({
         <p className="search-coverage">
           <Icon name="info" size={14} />
           <span>
-            {brief
-              ? `在本机保有的 ${run.coverage.retainedThreads} 个串、${run.coverage.retainedPosts} 条发言中搜索`
-              : `在本机保有的 ${run.coverage.retainedThreads} 个串、${run.coverage.retainedPosts} 条发言中搜索：普通缓存、离线副本和订阅记录中的标题与正文。普通缓存被清理后，其中的内容就搜不到了。`}
+            在本机保有的 {run.coverage.retainedThreads} 个串、{run.coverage.retainedPosts} 条发言中搜索
           </span>
         </p>
       )}
@@ -331,7 +284,7 @@ export function SearchBody({
       {!showRebuild && rebuild.status !== 'idle' && <RebuildResult rebuild={rebuild} />}
 
       {run !== null && (
-        <RunStatus run={run} brief={brief} onMore={() => commands.more(tabId, view)} onRerun={() => commands.submit(tabId, view, run.query)} />
+        <RunStatus run={run} onMore={() => commands.more(tabId, view)} onRerun={() => commands.submit(tabId, view, run.query)} />
       )}
 
       {run !== null && run.hits.length > 0 && (
@@ -359,7 +312,7 @@ export function SearchBody({
   )
 }
 
-function RunStatus({ run, brief, onMore, onRerun }: { run: SearchRun; brief: boolean; onMore: () => void; onRerun: () => void }) {
+function RunStatus({ run, onMore, onRerun }: { run: SearchRun; onMore: () => void; onRerun: () => void }) {
   const count = run.hits.length
   let body: ReactNode
   switch (run.status) {
@@ -381,7 +334,6 @@ function RunStatus({ run, brief, onMore, onRerun }: { run: SearchRun; brief: boo
         count === 0 ? (
           <span className="search-empty">
             <strong>没有找到「{run.query}」</strong>
-            {!brief && <span>只说明本机目前保有的内容里没有，不代表论坛上没有。</span>}
           </span>
         ) : (
           <span>共找到 {count} 条</span>
@@ -427,9 +379,6 @@ function RebuildBlock({ rebuild, indexMissing, commands }: { rebuild: RebuildSta
       <Icon name="alert" className="notice-icon" />
       <div className="notice-text">
         <p className="notice-title">{indexMissing ? '搜索索引不可用，这次没有执行搜索' : '正在重建搜索索引'}</p>
-        <p className="notice-detail">
-          这不是“没有结果”。重建只整理本机已保有的内容，不联网，也不改动阅读记录；可以随时取消。
-        </p>
         {running && <Loading>{rebuild.cancelling ? '正在取消重建…' : '正在重建索引…'}</Loading>}
       </div>
       {running ? (
@@ -469,9 +418,6 @@ function FetchBlock({ tab, tabId, commands }: { tab: TabSearch; tabId: number; c
   const running = fetch !== null && fetch.failure === null && (status === null || status.state === 'running')
   return (
     <div className="search-fetch">
-      {fetch === null && (
-        <p className="search-fetch-text">默认只搜索本机已有的内容。获取会按页读取这个串的全部回复并存入普通缓存，不会标为已读，可以随时取消。</p>
-      )}
       {running && (
         <Loading>{fetch.cancelling ? '正在取消获取…' : status === null ? '正在开始获取…' : fetchText(status)}</Loading>
       )}
@@ -481,9 +427,7 @@ function FetchBlock({ tab, tabId, commands }: { tab: TabSearch; tabId: number; c
         </p>
       )}
       {status !== null && (
-        <p className="search-fetch-coverage">
-          {coverageText(status.coverage)}。末尾候选只说明读取时没有更多回复，不代表与论坛完全一致。
-        </p>
+        <p className="search-fetch-coverage">{coverageText(status.coverage)}</p>
       )}
       {fetch !== null && fetch.failure !== null && (
         <p className="search-fetch-text is-warning" role="status">
@@ -617,7 +561,7 @@ function LocateStatus({
           {locate.intent === 'open-thread'
             ? '正在打开原串…（Esc 取消）'
             : locate.intent === 'resolve'
-              ? '正在重新定位，不会自动跳转…（Esc 取消）'
+              ? '正在重新定位…（Esc 取消）'
               : '正在定位这条发言…（Esc 取消）'}
         </Loading>
       </div>
@@ -639,7 +583,7 @@ function LocateStatus({
       <div className="search-locate" id={id} role="status">
         <Icon name="check" size={14} className="search-locate-icon" />
         <span className="search-locate-text">
-          现在可以定位：串 No.{result.threadId} {mode}第 {result.target.page} 页{result.source === 'cached' ? '（网络读取失败，按本地缓存核对）' : ''}。重试不会跳转。
+          现在可以定位：串 No.{result.threadId} {mode}第 {result.target.page} 页{result.source === 'cached' ? '（按本地缓存核对）' : ''}
         </span>
         <button type="button" className="btn btn-small" onClick={onOpen}>
           打开
@@ -650,10 +594,10 @@ function LocateStatus({
       </div>
     )
   } else if (result.status === 'thread-known') {
-    text = `所属串 No.${result.threadId} 已知，但记录的页面中没有找到这条发言；不会把别处当成它。`
+    text = `所属串 No.${result.threadId} 记录的页面中没有找到这条发言`
     action = { label: '打开原串', run: onOpenThread }
   } else if (result.status === 'unknown-thread') {
-    text = '本机没有这条发言所属串的记录，无法定位；不会猜测所属串。'
+    text = '本机没有这条发言所属串的记录，无法定位'
     action = null
   } else {
     const unavailable = result.error.kind === 'not-found' || result.error.kind === 'permission'

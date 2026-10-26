@@ -27,8 +27,6 @@ import {
 } from './reminderText'
 import { failureText, useRemindersContext } from './useReminders'
 import { useListOpener } from './openList'
-// PROTOTYPE (throwaway): no read/unread surface (#20).
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import '../feed/feed.css'
 import './reminders.css'
 
@@ -53,7 +51,7 @@ interface OpenState {
 }
 
 function unavailableText(error: ReadError): string | null {
-  if (error.kind === 'not-found') return '这条回复当前不可用，服务端返回不存在'
+  if (error.kind === 'not-found') return '这条回复不存在'
   if (error.kind === 'permission') return '当前身份无法访问这条回复'
   return null
 }
@@ -64,8 +62,9 @@ function groupTitle(group: ThreadReminderGroup): string {
 
 /**
  * 提醒 list: checker status and actions, then reminder events grouped by thread with each thread's
- * rules and coverage state. Refreshed by `reminders.onChanged` only (no polling); nothing here marks
- * a post read, and opening an event never does either.
+ * rules and coverage state. Refreshed by `reminders.onChanged` only (no polling). Counts are confirmed
+ * events (99, then 99+); coverage problems are marked separately. Automatic checks show no loading
+ * text.
  */
 export function ReminderPane({
   entryKey,
@@ -161,7 +160,7 @@ export function ReminderPane({
         }
       }
     } catch {
-      if (alive.current) setMessage({ text: '检查请求失败：应用内部请求失败，没有开始检查', tone: 'error' })
+      if (alive.current) setMessage({ text: '检查请求失败', tone: 'error' })
     } finally {
       if (alive.current) setRequest(null)
     }
@@ -174,9 +173,9 @@ export function ReminderPane({
     setMessage(null)
     try {
       await window.xidao.reminders.cancel()
-      if (alive.current) setMessage({ text: '已请求取消：已确认的结果和缺口会保留', tone: 'info' })
+      if (alive.current) setMessage({ text: '已请求取消', tone: 'info' })
     } catch {
-      if (alive.current) setMessage({ text: '取消请求失败：应用内部请求失败，检查可能仍在进行', tone: 'error' })
+      if (alive.current) setMessage({ text: '取消请求失败', tone: 'error' })
     } finally {
       if (alive.current) setRequest(null)
     }
@@ -271,6 +270,8 @@ export function ReminderPane({
   // ---------- Render ----------
   const running = overview?.checker.running === true
   const round = overview?.currentRound ?? null
+  /** A check the user started here shows its progress; automatic ones only mark the region busy. */
+  const manualRun = running && (round === null ? request === 'check' : round.trigger === 'manual')
   const coverageProblem = overview !== null && overviewHasCoverageProblem(overview)
   const empty = overview !== null && overview.threads.length === 0
   const notification = overview?.lastNotification != null ? notificationText(overview.lastNotification) : null
@@ -293,15 +294,12 @@ export function ReminderPane({
             <h2 className="list-title" id={headingId}>
               <span className="list-name">提醒</span>
             </h2>
-            {overview !== null && (!PROTOTYPE_ENABLED || coverageProblem) && (
+            {coverageProblem && (
               <p className="reminder-total">
-                {!PROTOTYPE_ENABLED && (overview.totalUnread > 0 ? `${formatReminderCount(overview.totalUnread)} 条未读提醒` : '没有未读提醒')}
-                {coverageProblem && (
-                  <span className="reminder-total-note">
-                    <Icon name="alert" size={13} />
-                    部分串覆盖不完整
-                  </span>
-                )}
+                <span className="reminder-total-note">
+                  <Icon name="alert" size={13} />
+                  部分串覆盖不完整
+                </span>
               </p>
             )}
           </div>
@@ -326,9 +324,8 @@ export function ReminderPane({
                 {request === 'check' ? '正在开始…' : '检查更新'}
               </button>
             )}
-            <div className="reminder-checker-status" role="status">
-              {running && round !== null && <Loading live={false}>{progressText(round)}</Loading>}
-              {running && round === null && <Loading live={false}>正在检查…</Loading>}
+            <div className="reminder-checker-status" role="status" aria-busy={running || undefined}>
+              {manualRun && <Loading live={false}>{round !== null ? progressText(round) : '正在检查…'}</Loading>}
             </div>
             {/* Counts down every second: deliberately outside any live region. */}
             {!running && cooldownLeft > 0 && <p className="reminder-checker-line">{secondsText(cooldownLeft)}后可再次检查</p>}
@@ -341,14 +338,13 @@ export function ReminderPane({
           )}
         </div>
 
-        {/* Prototype: the first read is quiet; only a failure says anything. */}
-        <div className="list-status" aria-busy={PROTOTYPE_ENABLED && overview === null && failure === null ? true : undefined}>
-          {!PROTOTYPE_ENABLED && overview === null && failure === null && <Loading>正在读取提醒…</Loading>}
+        {/* The first read is quiet; only a failure says anything. */}
+        <div className="list-status" aria-busy={overview === null && failure === null ? true : undefined}>
           {failure !== null && (
             <div className="notice notice-error is-compact" role="alert">
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">
-                {overview === null ? '提醒读取失败' : '提醒更新失败，仍显示之前的内容'}：{failureText(failure)}
+                {overview === null ? '提醒读取失败' : '提醒更新失败'}：{failureText(failure)}
               </p>
               <button type="button" className="btn btn-small" onClick={() => void reload()}>
                 重试
@@ -451,12 +447,12 @@ function ReminderGroup({
           ))}
         </ul>
       ) : (
-        <p className="reminder-group-line">提醒已全部关闭；下面保留之前的结果，不会再检查。</p>
+        <p className="reminder-group-line">提醒已全部关闭</p>
       )}
 
       <div className={`reminder-state ${tone}`}>
         <p className="reminder-state-name">
-          {group.state === 'checking' ? <Loading live={false}>{STATE_NAME.checking}</Loading> : <span className="tag">{STATE_NAME[group.state]}</span>}
+          <span className="tag">{STATE_NAME[group.state]}</span>
           <span className="reminder-state-detail">{stateDetail(group)}</span>
         </p>
         {group.issues.length > 0 && (
@@ -472,15 +468,7 @@ function ReminderGroup({
       </div>
 
       <p className="reminder-counts">
-        {PROTOTYPE_ENABLED ? (
-          <span>{group.eventCount > 0 ? `${formatReminderCount(group.eventCount)} 条提醒` : emptyText(group)}</span>
-        ) : group.unreadCount > 0 ? (
-          <span className="reminder-unread">{formatReminderCount(group.unreadCount)} 条未读</span>
-        ) : group.eventCount > 0 ? (
-          <span>没有未读提醒</span>
-        ) : (
-          <span>{emptyText(group)}</span>
-        )}
+        <span>{group.eventCount > 0 ? `${formatReminderCount(group.eventCount)} 条提醒` : emptyText(group)}</span>
         {group.uncertainCount > 0 && (
           <span className="reminder-uncertain">
             <Icon name="alert" size={13} />
@@ -538,13 +526,12 @@ function EventRow({
     <>
       <button
         type="button"
-        className={event.read || PROTOTYPE_ENABLED ? 'reminder-event' : 'reminder-event is-unread'}
+        className="reminder-event"
         aria-describedby={open !== null ? statusId : undefined}
         aria-busy={busy !== null || undefined}
         onClick={() => onLocate(event.postId, 'navigate')}
       >
         <span className="reminder-event-top">
-          {!PROTOTYPE_ENABLED && <span className={event.read ? 'tag' : 'tag tag-po'}>{event.read ? '已读' : '未读'}</span>}
           {event.kinds.map((kind) => (
             <span key={kind} className="reminder-event-kind">
               {KIND_NAME[kind]}
@@ -613,7 +600,7 @@ function OpenStatus({
       <div className="reminder-open-row is-error">
         <p className="reminder-open-text">
           <Icon name="alert" size={14} />
-          {open.internal === 'thread' ? '打开原串失败' : '定位失败'}：应用内部请求失败，没有跳转
+          {open.internal === 'thread' ? '打开原串失败' : '定位失败'}：应用内部请求失败
         </p>
         <button
           type="button"
@@ -634,7 +621,7 @@ function OpenStatus({
         <p className="reminder-open-text">
           <Icon name="alert" size={14} />
           原串读取失败：{describeReadError(error)}
-          {error.serverMessage !== undefined && `；论坛提示：${error.serverMessage}`}，没有跳转
+          {error.serverMessage !== undefined && `；论坛提示：${error.serverMessage}`}
         </p>
         <IdentitySettingsAction error={error} />
         <button type="button" className="btn btn-small" onClick={() => onOpenThread(postId, threadId, head)}>
@@ -667,7 +654,7 @@ function OpenStatus({
         <div className="reminder-open-row">
           <p className="reminder-open-text">
             <Icon name="info" size={14} />
-            暂时无法确定这条回复属于哪个串，没有跳转
+            无法确定这条回复所属的串
           </p>
           {dismiss}
         </div>
@@ -677,7 +664,7 @@ function OpenStatus({
         <div className="reminder-open-row">
           <p className="reminder-open-text">
             <Icon name="info" size={14} />
-            已知原串 No.{result.threadId}，暂未定位到这条回复；可以按正常续读位置打开原串
+            已知原串 No.{result.threadId}，未定位到这条回复
           </p>
           <button type="button" className="btn btn-small" onClick={() => onOpenThread(postId, result.threadId, result.head)}>
             打开原串
@@ -692,7 +679,6 @@ function OpenStatus({
           <p className="reminder-open-text">
             <Icon name="alert" size={14} />
             {unavailable ?? `定位失败：${describeReadError(result.error)}${result.error.serverMessage !== undefined ? `；论坛提示：${result.error.serverMessage}` : ''}`}
-            ，没有跳转
           </p>
           <IdentitySettingsAction error={result.error} />
           {unavailable === null && (

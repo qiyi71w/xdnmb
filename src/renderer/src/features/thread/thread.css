@@ -1,5 +1,5 @@
-/* Positioned: the image viewer covers exactly this reader, its editor included. A column: the
-   scroller takes what the bottom editor leaves, so the reading viewport ends above the editor. */
+/* Positioned: the image viewer covers exactly this reader. A column: the scroller takes the
+   reader's height. */
 .reader {
   position: relative;
   height: 100%;
@@ -16,11 +16,6 @@
   overflow: hidden auto;
   overscroll-behavior: contain;
   overflow-anchor: none;
-}
-
-/* Only carries `inert` for the editor while the image viewer is open. */
-.reader-dock {
-  display: contents;
 }
 
 .reader-scroll:focus {
@@ -67,21 +62,6 @@
 .toolbar-note .icon {
   flex: none;
   color: var(--accent-ink);
-}
-
-.toolbar-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.toolbar-group {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
 }
 
 /* A toolbar button wider than the row (large zoom) wraps its label instead of being clipped. */
@@ -138,14 +118,6 @@
   gap: 4px;
 }
 
-:root[data-density='compact'] .toolbar-row {
-  gap: 6px;
-}
-
-:root[data-density='compact'] .toolbar-group {
-  gap: 4px;
-}
-
 :root[data-density='compact'] .page-input {
   min-height: 24px;
   padding-block: 1px;
@@ -180,33 +152,7 @@
   margin: 0;
 }
 
-.toolbar-coverage {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 12px;
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.loaded-range {
-  font-weight: 600;
-  color: var(--ink-2);
-}
-
-.coverage {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 12px;
-}
-
-.coverage-gap {
-  color: var(--warn-ink);
-  font-weight: 600;
-}
-
-/* ---------- PROTOTYPE (throwaway): one-row toolbar, page control, 更多, 开头／末尾 pills ---------- */
+/* ---------- One-row toolbar, page control, 更多 ---------- */
 
 /* One row: reading mode and page on the left, actions on the right, all 30px high (26 compact).
    The row is a size container: labels give way to icons before anything wraps. */
@@ -473,14 +419,6 @@
   background: var(--line-soft);
 }
 
-/* ---------- 订阅／已订阅 in the toolbar ---------- */
-
-.subscribe {
-  position: relative;
-  display: inline-flex;
-  max-width: 100%;
-}
-
 .subscribe-btn.is-on,
 .subscribe-btn.is-on .icon {
   color: var(--accent-ink);
@@ -489,29 +427,6 @@
 .subscribe-btn.is-warning,
 .subscribe-btn.is-warning .icon {
   color: var(--warn-ink);
-}
-
-.subscribe-panel {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 4px);
-  inset-inline-end: 0;
-  display: grid;
-  justify-items: start;
-  gap: 8px;
-  width: min(24rem, calc(100vw - 24px));
-  padding: 8px;
-  border-radius: var(--radius-l);
-  background: var(--glass-strong);
-  backdrop-filter: blur(24px) saturate(1.5);
-  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
-  text-align: start;
-  white-space: normal;
-  font-size: var(--text-sm);
-}
-
-.subscribe-panel .sub-confirm {
-  justify-self: stretch;
 }
 
 .subscribe-note {
@@ -525,7 +440,7 @@
   height: 24px;
 }
 
-/* ---------- PROTOTYPE (throwaway): floating 开头 / 末尾 ---------- */
+/* ---------- Corner 开头 / 末尾 ---------- */
 
 /* Round icon buttons in the reader's right gutter, measured against the scroll viewport: 开头 at the
    top-right just under the toolbar (inside it, so it follows the sticky bar), 末尾 at the bottom-right
@@ -624,7 +539,7 @@
   padding: 20px var(--gutter-min) 160px;
 }
 
-/* PROTOTYPE: the text never runs under the 开头 / 末尾 buttons. While the free gutter right of the
+/* The text never runs under the 开头 / 末尾 buttons. While the free gutter right of the
    text (half of what the viewport leaves beside the reading width) is narrower than the buttons' lane,
    the column's end padding grows just enough, up to the lane itself in narrow windows; the column
    grows by the same amount, so the text keeps its width wherever the window still allows it. Padding
@@ -706,19 +621,6 @@
   transition: none;
 }
 
-.unread-mark {
-  display: inline-flex;
-  align-items: center;
-}
-
-.unread-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
-}
-
 .post-title {
   margin-bottom: 4px;
   font-family: var(--font-reading);
@@ -731,7 +633,7 @@
   font-family: var(--font-reading);
 }
 
-/* PROTOTYPE: the list-row order. Meta line, title, name each on their own line, tight together;
+/* The list-row order. Meta line, title, name each on their own line, tight together;
    the usual gap before the image and body. The head's title keeps the thread-title size. */
 .post-head {
   display: grid;
@@ -768,19 +670,7 @@
   background: var(--line);
 }
 
-.load-previous {
-  display: grid;
-  justify-items: center;
-  gap: 6px;
-  padding: 12px 0 4px;
-  border-top: 1px solid var(--line-soft);
-}
-
-.load-previous .notice {
-  justify-self: stretch;
-}
-
-/* PROTOTYPE: the page before the range loading — a thin text-free bar on the toolbar's lower edge. */
+/* The page before the range loading — a thin text-free bar on the toolbar's lower edge. */
 .prepend-progress {
   position: absolute;
   inset: auto 0 -1px;
@@ -813,30 +703,7 @@
   opacity: 0.45;
 }
 
-.end-candidate {
-  display: grid;
-  justify-items: center;
-  gap: 6px;
-  margin: 18px 0 8px;
-  padding: 16px;
-  border-radius: var(--radius-l);
-  background: var(--info-bg);
-  text-align: center;
-  font-size: var(--text-sm);
-  color: var(--ink-2);
-}
-
-.end-candidate > p:first-child {
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.end-candidate-note {
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-}
-
-/* PROTOTYPE: the end of a fully read thread is a single quiet 刷新. */
+/* The end of a fully read thread is a single quiet 刷新. */
 .thread-end {
   display: flex;
   justify-content: center;

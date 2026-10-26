@@ -49,24 +49,12 @@ export function CloseChoiceDialog({
     <Modal className="lifecycle-dialog" labelledBy={titleId} onClose={dismiss}>
       <ModalHeader title="关闭汐岛窗口" titleId={titleId} closeLabel="取消关闭" onClose={dismiss} closeDisabled={busy} />
       <div className="modal-body">
-        <dl className="close-choices">
-          <div className="close-choice">
-            <dt>后台驻留</dt>
-            <dd>只隐藏窗口，标签、阅读位置和未保存的编辑原样保留。之后从{reopenPlace(platform)}重新打开。</dd>
-          </div>
-          <div className="close-choice">
-            <dt>退出汐岛</dt>
-            <dd>先处理未保存的编辑并保存工作区，再真正退出。已经开始的发送只等它结束，不会重发。</dd>
-          </div>
-        </dl>
+        <p className="lifecycle-note">后台驻留后可从{reopenPlace(platform)}重新打开。</p>
       </div>
       <div className="modal-actions close-choice-actions">
         <label className="close-choice-remember">
           <input type="checkbox" checked={remember} disabled={busy} onChange={(event) => setRemember(event.target.checked)} />
-          <span>
-            记住我的选择
-            <span className="close-choice-remember-help">之后关闭窗口不再询问，可在设置中修改</span>
-          </span>
+          <span>记住我的选择</span>
         </label>
         <div className="close-choice-buttons">
           <button type="button" className="btn" aria-disabled={busy || undefined} onClick={() => choose('quit')}>

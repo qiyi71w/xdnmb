@@ -1,12 +1,13 @@
-// PROTOTYPE (throwaway): the float compose panel's 颜文字 button and its panel. The panel opens above
-// the toolbar and stays open for several inserts; Esc (focus back on the button) or a press outside
-// closes it. A kaomoji goes into the text at its caret or over its selection, wherever focus was.
-// After the presets come the user's own kaomoji (removable) and 添加.
+// The compose panel's 颜文字 button and its panel. The panel opens above the toolbar and stays open
+// for several inserts; Esc (focus back on the button) or a press outside closes it. A kaomoji goes
+// into the text at its caret or over its selection, wherever focus was. After the presets come the
+// user's own kaomoji (removable; the `customKaomoji` setting) and 添加.
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Icon } from '../../components/Icon'
 import { openLayer } from '../../lib/layers'
-import { addKaomoji, canAddKaomoji, customKaomoji, KAOMOJI_PRESETS, removeKaomoji, subscribeCustomKaomoji } from './kaomoji'
+import { useSettings } from '../../lib/settingsContext'
+import { canAddKaomoji, KAOMOJI_PRESETS } from './kaomoji'
 
 const ITEM = '[data-kaomoji-item]'
 
@@ -34,9 +35,10 @@ function verticalNeighbour(items: readonly HTMLElement[], from: HTMLElement, dow
 export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onInsert: (text: string) => void }) {
   const [open, setOpen] = useState(false)
   const panelId = useId()
-  const buttonRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
-  const custom = useSyncExternalStore(subscribeCustomKaomoji, customKaomoji)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const { settings, latest, write } = useSettings()
+  const custom = settings.customKaomoji
   /** The grid's one tabbable item (roving focus), by position. */
   const [active, setActive] = useState(0)
   const [adding, setAdding] = useState(false)
@@ -132,8 +134,9 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
 
   const save = (event: FormEvent) => {
     event.preventDefault()
-    if (!canAddKaomoji(draft)) return
-    addKaomoji(draft)
+    const saved = latest().customKaomoji
+    if (!canAddKaomoji(saved, draft)) return
+    write({ customKaomoji: [...saved, draft] })
     setDraft('')
     setAdding(false)
     // 添加 again, after the new one.
@@ -141,7 +144,7 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
   }
 
   const remove = (text: string, position: number) => {
-    removeKaomoji(text)
+    write({ customKaomoji: latest().customKaomoji.filter((item) => item !== text) })
     focusAt.current = position
   }
 
@@ -242,7 +245,7 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
                     focusAt.current = itemCount - 1
                   }}
                 />
-                <button type="submit" className="btn btn-small btn-primary" disabled={!canAddKaomoji(draft)}>
+                <button type="submit" className="btn btn-small btn-primary" disabled={!canAddKaomoji(custom, draft)}>
                   保存
                 </button>
               </form>

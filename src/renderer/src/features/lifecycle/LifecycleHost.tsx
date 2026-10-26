@@ -312,7 +312,7 @@ export function LifecycleHost({
       {question?.kind === 'unsaved' && (
         <UnsavedEditorsDialog
           label="退出汐岛"
-          intro={`还有 ${question.editorIds.length} 份未保存的编辑（包括已收起的），分布在各个标签中。退出前保存为草稿，还是放弃？`}
+          intro={`还有 ${question.editorIds.length} 份未保存的编辑`}
           verb="退出"
           editorIds={question.editorIds}
           onFinish={() => answer('continue')}

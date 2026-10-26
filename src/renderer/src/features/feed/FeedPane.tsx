@@ -1,8 +1,8 @@
-import { Fragment, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ForumId, ThreadSummary } from '../../../../shared/forum'
 import { Content, contentText } from '../../components/Content'
 import { Icon } from '../../components/Icon'
-import { FailureNotice, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
+import { FailureNotice, PartialNotice, SourceNotice } from '../../components/Notices'
 import { formatPageList } from '../../lib/format'
 import { useNearEnd } from '../../lib/useNearEnd'
 import { useRovingFocus } from '../../lib/useRovingFocus'
@@ -18,8 +18,7 @@ import type { FeedPageRecord } from './feedState'
 import { ThreadRow } from './ThreadRow'
 import { useFeed } from './useFeed'
 import './feed.css'
-// PROTOTYPE (throwaway): D makes the board name open its board panel; automatic loads stay quiet.
-import { ListHostContext, PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
+import { ListHostContext } from '../directory/navStore'
 import type { ComposeEntry } from '../editor/ComposePanel'
 import { isPostBlocked } from '../../../../shared/blocks'
 import { useBlocks } from '../thread/useBlocks'
@@ -56,7 +55,6 @@ export function FeedPane({
   forumNames,
   selectedThreadId,
   onOpenThread,
-  footer,
   compose
 }: {
   /** History entry showing this list; the shell refreshes it through the content registry. */
@@ -65,13 +63,11 @@ export function FeedPane({
   forumNames: ReadonlyMap<ForumId, string>
   selectedThreadId: string | null
   onOpenThread: (thread: ThreadSummary) => void
-  /** Shown below the scroller (the new-thread editor of a forum). */
-  footer: ReactNode
-  /** PROTOTYPE: a forum's 发新串 entry beside its name and its sent note; `null` otherwise. */
+  /** A forum's 发新串 entry beside its name and its sent note; `null` for timelines. */
   compose: ComposeEntry | null
 }) {
   const registry = useContext(ContentRegistryContext)
-  const protoHost = useContext(ListHostContext)
+  const listHost = useContext(ListHostContext)
   // The same entry's list as it was when last unmounted (split toggled, single pane, back/forward).
   const [remembered] = useState(() => {
     const memory = registry?.listMemory.get(entryKey)
@@ -208,10 +204,10 @@ export function FeedPane({
           <div className="list-title-row">
             <h2 className="list-title">
               <span className="list-kind">{kindLabel}</span>
-              <span className="list-name">{protoHost?.boardTitle != null ? protoHost.boardTitle(info.name) : info.name}</span>
+              <span className="list-name">{listHost?.boardTitle != null ? listHost.boardTitle(info.name) : info.name}</span>
             </h2>
             {compose !== null && compose.entry}
-            <button type="button" className="icon-btn" onClick={refreshList} aria-label="刷新列表（重新读取第 1 页）" title="刷新列表">
+            <button type="button" className="icon-btn" onClick={refreshList} aria-label="刷新列表" title="刷新列表">
               <Icon name="refresh" />
             </button>
           </div>
@@ -233,9 +229,9 @@ export function FeedPane({
               <Content
                 nodes={info.description}
                 className="feed-description-body"
-                renderQuote={PROTOTYPE_ENABLED ? (node, quoteIndex) => (
+                renderQuote={(node, quoteIndex) => (
                   <QuoteRef host={{ descriptionId: `${info.ref.kind}:${info.ref.id}` }} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} />
-                ) : undefined}
+                )}
               />
             </QuoteEntryContext.Provider>
           </details>
@@ -246,7 +242,6 @@ export function FeedPane({
             filters={filters}
             onChange={setFilters}
             forums={isTimeline ? forumNames : null}
-            unreadOffered={false}
             noun="串"
             total={visibleThreads.length}
             result={filtered}
@@ -255,18 +250,14 @@ export function FeedPane({
           />
         )}
 
-        <div className="list-status">
-          {!PROTOTYPE_ENABLED && state.activity === 'refresh' && <Loading>正在刷新第 1 页…</Loading>}
+        <div className="list-status" aria-busy={state.activity === 'refresh' || undefined}>
           {error !== null && error.action === 'refresh' && (
-            <FailureNotice title="刷新失败，仍显示之前的列表" failure={error.failure} onRetry={retry} compact />
+            <FailureNotice title="刷新失败" failure={error.failure} onRetry={retry} compact />
           )}
         </div>
 
         {firstLoad && state.activity === 'initial' && (
-          <div className="list-placeholder" aria-busy={PROTOTYPE_ENABLED ? true : undefined}>
-            {!PROTOTYPE_ENABLED && (
-              <Loading>{restorePages !== null && restorePages > 1 ? `正在读取第 1–${restorePages} 页…` : '正在读取第 1 页…'}</Loading>
-            )}
+          <div className="list-placeholder" aria-busy="true">
             <div aria-hidden="true">
               {Array.from({ length: 6 }, (_, index) => (
                 <div key={index} className="row-skeleton">
@@ -288,7 +279,6 @@ export function FeedPane({
         {!firstLoad && state.threads.length === 0 && state.reachedEmptyPage === 1 && (
           <div className="list-empty" role="status">
             <p className="list-empty-title">这里还没有串</p>
-            <p className="list-empty-text">{kindLabel}第 1 页是空的。</p>
           </div>
         )}
 
@@ -321,24 +311,23 @@ export function FeedPane({
         )}
         {filtering && visibleThreads.length > 0 && filtered.shown.length === 0 && (
           <p className="list-filters-empty" role="status">
-            已加载的串都不符合筛选。可以读取下一页，或清除筛选。
+            已加载的串都不符合筛选
           </p>
         )}
         {!firstLoad && state.threads.length > 0 && visibleThreads.length === 0 && (
           <p className="list-filters-empty" role="status">已加载的串均已屏蔽</p>
         )}
 
-        <div className="list-footer">
+        <div className="list-footer" aria-busy={state.activity === 'append' || undefined}>
           <div ref={sentinelRef} className="scroll-sentinel" aria-hidden="true" />
-          {!PROTOTYPE_ENABLED && state.activity === 'append' && <Loading>正在读取第 {lastPage + 1} 页…</Loading>}
           {error !== null && error.action === 'append' && (
             <FailureNotice title={`读取第 ${error.page} 页失败`} failure={error.failure} onRetry={retry} compact />
           )}
           {!firstLoad && state.reachedEmptyPage !== null && state.reachedEmptyPage > 1 && (
-            <p className="list-end">第 {state.reachedEmptyPage} 页没有串，列表到此为止</p>
+            <p className="list-end">没有更多串</p>
           )}
           {!firstLoad && state.reachedEmptyPage === null && !hasMore && info.maxPage !== null && (
-            <p className="list-end">已到{kindLabel}最后一页（第 {info.maxPage} 页）</p>
+            <p className="list-end">没有更多串</p>
           )}
           {canAppend && (
             <button type="button" className="btn btn-quiet" onClick={loadMore}>
@@ -347,7 +336,6 @@ export function FeedPane({
           )}
         </div>
       </div>
-      {footer}
     </section>
   )
 }

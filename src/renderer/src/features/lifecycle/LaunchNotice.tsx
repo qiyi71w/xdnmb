@@ -8,7 +8,7 @@ import './lifecycle.css'
 
 function stateText(attempt: PublicationAttempt): string {
   if (attempt.state === 'failed') return attempt.savedDraftId === null ? '发送失败' : '发送失败，内容已存为草稿'
-  if (attempt.state === 'unknown') return '结果待确认，不会自动重发'
+  if (attempt.state === 'unknown') return '结果待确认'
   return ATTEMPT_STATE_LABEL[attempt.state]
 }
 

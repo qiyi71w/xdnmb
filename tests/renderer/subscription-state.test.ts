@@ -93,12 +93,15 @@ describe('a press of 订阅／取消订阅 (prototype: no confirmation)', () => 
       ...overrides
     })
 
-  it('is the write itself, for the shown source and identity generation, with reminders left alone', () => {
+  it('is the write itself, for the shown source and identity generation', () => {
     expect(press()).toEqual({
       kind: 'write',
-      request: { source: 'app', threadId: '1003', action: 'add', expectedGeneration: 2, label: 'No.1003', reminders: null }
+      request: { source: 'app', threadId: '1003', action: 'add', expectedGeneration: 2, label: 'No.1003' }
     })
-    expect(press({ action: 'remove' })).toMatchObject({ kind: 'write', request: { action: 'remove', reminders: null } })
+    expect(press({ action: 'remove' })).toEqual({
+      kind: 'write',
+      request: { source: 'app', threadId: '1003', action: 'remove', expectedGeneration: 2, label: 'No.1003' }
+    })
   })
 
   it('keeps the existing reasons when it cannot write', () => {

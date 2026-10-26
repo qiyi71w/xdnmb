@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { IdentityChoice, PostTarget } from '../../../../shared/drafts'
-import { rememberComposeOpener } from '../directory/prototype/prototypeStore'
+import { rememberComposeOpener } from '../directory/navStore'
 import { useEditorWorkspace } from '../editor/workspace'
 import { focusKey } from '../editor/useEditorsStore'
 

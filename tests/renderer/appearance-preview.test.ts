@@ -17,7 +17,7 @@ describe('theme preview', () => {
   it('previews without writing settings and restores the latest appearance when discarded', () => {
     const variables = new Map<string, string>()
     const root = { style: { setProperty: (name: string, value: string) => variables.set(name, value) }, dataset: {} }
-    vi.stubGlobal('document', { documentElement: root })
+    vi.stubGlobal('document', { documentElement: root, querySelectorAll: () => [] })
     vi.stubGlobal('window', { matchMedia: () => ({ matches: false }), xidao: { view: { updateTitleBar: async () => undefined } } })
     try {
       const settings = { ...DEFAULT_SETTINGS, colorScheme: 'light' as const }

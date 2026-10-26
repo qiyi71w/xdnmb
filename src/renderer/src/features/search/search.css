@@ -70,12 +70,6 @@
   min-height: 34px;
 }
 
-.search-hint {
-  margin-top: -4px;
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-}
-
 .search-filters,
 .list-filters-panel {
   display: grid;
@@ -149,27 +143,6 @@
   flex-basis: 100%;
 }
 
-.filter-rules {
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-}
-
-.filter-unread {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  width: fit-content;
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.filter-unread input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--accent);
-}
-
 .tag-uncertain {
   background: var(--warn-bg);
   color: var(--warn-ink);
@@ -212,7 +185,6 @@
   gap: 6px 12px;
 }
 
-.search-scope-note,
 .search-fetch-note {
   font-size: var(--text-xs);
   color: var(--ink-3);
@@ -429,7 +401,7 @@
   min-width: 0;
 }
 
-/* ---------- PROTOTYPE 搜索 page ----------
+/* ---------- 搜索 page ----------
    One centred column as wide as the online search page: the 本机｜联网 switch on top, then the
    chosen side with its own scroller and frosted sticky search bar (the 联网 side's header). */
 

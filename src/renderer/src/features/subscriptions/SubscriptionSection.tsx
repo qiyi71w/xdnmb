@@ -1,11 +1,9 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { SubscriptionOverview, SubscriptionResult } from '../../../../shared/subscriptions'
 import { Icon } from '../../components/Icon'
-import { FailureNotice, Loading } from '../../components/Notices'
+import { FailureNotice } from '../../components/Notices'
 import { failureText, webObjectText } from './subscriptionText'
 import type { SubscriptionsState } from './useSubscriptions'
-// PROTOTYPE (throwaway): automatic reads are silent; only failures show.
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import './subscriptions.css'
 
 interface Message {
@@ -35,11 +33,10 @@ export function SubscriptionSection({ subscriptions }: { subscriptions: Subscrip
   const headingId = useId()
 
   return (
-    <section className="settings-section" aria-labelledby={headingId}>
+    <section className="settings-section" aria-labelledby={headingId} aria-busy={(overview === null && !overviewFailed) || undefined}>
       <h3 className="settings-section-title" id={headingId}>
         订阅
       </h3>
-      {!PROTOTYPE_ENABLED && overview === null && !overviewFailed && <Loading>正在读取订阅设置…</Loading>}
       {overview === null && overviewFailed && (
         <FailureNotice title="订阅设置读取失败" failure={{ type: 'internal' }} onRetry={() => void refreshOverview()} compact />
       )}
@@ -65,12 +62,9 @@ function SubscriptionSettings({ overview, subscriptions }: { overview: Subscript
   return (
     <>
       {overview.protection === 'unavailable' && (
-        <div className="notice notice-cached" role="note">
+        <div className="notice notice-cached is-compact" role="note">
           <Icon name="alert" className="notice-icon" />
-          <div className="notice-text">
-            <p className="notice-title">系统凭据保护不可用</p>
-            <p>App UUID 与网页同步对象暂时无法使用。</p>
-          </div>
+          <p className="notice-text">系统凭据保护不可用，App UUID 与网页同步对象暂时无法使用</p>
         </div>
       )}
       {!overview.writable && (
@@ -228,7 +222,7 @@ function AppUuidForm({
         <h4 className="import-title" id={titleId}>
           App 订阅 UUID
         </h4>
-        {busy && <p className="field-hint">订阅操作进行中，结束后才能更换 UUID。</p>}
+        {busy && <p className="field-hint">订阅操作进行中，结束后才能更换 UUID</p>}
 
         <label className="visually-hidden" htmlFor={inputId}>
           App 订阅 UUID
@@ -243,7 +237,8 @@ function AppUuidForm({
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            placeholder={saved === undefined ? '读取中…' : '未设置，粘贴或输入 UUID'}
+            placeholder={saved === undefined ? undefined : '未设置'}
+            aria-busy={saved === undefined || undefined}
             aria-describedby={invalid ? messageId : undefined}
             aria-invalid={invalid ? true : undefined}
             onInput={onInput}
@@ -280,7 +275,7 @@ function AppUuidForm({
             <p className="credential-confirm-title" id={confirmId}>
               生成新的 UUID？
             </p>
-            <p className="credential-confirm-text">App 订阅将换到一份新的空集合，原 UUID 的集合不会被删除。</p>
+            <p className="credential-confirm-text">App 订阅将换到一份新的空集合，原集合保留。</p>
             <div className="credential-confirm-actions">
               <button
                 type="button"

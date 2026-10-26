@@ -1,4 +1,4 @@
-// PROTOTYPE (throwaway): when the reader's floating 开头 / 末尾 pills show. Pure, so the rules can be
+// When the reader's corner 开头 / 末尾 buttons show. Pure, so the rules can be
 // tested without a DOM; JumpPills.tsx feeds it the reader's own scrolls only.
 
 /** `start` is 开头 (above, after moving up), `end` is 末尾 (below, after moving down). */

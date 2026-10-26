@@ -84,7 +84,7 @@ export function importFailureText(failure: ImportFailure, entry: ImportEntry): {
     case 'duplicate':
       return { text: `已有相同饼干「${failure.existing.name}」，未做任何更改`, field: null }
     case 'protection-unavailable':
-      return { text: '系统凭据保护不可用，不会以明文保存，未导入', field: null }
+      return { text: '系统凭据保护不可用，未导入', field: null }
     case 'decrypt-failed':
       return { text: '已有饼干无法解密，无法核对重复，请先处理', field: null }
     case 'storage':
@@ -97,7 +97,7 @@ function formatErrorText(detail: ImportFormatError, entry: ImportEntry): string 
     case 'empty':
       return entry === 'export' ? '请先粘贴官网导出内容' : '请先粘贴 userhash'
     case 'too-long':
-      return `内容过长（超过 ${IMPORT_INPUT_MAX_LENGTH} 个字符），请确认只粘贴了${entry === 'export' ? '导出内容' : ' userhash'}`
+      return `内容过长（超过 ${IMPORT_INPUT_MAX_LENGTH} 个字符）`
     case 'not-base64':
       return '格式无法识别：不是官网导出的 Base64 或 JSON 内容'
     case 'not-json':

@@ -66,7 +66,18 @@ const FIELD_LABELS: Record<string, string> = {
   reading: '阅读参数',
   density: '密度',
   motion: '动态效果',
-  newTabSplitDefault: '新标签默认开启分栏'
+  newTabSplitDefault: '新标签默认开启分栏',
+  closeAction: '关闭窗口时的操作',
+  rail: '图标栏设置',
+  'rail.order': '图标栏顺序',
+  'rail.hidden': '隐藏的功能',
+  boards: '版块管理',
+  'boards.favorites': '收藏的版块',
+  'boards.hidden': '隐藏的版块',
+  'boards.order': '版块顺序',
+  'boards.collapsed': '收起的分组',
+  listWidth: '列表宽度',
+  customKaomoji: '自定义颜文字'
 }
 
 /** Field path relative to the theme / reading object (`customTheme.colors.text` → `colors.text`). */

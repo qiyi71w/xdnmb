@@ -3,7 +3,7 @@ import type { ThreadId } from '../../../../shared/forum'
 import { REMINDER_KINDS, type ReminderKind, type ReminderRule, type ThreadReminders } from '../../../../shared/reminders'
 import { Icon } from '../../components/Icon'
 import { usePopover } from '../../lib/usePopover'
-import { enabledKinds, KIND_HELP, KIND_NAME, KIND_SHORT, ruleStateText } from './reminderText'
+import { enabledKinds, KIND_NAME, KIND_SHORT, ruleStateText } from './reminderText'
 import { failureText, type LoadFailure } from './useReminders'
 import './reminders.css'
 
@@ -70,7 +70,7 @@ export function ReminderMenu({
         aria-expanded={popover.open}
         aria-controls={popover.open ? panelId : undefined}
         aria-label={`提醒设置：${label}，${state}`}
-        title="全串更新 / PO追更 / 引用我的发言"
+        title="提醒"
         tabIndex={tabIndex}
         onClick={popover.toggle}
       >
@@ -207,7 +207,12 @@ export function ReminderPanel({
       }}
     >
       <p className="reminder-panel-title">提醒 · {label}</p>
-      {!known && failure === null && <p className="reminder-panel-note">正在读取提醒状态…</p>}
+      {!known && failure === null && (
+        <div aria-busy="true">
+          <span className="skeleton-line is-mid" aria-hidden="true" />
+          <span className="skeleton-line is-short" aria-hidden="true" />
+        </div>
+      )}
       {!known && failure !== null && (
         <div className="reminder-panel-failure" role="alert">
           <p>
@@ -235,7 +240,6 @@ export function ReminderPanel({
                   />
                   <span className="reminder-rule-text">
                     <span className="reminder-rule-name">{KIND_NAME[kind]}</span>
-                    <span className="reminder-rule-help">{KIND_HELP[kind]}</span>
                     <span className={rule.enabled ? 'reminder-rule-state is-on' : 'reminder-rule-state'}>
                       {busy === kind ? '正在保存…' : ruleStateText(rule)}
                     </span>
@@ -254,7 +258,6 @@ export function ReminderPanel({
           </p>
         )}
       </div>
-      <p className="reminder-panel-note">从开启时起算，不补关闭期间的回复。</p>
     </div>
   )
 }

@@ -1,15 +1,7 @@
-/* Settings sections inside the shared modal (components/modal.css): frosted like every overlay,
-   the body scrolls inside the viewport so it stays usable at 200% interface zoom. Rows wrap
-   instead of overflowing. */
-
-.settings-dialog {
-  width: min(600px, calc(100vw - 32px));
-}
-
-.modal-body.settings-body {
-  gap: 0;
-  padding-top: 4px;
-}
+/* Settings sections of the settings page (app/SettingsPage.tsx). Rows
+   wrap instead of overflowing, so the page stays usable at 200% interface zoom.
+   Type scale (DESIGN.md): category titles use the page-title size; section titles the interface
+   size at 650; setting names the interface size at 400; group titles the label style. */
 
 .settings-section {
   display: grid;
@@ -22,6 +14,7 @@
 }
 
 .settings-section-title {
+  margin: 0;
   font-size: var(--text-md);
   font-weight: 650;
   color: var(--ink);
@@ -43,7 +36,7 @@
 }
 
 .setting-label {
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .setting-help {

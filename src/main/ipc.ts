@@ -579,7 +579,6 @@ export function registerIpc({
   handle(IpcChannel.updateTitleBar, async (event, raw) => {
     const input = record(raw)
     if (typeof input.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(input.color) || typeof input.symbolColor !== 'string' || !/^#[0-9a-f]{6}$/i.test(input.symbolColor) || (input.scheme !== 'system' && input.scheme !== 'light' && input.scheme !== 'dark')) throw new InvalidRequestError()
-    if (process.env.VITE_XIDAO_PROTOTYPE !== '1') return
     nativeTheme.themeSource = input.scheme
     const window = BrowserWindow.fromWebContents(event.sender)
     if (process.platform !== 'darwin') window?.setTitleBarOverlay({ color: input.color, symbolColor: input.symbolColor, height: 44 })

@@ -1,6 +1,6 @@
 import { REPORT_REASONS, reportReason } from '../../../../shared/report'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
-import { sameTarget, targetKey, type IdentityChoice, type PostFields, type PostTarget } from '../../../../shared/drafts'
+import { sameTarget, type IdentityChoice, type PostFields, type PostTarget } from '../../../../shared/drafts'
 import type { CredentialId } from '../../../../shared/identity'
 import { isSendShortcut, saveAriaShortcut, sendAriaShortcut, sendShortcutLabel, shortcutLabel } from '../../app/shortcuts'
 import { Icon, Spinner } from '../../components/Icon'
@@ -11,17 +11,7 @@ import { formatBytes } from '../image/imageView'
 import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, ATTEMPT_STATE_LABEL, PROBLEM_TEXT } from '../publication/publicationText'
 import type { IdentitiesState } from '../identity/useIdentities'
 import { ROLE_INFO } from '../identity/identityText'
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
-import {
-  ATTACH_FAILURE_TEXT,
-  choiceLine,
-  editorStateText,
-  forumLabel,
-  identityLine,
-  SAVE_FAILURE_TEXT,
-  targetText,
-  type IdentityLine
-} from './editorText'
+import { ATTACH_FAILURE_TEXT, editorStateText, forumLabel, SAVE_FAILURE_TEXT, targetText } from './editorText'
 import { editorFor, identityStatus, isUnsaved, type Editor, type IdentityStatus } from './editorsState'
 import { focusKey } from './useEditorsStore'
 import { useEditorWorkspace } from './workspace'
@@ -30,50 +20,9 @@ import { useComposeTips } from './composeTips'
 import { KaomojiPicker } from './KaomojiPicker'
 import './editor.css'
 
-/** Identity of an existing editor; a reference waiting for the overview is “读取中”, not unknown. */
-function editorIdentity(editor: Editor, identities: IdentitiesState): IdentityLine {
-  if (editor.credentialId !== null && identities.overview === null && !identities.failed) return { text: '读取中…', warning: false }
-  return identityLine(identityStatus(editor, identities.overview))
-}
-
-function IdentityValue({ line }: { line: IdentityLine }) {
-  return (
-    <span className={line.warning ? 'editor-identity is-warning' : 'editor-identity'}>
-      {line.warning && <Icon name="alert" size={13} />}
-      {line.text}
-    </span>
-  )
-}
-
 /**
- * Bottom editor of one target in one tab: a collapsed bar that always names the target
- * and the 发言饼干, expanding into this tab's editor for the target. Lives outside the content
- * scroller, so the reading viewport never counts posts under it as visible.
- */
-export function EditorDock({ tabId, target, displayed }: { tabId: number; target: PostTarget; displayed: boolean }) {
-  const workspace = useEditorWorkspace()
-  const editor = editorFor(workspace.store.state, target)
-  useLayoutEffect(() => {
-    if (editor !== null) workspace.store.dispatch({ type: 'attach-tab', editorId: editor.id, tabId })
-  }, [editor?.id, tabId, workspace.store.dispatch])
-  const label = targetText(target, workspace.forumName)
-  /** Set when the panel goes away by the user's action: the bar takes focus when it appears. */
-  const focusBar = useRef(false)
-  const expanded = editor !== null && editor.expanded
-  return (
-    <section className={expanded ? 'editor-dock is-expanded' : 'editor-dock'} aria-label={`发言编辑：${label}`}>
-      {expanded ? (
-        <EditorPanel key={editor.id} tabId={tabId} editor={editor} label={label} displayed={displayed} focusBar={focusBar} />
-      ) : (
-        <CollapsedBar tabId={tabId} target={target} editor={editor} label={label} focusBar={focusBar} />
-      )}
-    </section>
-  )
-}
-
-/**
- * Opening or continuing this tab's editor for a target, as its entry (the collapsed bar, or the
- * prototype's 回复 / 发新串 buttons) does it: an existing editor is expanded, otherwise a new one
+ * Opening or continuing this tab's editor for a target, as its entry (the 回复 / 发新串 buttons)
+ * does it: an existing editor is expanded, otherwise a new one
  * starts with the identity the target would use. Either way its panel asks for focus.
  */
 export function useComposeOpen(tabId: number, target: PostTarget, editor: Editor | null) {
@@ -97,118 +46,27 @@ export function useComposeOpen(tabId: number, target: PostTarget, editor: Editor
   return { opening, expand }
 }
 
-function CollapsedBar({
-  tabId,
-  target,
-  editor,
-  label,
-  focusBar
-}: {
-  tabId: number
-  target: PostTarget
-  editor: Editor | null
-  label: string
-  focusBar: RefObject<boolean>
-}) {
-  const { store, identities } = useEditorWorkspace()
-  const { overview } = identities
-  const buttonRef = useRef<HTMLButtonElement>(null)
-  const [choice, setChoice] = useState<IdentityChoice | null>(null)
-  const { opening, expand } = useComposeOpen(tabId, target, editor)
-  const targetRef = useRef(target)
-  useLayoutEffect(() => {
-    targetRef.current = target
-  })
-  const key = targetKey(target)
-  const hasEditor = editor !== null
-  const barKey = focusKey(tabId, target)
-  /** The last send from this tab to this target was confirmed: say so until a new editor opens. */
-  const sent = editor === null ? store.published.get(barKey) : undefined
-
-  useLayoutEffect(() => {
-    if (!focusBar.current) return
-    focusBar.current = false
-    buttonRef.current?.focus()
-  }, [focusBar])
-
-  // Without an editor, show the identity a new one would start with. Re-read whenever the
-  // identities change (e.g. the global default was switched in settings); existing editors keep theirs.
-  useEffect(() => {
-    if (hasEditor) return
-    let alive = true
-    window.xidao.posting
-      .identityFor({ target: targetRef.current })
-      .catch((): IdentityChoice => ({ source: 'unknown' }))
-      .then((next) => {
-        if (alive) setChoice(next)
-      })
-    return () => {
-      alive = false
-    }
-  }, [hasEditor, key, overview])
-
-  const identity = editor === null ? choiceLine(choice, overview) : editorIdentity(editor, identities)
-  const action = editor !== null ? '继续编辑' : target.kind === 'reply' ? '回复' : '发新串'
-
-  return (
-    <div className="editor-bar">
-      <Icon name={target.kind === 'reply' ? 'reply' : 'draft'} className="editor-bar-icon" />
-      <div className="editor-bar-text">
-        <span className="editor-bar-target">{label}</span>
-        <span className="editor-bar-meta">
-          {editor === null ? '将使用饼干：' : '饼干：'}
-          <IdentityValue line={identity} />
-          {editor !== null && <span className="editor-bar-state">{editorStateText(editor)}</span>}
-        </span>
-        <span className="editor-bar-sent" role="status">
-          {sent !== undefined && (
-            <>
-              <Icon name="check" size={13} />
-              {sent.isThread ? `新串已发出：No.${sent.postId}` : `已发送 No.${sent.postId}`}，已记为自己的发言
-            </>
-          )}
-        </span>
-      </div>
-      <button
-        ref={buttonRef}
-        type="button"
-        className="btn editor-bar-action"
-        aria-expanded={false}
-        aria-busy={opening || undefined}
-        onClick={() => void expand()}
-      >
-        <Icon name={editor !== null ? 'draft' : target.kind === 'reply' ? 'reply' : 'plus'} />
-        {action}
-      </button>
-    </div>
-  )
-}
-
 /**
- * The editor of one target. `dock`: the bottom panel. `float` (PROTOTYPE): the floating panel's
- * layout — one header line (target as the title that opens 更改目标, the 发言饼干 pill, close),
- * optional 标题／名称／E-mail row, the text as the page, and a bottom toolbar (image, fields,
- * status; 放弃修改, 保存草稿, 发送). Same state and handlers in both.
+ * The editor of one target, as the floating panel lays it out: one header line (target as the title
+ * that opens 更改目标, the 发言饼干 pill, close), the 举报 reasons, the optional 标题／名称／E-mail row,
+ * the text as the page, and a bottom toolbar (image, fields, 颜文字, status; 放弃修改, 保存草稿, 发送).
  */
 export function EditorPanel({
   tabId,
   editor,
   label,
   displayed,
-  focusBar,
-  layout = 'dock'
+  focusBar
 }: {
   tabId: number
   editor: Editor
   label: string
   displayed: boolean
   focusBar: RefObject<boolean>
-  layout?: 'dock' | 'float'
 }) {
-  const { store, identities, platform, openAttempts, showTarget } = useEditorWorkspace()
+  const { store, platform, openAttempts, showTarget } = useEditorWorkspace()
   const { focusRequest, requestFocus } = store
   const ids = useId()
-  const float = layout === 'float'
   const panelRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -221,14 +79,14 @@ export function EditorPanel({
   const [retargeting, setRetargeting] = useState(false)
   const [identityNotice, setIdentityNotice] = useState<string | null>(null)
   const [reportError, setReportError] = useState(false)
-  /** Float layout: the attached image shown large, opened from its thumbnail chip. */
+  /** The attached image shown large, opened from its thumbnail chip. */
   const [previewing, setPreviewing] = useState(false)
   const thumbRef = useRef<HTMLButtonElement>(null)
   const attachmentId = editor.attachment?.id ?? null
   useEffect(() => setPreviewing(false), [attachmentId])
   useComposeTips(panelRef)
   const hasExtraFields = editor.fields.title !== '' || editor.fields.name !== '' || editor.fields.email !== ''
-  /** Float layout: the 标题／名称／E-mail row is shown whenever one of its fields holds something. */
+  /** The 标题／名称／E-mail row is shown whenever one of its fields holds something. */
   const [fieldsOpen, setFieldsOpen] = useState(hasExtraFields)
   useEffect(() => {
     if (hasExtraFields) setFieldsOpen(true)
@@ -254,8 +112,7 @@ export function EditorPanel({
     textareaRef.current?.focus()
   }, [displayed, focusRequest, key, requestFocus])
 
-  // A placed caret (a quoted >>No. at the end): the text and, in the float layout, its scrolling
-  // body follow it.
+  // A placed caret (a quoted >>No. at the end): the text and its scrolling body follow it.
   useEffect(() => {
     const textarea = textareaRef.current
     if (!displayed || editor.caret === undefined || textarea === null) return
@@ -287,7 +144,7 @@ export function EditorPanel({
   })
 
   /**
-   * Float layout (颜文字): `inserted` goes into the text at its caret, over its selection, even when
+   * 颜文字: `inserted` goes into the text at its caret, over its selection, even when
    * focus was elsewhere (标题／名称); focus ends in the text with the caret after the insertion.
    */
   const insertText = (inserted: string) => {
@@ -314,7 +171,7 @@ export function EditorPanel({
     void store.save(editorId)
   }
 
-  const report = PROTOTYPE_ENABLED ? editor.report : undefined
+  const report = editor.report
   const send = () => {
     if (report !== undefined && reportReason(report) === null) { setReportError(true); return }
     if (!locked) void store.send(editorId)
@@ -341,7 +198,7 @@ export function EditorPanel({
     store.dispatch({ type: 'set-identity', editorId, credentialId })
     setIdentityNotice(null)
     if (editor.target.kind !== 'reply') return
-    const failed = '未能记住该串的选择，本次编辑仍使用新选择'
+    const failed = '未能记住该串的饼干选择'
     try {
       const result = await window.xidao.posting.selectThreadIdentity({ threadId: editor.target.threadId, credentialId })
       if (!result.ok) setIdentityNotice(failed)
@@ -350,41 +207,17 @@ export function EditorPanel({
     }
   }
 
-  const identity = editorIdentity(editor, identities)
   const canDiscard = !saving && !locked && (unsaved || (editor.draft === null && editor.discarded === undefined))
   const saveShortcut = shortcutLabel('save', platform)
   const sendShortcut = sendShortcutLabel(platform)
   const statusText = saving ? '正在保存…' : editorStateText(editor)
-  const sendLabel = float
-    ? report !== undefined
-      ? '发送举报'
-      : '发送'
-    : report !== undefined
-      ? '发送'
-      : editor.target.kind === 'reply'
-        ? '发送回复'
-        : '发布新串'
-  /** Float layout: text buttons without frames; the dock keeps its framed buttons. */
-  const textButton = float ? 'compose-text-btn' : 'btn'
-
-  const retargetButton = (
-    <button
-      ref={retargetRef}
-      type="button"
-      className="btn btn-small"
-      aria-expanded={retargeting && !locked}
-      disabled={locked}
-      title={locked ? '发送进行中或结果待确认，目标已固定' : undefined}
-      onClick={() => setRetargeting((open) => !open)}
-    >
-      更改目标
-    </button>
-  )
+  const sendLabel = report !== undefined ? '发送举报' : '发送'
+  /** Text buttons without frames. */
+  const textButton = 'compose-text-btn'
 
   const retargetForm = retargeting && !locked && (
     <RetargetForm
       editor={editor}
-      compact={float}
       onDone={() => {
         setRetargeting(false)
         retargetRef.current?.focus()
@@ -445,7 +278,6 @@ export function EditorPanel({
         ref={textareaRef}
         id={`${ids}-content`}
         className="editor-content"
-        rows={float ? undefined : 5}
         placeholder={report !== undefined ? '举报内容' : '正文'}
         value={report?.text ?? editor.fields.content}
         readOnly={locked}
@@ -458,7 +290,7 @@ export function EditorPanel({
   )
 
   const fields = (
-    <div className={float ? 'compose-fields' : 'editor-fields'}>
+    <div className="compose-fields">
       <FieldInput id={`${ids}-title`} label="标题" value={editor.fields.title} readOnly={locked} onChange={(title) => edit({ title })} />
       <FieldInput id={`${ids}-name`} label="名称" value={editor.fields.name} readOnly={locked} onChange={(name) => edit({ name })} />
       <FieldInput
@@ -476,13 +308,12 @@ export function EditorPanel({
     <div className="editor-status" role="status">
       {editor.discarded !== undefined ? <>
         <span className="editor-state">已放弃修改</span>
-        <button type="button" className={float ? 'btn btn-small btn-quiet' : 'btn btn-small'} disabled={locked} onClick={() => {
+        <button type="button" className="btn btn-small btn-quiet" disabled={locked} onClick={() => {
           store.dispatch({ type: 'undo-discard', editorId })
           if (editor.discarded !== undefined) showTarget(tabId, editor.discarded.target)
           textareaRef.current?.focus()
         }}>撤销</button>
       </> : <span className="editor-state">{statusText}</span>}
-      {!float && <SendStatus editor={editor} />}
     </div>
   )
 
@@ -507,16 +338,11 @@ export function EditorPanel({
     <div className="editor-actions">
       {ended ? (
         <>
-          <button type="button" className={textButton} aria-haspopup={PROTOTYPE_ENABLED ? undefined : 'dialog'} onClick={openAttempts}>
+          <button type="button" className={textButton} onClick={openAttempts}>
             <Icon name="history" />
             查看发送记录
           </button>
-          <button
-            type="button"
-            className={textButton}
-            title="内容与这次发送一起保留在发送记录中"
-            onClick={() => store.endPublication(editorId)}
-          >
+          <button type="button" className={textButton} onClick={() => store.endPublication(editorId)}>
             结束编辑
           </button>
         </>
@@ -548,231 +374,177 @@ export function EditorPanel({
             aria-keyshortcuts={saveAriaShortcut(platform)}
             aria-disabled={!unsaved || saving || locked}
             aria-busy={saving || undefined}
-            title={float ? undefined : locked ? '发送进行中，不能另存' : unsaved ? undefined : '没有需要保存的内容'}
-            data-tip={float ? saveTip : undefined}
+            data-tip={saveTip}
             onClick={save}
           >
-            {!float && <Icon name="download" />}
             保存草稿
-            {!float && saveShortcut !== '' && <kbd className="editor-kbd">{saveShortcut}</kbd>}
           </button>
           <button
             type="button"
             className="btn btn-primary"
-            aria-label={float ? sendText : undefined}
+            aria-label={sendText}
             aria-keyshortcuts={sendAriaShortcut(platform)}
             aria-disabled={locked || undefined}
             aria-busy={locked || undefined}
-            data-tip={float && !locked && sendShortcut !== '' ? sendShortcut : undefined}
-            data-tip-place={float ? 'end' : undefined}
+            data-tip={!locked && sendShortcut !== '' ? sendShortcut : undefined}
+            data-tip-place="end"
             onClick={send}
           >
-            {locked ? <Spinner /> : !float && <Icon name="send" />}
+            {locked && <Spinner />}
             {sendText}
-            {!float && sendShortcut !== '' && !locked && <kbd className="editor-kbd">{sendShortcut}</kbd>}
           </button>
         </>
       )}
     </div>
   )
 
-  if (float) {
-    const attachment = editor.attachment
-    const fieldsHidden = !fieldsOpen && hasExtraFields
-    return (
-      <div className="editor-panel is-float" data-editor-id={editorId} ref={panelRef} onKeyDown={onKeyDown}>
-        <header className="compose-head">
-          <h2 className="compose-title">
-            {report !== undefined ? (
-              <span className="compose-title-static">
-                <span className="compose-title-text">举报</span>
-                <span className="compose-subtitle">&gt;&gt;No.{report.postId}</span>
-              </span>
-            ) : locked ? (
-              <span className="compose-title-static">
-                <span className="compose-title-text">{label}</span>
-              </span>
-            ) : (
-              <button
-                ref={retargetRef}
-                type="button"
-                className="compose-target"
-                aria-label={`${label}，更改目标`}
-                aria-expanded={retargeting}
-                data-tip="更改目标"
-                data-tip-place="below start"
-                onClick={() => setRetargeting((open) => !open)}
-              >
-                <span className="compose-title-text">{label}</span>
-                <Icon name="chevron" size={14} className="compose-target-chevron" />
-              </button>
-            )}
-          </h2>
-          {locked && (
-            <span className="editor-fixed" title="发送进行中或结果待确认，目标已固定">
-              已固定
-            </span>
-          )}
-          <CookiePill editor={editor} onChoose={(id) => void chooseIdentity(id)} />
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="收起（内容保留）"
-            aria-keyshortcuts="Escape"
-            data-tip="收起 · Esc"
-            data-tip-place="below end"
-            onClick={collapse}
-          >
-            <Icon name="close" />
-          </button>
-        </header>
-
-        {retargetForm}
-        {reportReasons}
-        {fieldsOpen && fields}
-
-        <div className="compose-body" ref={bodyRef}>
-          {text}
-        </div>
-
-        <footer className="compose-foot">
-          <div className="compose-notes">
-            {saveFailure}
-            {identityNotice !== null && (
-              <p className="notice-inline is-warning" role="alert">
-                <Icon name="alert" size={14} />
-                {identityNotice}
-              </p>
-            )}
-            {attach.error !== null && (
-              <p className="notice-inline is-warning" role="alert">
-                <Icon name="alert" size={14} />
-                {attach.error}
-              </p>
-            )}
-            <SendStatus editor={editor} />
-          </div>
-          <div className="compose-toolbar">
-            <div className="compose-tools">
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label={attach.busy ? '正在选择图片…' : attachment === null ? '添加图片' : '更换图片'}
-                aria-busy={attach.busy || undefined}
-                disabled={attach.busy || locked}
-                data-tip={attachment === null ? '添加图片' : '更换图片'}
-                data-tip-place="start"
-                onClick={() => void attach.choose()}
-              >
-                {attach.busy ? <Spinner /> : <Icon name="image" />}
-              </button>
-              {attachment !== null && (
-                <span className="compose-attachment">
-                  {attach.previewFailed === attachment.id ? (
-                    <span
-                      className="compose-thumb is-failed"
-                      data-tip={`${attachment.width}×${attachment.height} · ${attachment.format.toUpperCase()} · ${formatBytes(attachment.bytes)}`}
-                      data-tip-place="start"
-                    >
-                      <Icon name="image" size={16} />
-                      <span className="visually-hidden">无法显示预览：{attachment.originalName}</span>
-                    </span>
-                  ) : (
-                    <button
-                      ref={thumbRef}
-                      type="button"
-                      className="compose-thumb"
-                      aria-label={`查看附图：${attachment.originalName}`}
-                      aria-haspopup="dialog"
-                      data-tip={`${attachment.width}×${attachment.height} · ${attachment.format.toUpperCase()} · ${formatBytes(attachment.bytes)}`}
-                      data-tip-place="start"
-                      onClick={() => setPreviewing(true)}
-                    >
-                      <img src={attachment.url} alt="" onError={() => attach.markPreviewFailed(attachment.id)} />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="compose-chip-remove"
-                    aria-label="移除图片"
-                    disabled={attach.busy || locked}
-                    data-tip="移除图片"
-                    data-tip-place="start"
-                    onClick={attach.remove}
-                  >
-                    <Icon name="close" size={12} />
-                  </button>
-                  {previewing && attach.previewFailed !== attachment.id && (
-                    <AttachmentPreview attachment={attachment} returnFocus={thumbRef} onClose={() => setPreviewing(false)} />
-                  )}
-                </span>
-              )}
-              {attachment !== null && <WatermarkSwitch editor={editor} helpId={`${ids}-wm`} hint={false} />}
-              <button
-                type="button"
-                className="icon-btn compose-fields-toggle"
-                aria-label={fieldsHidden ? '标题、名称、E-mail（已填写）' : '标题、名称、E-mail'}
-                aria-pressed={fieldsOpen}
-                data-tip={fieldsHidden ? '标题 · 名称 · E-mail（已填写）' : '标题 · 名称 · E-mail'}
-                data-tip-place="start"
-                onClick={() => {
-                  focusFields.current = !fieldsOpen
-                  setFieldsOpen((open) => !open)
-                }}
-              >
-                <Icon name="fields" />
-                {fieldsHidden && <span className="compose-dot" aria-hidden="true" />}
-              </button>
-              <KaomojiPicker disabled={locked} onInsert={insertText} />
-              {status}
-            </div>
-            {actions}
-          </div>
-        </footer>
-      </div>
-    )
-  }
-
+  const attachment = editor.attachment
+  const fieldsHidden = !fieldsOpen && hasExtraFields
   return (
-    <div className="editor-panel" data-editor-id={editorId} ref={panelRef} onKeyDown={onKeyDown}>
-      <header className="editor-head">
-        <div className="editor-head-text">
-          <p className="editor-target">
-            <Icon name={editor.target.kind === 'reply' ? 'reply' : 'draft'} />
-            <span>{label}</span>
-          </p>
-          <p className="editor-meta">
-            饼干：
-            <IdentityValue line={identity} />
-            {locked && <span className="editor-fixed">· 已固定</span>}
-          </p>
-        </div>
-        <div className="editor-head-actions">
-          {retargetButton}
-          <button type="button" className="btn btn-small" aria-expanded={true} onClick={collapse} title="收起，内容保留">
-            <Icon name="arrowUp" size={14} className="editor-collapse-icon" />
-            收起
-          </button>
-        </div>
+    <div className="editor-panel is-float" data-editor-id={editorId} ref={panelRef} onKeyDown={onKeyDown}>
+      <header className="compose-head">
+        <h2 className="compose-title">
+          {report !== undefined ? (
+            <span className="compose-title-static">
+              <span className="compose-title-text">举报</span>
+              <span className="compose-subtitle">&gt;&gt;No.{report.postId}</span>
+            </span>
+          ) : locked ? (
+            <span className="compose-title-static">
+              <span className="compose-title-text">{label}</span>
+            </span>
+          ) : (
+            <button
+              ref={retargetRef}
+              type="button"
+              className="compose-target"
+              aria-label={`${label}，更改目标`}
+              aria-expanded={retargeting}
+              data-tip="更改目标"
+              data-tip-place="below start"
+              onClick={() => setRetargeting((open) => !open)}
+            >
+              <span className="compose-title-text">{label}</span>
+              <Icon name="chevron" size={14} className="compose-target-chevron" />
+            </button>
+          )}
+        </h2>
+        {locked && <span className="editor-fixed">已固定</span>}
+        <CookiePill editor={editor} onChoose={(id) => void chooseIdentity(id)} />
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="收起"
+          aria-keyshortcuts="Escape"
+          data-tip="收起 · Esc"
+          data-tip-place="below end"
+          onClick={collapse}
+        >
+          <Icon name="close" />
+        </button>
       </header>
 
-      <div className="editor-body">
-        {retargetForm}
+      {retargetForm}
+      {reportReasons}
+      {fieldsOpen && fields}
 
-        {reportReasons}
+      <div className="compose-body" ref={bodyRef}>
         {text}
-
-        {fields}
-
-        <AttachmentRow editor={editor} attach={attach} />
-
-        <IdentityRow editor={editor} notice={identityNotice} onChoose={(id) => void chooseIdentity(id)} />
       </div>
 
-      <footer className="editor-foot">
-        {status}
-        {saveFailure}
-        {actions}
+      <footer className="compose-foot">
+        <div className="compose-notes">
+          {saveFailure}
+          {identityNotice !== null && (
+            <p className="notice-inline is-warning" role="alert">
+              <Icon name="alert" size={14} />
+              {identityNotice}
+            </p>
+          )}
+          {attach.error !== null && (
+            <p className="notice-inline is-warning" role="alert">
+              <Icon name="alert" size={14} />
+              {attach.error}
+            </p>
+          )}
+          <SendStatus editor={editor} />
+        </div>
+        <div className="compose-toolbar">
+          <div className="compose-tools">
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label={attach.busy ? '正在选择图片…' : attachment === null ? '添加图片' : '更换图片'}
+              aria-busy={attach.busy || undefined}
+              disabled={attach.busy || locked}
+              data-tip={attachment === null ? '添加图片' : '更换图片'}
+              data-tip-place="start"
+              onClick={() => void attach.choose()}
+            >
+              {attach.busy ? <Spinner /> : <Icon name="image" />}
+            </button>
+            {attachment !== null && (
+              <span className="compose-attachment">
+                {attach.previewFailed === attachment.id ? (
+                  <span
+                    className="compose-thumb is-failed"
+                    data-tip={`${attachment.width}×${attachment.height} · ${attachment.format.toUpperCase()} · ${formatBytes(attachment.bytes)}`}
+                    data-tip-place="start"
+                  >
+                    <Icon name="image" size={16} />
+                    <span className="visually-hidden">无法显示预览：{attachment.originalName}</span>
+                  </span>
+                ) : (
+                  <button
+                    ref={thumbRef}
+                    type="button"
+                    className="compose-thumb"
+                    aria-label={`查看附图：${attachment.originalName}`}
+                    aria-haspopup="dialog"
+                    data-tip={`${attachment.width}×${attachment.height} · ${attachment.format.toUpperCase()} · ${formatBytes(attachment.bytes)}`}
+                    data-tip-place="start"
+                    onClick={() => setPreviewing(true)}
+                  >
+                    <img src={attachment.url} alt="" onError={() => attach.markPreviewFailed(attachment.id)} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="compose-chip-remove"
+                  aria-label="移除图片"
+                  disabled={attach.busy || locked}
+                  data-tip="移除图片"
+                  data-tip-place="start"
+                  onClick={attach.remove}
+                >
+                  <Icon name="close" size={12} />
+                </button>
+                {previewing && attach.previewFailed !== attachment.id && (
+                  <AttachmentPreview attachment={attachment} returnFocus={thumbRef} onClose={() => setPreviewing(false)} />
+                )}
+              </span>
+            )}
+            {attachment !== null && <WatermarkSwitch editor={editor} />}
+            <button
+              type="button"
+              className="icon-btn compose-fields-toggle"
+              aria-label={fieldsHidden ? '标题、名称、E-mail（已填写）' : '标题、名称、E-mail'}
+              aria-pressed={fieldsOpen}
+              data-tip={fieldsHidden ? '标题 · 名称 · E-mail（已填写）' : '标题 · 名称 · E-mail'}
+              data-tip-place="start"
+              onClick={() => {
+                focusFields.current = !fieldsOpen
+                setFieldsOpen((open) => !open)
+              }}
+            >
+              <Icon name="fields" />
+              {fieldsHidden && <span className="compose-dot" aria-hidden="true" />}
+            </button>
+            <KaomojiPicker disabled={locked} onInsert={insertText} />
+            {status}
+          </div>
+          {actions}
+        </div>
       </footer>
     </div>
   )
@@ -786,12 +558,10 @@ function SendStatus({ editor }: { editor: Editor }) {
     if (notice === null) return null
     const text =
       notice.kind === 'refused'
-        ? `没有发送：${PROBLEM_TEXT[notice.reason]}。`
+        ? `没有发送：${PROBLEM_TEXT[notice.reason]}`
         : notice.kind === 'failed'
-          ? `发送失败${notice.problem === null ? '' : `：${ATTEMPT_PROBLEM_TEXT[notice.problem]}`}。${
-              notice.saved ? '内容已自动保存为草稿，确认后可再次发送。' : '自动保存草稿没有成功，内容仍在编辑中，请先保存。'
-            }`
-          : '核对结果：这次发送没有留下记录，没有发出。内容已解锁，可以再次发送。'
+          ? `发送失败${notice.problem === null ? '' : `：${ATTEMPT_PROBLEM_TEXT[notice.problem]}`}${notice.saved ? '，已保存为草稿' : '，草稿未能自动保存'}`
+          : '这次发送没有发出，可以再次发送'
     return (
       <p className="notice-inline is-warning editor-send-notice">
         <Icon name="alert" size={14} />
@@ -800,17 +570,16 @@ function SendStatus({ editor }: { editor: Editor }) {
     )
   }
   switch (publication.phase) {
+    // The send button says these itself (正在提交…, 等待选择饼干…, 正在核对…).
     case 'submitting':
-      return <span className="editor-note">内容已锁定，正在提交…</span>
     case 'prompt':
-      return <span className="editor-note">请在对话框中选择发言饼干；内容保持不变。</span>
+      return null
     case 'uncertain':
+      if (publication.checking) return null
       return (
         <p className="notice-inline is-warning editor-send-notice">
           <Icon name="alert" size={14} />
-          {publication.checking
-            ? '正在按这次发送的编号核对本地记录…'
-            : '应用内部请求出错，暂时无法确认这次发送是否已经记录。内容已锁定，避免重复投递；请重新核对。'}
+          无法确认这次发送是否已记录
         </p>
       )
     case 'attempt': {
@@ -822,7 +591,7 @@ function SendStatus({ editor }: { editor: Editor }) {
             {publication.readFailed && (
               <p className="notice-inline is-warning editor-send-notice">
                 <Icon name="alert" size={14} />
-                暂时读不到本地发送状态，正在继续读取；不会重新发送。
+                暂时读不到发送状态，正在重新读取
               </p>
             )}
           </>
@@ -837,7 +606,7 @@ function SendStatus({ editor }: { editor: Editor }) {
             {publication.attempt.problem !== null && `：${ATTEMPT_PROBLEM_TEXT[publication.attempt.problem]}`}
           </p>
           <p>{ATTEMPT_STATE_DETAIL[state]}</p>
-          <p className="editor-note">开始于 {formatLocalTime(publication.attempt.createdAt)}；可以结束编辑，内容会留在发送记录中。</p>
+          <p className="editor-note">开始于 {formatLocalTime(publication.attempt.createdAt)}</p>
         </div>
       )
     }
@@ -909,7 +678,7 @@ function useAttachImage(editor: Editor): AttachImage {
       reason = ATTACH_FAILURE_TEXT.internal
     }
     setBusy(false)
-    if (reason !== null) setError(`未能${replacing ? '更换' : '添加'}图片：${reason}${replacing ? '，原来的图片仍保留' : ''}`)
+    if (reason !== null) setError(`未能${replacing ? '更换' : '添加'}图片：${reason}`)
   }
 
   const remove = () => {
@@ -920,70 +689,12 @@ function useAttachImage(editor: Editor): AttachImage {
   return { busy, error, previewFailed, markPreviewFailed: setPreviewFailed, choose, remove }
 }
 
-function AttachmentRow({ editor, attach }: { editor: Editor; attach: AttachImage }) {
-  const ids = useId()
-  const attachment = editor.attachment
-  const locked = editor.publication !== null
-  const { busy, error } = attach
-
-  return (
-    <div className="editor-attachment">
-      {attachment !== null && (
-        <div className="editor-thumb">
-          {attach.previewFailed === attachment.id ? (
-            <span className="editor-thumb-failed">无法显示预览</span>
-          ) : (
-            <img src={attachment.url} alt={`附图预览：${attachment.originalName}`} onError={() => attach.markPreviewFailed(attachment.id)} />
-          )}
-        </div>
-      )}
-      <div className="editor-attachment-text">
-        {attachment === null ? (
-          <span className="editor-hint">未附图（单张）</span>
-        ) : (
-          <>
-            <span className="editor-attachment-name">{attachment.originalName}</span>
-            <span className="editor-hint">
-              {attachment.width}×{attachment.height} · {attachment.format.toUpperCase()} · {formatBytes(attachment.bytes)}
-            </span>
-          </>
-        )}
-        <div className="editor-attachment-actions">
-          <button
-            type="button"
-            className="btn btn-small"
-            aria-busy={busy || undefined}
-            disabled={busy || locked}
-            onClick={() => void attach.choose()}
-          >
-            <Icon name="image" size={14} />
-            {busy ? '正在选择图片…' : attachment === null ? '添加图片' : '更换图片'}
-          </button>
-          {attachment !== null && (
-            <button type="button" className="btn btn-small" disabled={busy || locked} onClick={attach.remove}>
-              <Icon name="close" size={14} />
-              移除图片
-            </button>
-          )}
-          <WatermarkSwitch editor={editor} helpId={`${ids}-wm`} hint />
-        </div>
-        {error !== null && (
-          <p className="notice-inline is-warning" role="alert">
-            <Icon name="alert" size={14} />
-            {error}
-          </p>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function WatermarkSwitch({ editor, helpId, hint }: { editor: Editor; helpId: string; hint: boolean }) {
+/** 水印, shown beside an attached image. */
+function WatermarkSwitch({ editor }: { editor: Editor }) {
   const { store } = useEditorWorkspace()
   const ids = useId()
-  const hasImage = editor.attachment !== null
   const on = editor.fields.watermark
-  const disabled = !hasImage || editor.publication !== null
+  const disabled = editor.publication !== null
   return (
     <span className={`editor-watermark${disabled ? ' is-disabled' : ''}`}>
       <label className="editor-watermark-label" id={`${ids}-label`} htmlFor={`${ids}-switch`}>
@@ -996,22 +707,16 @@ function WatermarkSwitch({ editor, helpId, hint }: { editor: Editor; helpId: str
         className="switch"
         aria-checked={on}
         aria-labelledby={`${ids}-label`}
-        aria-describedby={hasImage || !hint ? undefined : helpId}
         disabled={disabled}
         onClick={() => store.dispatch({ type: 'edit', editorId: editor.id, patch: { watermark: !on } })}
       >
         <span className="switch-thumb" aria-hidden="true" />
       </button>
-      {!hasImage && hint && (
-        <span className="editor-hint" id={helpId}>
-          有图时可用
-        </span>
-      )}
     </span>
   )
 }
 
-/** The 发言饼干 select's empty choice: why nothing is selected. */
+/** The 发言饼干 pill's text while nothing is selected: why. */
 function identityPlaceholder(status: IdentityStatus, identities: IdentitiesState): string {
   const { overview, failed } = identities
   if (overview === null) return failed ? '饼干列表读取失败' : '读取中…'
@@ -1020,66 +725,11 @@ function identityPlaceholder(status: IdentityStatus, identities: IdentitiesState
   return overview.credentials.length === 0 ? '尚未导入饼干' : '请选择饼干'
 }
 
-function IdentityRow({
-  editor,
-  notice,
-  onChoose
-}: {
-  editor: Editor
-  notice: string | null
-  onChoose: (credentialId: CredentialId) => void
-}) {
-  const { identities } = useEditorWorkspace()
-  const openSettings = useSettingsOpener()
-  const id = useId()
-  const { overview } = identities
-  const status = identityStatus(editor, overview)
-  const credentials = overview?.credentials ?? []
-  const value = status.state === 'selected' ? status.credentialId : ''
-  return (
-    <div className="editor-identity-row">
-      <label htmlFor={id}>发言饼干</label>
-      <select
-        id={id}
-        value={value}
-        disabled={overview === null || credentials.length === 0 || editor.publication !== null}
-        aria-invalid={status.state === 'missing' || status.state === 'unknown' ? true : undefined}
-        onChange={(event) => {
-          if (event.target.value !== '') onChoose(event.target.value)
-        }}
-      >
-        {value === '' && (
-          <option value="" disabled>
-            {identityPlaceholder(status, identities)}
-          </option>
-        )}
-        {credentials.map((credential) => (
-          <option key={credential.id} value={credential.id}>
-            {credential.name}
-          </option>
-        ))}
-      </select>
-      {overview !== null && credentials.length === 0 && openSettings !== null && (
-        <button type="button" className="btn btn-small" onClick={() => openSettings('cookies')}>
-          导入饼干
-        </button>
-      )}
-      {editor.target.kind === 'reply' && editor.publication === null && <span className="editor-hint">会记住为该串的选择</span>}
-      {notice !== null && (
-        <p className="notice-inline is-warning" role="alert">
-          <Icon name="alert" size={14} />
-          {notice}
-        </p>
-      )}
-    </div>
-  )
-}
-
 /** Typed letters within this pause extend one typeahead search. */
 const TYPEAHEAD_PAUSE = 500
 
 /**
- * Float layout header: the 发言饼干 as a compact pill (`饼干 名称 ▾`, or `选择饼干` in warning ink).
+ * Header: the 发言饼干 as a compact pill (`饼干 名称 ▾`, or `选择饼干` in warning ink).
  * The pill opens a listbox under it: the cookies in the user's order (the current one checked, the
  * browsing and default ones tagged as in settings), then 管理饼干. Arrow keys, Home/End and typed
  * letters move; Enter or Space chooses; Esc closes with focus back on the pill.
@@ -1306,7 +956,8 @@ function CookiePill({ editor, onChoose }: { editor: Editor; onChoose: (credentia
   )
 }
 
-function RetargetForm({ editor, compact, onDone }: { editor: Editor; compact: boolean; onDone: () => void }) {
+/** 更改目标: a thread to reply to, or a forum to post a new thread in. The 发言饼干 stays. */
+function RetargetForm({ editor, onDone }: { editor: Editor; onDone: () => void }) {
   const { directory, forumName, retarget } = useEditorWorkspace()
   const ids = useId()
   const current = editor.target
@@ -1414,7 +1065,6 @@ function RetargetForm({ editor, compact, onDone }: { editor: Editor; compact: bo
           取消
         </button>
       </div>
-      {!compact && <p className="editor-hint editor-retarget-note">饼干不变；确定后本标签会打开新目标。</p>}
       {message !== null && (
         <p className="notice-inline is-warning" role="alert">
           <Icon name="alert" size={14} />

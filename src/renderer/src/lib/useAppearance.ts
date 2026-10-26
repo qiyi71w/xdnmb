@@ -1,13 +1,12 @@
 import { useLayoutEffect } from 'react'
 import { resolveAppearance, type AppSettings, type ColorScheme } from '../../../shared/settings'
 import { over, parseColor, toHex, type CustomTheme, type Rgba } from '../../../shared/theme'
-import { PROTOTYPE_ENABLED } from '../features/directory/prototype/prototypeStore'
 import { onLayersChange } from './layers'
 
 let preview: CustomTheme | null = null
 let currentSettings: AppSettings | null = null
 
-// ---------- PROTOTYPE: title-bar overlay (Windows/Linux controls drawn by the system) ----------
+// ---------- Title-bar overlay (Windows / Linux window controls drawn by the system) ----------
 
 /** The window's own overlay colours: `--window` and `--ink` of the applied appearance. */
 let titleBar: { color: Rgba; symbol: Rgba; scheme: ColorScheme } | null = null
@@ -161,7 +160,7 @@ export function applyAppearance(settings: AppSettings): void {
   root.dataset.density = settings.density
   if (settings.motion === 'reduce' || systemReducesMotion()) root.dataset.motion = 'reduce'
   else delete root.dataset.motion
-  if (PROTOTYPE_ENABLED) updateTitleBar(variables, settings.colorScheme)
+  updateTitleBar(variables, settings.colorScheme)
 }
 
 /** Keeps the root element in step with `settings` and with live OS scheme / motion changes. */

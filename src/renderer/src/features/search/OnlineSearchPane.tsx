@@ -109,8 +109,8 @@ function errorLines(error: SearchError): { reason: string; details: string[] } {
       return { reason: `搜索服务返回 HTTP ${error.httpStatus}`, details: [] }
     case 'service': {
       const details = [`服务消息：${error.serviceMessage}`]
-      if (error.hint === 'rate-limited') details.push('服务消息提到请求过于频繁')
-      if (error.hint === 'verification') details.push('服务消息提到需要人工验证，可打开搜索网站查看；验证结果不会传回汐岛')
+      if (error.hint === 'rate-limited') details.push('请求过于频繁')
+      if (error.hint === 'verification') details.push('服务要求人工验证')
       return { reason: '搜索服务返回错误', details }
     }
     case 'unknown-structure':
@@ -119,9 +119,9 @@ function errorLines(error: SearchError): { reason: string; details: string[] } {
 }
 
 const CHAIN_END_TEXT = {
-  end: '没有更多结果页（不代表收录完整）',
-  expired: '下一页链接已过期（闲置超过 15 分钟），请重新搜索',
-  lost: '下一页链接已失效，请重新搜索'
+  end: '没有更多结果',
+  expired: '下一页已过期',
+  lost: '下一页已失效'
 } as const
 
 function Status({ tone, children }: { tone: 'info' | 'error'; children: ReactNode }) {
@@ -134,19 +134,17 @@ function Status({ tone, children }: { tone: 'info' | 'error'; children: ReactNod
 }
 
 /**
- * Online search page (spec I10): a search box that requests only on submit, the third-party
- * notice, plain-text results with paging over the session's chain, and result opening through the
- * existing reader navigation. Its query, pages and view live in the entry's OnlineSearchSession, so
- * leaving and coming back restores them without any request. Nothing here marks posts read.
- * `embedded`: the 联网 side of the PROTOTYPE 搜索 page, which carries the title; only the line
- * about the third-party service is kept of the explanations.
+ * The 联网 side of the 搜索 page (spec I10): a search box that requests only on submit, the
+ * third-party notice, plain-text results with paging over the session's chain, and result opening
+ * through the existing reader navigation. Its query, pages and view live in the entry's
+ * OnlineSearchSession, so leaving and coming back restores them without any request. Nothing here
+ * marks posts read.
  */
 export function OnlineSearchPane({
   entryKey,
   displayed,
   directory,
-  onOpen,
-  embedded = false
+  onOpen
 }: {
   entryKey: number
   /** The page is on screen (its tab is active, and in a 搜索 page the 联网 side is shown). */
@@ -154,7 +152,6 @@ export function OnlineSearchPane({
   directory: BoardDirectory | null
   /** Opens a result in this entry's tab as a new `online-search` step; false when the entry is no longer current. */
   onOpen: (entryKey: number, init: EntryInit) => boolean
-  embedded?: boolean
 }) {
   const registry = useContext(ContentRegistryContext)
   const [session] = useState<OnlineSearchSession>(() => {
@@ -434,7 +431,6 @@ export function OnlineSearchPane({
     <section className="online-search-page" aria-label="联网搜索">
       <div className="online-search-scroll" ref={scrollRef} onScroll={onScroll}>
         <header className="online-search-header">
-          {!embedded && <h2 className="online-search-title">联网搜索</h2>}
           <form className="online-search-form" role="search" onSubmit={submit}>
             <label className="visually-hidden" htmlFor={`online-search-input-${entryKey}`}>
               搜索词
@@ -448,7 +444,7 @@ export function OnlineSearchPane({
               autoComplete="off"
               spellCheck={false}
               maxLength={MAX_SEARCH_QUERY_LENGTH}
-              placeholder="输入搜索词，按 Enter 搜索"
+              placeholder="搜索词"
               aria-describedby={`online-search-about-${entryKey}`}
               value={state.draft}
               onChange={(event) => session.setDraft(event.target.value)}
@@ -465,42 +461,21 @@ export function OnlineSearchPane({
           )}
         </header>
 
-        {embedded ? (
-          <div className="online-search-about is-brief" id={`online-search-about-${entryKey}`}>
-            <p className="online-search-about-site">
-              <span>搜索词会发给第三方服务 nmb-search，收录可能不全或过时</span>
-              <button type="button" className="btn btn-small btn-quiet" onClick={openSite}>
-                <Icon name="external" size={14} />
-                打开搜索网站
-              </button>
+        <div className="online-search-about" id={`online-search-about-${entryKey}`}>
+          <p className="online-search-about-site">
+            <span>搜索词会发给第三方服务 nmb-search，收录可能不全或过时</span>
+            <button type="button" className="btn btn-small btn-quiet" onClick={openSite}>
+              <Icon name="external" size={14} />
+              打开搜索网站
+            </button>
+          </p>
+          {siteFailed && (
+            <p className="notice-inline is-warning" role="status">
+              <Icon name="alert" size={14} />
+              无法在系统浏览器中打开搜索网站
             </p>
-            {siteFailed && (
-              <p className="notice-inline is-warning" role="status">
-                <Icon name="alert" size={14} />
-                无法在系统浏览器中打开搜索网站
-              </p>
-            )}
-          </div>
-        ) : (
-          <div className="online-search-about" id={`online-search-about-${entryKey}`}>
-            <p>
-              搜索词会交给第三方服务 nmb-search（4get／Google CSE 代理）及其上游搜索引擎。收录可能不全或过时；结果不代表论坛当前状态，摘要也不是帖子正文。
-            </p>
-            <div className="online-search-about-site">
-              <button type="button" className="btn btn-small" onClick={openSite}>
-                <Icon name="external" size={14} />
-                打开搜索网站
-              </button>
-              <span>在系统浏览器中打开同一服务的网站，不是故障时的备用来源；在浏览器里完成的验证不会传回汐岛。</span>
-            </div>
-            {siteFailed && (
-              <p className="notice-inline is-warning" role="status">
-                <Icon name="alert" size={14} />
-                无法在系统浏览器中打开搜索网站
-              </p>
-            )}
-          </div>
-        )}
+          )}
+        </div>
 
         <div className="online-search-status" role="status">
           {pending?.kind === 'run' && (
@@ -520,19 +495,18 @@ export function OnlineSearchPane({
           )}
           {notice !== null && notice.kind !== 'closed' && notice.request.kind === 'run' && <RequestNotice notice={notice} onRetry={rerun} />}
           {results !== null && !results.live && pending?.kind !== 'run' && (
-            <p className="notice-inline">
-              <Icon name="info" size={14} />
-              {notice?.kind === 'closed' ? '搜索会话已释放，' : ''}以下仍是「{results.query}」之前取得的结果，已取得的页面可以前后查看，但无法继续取新页；需要时请重新搜索。
-            </p>
+            <div className="online-search-chain-end">
+              <p className="notice-inline">
+                <Icon name="info" size={14} />
+                「{results.query}」不能再取新页
+              </p>
+              <button type="button" className="btn btn-small" onClick={() => rerun(results.query)}>
+                <Icon name="refresh" size={14} />
+                重新搜索
+              </button>
+            </div>
           )}
         </div>
-
-        {results === null && pending === null && notice === null && !embedded && (
-          <div className="online-search-idle">
-            <p className="list-empty-title">输入搜索词开始搜索</p>
-            <p className="list-empty-text">只有按 Enter 或点击“搜索”时才会联网；输入过程中不发送任何内容。</p>
-          </div>
-        )}
 
         {results !== null && shownPage !== null && (
           <>
@@ -546,7 +520,6 @@ export function OnlineSearchPane({
             {hits.length === 0 && (
               <div className="list-empty" role="status">
                 <p className="list-empty-title">{shownPage.pageNumber === 1 ? '没有找到结果' : '这一页没有结果'}</p>
-                {!embedded && <p className="list-empty-text">第三方服务的收录可能不全，没有结果不代表论坛中没有相关内容。</p>}
               </div>
             )}
 
@@ -636,7 +609,6 @@ function RequestNotice({ notice, onRetry }: { notice: Exclude<OnlineSearchNotice
             {line}
           </p>
         ))}
-        {request.kind === 'page' && <p className="notice-detail">已取得的页面仍可查看；这一页需要重新搜索后才能再取得。</p>}
       </div>
       {request.kind === 'run' && onRetry !== null && (
         <button type="button" className="btn btn-small" onClick={() => onRetry(request.query)}>
@@ -821,7 +793,6 @@ function RowStatusView({
       body = (
         <Status tone="info">
           <p className="online-search-status-title">未在该页找到{status.known.subject}</p>
-          <p className="online-search-status-detail">所属串 No.{status.known.threadId} 可以读取；打开原串会按正常续读位置阅读，不会跳到这条发言。</p>
         </Status>
       )
       actions = (
@@ -862,7 +833,6 @@ function RowStatusView({
       body = (
         <Status tone="info">
           <p className="online-search-status-title">无法确认{status.subject}所属的串</p>
-          <p className="online-search-status-detail">没有可靠的所属串记录，不会按摘要猜测；只能在浏览器中查看。</p>
         </Status>
       )
       break
@@ -913,7 +883,6 @@ function RowStatusView({
           <p className="online-search-status-title">
             {status.directoryLoaded ? `版面目录中没有「${status.boardName}」` : `版面目录尚未加载，无法确认版面「${status.boardName}」`}
           </p>
-          <p className="online-search-status-detail">只能在浏览器中查看这个链接。</p>
         </Status>
       )
       break

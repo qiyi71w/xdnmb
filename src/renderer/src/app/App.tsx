@@ -1,15 +1,25 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react'
 import type { AppPlatform, StorageStatus } from '../../../shared/api'
-import type { RetainedList } from '../../../shared/content'
 import { sameTarget, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
 import type { FeedRef, Post, ThreadId } from '../../../shared/forum'
 import type { WorkspaceLoadResult } from '../../../shared/lifecycle'
-import { DEFAULT_SETTINGS, type AppSettings } from '../../../shared/settings'
+import { DEFAULT_SETTINGS, LIST_WIDTH_LIMITS, type AppSettings } from '../../../shared/settings'
 import { Icon } from '../components/Icon'
 import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/directory/feeds'
-import { Navigation, NavMeasure } from '../features/directory/Navigation'
+import { BoardPanelEmptyPage, BoardPanelTitle, RailNavigation } from '../features/directory/RailNavigation'
+import type { FeatureHost, NavProps } from '../features/directory/navParts'
+import { RAIL_WIDTH } from '../features/directory/Rail'
+import { SettingsPage } from './SettingsPage'
+import {
+  closeBoardPanel,
+  isShown,
+  ListHostContext,
+  openBoardPanel,
+  setBoardPanelHost,
+  type FeatureId,
+  type ListHost
+} from '../features/directory/navStore'
 import { useDirectory } from '../features/directory/useDirectory'
-import { RetainedDialog } from '../features/content/RetainedDialog'
 import { HistoryPageContext, type HistoryPageHost, type HistoryView } from '../features/content/RetainedPane'
 import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
 import { editorFor, editorForDraft, isUnsaved, unsavedInTab } from '../features/editor/editorsState'
@@ -17,8 +27,6 @@ import { targetText } from '../features/editor/editorText'
 import { UnsavedEditorsDialog } from '../features/editor/UnsavedEditorsDialog'
 import { focusKey, useEditorsStore } from '../features/editor/useEditorsStore'
 import { EditorWorkspaceContext, type EditorWorkspace } from '../features/editor/workspace'
-import { AttemptsDialog } from '../features/publication/AttemptsDialog'
-import { OwnPostsDialog } from '../features/publication/OwnPostsDialog'
 import { PoPromptDialog } from '../features/publication/PoPromptDialog'
 import { usePendingAttempts } from '../features/publication/usePendingAttempts'
 import { LaunchNotice } from '../features/lifecycle/LaunchNotice'
@@ -55,47 +63,21 @@ import {
 import { parseWorkspace, type Workspace } from '../features/tabs/workspaceSnapshot'
 import { AppCoveredContext, useCoverageScope } from '../lib/appCovered'
 import { meaningfulTitle } from '../lib/format'
+import { SettingsContext, type SettingsAccess } from '../lib/settingsContext'
+import { SettingsOpenerContext, type SettingsSectionId } from '../lib/settingsOpener'
 import { useAppearance } from '../lib/useAppearance'
 import { usePopover } from '../lib/usePopover'
-import { SettingsDialog } from './SettingsDialog'
+import { ListOpenerContext } from '../features/reminders/openList'
+import { ThreadTabOpenerContext, type ThreadTabOpener } from '../features/tabs/openThreadInTab'
 import { isEditableTarget, matchShortcut, shortcutLabel, type ShortcutAction } from './shortcuts'
 import { TabView } from './TabView'
 import { TopBar } from './TopBar'
-import { SettingsOpenerContext, type SettingsSectionId } from '../lib/settingsOpener'
-import { ListOpenerContext } from '../features/reminders/openList'
-import { ThreadTabOpenerContext, type ThreadTabOpener } from '../features/tabs/openThreadInTab'
 import { useSettingsWriter } from './useSettingsWriter'
 import './layout.css'
-// PROTOTYPE (throwaway): navigation variants, active only with VITE_XIDAO_PROTOTYPE=1.
-import { PrototypeSwitcher } from '../components/PrototypeSwitcher'
-import { PrototypeNavB } from '../features/directory/prototype/PrototypeNavB'
-import { BoardPanelEmptyPage, BoardPanelTitle, PrototypeNavD } from '../features/directory/prototype/PrototypeNavD'
-import { BoardChooserPage, BoardStrip, PrototypeNavE } from '../features/directory/prototype/PrototypeNavE'
-import { PrototypeNavF } from '../features/directory/prototype/PrototypeNavF'
-import type { FeatureHost, PrototypeNavProps } from '../features/directory/prototype/PrototypeNavParts'
-import { RAIL_WIDTH } from '../features/directory/prototype/PrototypeRail'
-import { readListWidth, saveListWidth } from './ListDivider'
-import { PrototypeSettingsPage } from '../features/directory/prototype/PrototypeSettings'
-import {
-  ListHostContext,
-  NAV_VARIANTS,
-  closeBoardPanel,
-  isShown,
-  openBoardPanel,
-  PROTOTYPE_ENABLED,
-  setBoardPanelHost,
-  setNavVariant,
-  useBoardColumnCollapsed,
-  useBoardColumnWidth,
-  useNavVariant,
-  type FeatureId,
-  type ListHost
-} from '../features/directory/prototype/prototypeStore'
 
 function StorageBanner({ storage }: { storage: StorageStatus | null }) {
   if (storage === null || storage.state === 'ready') return null
-  const text =
-    storage.state === 'read-only' ? '数据库来自更新版本，当前只读，新内容不会保存' : '本地存储不可用，内容不会被保存'
+  const text = storage.state === 'read-only' ? '数据库只读，新内容不会保存' : '本地存储不可用，内容不会保存'
   return (
     <div className="storage-banner" role="status">
       <Icon name="alert" />
@@ -157,12 +139,20 @@ function entryFor(target: PostTarget): EntryInit {
     : { kind: 'list', feed: { kind: 'forum', id: target.forumId } }
 }
 
+/** Navigation column: the icon rail plus the navigation's outer margin. */
+const NAV_FULL = 8 + RAIL_WIDTH
+
 export function App() {
   const [storage, setStorage] = useState<StorageStatus | null>(null)
   const [platform, setPlatform] = useState<AppPlatform | null>(null)
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
   useAppearance(settings)
   const settingsWriter = useSettingsWriter(settings, setSettings)
+  const { write: writeSettings, latest: latestSettings } = settingsWriter
+  const settingsAccess = useMemo<SettingsAccess>(
+    () => ({ settings, latest: latestSettings, write: writeSettings }),
+    [settings, latestSettings, writeSettings]
+  )
   const [tabs, dispatch] = useReducer(shellReducer, null)
   const registry = useMemo(createContentRegistry, [])
   const directory = useDirectory()
@@ -176,23 +166,14 @@ export function App() {
   const reminders = useReminderOverview()
   const { overview: reminderOverview, reload: reloadReminders } = reminders
   const reminderBadge = useMemo(
-    () =>
-      reminderOverview === null
-        ? null
-        : { unread: reminderOverview.totalUnread, coverageProblem: overviewHasCoverageProblem(reminderOverview) },
+    () => (reminderOverview === null ? null : { coverageProblem: overviewHasCoverageProblem(reminderOverview) }),
     [reminderOverview]
   )
-  /** The app's coverage scope: every modal dialog (`Modal`) covers it while open. */
+  /** The app's coverage scope: every modal dialog (`Modal`) and the settings page cover it while open. */
   const coverage = useCoverageScope()
   const [draftsOpen, setDraftsOpen] = useState(false)
   const closeDrafts = useCallback(() => setDraftsOpen(false), [])
-  const [retained, setRetained] = useState<RetainedList | null>(null)
-  const closeRetained = useCallback(() => setRetained(null), [])
-  const [attemptsOpen, setAttemptsOpen] = useState(false)
-  const closeAttempts = useCallback(() => setAttemptsOpen(false), [])
   const [historyRequest, setHistoryRequest] = useState<HistoryPageHost['request']>(null)
-  const [ownPostsOpen, setOwnPostsOpen] = useState(false)
-  const closeOwnPosts = useCallback(() => setOwnPostsOpen(false), [])
   /** Tab whose close waits for its unsaved editors to be handled. */
   const [closing, setClosing] = useState<{ tabId: number; editorIds: EditorId[] } | null>(null)
 
@@ -244,13 +225,20 @@ export function App() {
   const [readingWidth, setReadingWidth] = useState(0)
   /** Width the reader scroller's vertical scrollbar takes from its content (0 for overlay scrollbars). */
   const [scrollbarWidth, setScrollbarWidth] = useState(0)
-  const [navCompactMin, setNavCompactMin] = useState<number>(LAYOUT_DEFAULTS.navCompactReference)
-  /** PROTOTYPE: list width chosen with the split divider; the default outside the prototype. */
-  const [listPreference, setListPreference] = useState(() => (PROTOTYPE_ENABLED ? readListWidth() : LAYOUT_DEFAULTS.listWidth))
-  const resizeList = useCallback((next: number, done: boolean) => {
-    setListPreference(next)
-    if (done) saveListWidth(next)
-  }, [])
+  /** The list width while the divider is being dragged; the saved `listWidth` otherwise. */
+  const [draggedWidth, setDraggedWidth] = useState<number | null>(null)
+  const listPreference = draggedWidth ?? settings.listWidth
+  const resizeList = useCallback(
+    (next: number, done: boolean) => {
+      if (!done) {
+        setDraggedWidth(next)
+        return
+      }
+      setDraggedWidth(null)
+      writeSettings({ listWidth: next })
+    },
+    [writeSettings]
+  )
 
   useLayoutEffect(() => {
     const app = appRef.current
@@ -270,32 +258,18 @@ export function App() {
   }, [])
 
   const current = tabs === null ? null : activeTab(tabs)
-  /** PROTOTYPE: the active tab shows a 搜索 page (its `online-search` entry); it holds the tab's local search open. */
-  const searchPageTab = PROTOTYPE_ENABLED && current !== null && currentEntry(current).kind === 'online-search' ? current.id : null
-  /** PROTOTYPE: the navigation variant; `null` (the regular navigation and settings dialog) unless built in. */
-  const navVariant = useNavVariant()
-  const protoColumnCollapsed = useBoardColumnCollapsed()
-  const protoColumnWidth = useBoardColumnWidth()
-  /**
-   * PROTOTYPE: navigation column width. B: the regular column plus the rail (narrowing as usual);
-   * D, E: the rail alone; F: the rail plus the board column at its content width, unless collapsed.
-   * The 8 px is the navigation's outer margin.
-   */
-  const protoNavFull =
-    navVariant === null || navVariant === 'B'
-      ? null
-      : 8 + RAIL_WIDTH + (navVariant === 'F' && !protoColumnCollapsed ? protoColumnWidth : 0)
-  const navFull = protoNavFull ?? LAYOUT_DEFAULTS.navFull + (navVariant === 'B' ? RAIL_WIDTH : 0)
+  /** The active tab shows a 搜索 page (its `online-search` entry); it holds the tab's local search open. */
+  const searchPageTab = current !== null && currentEntry(current).kind === 'online-search' ? current.id : null
   const layout = computeLayout({
     width,
     view: current === null ? 'list' : viewOf(current),
-    navFull,
-    navCompactMin: protoNavFull ?? navCompactMin + (navVariant === 'B' ? RAIL_WIDTH : 0),
+    navFull: NAV_FULL,
     // Up to the default the list width is reserved like before; a wider one is granted from the reader.
-    listWidth: Math.min(listPreference, LAYOUT_DEFAULTS.listWidth),
-    listGrow: Math.max(0, listPreference - LAYOUT_DEFAULTS.listWidth),
+    listWidth: Math.min(listPreference, LIST_WIDTH_LIMITS.default),
+    listGrow: Math.max(0, listPreference - LIST_WIDTH_LIMITS.default),
     readingWidth,
     minGutter: LAYOUT_DEFAULTS.minGutter,
+    readerEndGutter: LAYOUT_DEFAULTS.readerEndGutter,
     minSplitText: LAYOUT_DEFAULTS.minSplitText,
     gap: LAYOUT_DEFAULTS.gap + scrollbarWidth
   })
@@ -404,50 +378,48 @@ export function App() {
     }
   }, [restored, reopenDrafts, registry])
 
-  // ---------- Settings dialog ----------
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  /** Focus target when whatever opened the dialog (button, navigation, Ctrl/Cmd+, from anywhere) is gone. */
+  // ---------- Settings page ----------
+  /** The top bar's 设置 (shown while the navigation is an overlay). */
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   const { clearStatus: clearSettingsStatus } = settingsWriter
-
-  /** PROTOTYPE: the settings page is shown in place of the tabs. */
-  const [protoSettingsOpen, setProtoSettingsOpen] = useState(false)
-  const protoSettingsShown = navVariant !== null && protoSettingsOpen
+  /** The settings page is shown in place of the tabs. */
+  const [settingsShown, setSettingsShown] = useState(false)
   /**
-   * PROTOTYPE: where focus goes back when the settings page is left (Esc, 返回): the control that
-   * opened it, read before anything closes, and whether that was the top bar's 设置 (remounted with
-   * the top bar). Leaving it for other content (a list chosen) hands focus to that content instead.
+   * Where focus goes back when the settings page is left (Esc, 返回): the control that opened it,
+   * read before anything closes, and whether that was the top bar's 设置 (remounted with the top
+   * bar). Leaving it for other content (a list chosen) hands focus to that content instead.
    */
   const settingsReturn = useRef<{ opener: HTMLElement | null; fromTopBar: boolean; pending: boolean } | null>(null)
   /**
-   * PROTOTYPE: where the settings page lands — the section an entry is about, or the top. A new
-   * request (`seq`) moves the page even while it is already shown.
+   * Where the settings page lands — the section an entry is about, or the top. A new request
+   * (`seq`) moves the page even while it is already shown.
    */
   const [settingsTarget, setSettingsTarget] = useState<{ section: SettingsSectionId | null; seq: number }>({ section: null, seq: 0 })
 
-  const openSettings = useCallback((section?: SettingsSectionId) => {
-    if (PROTOTYPE_ENABLED && settingsReturn.current === null) {
-      const active = document.activeElement
-      const opener = active instanceof HTMLElement && active !== document.body ? active : null
-      settingsReturn.current = { opener, fromTopBar: opener !== null && opener === settingsButtonRef.current, pending: false }
-    }
-    // The dialog becomes the only layer: an open navigation overlay closes first.
-    closeNav(false)
-    clearSettingsStatus()
-    setSettingsTarget((previous) => ({ section: section ?? null, seq: previous.seq + 1 }))
-    if (PROTOTYPE_ENABLED) setProtoSettingsOpen(true)
-    else setSettingsOpen(true)
-  }, [closeNav, clearSettingsStatus])
+  /** Opens settings at `section` (the top without one). Floating editors of the tabs stay as they are, hidden. */
+  const openSettings = useCallback(
+    (section?: SettingsSectionId) => {
+      if (settingsReturn.current === null) {
+        const active = document.activeElement
+        const opener = active instanceof HTMLElement && active !== document.body ? active : null
+        settingsReturn.current = { opener, fromTopBar: opener !== null && opener === settingsButtonRef.current, pending: false }
+      }
+      // The page becomes the only layer: an open navigation overlay or board panel closes first.
+      closeBoardPanel('dismiss')
+      closeNav(false)
+      clearSettingsStatus()
+      setSettingsTarget((previous) => ({ section: section ?? null, seq: previous.seq + 1 }))
+      setSettingsShown(true)
+    },
+    [closeNav, clearSettingsStatus]
+  )
   /** Settings at the top: Ctrl/Cmd+, and the general 设置 buttons. */
   const openSettingsTop = useCallback(() => openSettings(), [openSettings])
-  /** Settings at 饼干: the navigation's browse-cookie footer. */
-  const openCookieSettings = useCallback(() => openSettings('cookies'), [openSettings])
 
-  /** Leaves settings; `returnFocus` (Esc, 返回, the dialog closed) sends focus back where it came from. */
+  /** Leaves settings; `returnFocus` (Esc, 返回) sends focus back where it came from. */
   const endSettings = useCallback(
     (returnFocus: boolean) => {
-      setSettingsOpen(false)
-      setProtoSettingsOpen(false)
+      setSettingsShown(false)
       if (settingsReturn.current !== null) {
         if (returnFocus) settingsReturn.current.pending = true
         else settingsReturn.current = null
@@ -459,13 +431,21 @@ export function App() {
     [refreshSubscriptions, refreshSubscriptionJournal]
   )
   const closeSettings = useCallback(() => endSettings(true), [endSettings])
+  const settingsShownRef = useRef(settingsShown)
+  useLayoutEffect(() => {
+    settingsShownRef.current = settingsShown
+  })
+  /** Choosing other content leaves the settings page; the content, not the page's opener, gets focus. */
+  const leaveSettings = useCallback(() => {
+    if (settingsShownRef.current) endSettings(false)
+  }, [endSettings])
 
-  // PROTOTYPE: back from the settings page, once the content it covered is back (the top bar returns
-  // in the same commit, so the page's own cleanup would run before its buttons exist). The opener if
-  // still shown; else the stable entry: the top bar's 设置 it came from, 打开导航, or the rail's 设置.
+  // Back from the settings page, once the content it covered is back (the top bar returns in the
+  // same commit, so the page's own cleanup would run before its buttons exist). The opener if still
+  // shown; else the stable entry: the top bar's 设置 it came from, 打开导航, or the rail's 设置.
   useLayoutEffect(() => {
     const back = settingsReturn.current
-    if (protoSettingsShown || back === null || !back.pending) return
+    if (settingsShown || back === null || !back.pending) return
     settingsReturn.current = null
     const target = isShown(back.opener)
       ? back.opener
@@ -473,9 +453,9 @@ export function App() {
         ? settingsButtonRef.current
         : navOverlay
           ? navTriggerRef.current
-          : (inlineNavRef.current?.querySelector<HTMLElement>('[data-proto-settings]') ?? null)
+          : (inlineNavRef.current?.querySelector<HTMLElement>('[data-settings-entry]') ?? null)
     target?.focus()
-  }, [protoSettingsShown, navOverlay])
+  }, [settingsShown, navOverlay])
 
   // ---------- Local / thread search ----------
   /** Tab whose reader takes focus after a search hit was opened in it. */
@@ -491,9 +471,9 @@ export function App() {
   })
   const { commands: searchCommands } = search
 
-  // PROTOTYPE: a hit chosen on a 搜索 page's 本机 side opens only while the tab's local search is
-  // open, as from the sheet. The page holds it open while shown and lets go when left (a hit
-  // opened from the page has already closed it).
+  // A hit chosen on a 搜索 page's 本机 side opens only while the tab's local search is open. The
+  // page holds it open while shown and lets go when left (a hit opened from the page has already
+  // closed it).
   const openSearchTab = search.state.openTab
   const heldSearch = useRef<number | null>(null)
   useLayoutEffect(() => {
@@ -505,8 +485,8 @@ export function App() {
       searchCommands.close()
     }
   }, [searchPageTab, openSearchTab, searchCommands])
-  const localSearchHost = useMemo<LocalSearchHost | null>(
-    () => (PROTOTYPE_ENABLED ? { state: search.state, commands: searchCommands, forums: names } : null),
+  const localSearchHost = useMemo<LocalSearchHost>(
+    () => ({ state: search.state, commands: searchCommands, forums: names }),
     [search.state, searchCommands, names]
   )
 
@@ -556,12 +536,13 @@ export function App() {
   }, [])
 
   /**
-   * Shows `ref` in the active tab. Focus: `nav` — an open navigation overlay closes back to 打开导航
-   * (an inline navigation keeps it); `list` — the active tab's list takes it, for openers that are
-   * going away (the PROTOTYPE 全部功能 panel).
+   * Shows `ref` in the active tab, leaving the settings page. Focus: `nav` — an open navigation
+   * overlay closes back to 打开导航 (an inline navigation keeps it); `list` — the active tab's list
+   * takes it, for openers that are going away (the 更多 panel, content of a page).
    */
   const selectFeed = useCallback(
     (ref: ListRef, focus: 'nav' | 'list' = 'nav') => {
+      leaveSettings()
       closeNav(focus === 'nav')
       withActive((tab) => {
         const entry = currentEntry(tab)
@@ -576,25 +557,8 @@ export function App() {
         })
       }
     },
-    [closeNav, withActive, leave]
+    [leaveSettings, closeNav, withActive, leave]
   )
-
-  /**
-   * 联网搜索: an online search page as a new step of the current tab; on such a page already, focus
-   * its search box. No shortcut (spec I11 names none).
-   */
-  const openOnlineSearch = useCallback(() => {
-    closeNav()
-    withActive((tab) => {
-      const entry = currentEntry(tab)
-      if (entry.kind === 'online-search') {
-        registry.onlineSearchPanes.get(entry.key)?.current.focusInput()
-        return
-      }
-      leave(tab)
-      dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'online-search' } })
-    })
-  }, [closeNav, withActive, leave, registry])
 
   /**
    * An online search result opens as a new `online-search` step of the tab still showing that page
@@ -659,8 +623,8 @@ export function App() {
         const sourceKey = (tab.entries[tab.index - 1] as TabEntry).key
         leave(tab)
         dispatch({ type: 'back', tabId: tab.id })
-        // 返回搜索结果 (local / thread search): the source entry comes back with the search sheet it
-        // had when the hit was opened. An online search page restores itself from its session.
+        // 返回搜索结果 (local / thread search): the source entry comes back with the search it had
+        // when the hit was opened. A 搜索 page's 联网 side restores itself from its session.
         if (fromSearch) searchCommands.returnTo(tab.id, sourceKey)
       }),
     [withActive, leave, searchCommands]
@@ -764,8 +728,8 @@ export function App() {
    */
   const continueDraft = useCallback(
     (draft: SavedDraft) => {
-      setAttemptsOpen(false)
       setDraftsOpen(false)
+      leaveSettings()
       const existing = editorForDraft(currentEditors(), draft.id) ?? editorFor(currentEditors(), draft.target)
       if (existing !== null) {
         showTarget(existing.tabId, existing.target)
@@ -781,7 +745,7 @@ export function App() {
       dispatchEditors({ type: 'open-draft', tabId, draft })
       requestFocus(focusKey(tabId, draft.target))
     },
-    [currentEditors, showTarget, dispatchEditors, requestFocus]
+    [leaveSettings, currentEditors, showTarget, dispatchEditors, requestFocus]
   )
 
   const openDrafts = useCallback(() => {
@@ -790,57 +754,27 @@ export function App() {
     setDraftsOpen(true)
   }, [closeNav])
 
-  const openRetained = useCallback(
-    (kind: RetainedList) => {
-      closeNav(false)
-      setRetained(kind)
+  const openHistoryView = useCallback(
+    (view: HistoryView) => {
+      const state = stateRef.current.tabs
+      if (state === null) return
+      selectFeed({ kind: 'history' }, 'list')
+      dispatch({ type: 'show-pane', tabId: state.activeId, pane: 'list' })
+      setHistoryRequest((current) => ({ tabId: state.activeId, view, seq: (current?.seq ?? 0) + 1 }))
     },
-    [closeNav]
+    [selectFeed]
   )
 
-  /** 打开 from 收藏 / 历史 / 离线: the active tab shows the thread in its reader (a new history step). */
-  const openThread = useCallback(
-    (threadId: ThreadId) => {
-      setRetained(null)
-      withActive((tab) => {
-        const entry = currentEntry(tab)
-        if (entryThread(entry)?.threadId === threadId && readerShown(tab, entry, stateRef.current.singlePane)) return
-        leave(tab)
-        dispatch({
-          type: 'navigate',
-          tabId: tab.id,
-          entry: { kind: 'thread', thread: { threadId, head: null, target: null, snapshot: null, unlocatedPostId: null } }
-        })
-      })
-    },
-    [withActive, leave]
-  )
-  const openHistoryView = useCallback((view: HistoryView) => {
-    const state = stateRef.current.tabs
-    if (state === null) return
-    endSettings(false)
-    selectFeed({ kind: 'history' }, 'list')
-    dispatch({ type: 'show-pane', tabId: state.activeId, pane: 'list' })
-    setHistoryRequest((current) => ({ tabId: state.activeId, view, seq: (current?.seq ?? 0) + 1 }))
-  }, [endSettings, selectFeed])
-
-  /** Every prototype sender entry opens the history page's sending view; production keeps its modal. */
+  /** Every 查看发送记录 opens the 历史 page on 发送记录; the active tab's open editors fold away first (content kept). */
   const openAttempts = useCallback(() => {
     closeNav(false)
     setDraftsOpen(false)
-    if (PROTOTYPE_ENABLED) {
-      const tabId = stateRef.current.tabs?.activeId
-      for (const editor of currentEditors().editors) {
-        if (tabId !== undefined && editor.tabIds.includes(tabId) && editor.expanded) dispatchEditors({ type: 'set-expanded', editorId: editor.id, expanded: false })
-      }
-      openHistoryView('attempts')
-    } else setAttemptsOpen(true)
+    const tabId = stateRef.current.tabs?.activeId
+    for (const editor of currentEditors().editors) {
+      if (tabId !== undefined && editor.tabIds.includes(tabId) && editor.expanded) dispatchEditors({ type: 'set-expanded', editorId: editor.id, expanded: false })
+    }
+    openHistoryView('attempts')
   }, [closeNav, currentEditors, dispatchEditors, openHistoryView])
-
-  const openOwnPosts = useCallback(() => {
-    closeNav(false)
-    setOwnPostsOpen(true)
-  }, [closeNav])
 
   /**
    * A reminder notification was clicked (the main process already revealed the window without a
@@ -850,6 +784,7 @@ export function App() {
     const state = stateRef.current.tabs
     if (state === null) return
     closeNav(false)
+    leaveSettings()
     void reloadReminders()
     const shows = (tab: Tab) => {
       const entry = currentEntry(tab)
@@ -868,32 +803,27 @@ export function App() {
       split: stateRef.current.settings.newTabSplitDefault,
       background: false
     })
-  }, [closeNav, reloadReminders])
+  }, [closeNav, leaveSettings, reloadReminders])
 
   useEffect(
     () => window.xidao.reminders.onOpenList(() => void whenRestored().then(openRemindersList)),
     [whenRestored, openRemindersList]
   )
 
-  /** A real quit closes every dialog that would compete with its questions. */
+  /** A real quit closes every layer that would compete with its questions. */
   const closeForQuit = useCallback(() => {
+    closeBoardPanel('dismiss')
     closeNav(false)
-    setSettingsOpen(false)
-    setProtoSettingsOpen(false)
+    setSettingsShown(false)
     settingsReturn.current = null
     setDraftsOpen(false)
-    setAttemptsOpen(false)
-    setOwnPostsOpen(false)
     setClosing(null)
-    setRetained(null)
     searchCommands.close()
     quote.cardProps?.onClose()
   }, [closeNav, searchCommands, quote.cardProps])
 
-  /** Opens a target from 发送记录 / 我的发言 in a new tab (global split default), to read or check it. */
+  /** Opens a target from 发送记录 in a new tab (global split default), to read or check it. */
   const openTargetInTab = useCallback((target: PostTarget) => {
-    setAttemptsOpen(false)
-    setOwnPostsOpen(false)
     dispatch({ type: 'open-tab', entry: entryFor(target), split: stateRef.current.settings.newTabSplitDefault, background: false })
   }, [])
 
@@ -941,9 +871,9 @@ export function App() {
     [withActive, registry]
   )
 
-  // List memory, restored list context, online search sessions and PROTOTYPE 搜索 page memory live
-  // only as long as their entry is in some tab's history (forward branch replaced, tab closed →
-  // dropped; a dropped online search session is closed).
+  // List memory, restored list context, online search sessions and 搜索 page memory live only as
+  // long as their entry is in some tab's history (forward branch replaced, tab closed → dropped; a
+  // dropped online search session is closed).
   useEffect(() => {
     if (tabs === null) return
     const live = new Set<number>()
@@ -974,13 +904,13 @@ export function App() {
   }, [tabs])
 
   /**
-   * PROTOTYPE: the 搜索 page as a new step of the active tab, on 本机 and focused there. On such a
-   * page already: `local` shows 本机, `shown` keeps the side; that side's search box takes focus.
+   * The 搜索 page as a new step of the active tab, on 本机 and focused there. On such a page
+   * already: `local` shows 本机, `shown` keeps the side; that side's search box takes focus.
    */
   const openSearchPage = useCallback(
     (side: 'local' | 'shown') => {
       closeNav(false)
-      if (protoSettingsShown) endSettings(false)
+      leaveSettings()
       withActive((tab) => {
         const entry = currentEntry(tab)
         if (entry.kind === 'online-search') {
@@ -994,27 +924,22 @@ export function App() {
         dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'online-search' } })
       })
     },
-    [closeNav, protoSettingsShown, endSettings, withActive, registry, leave, searchCommands]
+    [closeNav, leaveSettings, withActive, registry, leave, searchCommands]
   )
 
   /**
-   * Search of the active tab. `thread` searches the thread its reader shows, starting in the mode
-   * it is shown in; `local` everything retained (PROTOTYPE: the 搜索 page). Its entry points are
-   * inert or skipped (shortcuts) while another modal dialog covers the app; with the sheet itself
-   * open it switches its view.
+   * Search of the active tab. `thread` searches the thread its reader shows (the in-thread search
+   * sheet), starting in the mode it is shown in; `local` is the 搜索 page. Entry points are inert
+   * or skipped (shortcuts) while another modal dialog covers the app.
    */
   const openSearch = useCallback(
     (request: SearchRequest) => {
-      if (PROTOTYPE_ENABLED && request.view === 'local') {
+      if (request.view === 'local') {
         openSearchPage('local')
         return
       }
       closeNav(false)
       withActive((tab) => {
-        if (request.view === 'local') {
-          searchCommands.open(tab.id, { view: 'local' })
-          return
-        }
         if (currentEntry(tab).key !== request.entryKey) return
         searchCommands.open(tab.id, { view: 'thread', scope: { threadId: request.threadId, mode: request.mode, title: request.title } })
       })
@@ -1022,9 +947,7 @@ export function App() {
     [openSearchPage, closeNav, withActive, searchCommands]
   )
 
-  const openLocalSearch = useCallback(() => openSearch({ view: 'local' }), [openSearch])
-
-  /** Ctrl/Cmd+F: the thread on screen, else everything retained. */
+  /** Ctrl/Cmd+F: the thread on screen, else the 搜索 page. */
   const searchShownThread = useCallback(
     () =>
       withActive((tab) => {
@@ -1052,7 +975,7 @@ export function App() {
       forward: goForward,
       'open-settings': openSettingsTop,
       'search-thread': searchShownThread,
-      'search-local': openLocalSearch
+      'search-local': () => openSearchPage('local')
     }
   })
 
@@ -1077,13 +1000,11 @@ export function App() {
   }, [platform])
 
   // ---------- Render ----------
-  // Re-render when an online search page's submitted query (its tab title) changes.
-  useSyncExternalStore(registry.onlineSearches.subscribe, registry.onlineSearches.getVersion)
   const titleOf = useCallback(
     (tab: Tab) => {
       const entry = currentEntry(tab)
       if (entry.kind === 'thread') return threadTitle(entry.thread)
-      if (entry.kind === 'online-search') return PROTOTYPE_ENABLED ? '搜索' : registry.onlineSearches.title(entry.key)
+      if (entry.kind === 'online-search') return '搜索'
       if (entry.feed === null) return '新标签'
       const feed = entry.feed
       const name =
@@ -1098,18 +1019,18 @@ export function App() {
                 : (feedInfo(feed)?.name ?? (feed.kind === 'timeline' ? '时间线' : '版面'))
       return entry.thread !== null && tab.split ? `${name} › ${threadTitle(entry.thread)}` : name
     },
-    [feedInfo, registry]
+    [feedInfo]
   )
 
   const entry = current === null ? null : currentEntry(current)
   const selectedFeed = entry?.kind === 'list' ? entry.feed : null
-  const onlineSearchCurrent = entry?.kind === 'online-search'
+  const searchCurrent = entry?.kind === 'online-search'
 
   const workspaceStyle = {
     '--nav-width': `${layout.navWidth}px`,
-    '--nav-full': `${navFull}px`,
+    '--nav-full': `${NAV_FULL}px`,
     // Hidden split tabs keep the chosen width while the active entry shows no list beside a reader.
-    '--list-width': `${layout.listWidth > 0 ? layout.listWidth : Math.min(listPreference, LAYOUT_DEFAULTS.listWidth)}px`
+    '--list-width': `${layout.listWidth > 0 ? layout.listWidth : Math.min(listPreference, LIST_WIDTH_LIMITS.default)}px`
   } as CSSProperties
 
   const editorWorkspace = useMemo<EditorWorkspace>(
@@ -1117,57 +1038,49 @@ export function App() {
     [editors, identities, platform, dirData, forumName, retarget, showTarget, openAttempts]
   )
 
-  const tabTitle = (tabId: number) => {
-    const tab = tabs?.tabs.find((item) => item.id === tabId)
-    return tab === undefined ? '已关闭的标签' : titleOf(tab)
-  }
+  const tabTitle = useCallback(
+    (tabId: number) => {
+      const tab = tabs?.tabs.find((item) => item.id === tabId)
+      return tab === undefined ? '已关闭的标签' : titleOf(tab)
+    },
+    [tabs, titleOf]
+  )
+
+  const historyHost = useMemo<HistoryPageHost>(
+    () => ({ request: historyRequest, tabTitle, onContinue: continueDraft, onOpenTarget: openTargetInTab, pendingAttempts }),
+    [historyRequest, tabTitle, continueDraft, openTargetInTab, pendingAttempts]
+  )
 
   /** A send waiting for the PO identity answer (one at a time: the dialog is modal). */
   const promptEditor = editors.state.editors.find((editor) => editor.publication?.phase === 'prompt')
 
-  // ---------- PROTOTYPE: navigation variants (unused unless built in) ----------
-  /** Choosing content leaves the settings page; the content, not the page's opener, gets focus. */
-  const protoSelect = useCallback(
-    (ref: ListRef, focus: 'nav' | 'list' = 'nav') => {
-      if (protoSettingsShown) endSettings(false)
-      selectFeed(ref, focus)
-    },
-    [protoSettingsShown, endSettings, selectFeed]
-  )
+  // ---------- Navigation: the icon rail and its board panel ----------
   /** Lists opened from inside content (e.g. the reminders empty state): focus goes to the list. */
-  const openList = useCallback((ref: ListRef) => protoSelect(ref, 'list'), [protoSelect])
-  /** Lists of the tab (订阅的串, 提醒, 历史, 离线) and 搜索 are pages; the rest open dialogs. */
-  const openProtoFeature = useCallback(
+  const openList = useCallback((ref: ListRef) => selectFeed(ref, 'list'), [selectFeed])
+  /** Lists of the tab (订阅的串, 提醒, 历史, 离线) and 搜索 are pages; 草稿 is a dialog. */
+  const openFeature = useCallback(
     (id: FeatureId, focusTarget = false) => {
       if (id === 'history') openHistoryView('browsing')
-      else if (id === 'subscriptions' || id === 'reminders' || id === 'offline') {
-        protoSelect({ kind: id }, focusTarget ? 'list' : 'nav')
-      } else if (id === 'search') {
-        // The page focuses its search box itself.
-        openSearchPage('shown')
-      } else if (id === 'drafts') openDrafts()
+      else if (id === 'subscriptions' || id === 'reminders' || id === 'offline') selectFeed({ kind: id }, focusTarget ? 'list' : 'nav')
+      // The page focuses its search box itself.
+      else if (id === 'search') openSearchPage('shown')
+      else openDrafts()
     },
-    [protoSelect, openSearchPage, openDrafts, openHistoryView]
+    [selectFeed, openSearchPage, openDrafts, openHistoryView]
   )
-  const protoFeatures = useMemo<FeatureHost>(
+  const features = useMemo<FeatureHost>(
     () => ({
-      open: openProtoFeature,
-      current: protoSettingsShown
-        ? null
-        : onlineSearchCurrent
-          ? 'search'
-          : selectedFeed !== null && isLocalList(selectedFeed)
-            ? selectedFeed.kind
-            : null,
+      open: openFeature,
+      current: settingsShown ? null : searchCurrent ? 'search' : selectedFeed !== null && isLocalList(selectedFeed) ? selectedFeed.kind : null,
       reminderBadge,
       pendingAttempts,
       searchShortcut: shortcutLabel('search-local', platform)
     }),
-    [openProtoFeature, protoSettingsShown, onlineSearchCurrent, selectedFeed, reminderBadge, pendingAttempts, platform]
+    [openFeature, settingsShown, searchCurrent, selectedFeed, reminderBadge, pendingAttempts, platform]
   )
 
   /**
-   * D: the board panel lives in the navigation. Opened from the tab content in the overlay layout,
+   * The board panel lives in the navigation. Opened from the tab content in the overlay layout,
    * the overlay opens first to hold it; the panel opens once the overlay is on the layer stack, so
    * it is the top layer and Esc closes it first (spec I11).
    */
@@ -1176,14 +1089,14 @@ export function App() {
   const boardsPendingOpener = useRef<HTMLElement | null>(null)
   /** The overlay was opened only to hold the panel: the panel's end ends it too (see `closed`). */
   const boardsCarrier = useRef(false)
-  // The panel closes with what holds it (overlay closed, column → overlay, variant switch).
+  // The panel closes with what holds it (overlay closed, column → overlay).
   useEffect(() => {
-    if (navVariant !== 'D' || (navOverlay && !navOverlayOpen)) {
+    if (navOverlay && !navOverlayOpen) {
       boardsPendingOpener.current = null
       closeBoardPanel('dismiss')
       boardsCarrier.current = false
     }
-  }, [navVariant, navOverlay, navOverlayOpen])
+  }, [navOverlay, navOverlayOpen])
   // Declared after `usePopover`, whose effect puts the overlay on the layer stack in the same flush.
   useEffect(() => {
     const opener = boardsPendingOpener.current
@@ -1192,7 +1105,7 @@ export function App() {
     boardsCarrier.current = true
     openBoardPanel(opener)
   }, [navOverlayOpen])
-  const openProtoBoards = useCallback(
+  const openBoards = useCallback(
     (button: HTMLButtonElement) => {
       if (navOverlay && !navOverlayOpen) {
         boardsPendingOpener.current = button
@@ -1203,13 +1116,11 @@ export function App() {
     },
     [navOverlay, navOverlayOpen, toggleNavOverlay]
   )
-  // The panel decides focus when it closes (prototypeStore); the app keeps the overlay in step
+  // The panel decides focus when it closes (navStore); the app keeps the overlay in step
   // without moving focus, so nothing else competes for it.
   useLayoutEffect(() => {
-    if (navVariant !== 'D') return
     setBoardPanelHost({
-      home: () =>
-        navOverlay ? navTriggerRef.current : (inlineNavRef.current?.querySelector<HTMLElement>('[data-proto-boards-trigger]') ?? null),
+      home: () => (navOverlay ? navTriggerRef.current : (inlineNavRef.current?.querySelector<HTMLElement>('[data-boards-trigger]') ?? null)),
       closed: (end, at) => {
         const carrier = boardsCarrier.current
         boardsCarrier.current = false
@@ -1224,71 +1135,42 @@ export function App() {
       }
     })
     return () => setBoardPanelHost(null)
-  }, [navVariant, navOverlay, closeNav])
-  const protoListHost = useMemo<ListHost | null>(() => {
-    if (navVariant === 'D') {
-      return {
-        boardTitle: (name) => <BoardPanelTitle name={name} onOpen={openProtoBoards} />,
-        listTop: null,
-        emptyPage: () => <BoardPanelEmptyPage onOpen={openProtoBoards} />
-      }
-    }
-    if (navVariant === 'E') {
-      return {
-        boardTitle: null,
-        listTop: (feed) => <BoardStrip current={feed} directory={dirData} onSelect={protoSelect} />,
-        emptyPage: () => <BoardChooserPage directory={dirData} onSelect={protoSelect} />
-      }
-    }
-    return null
-  }, [navVariant, openProtoBoards, dirData, protoSelect])
+  }, [navOverlay, closeNav])
+  const listHost = useMemo<ListHost>(
+    () => ({
+      boardTitle: (name) => <BoardPanelTitle name={name} onOpen={openBoards} />,
+      emptyPage: (title) => <BoardPanelEmptyPage title={title} onOpen={openBoards} />
+    }),
+    [openBoards]
+  )
 
-  const protoNav = (placement: 'inline' | 'overlay') => {
-    if (navVariant === null) return null
+  const navigation = (placement: 'inline' | 'overlay') => {
     const common = {
       state: directory.state,
-      selected: protoSettingsShown ? null : selectedFeed,
-      onSelect: protoSelect,
+      selected: settingsShown ? null : selectedFeed,
+      onSelect: selectFeed,
       onRetry: directory.retry,
-      features: protoFeatures,
-      settingsCurrent: protoSettingsShown,
+      features,
+      settingsCurrent: settingsShown,
       onOpenSettings: openSettingsTop
     }
-    const props: PrototypeNavProps =
+    const props: NavProps =
       placement === 'inline'
-        ? { ...common, variant: 'inline', progress: layout.navProgress, panelRef: inlineNavRef }
-        : { ...common, variant: 'overlay', progress: 0, panelRef: navPanelRef, id: 'nav-overlay' }
-    if (navVariant === 'B') return <PrototypeNavB {...props} />
-    if (navVariant === 'D') return <PrototypeNavD {...props} />
-    if (navVariant === 'E') return <PrototypeNavE {...props} />
-    return <PrototypeNavF {...props} />
+        ? { ...common, variant: 'inline', panelRef: inlineNavRef }
+        : { ...common, variant: 'overlay', panelRef: navPanelRef, id: 'nav-overlay' }
+    return <RailNavigation {...props} />
   }
-
-  const protoSettingsPage =
-    navVariant === null ? null : (
-      <PrototypeSettingsPage
-        identities={identities}
-        subscriptions={subscriptions}
-        settings={settings}
-        platform={platform}
-        status={settingsWriter.status}
-        write={settingsWriter.write}
-        adopt={settingsWriter.adopt}
-        directory={dirData}
-        target={settingsTarget}
-        onClose={closeSettings}
-      />
-    )
 
   return (
     <AppCoveredContext value={coverage}>
+    <SettingsContext value={settingsAccess}>
     <SettingsOpenerContext value={openSettings}>
       <EditorWorkspaceContext value={editorWorkspace}>
       <SubscriptionsContext value={subscriptions}>
       <RemindersContext value={reminders}>
       <ListOpenerContext value={openList}>
-      <ThreadTabOpenerContext value={PROTOTYPE_ENABLED ? openThreadInTab : null}>
-      <HistoryPageContext value={PROTOTYPE_ENABLED ? { request: historyRequest, tabTitle, onContinue: continueDraft, onOpenTarget: openTargetInTab } : null}>
+      <ThreadTabOpenerContext value={openThreadInTab}>
+      <HistoryPageContext value={historyHost}>
         <div className="app" ref={appRef}>
           <StorageBanner storage={storage} />
           <LaunchNotice
@@ -1297,13 +1179,12 @@ export function App() {
           />
           <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
           <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
-          <NavMeasure directory={dirData} onMeasure={setNavCompactMin} />
           <ContentRegistryContext.Provider value={registry}>
             <QuoteControllerContext.Provider value={quote.controller}>
             <QuoteActiveContext.Provider value={quote.activeKey}>
             <SearchOpenerContext value={openSearch}>
             <LocalSearchContext value={localSearchHost}>
-            <ListHostContext value={protoListHost}>
+            <ListHostContext value={listHost}>
             <div className={navOverlay ? 'workspace is-nav-overlay' : 'workspace'} style={workspaceStyle}>
               {!navOverlay && (
                 <div
@@ -1313,70 +1194,48 @@ export function App() {
                     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) navHadFocus.current = false
                   }}
                 >
-                  {navVariant !== null ? protoNav('inline') : <Navigation
-                    state={directory.state}
-                    selected={selectedFeed}
-                    onSelect={selectFeed}
-                    onlineSearchCurrent={onlineSearchCurrent}
-                    onOpenOnlineSearch={openOnlineSearch}
-                    onRetry={directory.retry}
-                    variant="inline"
-                    progress={layout.navProgress}
-                    panelRef={inlineNavRef}
-                    identities={identities}
-                    onOpenSettings={openCookieSettings}
-                    onOpenDrafts={openDrafts}
-                    onOpenRetained={openRetained}
-                    onOpenAttempts={openAttempts}
-                    onOpenOwnPosts={openOwnPosts}
-                    pendingAttempts={pendingAttempts}
-                    reminderBadge={reminderBadge}
-                    onOpenLocalSearch={openLocalSearch}
-                    localSearchShortcut={shortcutLabel('search-local', platform)}
-                  />}
+                  {navigation('inline')}
                 </div>
               )}
 
               <div className="main-column">
                 {tabs !== null && current !== null && entry !== null && (
                   <>
-                    {!protoSettingsShown && <TopBar
-                      tabs={tabs.tabs}
-                      activeId={tabs.activeId}
-                      titleOf={titleOf}
-                      platform={platform}
-                      canBack={current.index > 0 && !protoSettingsShown}
-                      backLabel={
-                        current.index === 0 || protoSettingsShown
-                          ? null
-                          : entry.origin === 'quote'
-                            ? '返回引用处'
-                            : entry.origin === 'local-search' || entry.origin === 'online-search'
-                              ? '返回搜索结果'
-                              : null
-                      }
-                      canForward={current.index < current.entries.length - 1 && !protoSettingsShown}
-                      splitToggle={entry.kind === 'list' && !protoSettingsShown ? { pressed: current.split, onToggle: toggleSplit } : null}
-                      navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
-                      onBack={goBack}
-                      onForward={goForward}
-                      onActivate={activate}
-                      onClose={closeTab}
-                      onNewTab={newTab}
-                      settingsTrigger={
-                        navVariant !== null && !navOverlay
-                          ? null
-                          : { ref: settingsButtonRef, expanded: settingsOpen || protoSettingsShown, onOpen: openSettingsTop }
-                      }
-                    />}
-                    <div className="tab-host" hidden={protoSettingsShown ? true : undefined}>
+                    {!settingsShown && (
+                      <TopBar
+                        tabs={tabs.tabs}
+                        activeId={tabs.activeId}
+                        titleOf={titleOf}
+                        platform={platform}
+                        canBack={current.index > 0}
+                        backLabel={
+                          current.index === 0
+                            ? null
+                            : entry.origin === 'quote'
+                              ? '返回引用处'
+                              : entry.origin === 'local-search' || entry.origin === 'online-search'
+                                ? '返回搜索结果'
+                                : null
+                        }
+                        canForward={current.index < current.entries.length - 1}
+                        splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
+                        navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
+                        onBack={goBack}
+                        onForward={goForward}
+                        onActivate={activate}
+                        onClose={closeTab}
+                        onNewTab={newTab}
+                        settingsTrigger={navOverlay ? { ref: settingsButtonRef, onOpen: openSettingsTop } : null}
+                      />
+                    )}
+                    <div className="tab-host" hidden={settingsShown ? true : undefined}>
                       {tabs.tabs.map((tab) => (
                         <TabView
                           key={tab.id}
                           tab={tab}
                           active={tab.id === tabs.activeId}
-                          composeHidden={protoSettingsShown}
-                          onResizeList={PROTOTYPE_ENABLED ? resizeList : null}
+                          composeHidden={settingsShown}
+                          onResizeList={resizeList}
                           layout={layout}
                           directory={directory.state}
                           onRetryDirectory={directory.retry}
@@ -1386,12 +1245,24 @@ export function App() {
                           onSelectThread={selectThread}
                           onShowPane={showPane}
                           onOpenTarget={openListTarget}
-                          onOpenNav={navOverlay ? navPopover.toggle : null}
                           onOpenFromOnlineSearch={openFromOnlineSearch}
                         />
                       ))}
                     </div>
-                    {protoSettingsShown && protoSettingsPage}
+                    {settingsShown && (
+                      <SettingsPage
+                        identities={identities}
+                        subscriptions={subscriptions}
+                        settings={settings}
+                        platform={platform}
+                        status={settingsWriter.status}
+                        write={writeSettings}
+                        adopt={settingsWriter.adopt}
+                        directory={dirData}
+                        target={settingsTarget}
+                        onClose={closeSettings}
+                      />
+                    )}
                   </>
                 )}
               </div>
@@ -1399,28 +1270,7 @@ export function App() {
               {navOverlay && navPopover.open && (
                 <>
                   <div className="nav-overlay-layer" aria-hidden="true" />
-                  {navVariant !== null ? protoNav('overlay') : <Navigation
-                    state={directory.state}
-                    selected={selectedFeed}
-                    onSelect={selectFeed}
-                    onlineSearchCurrent={onlineSearchCurrent}
-                    onOpenOnlineSearch={openOnlineSearch}
-                    onRetry={directory.retry}
-                    variant="overlay"
-                    progress={0}
-                    panelRef={navPanelRef}
-                    id="nav-overlay"
-                    identities={identities}
-                    onOpenSettings={openCookieSettings}
-                    onOpenDrafts={openDrafts}
-                    onOpenRetained={openRetained}
-                    onOpenAttempts={openAttempts}
-                    onOpenOwnPosts={openOwnPosts}
-                    pendingAttempts={pendingAttempts}
-                    reminderBadge={reminderBadge}
-                    onOpenLocalSearch={openLocalSearch}
-                    localSearchShortcut={shortcutLabel('search-local', platform)}
-                  />}
+                  {navigation('overlay')}
                 </>
               )}
             </div>
@@ -1430,10 +1280,9 @@ export function App() {
             </QuoteActiveContext.Provider>
             </QuoteControllerContext.Provider>
           </ContentRegistryContext.Provider>
-          {/* Outside every reader's content: showing a quote card never counts as reading. */}
+          {/* Outside every reader's content: a quote card is not part of any thread view. */}
           {quote.cardProps !== null && <QuoteCard {...quote.cardProps} />}
-          {/* Modal: readers below judge nothing read while it is open, and hits shown here never count as reading.
-              PROTOTYPE: not while a 搜索 page holds the local search open; the page shows it. */}
+          {/* The in-thread search sheet (Ctrl/Cmd+F); not while a 搜索 page holds the local search open. */}
           {tabs !== null && search.state.openTab === tabs.activeId && searchPageTab === null && (
             <SearchSheet
               key={`${tabs.activeId}:${search.state.restoreSeq}`}
@@ -1445,21 +1294,7 @@ export function App() {
               restoreSeq={search.state.restoreSeq}
               commands={searchCommands}
               forums={names}
-              platform={platform}
               fallbackFocus={() => document.querySelector<HTMLElement>(`#tabpanel-${tabs.activeId} [data-pane-focus]`)}
-            />
-          )}
-          {settingsOpen && (
-            <SettingsDialog
-              identities={identities}
-              subscriptions={subscriptions}
-              settings={settings}
-              platform={platform}
-              status={settingsWriter.status}
-              write={settingsWriter.write}
-              adopt={settingsWriter.adopt}
-              onClose={closeSettings}
-              fallbackFocus={() => settingsButtonRef.current}
             />
           )}
           {draftsOpen && (
@@ -1468,35 +1303,9 @@ export function App() {
               onContinue={continueDraft}
               onOpenAttempts={openAttempts}
               onClose={closeDrafts}
-              fallbackFocus={() => navTriggerRef.current}
-            />
-          )}
-          {retained !== null && (
-            <RetainedDialog
-              initial={retained}
-              resets={registry.readingResets}
-              favorites={registry.favorites}
-              filters={registry.retainedFilters}
-              forumNames={names}
-              onOpenThread={openThread}
-              onClose={closeRetained}
-              fallbackFocus={() => navTriggerRef.current}
-            />
-          )}
-          {attemptsOpen && (
-            <AttemptsDialog
-              tabTitle={tabTitle}
-              onContinue={continueDraft}
-              onOpenTarget={openTargetInTab}
-              onClose={closeAttempts}
-              fallbackFocus={() => navTriggerRef.current}
-            />
-          )}
-          {ownPostsOpen && (
-            <OwnPostsDialog
-              onOpenThread={(threadId) => openTargetInTab({ kind: 'reply', threadId })}
-              onClose={closeOwnPosts}
-              fallbackFocus={() => navTriggerRef.current}
+              fallbackFocus={() =>
+                navOverlay ? navTriggerRef.current : (inlineNavRef.current?.querySelector<HTMLElement>('[data-boards-trigger]') ?? null)
+              }
             />
           )}
           {promptEditor !== undefined && promptEditor.publication?.phase === 'prompt' && (
@@ -1511,7 +1320,7 @@ export function App() {
           {closing !== null && (
             <UnsavedEditorsDialog
               label="关闭标签"
-              intro={`「${tabTitle(closing.tabId)}」中有未保存的编辑（包括已收起的）。关闭前保存为草稿，还是放弃？`}
+              intro={`「${tabTitle(closing.tabId)}」有未保存的编辑。`}
               verb="关闭"
               editorIds={closing.editorIds}
               onFinish={() => {
@@ -1520,9 +1329,6 @@ export function App() {
               }}
               onCancel={() => setClosing(null)}
             />
-          )}
-          {navVariant !== null && (
-            <PrototypeSwitcher variants={NAV_VARIANTS} current={navVariant} onChange={setNavVariant} />
           )}
           <LifecycleHost
             platform={platform}
@@ -1539,6 +1345,7 @@ export function App() {
       </SubscriptionsContext>
       </EditorWorkspaceContext>
     </SettingsOpenerContext>
+    </SettingsContext>
     </AppCoveredContext>
   )
 }

@@ -75,9 +75,9 @@ export function fetchText(fetch: SearchFetch): string {
     case 'stopped':
       return reason === null ? `获取结束：${got}` : `获取停止（${reason}）：${got}`
     case 'cancelled':
-      return `已取消：${got}，已取得的内容保留`
+      return `已取消：${got}`
     case 'failed':
-      return `${fetch.failedPage === null ? '获取失败' : `第 ${fetch.failedPage} 页读取失败`}${reason === null ? '' : `（${reason}）`}：${got}，已取得的内容保留`
+      return `${fetch.failedPage === null ? '获取失败' : `第 ${fetch.failedPage} 页读取失败`}${reason === null ? '' : `（${reason}）`}：${got}`
   }
 }
 

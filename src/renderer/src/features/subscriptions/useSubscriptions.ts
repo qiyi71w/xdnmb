@@ -20,7 +20,6 @@ import {
   type ReconcileMode,
   type ReconcileTask
 } from './reconcileState'
-import { applyReminderChoice, type ReminderLinkage } from '../reminders/ReminderLinkage'
 
 /** Local history is re-read this often while a plan runs in this window; never any remote call. */
 const PLAN_POLL_MS = 1000
@@ -40,11 +39,6 @@ export interface ActiveWrite {
   label: string
   /** 停止回读 was requested; an already issued write is not withdrawn. */
   stopRequested: boolean
-  /**
-   * 取消订阅 of a thread with enabled reminders: the user's 保留 / 关闭 choice, applied locally
-   * before the remote write and reported apart from it. `null` when nothing was asked.
-   */
-  reminders: ReminderLinkage | null
 }
 
 export type WriteOutcome =
@@ -65,8 +59,6 @@ export interface ChangeRequest {
   action: SubscriptionAction
   expectedGeneration: number
   label: string
-  /** The reminder choice made in the confirmation, applied locally first. */
-  reminders: ReminderLinkage | null
 }
 
 export interface SubscriptionsState {
@@ -97,11 +89,8 @@ export interface SubscriptionsState {
   startPreview: (mode: ReconcileMode, mergeSource: SubscriptionMergeSource | null) => Promise<void>
   /** Checks or unchecks candidates of the current preview. */
   setSelected: (ids: readonly string[], checked: boolean) => void
-  /**
-   * Executes the checked items of the current preview once; the preview is consumed whatever happens.
-   * A 关闭 reminder choice for the removed threads is applied locally first.
-   */
-  execute: (reminders: ReminderLinkage | null) => Promise<void>
+  /** Executes the checked items of the current preview once; the preview is consumed whatever happens. */
+  execute: () => Promise<void>
   /** Stops later reads / steps of the running preview or plan; an already sent write is not withdrawn. */
   stopTask: () => void
   /** Drops a preview, a failed preview or a finished result. Running work cannot be dismissed. */
@@ -274,28 +263,17 @@ export function useSubscriptions(): SubscriptionsState {
         action: request.action,
         generation: request.expectedGeneration,
         label: request.label,
-        stopRequested: false,
-        reminders: request.reminders?.choice === 'close' ? { ...request.reminders, result: { status: 'pending' } } : request.reminders
+        stopRequested: false
       }
-      await runWrite(write, async () => {
-        // The local reminder choice first, then the remote change exactly as without it.
-        if (write.reminders?.choice === 'close') {
-          const reminders = await applyReminderChoice(write.reminders, 'unsubscribe')
-          const current = activeRef.current
-          if (current !== null && current.operationId === operationId) {
-            const next = { ...current, reminders }
-            activeRef.current = next
-            if (alive.current) setActive(next)
-          }
-        }
-        return window.xidao.subscriptions.change({
+      await runWrite(write, () =>
+        window.xidao.subscriptions.change({
           source: request.source,
           threadId: request.threadId,
           action: request.action,
           expectedGeneration: request.expectedGeneration,
           operationId
         })
-      })
+      )
     },
     [runWrite]
   )
@@ -311,9 +289,9 @@ export function useSubscriptions(): SubscriptionsState {
         threadId: operation.threadId,
         action: operation.action,
         generation: operation.context.generation,
-        label: operation.objectLabel,
-        stopRequested: false,
-        reminders: null
+        // The record's object label names the collection by local reference; the line names the thread.
+        label: '',
+        stopRequested: false
       }
       await runWrite(write, () => window.xidao.subscriptions.reconcile({ id: operation.id, operationId }))
     },
@@ -371,7 +349,7 @@ export function useSubscriptions(): SubscriptionsState {
     [setTask]
   )
 
-  const execute = useCallback(async (reminders: ReminderLinkage | null) => {
+  const execute = useCallback(async () => {
     const current = taskRef.current
     if (current?.phase !== 'preview' || activeRef.current !== null) return
     // A preview made for another UUID / binding is never sent; the backend would refuse it as stale too.
@@ -379,31 +357,18 @@ export function useSubscriptions(): SubscriptionsState {
     const { preview, mergeSource } = current
     const selectedIds = selectedInOrder(preview, current.selected)
     const operationId = crypto.randomUUID()
-    let linkage: ReminderLinkage | null = reminders?.choice === 'close' ? { ...reminders, result: { status: 'pending' } } : reminders
-    setTask({ phase: 'executing', preview, mergeSource, selectedIds, operationId, stopRequested: false, reminders: linkage })
-    // The local reminder choice first, then the plan exactly as without it.
-    if (linkage?.choice === 'close') {
-      linkage = await applyReminderChoice(linkage, 'sync-delete')
-      const running = taskRef.current
-      if (alive.current && running?.phase === 'executing' && running.operationId === operationId) setTask({ ...running, reminders: linkage })
-    }
+    setTask({ phase: 'executing', preview, mergeSource, selectedIds, operationId, stopRequested: false })
     let outcome: ExecuteOutcome
-    const stopped = taskRef.current
-    if (stopped?.phase === 'executing' && stopped.operationId === operationId && stopped.stopRequested) {
-      // Stopped while the local close ran: nothing was sent.
-      outcome = { type: 'refused', reason: 'cancelled' }
-    } else {
-      try {
-        const result = await window.xidao.subscriptions.executePlan({ previewId: preview.id, selectedItemIds: selectedIds, operationId })
-        outcome = result.ok ? { type: 'plan', plan: result.value } : { type: 'refused', reason: result.reason }
-      } catch {
-        outcome = { type: 'failed' }
-      }
+    try {
+      const result = await window.xidao.subscriptions.executePlan({ previewId: preview.id, selectedItemIds: selectedIds, operationId })
+      outcome = result.ok ? { type: 'plan', plan: result.value } : { type: 'refused', reason: result.reason }
+    } catch {
+      outcome = { type: 'failed' }
     }
     if (!alive.current) return
     const ended = taskRef.current
     const stopRequested = ended?.phase === 'executing' && ended.operationId === operationId ? ended.stopRequested : false
-    setTask({ phase: 'finished', preview, mergeSource, selectedIds, stopRequested, outcome, reminders: linkage })
+    setTask({ phase: 'finished', preview, mergeSource, selectedIds, stopRequested, outcome })
     // History and journal are the durable record; re-read them whatever happened.
     void refreshPlans()
     void refreshOperations()

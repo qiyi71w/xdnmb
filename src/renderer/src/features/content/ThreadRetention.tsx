@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { OfflineCopy } from '../../../../shared/content'
 import type { ThreadId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
@@ -14,95 +14,7 @@ import {
   offlineStateText,
   type Refused
 } from './contentText'
-import { ContentRegistryContext } from '../tabs/contentRegistry'
-import { createFavoriteWrites, useWrittenFavorite } from './favoriteWrites'
 import './content.css'
-
-type FavoriteState = { status: 'loading' } | { status: 'failed'; refused: Refused } | { status: 'ready'; favorite: boolean }
-
-/**
- * 收藏 toggle of the open thread. The stored state is queried first; until it is known the button
- * does nothing. A successful write from any entry point (another tab, the 收藏 list) replaces the
- * queried state. Favoriting records an entry only: nothing is downloaded.
- */
-export function FavoriteButton({ threadId }: { threadId: ThreadId }) {
-  const registry = useContext(ContentRegistryContext)
-  // Outside the shell (no registry) this button is the only entry point.
-  const [ownWrites] = useState(createFavoriteWrites)
-  const writes = registry?.favorites ?? ownWrites
-  const written = useWrittenFavorite(writes, threadId)
-  const [queried, setQueried] = useState<FavoriteState>({ status: 'loading' })
-  const state: FavoriteState = written === undefined ? queried : { status: 'ready', favorite: written }
-  const [busy, setBusy] = useState(false)
-  const [failure, setFailure] = useState<string | null>(null)
-  const alive = useRef(true)
-
-  const query = useCallback(async () => {
-    setQueried({ status: 'loading' })
-    const result = await attempt(() => window.xidao.content.isFavorite({ threadId }))
-    if (!alive.current) return
-    setQueried(result?.ok === true ? { status: 'ready', favorite: result.value } : { status: 'failed', refused: result?.ok === false ? result : null })
-  }, [threadId])
-
-  useEffect(() => {
-    alive.current = true
-    void query()
-    return () => {
-      alive.current = false
-    }
-  }, [query])
-
-  const toggle = async () => {
-    if (state.status !== 'ready' || busy) return
-    const next = !state.favorite
-    setBusy(true)
-    setFailure(null)
-    const result = await attempt(() => window.xidao.content.favorite({ threadId, favorite: next }))
-    // Shared even when this button is gone: other entry points show the stored state.
-    if (result?.ok === true) writes.written(threadId, result.value)
-    if (!alive.current) return
-    setBusy(false)
-    if (result?.ok !== true) setFailure(`${next ? '收藏' : '取消收藏'}未完成：${contentFailureText(result?.ok === false ? result : null)}`)
-  }
-
-  if (state.status === 'failed') {
-    return (
-      <span className="retention-inline">
-        <button type="button" className="btn" onClick={() => void query()} title="重新读取这个串的收藏状态">
-          <Icon name="alert" />
-          收藏状态未知 · 重试
-        </button>
-        <span className="visually-hidden" role="status">
-          收藏状态读取失败：{contentFailureText(state.refused)}
-        </span>
-      </span>
-    )
-  }
-
-  const favorite = state.status === 'ready' && state.favorite
-  return (
-    <span className="retention-inline">
-      <button
-        type="button"
-        className={favorite ? 'btn favorite-btn is-on' : 'btn favorite-btn'}
-        aria-pressed={state.status === 'ready' ? favorite : undefined}
-        aria-busy={state.status === 'loading' || busy || undefined}
-        disabled={state.status === 'loading'}
-        onClick={() => void toggle()}
-        title={favorite ? '取消收藏；不影响离线副本和阅读记录' : '收藏只保存入口，不下载整串'}
-      >
-        <Icon name="star" />
-        {state.status === 'loading' ? '收藏…' : favorite ? '已收藏' : '收藏'}
-      </button>
-      {failure !== null && (
-        <span className="toolbar-warning" role="alert">
-          <Icon name="alert" size={14} />
-          {failure}
-        </span>
-      )}
-    </span>
-  )
-}
 
 const POLL_MS = 1000
 
@@ -166,7 +78,7 @@ function useOfflineCopy(threadId: ThreadId): OfflineCopyHandle {
   return { state, setState: update, pollFailure, reload: load }
 }
 
-/** What the thread's offline entry says about its copy: its label, and whether it needs attention. */
+/** What the thread's offline entry (串工具栏 › 更多) says about its copy: its label, and whether it needs attention. */
 export function useOfflineEntry(threadId: ThreadId) {
   const offline = useOfflineCopy(threadId)
   const copy = offline.state.status === 'ready' ? offline.state.copy : null
@@ -184,28 +96,6 @@ export function useOfflineEntry(threadId: ThreadId) {
               : '离线未完整'
   const warn = offline.state.status === 'failed' || (copy !== null && copy.state !== 'saving' && label === '离线未完整')
   return { offline, label, warn, saving: copy?.state === 'saving' }
-}
-
-/** Toolbar entry for the thread's offline copy; opens its dialog. */
-export function OfflineButton({ threadId, title }: { threadId: ThreadId; title: string }) {
-  const { offline, label, warn, saving } = useOfflineEntry(threadId)
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <button
-        type="button"
-        className={warn ? 'btn offline-btn is-warning' : 'btn offline-btn'}
-        aria-haspopup="dialog"
-        aria-busy={saving || undefined}
-        onClick={() => setOpen(true)}
-        title="保存或更新这个串的离线副本"
-      >
-        <Icon name={warn ? 'alert' : 'download'} />
-        {label}
-      </button>
-      {open && <OfflineDialog threadId={threadId} title={title} offline={offline} onClose={() => setOpen(false)} />}
-    </>
-  )
 }
 
 export function OfflineDialog({
@@ -260,7 +150,6 @@ export function OfflineDialog({
           {title}
           <span className="offline-thread-id">No.{threadId}</span>
         </p>
-        <p className="offline-intro">离线副本保存在本机，不随普通缓存清理。</p>
 
         {state.status === 'failed' && (
           <div className="notice notice-error" role="alert">
@@ -287,19 +176,12 @@ export function OfflineDialog({
             <legend className="field-label">{copy === null ? '保存内容' : '这次更新保存'}</legend>
             <label className="choice-row">
               <input type="radio" name={choiceName} checked={includeImages} onChange={() => setIncludeImages(true)} />
-              <span>
-                <span className="choice-title">文字和原图</span>
-                <span className="choice-help">正文、回复，以及能取得的原图。缩略图不算原图。</span>
-              </span>
+              <span className="choice-title">文字和原图</span>
             </label>
             <label className="choice-row">
               <input type="radio" name={choiceName} checked={!includeImages} onChange={() => setIncludeImages(false)} />
-              <span>
-                <span className="choice-title">仅文字</span>
-                <span className="choice-help">不下载原图，占用更少。</span>
-              </span>
+              <span className="choice-title">仅文字</span>
             </label>
-            {copy !== null && <p className="field-hint">更新保留已保存的内容，只补充新取得的页面和图片。</p>}
           </fieldset>
         )}
 

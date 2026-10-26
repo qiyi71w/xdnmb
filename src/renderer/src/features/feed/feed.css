@@ -1,4 +1,4 @@
-/* A column: the scroller takes what the bottom editor of a forum leaves. */
+/* A column: the scroller takes the pane's height. */
 .list-pane {
   height: 100%;
   display: flex;
@@ -144,12 +144,6 @@
   font-size: var(--text-md);
   font-weight: 600;
   color: var(--ink-2);
-}
-
-.list-empty-text {
-  margin-top: 4px;
-  font-size: var(--text-sm);
-  color: var(--ink-3);
 }
 
 .thread-list {

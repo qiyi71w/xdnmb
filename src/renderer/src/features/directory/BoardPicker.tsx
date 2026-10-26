@@ -1,18 +1,18 @@
-// PROTOTYPE (throwaway): choosing a board by name, shared by D's board panel and E's 全部版块 list
-// and empty tab page. A filter field, 收藏 first, then every group. `columns` lays the groups side by
-// side so the whole directory is seen at once (D); `list` stacks them, each group collapsible (E,
-// sharing the saved collapse state of the board trees).
+// Choosing a board by name in the board panel: a filter field, 收藏 first, then every group side by
+// side so the whole directory is seen at once. Each group (收藏 too) collapses from its heading and
+// stays collapsed (settings `boards.collapsed`); while filtering every match is shown.
 // Hidden boards are never listed: filter matches among them (or all of them, when nothing else is
-// left) are named below the results with 显示 to bring them back; no match offers 清除筛选.
+// left) are counted below the results with 显示 to bring them back; no match offers 清除筛选.
 // Keyboard: ↓ from the field enters the boards (or those buttons when there are none), ↑/↓/Home/End
 // move, → reaches a board's star (收藏), ← returns; Enter in the field opens the first match.
 
 import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { Icon } from '../../../components/Icon'
-import { useRovingFocus } from '../../../lib/useRovingFocus'
-import type { ListRef } from '../../tabs/tabsState'
-import { groupKey, type RovingItemProps } from './PrototypeNavParts'
-import { navActions, useNavPrefs, type Board, type BoardGroup, type BoardView } from './prototypeStore'
+import { Icon } from '../../components/Icon'
+import { useRovingFocus } from '../../lib/useRovingFocus'
+import type { ListRef } from '../tabs/tabsState'
+import { useSettings } from '../../lib/settingsContext'
+import { groupKey, type RovingItemProps } from './navParts'
+import { useNavActions, type Board, type BoardGroup, type BoardView } from './navStore'
 
 export function matches(text: string, query: string): boolean {
   return text.toLowerCase().includes(query)
@@ -25,31 +25,13 @@ export function matchingGroups(groups: BoardGroup[], query: string): BoardGroup[
     .filter((group) => group.boards.length > 0)
 }
 
-/** The view narrowed to `query`. */
-function filtered(view: BoardView, query: string): BoardView {
-  if (query === '') return view
-  return {
-    favorites: view.favorites.filter((item) => matches(item.label, query)),
-    groups: matchingGroups(view.groups, query)
-  }
-}
-
-/** Up to three names, then 等. */
-function someNames(boards: Board[]): string {
-  const names = boards
-    .slice(0, 3)
-    .map((item) => item.label)
-    .join('、')
-  return boards.length > 3 ? `${names}等` : names
-}
+const FAVORITES_GROUP = 'favorites'
 
 export function BoardPicker({
   view,
   hidden,
   selectedKey,
   onSelect,
-  shape,
-  autoFocus = false,
   placeholder,
   onClose
 }: {
@@ -58,37 +40,44 @@ export function BoardPicker({
   hidden: BoardGroup[]
   selectedKey: string | null
   onSelect: (ref: ListRef) => void
-  shape: 'columns' | 'list'
-  /** The field takes focus when a popup opens (`data-autofocus`). */
-  autoFocus?: boolean
   /** Directory not obtained, failed or empty: shown in place of the boards, filtering or not. */
   placeholder?: ReactNode
-  /** A popup holding the picker: a 关闭 button right of the field. */
-  onClose?: () => void
+  /** 关闭 right of the field. */
+  onClose: () => void
 }) {
   const fieldId = useId()
   const noteId = `${fieldId}-note`
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
-  const collapsed = useNavPrefs().collapsed
+  const collapsed = useSettings().settings.boards.collapsed
+  const actions = useNavActions()
   const normalized = query.trim().toLowerCase()
-  const shown = useMemo(() => filtered(view, normalized), [view, normalized])
   const filtering = normalized !== ''
 
+  // 收藏 is the first group; while filtering, groups only hold their matches.
+  const groups = useMemo(() => {
+    const all: BoardGroup[] = [
+      ...(view.favorites.length > 0 ? [{ id: FAVORITES_GROUP, title: '收藏', boards: view.favorites }] : []),
+      ...view.groups
+    ]
+    if (!filtering) return all
+    return all
+      .map((group) => (group.id === FAVORITES_GROUP ? { ...group, boards: group.boards.filter((item) => matches(item.label, normalized)) } : group))
+      .flatMap((group) => (group.id === FAVORITES_GROUP ? (group.boards.length > 0 ? [group] : []) : matchingGroups([group], normalized)))
+  }, [view, filtering, normalized])
+  const isClosed = (id: string) => !filtering && collapsed.includes(id)
+
   const ids = useMemo(
-    () => [
-      ...shown.favorites.map((item) => item.key),
-      ...shown.groups.flatMap((group) => [
-        ...(shape === 'list' ? [groupKey(group.id)] : []),
-        ...(shape === 'list' && !filtering && collapsed.includes(group.id) ? [] : group.boards.map((item) => item.key))
-      ])
-    ],
-    [shown, shape, filtering, collapsed]
+    () =>
+      groups.flatMap((group) =>
+        filtering ? group.boards.map((item) => item.key) : [groupKey(group.id), ...(collapsed.includes(group.id) ? [] : group.boards.map((item) => item.key))]
+      ),
+    [groups, filtering, collapsed]
   )
   const roving = useRovingFocus(ids, selectedKey)
 
-  // Favoriting moves the row between sections: keep focus on its star. Showing hidden boards
+  // Favoriting moves the row between groups: keep focus on its star. Showing hidden boards
   // removes 显示: focus goes to the first board shown.
   const refocus = useRef<{ key: string; star: boolean } | null>(null)
   useLayoutEffect(() => {
@@ -100,8 +89,8 @@ export function BoardPicker({
     focused?.focus()
   })
 
-  const first = shown.favorites[0] ?? shown.groups[0]?.boards[0]
-  const nothing = shown.favorites.length === 0 && shown.groups.length === 0
+  const first = groups[0]?.boards[0]
+  const nothing = groups.length === 0
 
   // Hidden filter matches, or every hidden board when they are all there is.
   const hiddenShown = useMemo(
@@ -114,8 +103,8 @@ export function BoardPicker({
     const firstOffered = offered[0]
     if (firstOffered === undefined) return
     refocus.current = { key: firstOffered.key, star: false }
-    for (const group of hiddenShown) if (collapsed.includes(group.id)) navActions.setCollapsed(group.id, false)
-    for (const item of offered) navActions.setBoardHidden(item.key, false)
+    actions.setCollapsed(hiddenShown.map((group) => group.id), false)
+    actions.setBoardsHidden(offered.map((item) => item.key), false)
   }
 
   const clearFilter = () => {
@@ -127,7 +116,7 @@ export function BoardPicker({
     if (event.nativeEvent.isComposing) return
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      rootRef.current?.querySelector<HTMLElement>('[data-roving-item], .proto-picker-status button')?.focus()
+      rootRef.current?.querySelector<HTMLElement>('[data-roving-item], .shell-picker-status button')?.focus()
     } else if (event.key === 'Enter' && filtering && first !== undefined) {
       event.preventDefault()
       onSelect(first.ref)
@@ -155,7 +144,7 @@ export function BoardPicker({
       return
     }
     // From 显示 / 清除筛选: ↑ goes back to the last board, or to the field when there is none.
-    if (event.key === 'ArrowUp' && target.closest('.proto-picker-status') !== null) {
+    if (event.key === 'ArrowUp' && target.closest('.shell-picker-status') !== null) {
       event.preventDefault()
       const boards = rootRef.current?.querySelectorAll<HTMLElement>('[data-roving-item]') ?? []
       const last = boards.length > 0 ? boards[boards.length - 1] : inputRef.current
@@ -165,83 +154,75 @@ export function BoardPicker({
     roving.onKeyDown(event)
   }
 
-  const row = (item: Board, favorite: boolean) => (
-    <BoardChoice
-      key={item.key}
-      item={item}
-      favorite={favorite}
-      current={item.key === selectedKey}
-      onSelect={onSelect}
-      onStar={() => {
-        refocus.current = { key: item.key, star: true }
-        navActions.setFavorite(item.key, !favorite)
-      }}
-      itemProps={roving.itemProps(item.key)}
-    />
-  )
+  const favoriteKeys = new Set(view.favorites.map((item) => item.key))
 
   return (
-    <div className={`proto-picker is-${shape}`} ref={rootRef} data-keeps-arrows="">
-      <div className="proto-picker-top">
-        <div className="proto-picker-field">
+    <div className="shell-picker" ref={rootRef} data-keeps-arrows="">
+      <div className="shell-picker-top">
+        <div className="shell-picker-field">
           <Icon name="search" size={15} />
           <input
             ref={inputRef}
             id={fieldId}
             type="search"
-            className="proto-picker-input"
+            className="shell-picker-input"
             placeholder="筛选版块"
             aria-label="筛选版块"
             autoComplete="off"
             spellCheck={false}
             value={query}
-            data-autofocus={autoFocus ? '' : undefined}
+            data-autofocus=""
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onFieldKeyDown}
           />
         </div>
-        {onClose !== undefined && (
-          <button type="button" className="btn btn-quiet proto-picker-close" onClick={onClose}>
-            <Icon name="close" size={15} />
-            关闭
-          </button>
-        )}
+        <button type="button" className="btn btn-quiet shell-picker-close" onClick={onClose}>
+          <Icon name="close" size={15} />
+          关闭
+        </button>
       </div>
-      <div className="proto-picker-body" onKeyDown={onBodyKeyDown}>
-        {shown.favorites.length > 0 && (
-          <section className="proto-picker-favorites" aria-label="收藏">
-            <h3 className="proto-picker-heading">收藏</h3>
-            <ul className="proto-picker-list">{shown.favorites.map((item) => row(item, true))}</ul>
-          </section>
-        )}
-        {shown.groups.length > 0 && (
-          <div className="proto-picker-groups">
-            {shown.groups.map((group) => {
-              const closed = shape === 'list' && !filtering && collapsed.includes(group.id)
+      <div className="shell-picker-body" onKeyDown={onBodyKeyDown}>
+        {groups.length > 0 && (
+          <div className="shell-picker-groups">
+            {groups.map((group) => {
+              const closed = isClosed(group.id)
               const listId = `${fieldId}-${group.id}`
               return (
-                <section key={group.id} className="proto-picker-group" aria-label={group.title}>
-                  {shape === 'list' ? (
-                    <h3 className="proto-picker-heading">
-                      <button
-                        type="button"
-                        className="proto-picker-toggle"
-                        aria-expanded={!closed}
-                        aria-controls={closed ? undefined : listId}
-                        disabled={filtering}
-                        onClick={() => navActions.setCollapsed(group.id, !collapsed.includes(group.id))}
-                        {...(filtering ? {} : roving.itemProps(groupKey(group.id)))}
-                      >
-                        <Icon name="chevron" size={12} className={closed ? 'proto-chevron' : 'proto-chevron is-open'} />
-                        {group.title}
-                      </button>
-                    </h3>
-                  ) : (
-                    <h3 className="proto-picker-heading">{group.title}</h3>
-                  )}
+                <section key={group.id} className="shell-picker-group" aria-label={group.title}>
+                  <h3 className="shell-picker-heading">
+                    <button
+                      type="button"
+                      className="shell-picker-toggle"
+                      aria-expanded={!closed}
+                      aria-controls={closed ? undefined : listId}
+                      disabled={filtering}
+                      onClick={() => actions.setCollapsed([group.id], !collapsed.includes(group.id))}
+                      {...(filtering ? {} : roving.itemProps(groupKey(group.id)))}
+                    >
+                      <Icon name="chevron" size={12} className={closed ? 'shell-chevron' : 'shell-chevron is-open'} />
+                      {group.title}
+                      {closed && <span className="shell-group-count">{group.boards.length}</span>}
+                    </button>
+                  </h3>
                   {!closed && (
-                    <ul className="proto-picker-list" id={listId}>
-                      {group.boards.map((item) => row(item, false))}
+                    <ul className="shell-picker-list" id={listId}>
+                      {group.boards.map((item) => {
+                        const favorite = favoriteKeys.has(item.key)
+                        return (
+                          <BoardChoice
+                            key={item.key}
+                            item={item}
+                            favorite={favorite}
+                            current={item.key === selectedKey}
+                            onSelect={onSelect}
+                            onStar={() => {
+                              refocus.current = { key: item.key, star: true }
+                              actions.setFavorite(item.key, !favorite)
+                            }}
+                            itemProps={roving.itemProps(item.key)}
+                          />
+                        )
+                      })}
                     </ul>
                   )}
                 </section>
@@ -250,11 +231,11 @@ export function BoardPicker({
           </div>
         )}
         {placeholder ?? (
-          <div className={nothing ? 'proto-picker-status' : 'proto-picker-status is-below'} role="status">
-            {nothing && offered.length === 0 && <p className="proto-picker-note">{filtering ? '没有匹配的版块' : '没有可浏览的版面。'}</p>}
+          <div className={nothing ? 'shell-picker-status' : 'shell-picker-status is-below'} role="status">
+            {nothing && offered.length === 0 && <p className="shell-picker-note">{filtering ? '没有匹配的版块' : '没有可浏览的版块'}</p>}
             {offered.length > 0 && (
-              <p className="proto-picker-note" id={noteId}>
-                {filtering ? `已隐藏 ${offered.length} 个匹配：${someNames(offered)}` : '版块都已隐藏'}
+              <p className="shell-picker-note" id={noteId}>
+                {filtering ? `已隐藏 ${offered.length} 个匹配` : `版块都已隐藏`}
               </p>
             )}
             {offered.length > 0 && (
@@ -290,25 +271,25 @@ function BoardChoice({
   itemProps: RovingItemProps
 }) {
   return (
-    <li className="proto-choice">
+    <li className="shell-choice">
       <button
         type="button"
-        className={current ? 'proto-choice-btn is-current' : 'proto-choice-btn'}
+        className={current ? 'shell-choice-btn is-current' : 'shell-choice-btn'}
         aria-current={current ? 'page' : undefined}
         onClick={() => onSelect(item.ref)}
         {...itemProps}
       >
-        <Icon name={item.icon} size={14} className="proto-choice-icon" />
-        <span className="proto-choice-label">{item.label}</span>
+        <Icon name={item.icon} size={14} className="shell-choice-icon" />
+        <span className="shell-choice-label">{item.label}</span>
       </button>
       <button
         type="button"
-        className={favorite ? 'proto-star is-on' : 'proto-star'}
+        className={favorite ? 'shell-star is-on' : 'shell-star'}
         tabIndex={-1}
         data-star-key={item.key}
         aria-pressed={favorite}
         aria-label={`收藏 ${item.label}`}
-        title={favorite ? '取消收藏（←／→）' : '收藏（→ 选中星标）'}
+        title={favorite ? '取消收藏' : '收藏'}
         onClick={onStar}
       >
         <Icon name="star" size={13} />

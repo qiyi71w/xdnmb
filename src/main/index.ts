@@ -51,7 +51,6 @@ const IMAGE_ORIGIN = 'https://image.nmb.best'
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL
 const rendererFile = join(import.meta.dirname, '../renderer/index.html')
 const rendererFileUrl = pathToFileURL(rendererFile).href
-const prototypeEnabled = process.env.VITE_XIDAO_PROTOTYPE === '1'
 
 function isAppDocument(url: string): boolean {
   if (rendererDevUrl) return URL.canParse(url) && new URL(url).origin === new URL(rendererDevUrl).origin
@@ -125,15 +124,17 @@ function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1320,
     height: 860,
-    // Narrow windows fall back to compact navigation, an overlay and a single pane.
+    // Narrow windows fold the icon rail into an overlay, then fall back to a single pane.
     minWidth: 480,
     minHeight: 480,
     show: false,
     title: '汐岛',
-    ...(prototypeEnabled ? platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {
+    // Native window controls stay; the app draws the title bar area. Windows/Linux color the
+    // controls through the overlay (kept in step with the theme by `updateTitleBar`).
+    ...(platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {
       titleBarStyle: 'hidden' as const,
       titleBarOverlay: { color: '#eef2f3', symbolColor: '#20272b', height: 44 }
-    } : {}),
+    }),
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.cjs'),
       sandbox: true,
@@ -221,12 +222,14 @@ function serveManagedImages(directories: Record<'file' | 'draft', ManagedImageFi
 }
 
 async function start(): Promise<void> {
+  // Only the app's own main frame may list installed fonts (asked for when the user picks a font);
+  // every other permission and every other page is denied.
   const denyAll = session.defaultSession
   denyAll.setPermissionRequestHandler((contents, permission, callback, details) => {
-    callback(prototypeEnabled && permission === 'local-fonts' && contents === mainWindow?.webContents && details.isMainFrame && isAppDocument(details.requestingUrl))
+    callback(permission === 'local-fonts' && contents === mainWindow?.webContents && details.isMainFrame && isAppDocument(details.requestingUrl))
   })
   denyAll.setPermissionCheckHandler((contents, permission, _origin, details) =>
-    prototypeEnabled && permission === 'local-fonts' && contents === mainWindow?.webContents && details.isMainFrame && typeof details.requestingUrl === 'string' && isAppDocument(details.requestingUrl))
+    permission === 'local-fonts' && contents === mainWindow?.webContents && details.isMainFrame && typeof details.requestingUrl === 'string' && isAppDocument(details.requestingUrl))
 
   const openedStore = await openReadingStore({
     databasePath: join(app.getPath('userData'), 'xidao.sqlite'),

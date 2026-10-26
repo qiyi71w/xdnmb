@@ -1,7 +1,6 @@
-// PROTOTYPE (throwaway): 更多 of the one-row thread toolbar. Holds 开头 / 末尾 (also Ctrl/⌘+Home /
-// End and the floating pills), 提醒 and 离线保存; choosing 提醒 or 离线保存 opens its existing panel
-// (the 提醒 panel anchored to 更多, the 离线副本 dialog) with its usual behaviour. Built only with
-// VITE_XIDAO_PROTOTYPE=1.
+// 更多 of the one-row thread toolbar: 在新标签页打开, 开头 / 末尾 (also Ctrl/⌘+Home / End and the
+// corner buttons), 举报 (the head post), 提醒 and 离线保存; choosing 提醒 or 离线保存 opens its panel
+// (the 提醒 panel anchored to 更多, the 离线副本 dialog).
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import type { ReadingMode, ThreadId } from '../../../../shared/forum'
@@ -118,6 +117,7 @@ export function ThreadMoreMenu({
       </button>
       {menu.open && (
         <div ref={menuRef} id={menuId} className="thread-more-menu" role="menu" aria-label="更多操作" onKeyDown={onMenuKeyDown}>
+          {openInTab !== null && <button type="button" role="menuitem" className="thread-more-item" onClick={() => { menu.close(); openInTab(threadId, null, mode) }}>在新标签页打开</button>}
           <button type="button" role="menuitem" className="thread-more-item" aria-keyshortcuts="Control+Home Meta+Home" onClick={() => { menu.close(); onToStart() }}>
             <Icon name="toTop" />
             开头
@@ -127,7 +127,6 @@ export function ThreadMoreMenu({
             末尾
           </button>
           <div role="separator" className="thread-more-separator" />
-          {openInTab !== null && <button type="button" role="menuitem" className="thread-more-item" onClick={() => { menu.close(); openInTab(threadId, null, mode) }}>在新标签页打开</button>}
           {onReport !== undefined && <button type="button" role="menuitem" className="thread-more-item" onClick={() => { menu.close(); onReport(triggerRef.current) }}>举报</button>}
           <button
             type="button"

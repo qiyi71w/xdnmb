@@ -1,8 +1,8 @@
-import type { AttachFailure, DraftAttachment, IdentityChoice, PostFields, PostTarget } from '../../../../shared/drafts'
+import type { AttachFailure, DraftAttachment, PostFields, PostTarget } from '../../../../shared/drafts'
 import type { CredentialId, IdentityOverview } from '../../../../shared/identity'
 import { formatLocalTime } from '../../lib/format'
 import { ATTEMPT_STATE_LABEL } from '../publication/publicationText'
-import { isUnsaved, type Editor, type IdentityStatus } from './editorsState'
+import { isUnsaved, type Editor } from './editorsState'
 import type { SaveFailure } from './useEditorsStore'
 
 export function forumLabel(forumId: string, forumName: (forumId: string | null) => string | null): string {
@@ -26,29 +26,6 @@ export const MISSING_IDENTITY_TEXT = '已移除，需要重新选择'
 export interface IdentityLine {
   text: string
   warning: boolean
-}
-
-export function identityLine(status: IdentityStatus): IdentityLine {
-  switch (status.state) {
-    case 'unknown':
-      return { text: '饼干选择无法读取，请重新选择', warning: true }
-    case 'none':
-      return { text: '未选择饼干', warning: false }
-    case 'missing':
-      return { text: MISSING_IDENTITY_TEXT, warning: true }
-    case 'selected':
-      return { text: status.name, warning: false }
-  }
-}
-
-/** The identity a new editor would start with, as the collapsed bar shows it. */
-export function choiceLine(choice: IdentityChoice | null, overview: IdentityOverview | null): IdentityLine {
-  if (choice === null) return { text: '读取中…', warning: false }
-  if (choice.source === 'unknown') return { text: '饼干选择无法读取', warning: true }
-  const selection = choice.selection
-  if (selection.state === 'none') return { text: '未选择饼干', warning: false }
-  if (selection.state === 'missing') return { text: MISSING_IDENTITY_TEXT, warning: true }
-  return credentialLine(selection.credentialId, overview)
 }
 
 /** Name of a referenced credential; a reference without its credential is missing. */
@@ -79,11 +56,11 @@ export function editorStateText(editor: Editor): string {
 }
 
 export const SAVE_FAILURE_TEXT: Record<SaveFailure, string> = {
-  storage: '未能保存：本地存储不可用或写入失败，内容仍保留在编辑中',
-  'not-found': '未能保存：原草稿已不存在，内容仍保留在编辑中',
-  'attachment-missing': '未能保存：附图的本地副本已丢失，请移除或重新添加图片后再保存',
-  locked: '未能保存：这份内容有一次发送尚无结果，已锁定，不能作为草稿修改',
-  internal: '未能保存：应用内部请求失败，内容仍保留在编辑中'
+  storage: '未能保存：本地存储不可用',
+  'not-found': '未能保存：原草稿已不存在',
+  'attachment-missing': '未能保存：附图副本已丢失，请重新添加图片',
+  locked: '未能保存：发送结果未定，内容已锁定',
+  internal: '未能保存：应用内部请求失败'
 }
 
 export const ATTACH_FAILURE_TEXT: Record<Exclude<AttachFailure, 'cancelled'> | 'internal', string> = {

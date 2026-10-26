@@ -19,11 +19,6 @@
   font-weight: 600;
 }
 
-.drafts-empty-text {
-  font-size: var(--text-sm);
-  color: var(--ink-2);
-}
-
 .drafts-list {
   display: grid;
   gap: 6px;

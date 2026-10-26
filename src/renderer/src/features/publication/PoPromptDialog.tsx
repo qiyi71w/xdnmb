@@ -48,7 +48,7 @@ export function PoPromptDialog({
         </h2>
       </header>
       <div className="modal-body po-body">
-        <p className="po-intro">{target}。这个串是你用另一块饼干开的，确认这次用哪块饼干发送。</p>
+        <p className="po-intro">{target}</p>
         <dl className="po-names">
           <div className="po-name">
             <dt>当前饼干</dt>
@@ -62,18 +62,14 @@ export function PoPromptDialog({
         {!prompt.canSwitch && (
           <p className="notice-inline is-warning" id={switchHelpId}>
             <Icon name="alert" size={14} />
-            PO 饼干当前不可用（已移除或无法读取），不能切回。
+            PO 饼干当前不可用，不能切回
           </p>
         )}
-        <p className="po-note">正文、目标和附图已固定，选择之前不会发送。切回会同时更新这次编辑和该串记住的饼干。</p>
       </div>
       <div className="modal-actions po-actions">
         <label className="po-suppress">
           <input type="checkbox" checked={suppress} disabled={resolving} onChange={(event) => setSuppress(event.target.checked)} />
-          <span>
-            本次启动不再提示
-            <span className="po-suppress-help">选择发送后生效，对所有串有效；可在设置中长期关闭</span>
-          </span>
+          <span>本次启动不再提示</span>
         </label>
         <div className="po-buttons">
           <button type="button" className="btn" aria-disabled={resolving || undefined} onClick={() => choose('cancel')}>

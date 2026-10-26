@@ -1,7 +1,6 @@
 import type { ThreadSummary } from '../../../../shared/forum'
 import type {
   SubscriptionAction,
-  SubscriptionContext,
   SubscriptionFailure,
   SubscriptionObservation,
   SubscriptionOperation,
@@ -38,19 +37,6 @@ export function threadLabel(thread: ThreadSummary): string {
   return excerpt === '' ? `No.${thread.head.id}` : excerpt.slice(0, 30)
 }
 
-/** Identity combination behind a source: App local reference or the fixed web sync object. */
-export function contextText(context: SubscriptionContext, source: SubscriptionSource): string {
-  const ref =
-    source === 'app'
-      ? context.appCredentialId === null
-        ? 'App UUID 未设置'
-        : `App UUID 本机引用 #${context.appCredentialId}`
-      : context.webCredentialId === null
-        ? '网页同步对象未绑定'
-        : `网页同步对象 #${context.webCredentialId}`
-  return `${ref} · 配置代次 ${context.generation}`
-}
-
 /** Fixed web sync object as the user named it; never the cookie itself. */
 export function webObjectText(overview: SubscriptionOverview): string {
   switch (overview.webSelection.state) {
@@ -71,7 +57,7 @@ export function sourceBlocker(overview: SubscriptionOverview, source: Subscripti
     case 'none':
       return '尚未绑定网页同步对象'
     case 'missing':
-      return '网页同步对象已移除，需要重新选择；不会自动改用其他饼干'
+      return '网页同步对象已移除，需要重新选择'
     case 'selected':
       return null
   }
@@ -92,15 +78,15 @@ export function failureText(reason: SubscriptionFailure): string {
     case 'invalid-uuid':
       return 'UUID 格式无效，未更改'
     case 'stale':
-      return '订阅配置已变化，未按旧配置执行，请重新确认'
+      return '订阅配置已变化，未执行'
     case 'busy':
-      return '另一项订阅操作正在进行，或这个串还有待核对的操作，未执行'
+      return '另一项订阅操作正在进行，或这个串的上次操作待核对，未执行'
     case 'not-found':
       return '找不到这条记录'
     case 'invalid-selection':
-      return '所选条目不属于这份预览，或有重复，未执行；请重新预览后再勾选'
+      return '所选条目不属于这份预览，未执行'
     case 'cancelled':
-      return '已按要求停止，之后的读取与步骤没有继续'
+      return '已停止'
   }
 }
 
@@ -109,7 +95,7 @@ function reportText(operation: SubscriptionOperation): string {
     case 'pending':
       return '尚未收到服务端报告'
     case 'success':
-      return '服务端报告成功（不代表集合一定发生了变化）'
+      return '服务端报告成功'
     case 'rejected':
       return '服务端拒绝了这次请求'
     case 'unknown':
@@ -128,9 +114,9 @@ export function verificationText(operation: SubscriptionOperation): string {
     case 'present':
       return '回读看到这个串在订阅中'
     case 'absent-supported':
-      return '回读从第 1 页连续读到结束候选都没有这个串，且有原有效观察与成功报告为依据'
+      return '回读从第 1 页读到结束候选都没有这个串'
     case 'absent-unproven':
-      return '回读没有找到这个串，但依据不足，不能证明它已不在订阅中'
+      return '回读没有找到这个串，但不能证明它已不在订阅中'
     case 'mismatch':
       return '回读结果与服务端报告不一致'
     case 'unknown':
@@ -161,15 +147,6 @@ export function coverageText(observation: SubscriptionObservation): string {
   return parts.join(' · ')
 }
 
-/** Short evidence line for a journal entry's before/after observation. */
-export function evidenceText(observation: SubscriptionObservation | null): string {
-  if (observation === null) return '无'
-  const base = coverageText(observation)
-  if (observation.error !== null) return `${base} · 第 ${observation.error.page} 页读取失败`
-  if (observation.cancelled) return `${base} · 已取消`
-  return base
-}
-
 /** One observation's state for a preview: how far it got and why it may be incomplete. */
 export function observationState(observation: SubscriptionObservation): { complete: boolean; text: string } {
   if (observation.error !== null) {
@@ -177,7 +154,7 @@ export function observationState(observation: SubscriptionObservation): { comple
   }
   if (observation.cancelled) return { complete: false, text: `已停止，第 ${observation.nextPage ?? ''} 页起没有读取` }
   if (observation.nextPage !== null) return { complete: false, text: `第 ${observation.nextPage} 页起没有读取` }
-  return { complete: true, text: '已连续读到空页（结束候选）；读取期间远端仍可能变化' }
+  return { complete: true, text: '已读到空页（结束候选）' }
 }
 
 export const PLAN_STATE_TEXT: Record<SubscriptionPlan['state'], string> = {
@@ -191,13 +168,13 @@ export const PLAN_STATE_TEXT: Record<SubscriptionPlan['state'], string> = {
 export function stopReasonText(plan: SubscriptionPlan): string | null {
   switch (plan.stopReason) {
     case null:
-      return plan.state === 'interrupted' ? '应用在执行过程中关闭，计划没有继续，也不会在启动时自动继续' : null
+      return plan.state === 'interrupted' ? '应用在执行中关闭' : null
     case 'item-failed':
       return '有一项失败，已停止后续写入'
     case 'item-unknown':
       return '有一项结果无法确认，已停止后续写入'
     case 'cancelled':
-      return '按你的要求停止了后续步骤；已经发出的写入不会撤回'
+      return '已停止后续步骤'
     default:
       return failureText(plan.stopReason)
   }

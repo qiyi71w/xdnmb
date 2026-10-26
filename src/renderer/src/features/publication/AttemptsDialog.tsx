@@ -2,13 +2,10 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { PostTarget, SavedDraft } from '../../../../shared/drafts'
 import type { PublicationAttempt } from '../../../../shared/publication'
 import { Icon } from '../../components/Icon'
-import { Modal, ModalHeader } from '../../components/Modal'
-import { Loading } from '../../components/Notices'
 import { formatLocalTime } from '../../lib/format'
 import { credentialLine, excerpt, targetText } from '../editor/editorText'
 import { useEditorWorkspace } from '../editor/workspace'
 import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, ATTEMPT_STATE_LABEL } from './publicationText'
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import './publication.css'
 
 type ListState = { status: 'loading' } | { status: 'failed' } | { status: 'ready'; attempts: PublicationAttempt[] }
@@ -20,24 +17,6 @@ function needsCheck(attempt: PublicationAttempt): boolean {
   return attempt.state === 'sending' || attempt.state === 'unknown' || attempt.state === 'unconfirmed'
 }
 
-/**
- * 发送记录: every durable attempt with the content, target and identity it froze, newest first;
- * those still to be checked (sending / 结果待确认 / ID 未确认) come first. Nothing here sends: an
- * unresolved attempt can only be checked at its target, a failed one continues as its saved draft.
- */
-export function AttemptsDialog({ onClose, fallbackFocus, ...body }: AttemptsBodyProps & {
-  onClose: () => void
-  fallbackFocus?: () => HTMLElement | null
-}) {
-  const titleId = useId()
-  return (
-    <Modal className="attempts-dialog" labelledBy={titleId} onClose={onClose} fallbackFocus={fallbackFocus}>
-      <ModalHeader title="发送记录" titleId={titleId} closeLabel="关闭发送记录" onClose={onClose} />
-      <AttemptsBody {...body} />
-    </Modal>
-  )
-}
-
 export interface AttemptsBodyProps {
   tabTitle: (tabId: number) => string
   onContinue: (draft: SavedDraft) => void
@@ -45,6 +24,12 @@ export interface AttemptsBodyProps {
   onOpenTarget: (target: PostTarget) => void
 }
 
+/**
+ * 发送记录 (the 历史 page's second side): every durable attempt with the content, target and
+ * identity it froze, newest first; those still to be checked (sending / 结果待确认 / ID 未确认) come
+ * first. Nothing here sends: an unresolved attempt can only be checked at its target, a failed one
+ * continues as its saved draft. A failed background re-read keeps the list and says so.
+ */
 export function AttemptsBody({ tabTitle, onContinue, onOpenTarget, refreshRevision = 0 }: AttemptsBodyProps & { refreshRevision?: number }) {
   const { store, identities, forumName } = useEditorWorkspace()
   const titleId = useId()
@@ -65,12 +50,12 @@ export function AttemptsBody({ tabTitle, onContinue, onOpenTarget, refreshRevisi
         setReadFailed(false)
       } else {
         if (!quiet) setList({ status: 'failed' })
-        else if (PROTOTYPE_ENABLED) setReadFailed(true)
+        else setReadFailed(true)
       }
     } catch {
       if (!alive.current) return
       if (!quiet) setList({ status: 'failed' })
-      else if (PROTOTYPE_ENABLED) setReadFailed(true)
+      else setReadFailed(true)
     }
   }, [])
 
@@ -154,9 +139,6 @@ export function AttemptsBody({ tabTitle, onContinue, onOpenTarget, refreshRevisi
           {payload.fields.watermark && payload.attachmentId !== null && <span>水印开</span>}
         </p>
         <p className="attempt-excerpt">{excerpt(payload.fields, null, 80)}</p>
-        {state === 'sending' && (PROTOTYPE_ENABLED
-          ? <p className="attempt-detail">{ATTEMPT_STATE_DETAIL.sending}</p>
-          : <Loading live={false}>{ATTEMPT_STATE_DETAIL.sending}</Loading>)}
         {(state === 'unknown' || state === 'unconfirmed') && (
           <p className="attempt-detail">
             {ATTEMPT_STATE_DETAIL[state]}
@@ -165,8 +147,8 @@ export function AttemptsBody({ tabTitle, onContinue, onOpenTarget, refreshRevisi
         )}
         {state === 'failed' && (
           <p className="attempt-detail">
-            {attempt.problem === null ? '发送失败' : ATTEMPT_PROBLEM_TEXT[attempt.problem]}。
-            {attempt.savedDraftId !== null ? '内容已自动保存为草稿，可继续编辑后再发。' : '自动保存草稿没有成功；内容仍在下方保留。'}
+            {attempt.problem === null ? '发送失败' : ATTEMPT_PROBLEM_TEXT[attempt.problem]}
+            {attempt.savedDraftId !== null ? '，已存为草稿' : '，草稿未能保存'}
           </p>
         )}
         {editing !== undefined && <p className="attempt-editing">仍在「{tabTitle(editing.tabId)}」标签的编辑中显示</p>}
@@ -235,11 +217,9 @@ export function AttemptsBody({ tabTitle, onContinue, onOpenTarget, refreshRevisi
   }
 
   return (
-      <div className="modal-body attempts-body" aria-busy={list.status === 'loading' || undefined}>
-        {!PROTOTYPE_ENABLED && <p className="attempts-intro">每次发送都先记录在本机。汐岛不会自动重发；结果待确认或 ID 未确认的发送只能到目标处核对。</p>}
-        {list.status === 'loading' && !PROTOTYPE_ENABLED && <Loading>正在读取发送记录…</Loading>}
+      <div className="attempts-body" aria-busy={list.status === 'loading' || undefined}>
         {(list.status === 'failed' || readFailed) && (
-          <div className={`notice notice-error${PROTOTYPE_ENABLED ? ' is-compact' : ''}`} role="alert">
+          <div className="notice notice-error is-compact" role="alert">
             <Icon name="alert" className="notice-icon" />
             <div className="notice-text">
               <p className="notice-title">发送记录读取失败：本地存储不可用</p>

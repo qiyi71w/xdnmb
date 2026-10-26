@@ -74,5 +74,8 @@ export function useSettingsWriter(settings: AppSettings, setSettings: (settings:
 
   const clearStatus = useCallback(() => setStatus(NO_STATUS), [])
 
-  return { status, write, adopt, clearStatus }
+  /** The settings including changes not yet sent or answered. */
+  const current = useCallback(() => latest.current, [])
+
+  return { status, write, adopt, clearStatus, latest: current }
 }

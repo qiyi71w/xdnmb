@@ -1,8 +1,8 @@
-// PROTOTYPE (throwaway): B's icon rail, shared by every variant: an optional 版块 button on top with up
-// to five favorite boards under it (D, collapsed F), the shown features in the saved order (drag one
-// to move it; Esc or leaving the window cancels), then 更多 (only the hidden features, absent when
-// none are hidden) and 设置 at the bottom. Every button names itself in a tooltip shortly after a
-// hover or keyboard focus; the name of the current item is announced when it changes.
+// The icon rail: 版块 on top (it opens the board panel) with up to five favorite boards under it,
+// the shown features in the saved order (drag one to move it; Esc or leaving the window cancels),
+// then 更多 (only the hidden features, absent when none are hidden) and 设置 at the bottom. Every
+// button names itself in a tooltip shortly after a hover or keyboard focus; the name of the current
+// item is announced when it changes. Order and visibility are app settings (`rail`).
 
 import {
   useCallback,
@@ -12,16 +12,16 @@ import {
   type FocusEvent,
   type KeyboardEvent,
   type PointerEvent,
-  type Ref,
   type RefObject
 } from 'react'
 import { createPortal } from 'react-dom'
-import { Icon } from '../../../components/Icon'
-import { usePopover } from '../../../lib/usePopover'
-import { useRovingFocus } from '../../../lib/useRovingFocus'
-import type { ListRef } from '../../tabs/tabsState'
-import { FeatureDot, featureInfo, featureIsDialog, featureLabel, featureTitle, GridIcon, type FeatureHost } from './PrototypeNavParts'
-import { navActions, orderedFeatures, useNavPrefs, type Board, type FeatureId } from './prototypeStore'
+import { Icon } from '../../components/Icon'
+import { useSettings } from '../../lib/settingsContext'
+import { usePopover } from '../../lib/usePopover'
+import { useRovingFocus } from '../../lib/useRovingFocus'
+import type { ListRef } from '../tabs/tabsState'
+import { FeatureDot, featureInfo, featureIsDialog, featureLabel, featureTitle, GridIcon, type FeatureHost } from './navParts'
+import { orderedFeatures, useNavActions, type Board, type FeatureId } from './navStore'
 
 /** Width of the rail, CSS pixels (App widens the navigation column by it). */
 export const RAIL_WIDTH = 52
@@ -34,14 +34,10 @@ const MORE_KEY = 'more'
 const SETTINGS_KEY = 'settings'
 const favoriteKey = (key: string) => `fav:${key}`
 
-/** The 版块 button on top of the rail (D, F). */
+/** The 版块 button on top of the rail: opens the board panel. */
 export interface RailBoards {
-  label: string
-  buttonRef?: Ref<HTMLButtonElement>
-  /** Opens a popup panel; `expanded` tells whether it is open. */
-  popup: { expanded: boolean; controls: string } | null
-  /** Tinted while what it controls is shown (F: the column); the label says what a click does. */
-  active?: boolean
+  /** Whether the panel is open, and its element id. */
+  popup: { expanded: boolean; controls: string }
   onClick: (button: HTMLButtonElement) => void
 }
 
@@ -60,24 +56,25 @@ function favoriteMarks(boards: readonly Board[]): string[] {
   return chars.map((name, index) => (firsts.filter((first) => first === firsts[index]).length > 1 ? name.slice(0, 2).join('') : firsts[index]!))
 }
 
-export function PrototypeRail({
+export function Rail({
   features,
   settingsCurrent,
   onOpenSettings,
-  boards = null,
-  favorites = null
+  boards,
+  favorites
 }: {
   features: FeatureHost
   settingsCurrent: boolean
   onOpenSettings: () => void
-  boards?: RailBoards | null
-  favorites?: RailFavorites | null
+  boards: RailBoards
+  favorites: RailFavorites
 }) {
-  const prefs = useNavPrefs()
-  const ordered = orderedFeatures(prefs.featureOrder)
-  const shown = ordered.filter((feature) => !prefs.hiddenFeatures.includes(feature.id))
-  const hidden = ordered.filter((feature) => prefs.hiddenFeatures.includes(feature.id))
-  const railFavorites = favorites === null ? [] : favorites.boards.slice(0, RAIL_FAVORITES)
+  const prefs = useSettings().settings.rail
+  const actions = useNavActions()
+  const ordered = orderedFeatures(prefs.order)
+  const shown = ordered.filter((feature) => !prefs.hidden.includes(feature.id))
+  const hidden = ordered.filter((feature) => prefs.hidden.includes(feature.id))
+  const railFavorites = favorites.boards.slice(0, RAIL_FAVORITES)
   const marks = favoriteMarks(railFavorites)
 
   const railRef = useRef<HTMLDivElement>(null)
@@ -93,13 +90,13 @@ export function PrototypeRail({
   }, [hasMore, closeMore])
 
   const railIds = [
-    ...(boards !== null ? [BOARDS_KEY] : []),
+    BOARDS_KEY,
     ...railFavorites.map((item) => favoriteKey(item.key)),
     ...shown.map((feature) => feature.id),
     ...(hasMore ? [MORE_KEY] : []),
     SETTINGS_KEY
   ]
-  const selectedFavorite = railFavorites.find((item) => item.key === favorites?.selectedKey)
+  const selectedFavorite = railFavorites.find((item) => item.key === favorites.selectedKey)
   const railCurrent = settingsCurrent
     ? SETTINGS_KEY
     : (features.current ?? (selectedFavorite === undefined ? null : favoriteKey(selectedFavorite.key)))
@@ -111,13 +108,13 @@ export function PrototypeRail({
   if (announced.name !== currentName) setAnnounced({ name: currentName, text: currentName === null ? '' : `当前：${currentName}` })
 
   const tip = useRailTip()
-  const drag = useRailDrag(railRef, tip.hide)
+  const drag = useRailDrag(railRef, tip.hide, actions.placeFeature)
 
   return (
     <>
       <div
         ref={railRef}
-        className={drag.dragging === null ? 'proto-rail' : 'proto-rail is-dragging'}
+        className={drag.dragging === null ? 'shell-rail' : 'shell-rail is-dragging'}
         role="toolbar"
         aria-label="功能"
         aria-orientation="vertical"
@@ -132,61 +129,55 @@ export function PrototypeRail({
         onBlur={tip.hide}
         onScroll={tip.hide}
       >
-        {boards !== null && (
-          <button
-            ref={boards.buttonRef}
-            type="button"
-            className={['proto-rail-btn', boards.popup?.expanded === true ? 'is-open' : '', boards.active === true ? 'is-active' : '']
-              .filter(Boolean)
-              .join(' ')}
-            aria-label={boards.label}
-            data-rail-tip={boards.label}
-            aria-haspopup={boards.popup === null ? undefined : 'dialog'}
-            aria-expanded={boards.popup === null ? undefined : boards.popup.expanded}
-            aria-controls={boards.popup?.expanded === true ? boards.popup.controls : undefined}
-            data-proto-boards-trigger=""
-            onClick={(event) => boards.onClick(event.currentTarget)}
-            {...rail.itemProps(BOARDS_KEY)}
-          >
-            <Icon name="forum" size={18} />
-          </button>
-        )}
-        {favorites !== null &&
-          railFavorites.map((item, index) => {
-            const current = item.key === favorites.selectedKey
-            const mark = marks[index]!
-            return (
-              <button
-                key={item.key}
-                type="button"
-                className={['proto-rail-btn', 'proto-rail-fav', current ? 'is-current' : '', Array.from(mark).length > 1 ? 'is-pair' : '']
-                  .filter(Boolean)
-                  .join(' ')}
-                aria-label={item.label}
-                aria-current={current ? 'page' : undefined}
-                data-rail-tip={item.label}
-                data-rail-board=""
-                onClick={() => favorites.onSelect(item.ref)}
-                {...rail.itemProps(favoriteKey(item.key))}
-              >
-                <span aria-hidden="true">{mark}</span>
-              </button>
-            )
-          })}
-        {boards !== null && <span className="proto-rail-sep" aria-hidden="true" />}
+        <button
+          type="button"
+          className={boards.popup.expanded ? 'shell-rail-btn is-open' : 'shell-rail-btn'}
+          aria-label="版块"
+          data-rail-tip="版块"
+          aria-haspopup="dialog"
+          aria-expanded={boards.popup.expanded}
+          aria-controls={boards.popup.expanded ? boards.popup.controls : undefined}
+          data-boards-trigger=""
+          onClick={(event) => boards.onClick(event.currentTarget)}
+          {...rail.itemProps(BOARDS_KEY)}
+        >
+          <Icon name="forum" size={18} />
+        </button>
+        {railFavorites.map((item, index) => {
+          const current = item.key === favorites.selectedKey
+          const mark = marks[index]!
+          return (
+            <button
+              key={item.key}
+              type="button"
+              className={['shell-rail-btn', 'shell-rail-fav', current ? 'is-current' : '', Array.from(mark).length > 1 ? 'is-pair' : '']
+                .filter(Boolean)
+                .join(' ')}
+              aria-label={item.label}
+              aria-current={current ? 'page' : undefined}
+              data-rail-tip={item.label}
+              data-rail-board=""
+              onClick={() => favorites.onSelect(item.ref)}
+              {...rail.itemProps(favoriteKey(item.key))}
+            >
+              <span aria-hidden="true">{mark}</span>
+            </button>
+          )
+        })}
+        <span className="shell-rail-sep" aria-hidden="true" />
         {shown.map((feature) => {
           const current = features.current === feature.id
           return (
             <button
               key={feature.id}
               type="button"
-              className={['proto-rail-btn', current ? 'is-current' : '', drag.dragging === feature.id ? 'is-dragging' : '']
+              className={['shell-rail-btn', current ? 'is-current' : '', drag.dragging === feature.id ? 'is-dragging' : '']
                 .filter(Boolean)
                 .join(' ')}
               aria-current={current ? 'page' : undefined}
               aria-haspopup={featureIsDialog(feature.id) ? 'dialog' : undefined}
               aria-label={featureLabel(feature.id, features)}
-              data-rail-tip={featureTitle(feature.id, features) ?? feature.label}
+              data-rail-tip={featureTitle(feature.id, features)}
               data-rail-feature={feature.id}
               onPointerDown={(event) => drag.onPointerDown(event, feature.id)}
               onPointerMove={drag.onPointerMove}
@@ -202,18 +193,18 @@ export function PrototypeRail({
             </button>
           )
         })}
-        {drag.dropTop !== null && <span className="proto-rail-drop" style={{ top: drag.dropTop }} aria-hidden="true" />}
-        <span className="proto-rail-gap" />
+        {drag.dropTop !== null && <span className="shell-rail-drop" style={{ top: drag.dropTop }} aria-hidden="true" />}
+        <span className="shell-rail-gap" />
         {hasMore && (
           <button
             ref={moreTriggerRef}
             type="button"
-            className={morePopover.open ? 'proto-rail-btn is-open' : 'proto-rail-btn'}
+            className={morePopover.open ? 'shell-rail-btn is-open' : 'shell-rail-btn'}
             aria-label="更多"
             data-rail-tip="更多"
             aria-haspopup="dialog"
             aria-expanded={morePopover.open}
-            aria-controls={morePopover.open ? 'proto-all' : undefined}
+            aria-controls={morePopover.open ? 'shell-all' : undefined}
             onClick={morePopover.toggle}
             {...rail.itemProps(MORE_KEY)}
           >
@@ -222,10 +213,10 @@ export function PrototypeRail({
         )}
         <button
           type="button"
-          className={settingsCurrent ? 'proto-rail-btn is-current' : 'proto-rail-btn'}
+          className={settingsCurrent ? 'shell-rail-btn is-current' : 'shell-rail-btn'}
           aria-current={settingsCurrent ? 'page' : undefined}
           aria-label="设置"
-          data-proto-settings=""
+          data-settings-entry=""
           data-rail-tip="设置"
           onClick={onOpenSettings}
           {...rail.itemProps(SETTINGS_KEY)}
@@ -238,16 +229,16 @@ export function PrototypeRail({
       </div>
 
       {hasMore && morePopover.open && (
-        <div ref={morePanelRef} id="proto-all" className="proto-pop proto-all-panel" role="dialog" aria-labelledby="proto-all-title">
-          <h2 className="proto-all-title" id="proto-all-title">
+        <div ref={morePanelRef} id="shell-all" className="shell-pop shell-all-panel" role="dialog" aria-labelledby="shell-all-title">
+          <h2 className="shell-all-title" id="shell-all-title">
             更多
           </h2>
-          <div className="proto-all-grid">
+          <div className="shell-all-grid">
             {hidden.map((feature) => (
               <button
                 key={feature.id}
                 type="button"
-                className="proto-all-item"
+                className="shell-all-item"
                 aria-label={featureLabel(feature.id, features)}
                 onClick={() => {
                   // A dialog takes focus and later returns it to its opener: leave that on 更多.
@@ -261,7 +252,7 @@ export function PrototypeRail({
                   }
                 }}
               >
-                <span className="proto-all-icon">
+                <span className="shell-all-icon">
                   <Icon name={feature.icon} size={20} />
                   <FeatureDot id={feature.id} host={features} />
                 </span>
@@ -274,7 +265,7 @@ export function PrototypeRail({
 
       {tip.shown !== null &&
         createPortal(
-          <div className="proto-rail-tip" style={{ left: tip.shown.x, top: tip.shown.y }} aria-hidden="true">
+          <div className="shell-rail-tip" style={{ left: tip.shown.x, top: tip.shown.y }} aria-hidden="true">
             {tip.shown.text}
           </div>,
           document.body
@@ -376,10 +367,10 @@ interface DragPress {
 
 /**
  * Dragging a feature button along the rail: a line shows where it will go, release puts it there
- * (`navActions.placeFeature`). Esc, the window losing focus or a cancelled pointer leave the order
- * as it was. The click that ends a drag does not open the feature.
+ * (`place`, saved to the settings). Esc, the window losing focus or a cancelled pointer leave the
+ * order as it was. The click that ends a drag does not open the feature.
  */
-function useRailDrag(railRef: RefObject<HTMLDivElement | null>, onStart: () => void) {
+function useRailDrag(railRef: RefObject<HTMLDivElement | null>, onStart: () => void, place: (id: FeatureId, before: FeatureId | null) => void) {
   const press = useRef<DragPress | null>(null)
   const [dragging, setDragging] = useState<FeatureId | null>(null)
   const [drop, setDrop] = useState<{ before: FeatureId | null; top: number } | null>(null)
@@ -459,7 +450,7 @@ function useRailDrag(railRef: RefObject<HTMLDivElement | null>, onStart: () => v
       swallowClick.current = true
       if (!current.cancelled) {
         const target = dropAt(current.id, event.clientY)
-        if (target !== null) navActions.placeFeature(current.id, target.before)
+        if (target !== null) place(current.id, target.before)
       }
       setDragging(null)
       setDrop(null)

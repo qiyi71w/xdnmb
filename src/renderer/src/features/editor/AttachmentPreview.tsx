@@ -1,4 +1,4 @@
-// PROTOTYPE (throwaway): the attached image, large, from the float compose panel's thumbnail chip.
+// The attached image, large, from the compose panel's thumbnail chip.
 // The post image viewer (features/image/ImageViewer.tsx) fetches post images by id; this shows the
 // local draft copy in its look and with its zoom (useImageZoom): fitted to the window at first
 // (never enlarged), then toolbar, wheel, drag and keys. Esc, 关闭 or a press beside the image closes

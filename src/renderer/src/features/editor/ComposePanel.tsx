@@ -1,15 +1,14 @@
-// PROTOTYPE (throwaway): the floating 发言编辑 panel of the reading main line. Replaces the bottom
-// docks only in builds with VITE_XIDAO_PROTOTYPE=1. Entries are the 发新串 button beside a board's
-// name and the 回复 button in the thread toolbar; the panel is a centred modal over a dimmed reader.
-// Editors keep the store's semantics: closing only collapses, content stays.
+// The floating 发言编辑 panel. Entries are the 发新串 button beside a board's name and the 回复
+// button in the thread toolbar; the panel is a centred modal over a dimmed reader. Editors keep the
+// store's semantics: closing only collapses, content stays.
 
 import { useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { targetKey, type EditorId, type PostTarget } from '../../../../shared/drafts'
 import { Icon } from '../../components/Icon'
 import { useCover } from '../../lib/appCovered'
 import { openLayer, type Layer } from '../../lib/layers'
-import { rememberComposeOpener, returnComposeFocus } from '../directory/prototype/prototypeStore'
-import { EditorPanel, useComposeOpen } from './EditorDock'
+import { rememberComposeOpener, returnComposeFocus } from '../directory/navStore'
+import { EditorPanel, useComposeOpen } from './EditorPanel'
 import { targetText } from './editorText'
 import { editorFor, type Editor } from './editorsState'
 import { focusKey } from './useEditorsStore'
@@ -92,7 +91,7 @@ function ComposePanel({ tabId, target, displayed }: { tabId: number; target: Pos
     store.dispatch({ type: 'set-expanded', editorId: editor.id, expanded: false })
   }
   const label = targetText(target, workspace.forumName)
-  const panel = <EditorPanel key={editor.id} tabId={tabId} editor={editor} label={label} displayed={displayed} focusBar={focusBar} layout="float" />
+  const panel = <EditorPanel key={editor.id} tabId={tabId} editor={editor} label={label} displayed={displayed} focusBar={focusBar} />
   return (
     <ComposeModal label={editor.report !== undefined ? `举报 >>No.${editor.report.postId}` : `发言编辑：${label}`} onCollapse={collapse}>
       {panel}
@@ -221,7 +220,7 @@ export function ComposeSentNote({ tabId, target }: { tabId: number; target: Post
   return (
     <span className="compose-sent">
       <Icon name="check" size={13} />
-      {sent.isThread ? `新串已发出：No.${sent.postId}` : `已发送 No.${sent.postId}`}，已记为自己的发言
+      {sent.isThread ? `新串已发出：No.${sent.postId}` : `已发送 No.${sent.postId}`}
     </span>
   )
 }

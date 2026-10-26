@@ -1,4 +1,4 @@
-/* Online search page: a centred column as wide as the reading text (like a list without the
+/* 联网 side of the 搜索 page: a centred column as wide as the reading text (like a list without the
    reader), frosted sticky search bar, plain-text result rows in the feed list's style. */
 
 .online-search-page {
@@ -27,12 +27,6 @@
   background: color-mix(in oklch, var(--pane) 78%, transparent);
   backdrop-filter: blur(18px) saturate(1.5);
   border-bottom: 1px solid var(--line-soft);
-}
-
-.online-search-title {
-  font-size: 1.0625rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
 }
 
 .online-search-form {
@@ -67,16 +61,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* One plain line under the search bar: where the query goes, and 打开搜索网站. */
 .online-search-about {
   display: grid;
   gap: 6px;
-  margin: 10px 12px 4px;
-  padding: 9px 12px;
-  border-radius: var(--radius-m);
-  background: var(--info-bg);
+  margin: 6px 12px 0 16px;
   font-size: var(--text-xs);
   line-height: 1.55;
-  color: var(--ink-2);
+  color: var(--ink-3);
 }
 
 .online-search-about-site {
@@ -95,14 +87,6 @@
   margin: 0;
 }
 
-/* PROTOTYPE 搜索 page: one plain line under the search bar. */
-.online-search-about.is-brief {
-  margin: 6px 12px 0 16px;
-  padding: 0;
-  background: none;
-  color: var(--ink-3);
-}
-
 .online-search-status:not(:empty) {
   padding: 2px 12px;
 }
@@ -112,11 +96,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 10px;
-}
-
-.online-search-idle {
-  padding: 40px 20px;
-  text-align: center;
 }
 
 .online-search-results-head {

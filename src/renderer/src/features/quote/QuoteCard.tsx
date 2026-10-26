@@ -15,7 +15,7 @@ const GAP = 6
 
 /** Server said the post (or what was needed) is missing, or this identity may not see it. */
 function unavailableText(error: ReadError): string | null {
-  if (error.kind === 'not-found') return '该引用当前不可用，服务端返回不存在'
+  if (error.kind === 'not-found') return '该引用不存在'
   if (error.kind === 'permission') return '当前身份无法访问'
   return null
 }
@@ -160,13 +160,8 @@ export function QuoteCard({
               附图
             </span>
           )}
-          {outcome.data.threadId !== null && result === null && <span>所属串 No.{outcome.data.threadId}</span>}
+          {result === null && <span>{outcome.data.threadId !== null ? `所属串 No.${outcome.data.threadId}` : '所属串未知'}</span>}
         </div>
-        {outcome.data.threadId === null && locate === null && (
-          <Status tone="info">
-            <p className="quote-card-detail">本机还没有这条发言的所属串记录；跳转时只核对它是否为某串主帖，不会猜测回复所在的串。</p>
-          </Status>
-        )}
         <div className="quote-card-content">
           <QuoteEntryContext.Provider value={card.source.entryKey}>
             <Content
@@ -189,16 +184,14 @@ export function QuoteCard({
       case 'unknown-thread':
         located = (
           <Status tone="info">
-            <p className="quote-card-title">暂时无法确定这条回复属于哪个串</p>
-            <p className="quote-card-detail">没有可靠的所属串记录，因此不能跳转；可以复制编号。</p>
+            <p className="quote-card-title">无法确定这条回复所属的串</p>
           </Status>
         )
         break
       case 'thread-known':
         located = (
           <Status tone="info">
-            <p className="quote-card-title">已知原串 No.{result.threadId}，暂未定位到这条回复</p>
-            <p className="quote-card-detail">可以打开原串，按正常续读位置阅读；不会跳到这条回复。</p>
+            <p className="quote-card-title">已知原串 No.{result.threadId}，未定位到这条回复</p>
           </Status>
         )
         break

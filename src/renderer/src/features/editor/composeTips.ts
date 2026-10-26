@@ -1,4 +1,4 @@
-// PROTOTYPE (throwaway): when the float compose panel's `[data-tip]` tooltips may show. CSS shows a
+// When the compose panel's `[data-tip]` tooltips may show. CSS shows a
 // tip on hover unless the control carries `data-tip-off`, and on focus only while the control carries
 // `data-tip-focus` and matches :focus-visible.
 //

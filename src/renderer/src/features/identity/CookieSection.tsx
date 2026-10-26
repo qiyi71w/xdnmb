@@ -14,7 +14,6 @@ import {
 import { Icon } from '../../components/Icon'
 import { FailureNotice } from '../../components/Notices'
 import { formatLocalTime } from '../../lib/format'
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import {
   MISSING_SELECTION_TEXT,
   ROLE_INFO,
@@ -40,8 +39,8 @@ interface Message {
   text: string
 }
 
-/** Where an account's cookies are claimed and exported; opened in the system browser. */
-const OFFICIAL_COOKIE_PAGE = 'https://www.nmbxd1.com/Member/User/Index/'
+/** Where an account's cookies are claimed, applied and exported; opened in the system browser (spec I3). */
+const OFFICIAL_COOKIE_PAGE = 'https://www.nmbxd1.com/Member/User/Index/index.html'
 
 /**
  * 饼干 settings: the ordered credential list (the first one is used for browsing), one import area,
@@ -85,18 +84,15 @@ function CookieSettings({ overview, onChanged }: { overview: IdentityOverview; o
 
   return (
     <>
-      {PROTOTYPE_ENABLED && <OfficialPageLink />}
+      <OfficialPageLink />
       {!protectionOk && (
-        <div className="notice notice-cached" role="note">
+        <div className="notice notice-cached is-compact" role="note">
           <Icon name="alert" className="notice-icon" />
-          <div className="notice-text">
-            <p className="notice-title">系统凭据保护不可用</p>
-            <p>不能导入饼干，需要饼干的读取会被阻止。</p>
-          </div>
+          <p className="notice-text">系统凭据保护不可用，不能导入饼干</p>
         </div>
       )}
       {!overview.writable && (
-        <div className="notice notice-cached" role="note">
+        <div className="notice notice-cached is-compact" role="note">
           <Icon name="alert" className="notice-icon" />
           <p className="notice-text">本地存储不可写</p>
         </div>
@@ -104,23 +100,9 @@ function CookieSettings({ overview, onChanged }: { overview: IdentityOverview; o
 
       <CredentialList overview={overview} onChanged={onChanged} />
 
-      {PROTOTYPE_ENABLED ? (
-        <ImportArea disabled={importBlocked} onImported={onChanged} />
-      ) : (
-        <div className="cookie-imports">
-          <ImportForm entry="export" disabled={importBlocked} onImported={onChanged} />
-          <ImportForm entry="raw" disabled={importBlocked} onImported={onChanged} />
-        </div>
-      )}
+      <ImportArea disabled={importBlocked} onImported={onChanged} />
 
       <AccountImport onImported={onChanged} />
-
-      {!PROTOTYPE_ENABLED && (
-        <p className="settings-note">
-          <Icon name="info" size={14} />
-          领取、应用和删除饼干请在官网完成。
-        </p>
-      )}
 
       <div className="settings-group">
         <h4 className="settings-group-title">用途</h4>
@@ -134,7 +116,7 @@ function CookieSettings({ overview, onChanged }: { overview: IdentityOverview; o
   )
 }
 
-/** The official cookie page, in the system browser: claiming, applying and deleting cookies happen there. */
+/** The official cookie page, in the system browser. */
 function OfficialPageLink() {
   const [failed, setFailed] = useState(false)
   const open = () => {
@@ -277,7 +259,7 @@ function CredentialList({ overview, onChanged }: { overview: IdentityOverview; o
         已导入的饼干
       </h4>
       {credentials.length === 0 ? (
-        <p className="settings-empty">还没有导入饼干，浏览时不带饼干。</p>
+        <p className="settings-empty">还没有导入饼干</p>
       ) : (
         <ul className="credential-list" aria-labelledby={headingId} ref={listRef} aria-busy={pendingOrder !== null ? true : undefined}>
           {credentials.map((credential, index) => (
@@ -495,7 +477,6 @@ function CredentialItem({
               取消
             </button>
           </div>
-          <p className="field-hint">1–40 个字符，首尾空格会被去掉。</p>
         </form>
       ) : (
         <div className="credential-main">
@@ -600,7 +581,6 @@ function CredentialItem({
           <p className="credential-confirm-text">
             {roles.length > 0 && `${roleList(roles)}将需要重新选择。`}
             {browsing && count > 1 && '浏览将改用下一个饼干。'}
-            移除后需要重新导入。
           </p>
           <div className="credential-confirm-actions">
             <button type="button" className="btn btn-small btn-danger" onClick={() => void confirmRemove()} disabled={pending}>
@@ -627,21 +607,9 @@ function CredentialItem({
 
 /* ---------- Import entries ---------- */
 
-const IMPORT_COPY: Record<ImportEntry, { tab: string; title: string; secretLabel: string; description: string; nameHint: string }> = {
-  export: {
-    tab: '官网导出',
-    title: '粘贴官网导出内容',
-    secretLabel: '官网导出内容',
-    description: 'Base64 或 JSON。',
-    nameHint: '留空时用导出内容里的名称。'
-  },
-  raw: {
-    tab: 'userhash',
-    title: '粘贴原始 userhash',
-    secretLabel: 'userhash',
-    description: '可带 userhash= 前缀。',
-    nameHint: '1–40 个字符。'
-  }
+const IMPORT_COPY: Record<ImportEntry, { tab: string; title: string; secretLabel: string }> = {
+  export: { tab: '官网导出', title: '粘贴官网导出内容', secretLabel: '官网导出内容' },
+  raw: { tab: 'userhash', title: '粘贴原始 userhash', secretLabel: 'userhash' }
 }
 
 const IMPORT_ENTRIES: readonly ImportEntry[] = ['export', 'raw']
@@ -664,20 +632,18 @@ function ImportArea({ disabled, onImported }: { disabled: boolean; onImported: (
           ))}
         </div>
       </div>
-      <ImportForm key={entry} entry={entry} titled={false} disabled={disabled} onImported={onImported} />
+      <ImportForm key={entry} entry={entry} disabled={disabled} onImported={onImported} />
     </div>
   )
 }
 
+/** The import area's form for one format; its heading and switch name it. */
 function ImportForm({
   entry,
-  titled = true,
   disabled,
   onImported
 }: {
   entry: ImportEntry
-  /** False inside the import area, whose heading and switch already name the form. */
-  titled?: boolean
   disabled: boolean
   onImported: () => Promise<void>
 }) {
@@ -689,11 +655,8 @@ function ImportForm({
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
   const [invalid, setInvalid] = useState<FailureField>(null)
-  const titleId = useId()
   const secretId = useId()
-  const secretHintId = useId()
   const nameId = useId()
-  const nameHintId = useId()
   const messageId = useId()
   const nameRequired = entry === 'raw'
 
@@ -751,24 +714,9 @@ function ImportForm({
     }
   }
 
-  const describedSecret = invalid === 'secret' ? `${secretHintId} ${messageId}` : secretHintId
-  const describedName = invalid === 'name' ? `${nameHintId} ${messageId}` : nameHintId
-
   return (
-    <form
-      className="import-form"
-      aria-labelledby={titled ? titleId : undefined}
-      aria-label={titled ? undefined : copy.title}
-      onSubmit={(event) => void submit(event)}
-      noValidate
-    >
+    <form className="import-form" aria-label={copy.title} onSubmit={(event) => void submit(event)} noValidate>
       <fieldset className="import-fieldset" disabled={disabled}>
-        {titled && (
-          <h4 className="import-title" id={titleId}>
-            {copy.title}
-          </h4>
-        )}
-
         <label className="field-label" htmlFor={secretId}>
           {copy.secretLabel}
         </label>
@@ -783,7 +731,7 @@ function ImportForm({
             autoCapitalize="off"
             spellCheck={false}
             placeholder="粘贴到这里"
-            aria-describedby={describedSecret}
+            aria-describedby={invalid === 'secret' ? messageId : undefined}
             aria-invalid={invalid === 'secret' ? true : undefined}
             onInput={() => {
               if (invalid === 'secret') setInvalid(null)
@@ -799,10 +747,6 @@ function ImportForm({
             {shown ? '隐藏' : '显示'}
           </button>
         </div>
-        <p className="field-hint" id={secretHintId}>
-          {copy.description}
-        </p>
-
         <label className="field-label" htmlFor={nameId}>
           名称{nameRequired ? '' : '（可选）'}
         </label>
@@ -818,12 +762,9 @@ function ImportForm({
           spellCheck={false}
           required={nameRequired}
           aria-required={nameRequired ? true : undefined}
-          aria-describedby={describedName}
+          aria-describedby={invalid === 'name' ? messageId : undefined}
           aria-invalid={invalid === 'name' ? true : undefined}
         />
-        <p className="field-hint" id={nameHintId}>
-          {copy.nameHint}
-        </p>
 
         <div className="import-actions">
           <button type="submit" className="btn btn-primary" disabled={pending} aria-describedby={messageId}>
@@ -1035,9 +976,7 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
               重试
             </button>
           </div>
-        ) : (
-          <p className="settings-group-text">正在读取登录状态…</p>
-        )
+        ) : null
       ) : (
         <>
           {loggedIn && (

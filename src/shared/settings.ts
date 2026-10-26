@@ -26,6 +26,38 @@ export type Density = 'comfortable' | 'compact'
 /** `system` follows the operating system; `reduce` turns motion off regardless of it. */
 export type MotionPreference = 'system' | 'reduce'
 
+/** Features the icon rail can show; `search` opens the one search page. */
+export const RAIL_FEATURES = ['subscriptions', 'reminders', 'search', 'history', 'offline', 'drafts'] as const
+export type RailFeature = (typeof RAIL_FEATURES)[number]
+
+/** The icon rail: every feature's place (hidden ones included) and which ones are hidden (they go to 更多). */
+export interface RailSettings {
+  /** Rail order; features missing from it keep their default place after it. */
+  order: readonly RailFeature[]
+  hidden: readonly RailFeature[]
+}
+
+/**
+ * Board management. Boards are named by their list key (`forum:<id>` / `timeline:<id>`), groups by
+ * the navigation's group id (`group-<id>`, `timelines`, `favorites`). Only forum groups take a
+ * custom order; timelines keep the directory order.
+ */
+export interface BoardSettings {
+  /** Favorite boards in their own order. */
+  favorites: readonly string[]
+  hidden: readonly string[]
+  /** Custom board order per forum group; boards missing from it keep the directory order after it. */
+  order: Readonly<Record<string, readonly string[]>>
+  /** Collapsed board groups. */
+  collapsed: readonly string[]
+}
+
+/** Split-view list width bounds, CSS pixels; the reader still keeps its minimum text width. */
+export const LIST_WIDTH_LIMITS = { min: 260, max: 1600, default: 340 } as const
+
+/** The user's own kaomoji: count and per-entry length (characters) limits. */
+export const KAOMOJI_LIMITS = { count: 200, length: 500 } as const
+
 export interface AppSettings {
   /** Split preference given to tabs created from now on; existing tabs keep their own. */
   newTabSplitDefault: boolean
@@ -39,6 +71,12 @@ export interface AppSettings {
   reading: ReadingParams
   density: Density
   motion: MotionPreference
+  rail: RailSettings
+  boards: BoardSettings
+  /** List width chosen with the split divider. */
+  listWidth: number
+  /** Kaomoji added by the user, after the presets, in the order added. */
+  customKaomoji: readonly string[]
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -49,10 +87,120 @@ export const DEFAULT_SETTINGS: AppSettings = {
   customTheme: null,
   reading: DEFAULT_READING,
   density: 'comfortable',
-  motion: 'system'
+  motion: 'system',
+  rail: { order: [], hidden: [] },
+  boards: { favorites: [], hidden: [], order: {}, collapsed: [] },
+  listWidth: LIST_WIDTH_LIMITS.default,
+  customKaomoji: []
 }
 
-export const SETTING_KEYS = ['newTabSplitDefault', 'closeAction', 'colorScheme', 'customThemeEnabled', 'customTheme', 'reading', 'density', 'motion'] as const satisfies readonly (keyof AppSettings)[]
+export const SETTING_KEYS = [
+  'newTabSplitDefault',
+  'closeAction',
+  'colorScheme',
+  'customThemeEnabled',
+  'customTheme',
+  'reading',
+  'density',
+  'motion',
+  'rail',
+  'boards',
+  'listWidth',
+  'customKaomoji'
+] as const satisfies readonly (keyof AppSettings)[]
+
+/** At most this many entries in any board list (favorites, hidden, one group's order, collapsed). */
+const MAX_BOARD_ENTRIES = 2000
+const BOARD_KEY = /^(?:forum|timeline):[0-9A-Za-z_-]{1,32}$/
+const FORUM_KEY = /^forum:[0-9A-Za-z_-]{1,32}$/
+const GROUP_ID = /^(?:timelines|favorites|group-[0-9A-Za-z_-]{1,32})$/
+const FORUM_GROUP_ID = /^group-[0-9A-Za-z_-]{1,32}$/
+const KAOMOJI_FORBIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f]/
+
+type Issues = AppearanceIssue[]
+
+/** A list of distinct strings that each pass `valid`; anything else is a `field` issue. */
+function stringList(value: unknown, field: string, valid: (item: string) => boolean, max: number, issues: Issues): string[] | null {
+  if (!Array.isArray(value)) {
+    issues.push({ kind: 'field', field, problem: value === undefined ? 'missing' : 'type' })
+    return null
+  }
+  if (value.length > max) {
+    issues.push({ kind: 'field', field, problem: 'range' })
+    return null
+  }
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (typeof item !== 'string') {
+      issues.push({ kind: 'field', field, problem: 'type' })
+      return null
+    }
+    if (!valid(item) || seen.has(item)) {
+      issues.push({ kind: 'field', field, problem: 'range' })
+      return null
+    }
+    seen.add(item)
+  }
+  return [...seen]
+}
+
+function exactKeys(value: Record<string, unknown>, keys: readonly string[], field: string, issues: Issues): void {
+  for (const key of Object.keys(value)) if (!keys.includes(key)) issues.push({ kind: 'field', field: `${field}.${key}`, problem: 'unknown' })
+}
+
+function parseRail(value: unknown, field: string): Parsed<RailSettings> {
+  if (!isRecord(value)) return { ok: false, issues: [{ kind: 'field', field, problem: 'type' }] }
+  const issues: Issues = []
+  exactKeys(value, ['order', 'hidden'], field, issues)
+  const isFeature = (item: string) => (RAIL_FEATURES as readonly string[]).includes(item)
+  const order = stringList(value.order, `${field}.order`, isFeature, RAIL_FEATURES.length, issues)
+  const hidden = stringList(value.hidden, `${field}.hidden`, isFeature, RAIL_FEATURES.length, issues)
+  if (order === null || hidden === null || issues.length > 0) return { ok: false, issues }
+  return { ok: true, value: { order: order as RailFeature[], hidden: hidden as RailFeature[] } }
+}
+
+function parseBoards(value: unknown, field: string): Parsed<BoardSettings> {
+  if (!isRecord(value)) return { ok: false, issues: [{ kind: 'field', field, problem: 'type' }] }
+  const issues: Issues = []
+  exactKeys(value, ['favorites', 'hidden', 'order', 'collapsed'], field, issues)
+  const isBoard = (item: string) => BOARD_KEY.test(item)
+  const favorites = stringList(value.favorites, `${field}.favorites`, isBoard, MAX_BOARD_ENTRIES, issues)
+  const hidden = stringList(value.hidden, `${field}.hidden`, isBoard, MAX_BOARD_ENTRIES, issues)
+  const collapsed = stringList(value.collapsed, `${field}.collapsed`, (item) => GROUP_ID.test(item), MAX_BOARD_ENTRIES, issues)
+  let order: Record<string, string[]> | null = null
+  if (!isRecord(value.order)) issues.push({ kind: 'field', field: `${field}.order`, problem: value.order === undefined ? 'missing' : 'type' })
+  else {
+    const groups = Object.entries(value.order)
+    if (groups.length > MAX_BOARD_ENTRIES) issues.push({ kind: 'field', field: `${field}.order`, problem: 'range' })
+    else {
+      order = {}
+      for (const [groupId, keys] of groups) {
+        if (!FORUM_GROUP_ID.test(groupId)) {
+          issues.push({ kind: 'field', field: `${field}.order`, problem: 'range' })
+          break
+        }
+        const list = stringList(keys, `${field}.order`, (item) => FORUM_KEY.test(item), MAX_BOARD_ENTRIES, issues)
+        if (list === null) break
+        order[groupId] = list
+      }
+    }
+  }
+  if (favorites === null || hidden === null || collapsed === null || order === null || issues.length > 0) return { ok: false, issues }
+  return { ok: true, value: { favorites, hidden, order, collapsed } }
+}
+
+function parseKaomoji(value: unknown, field: string): Parsed<string[]> {
+  const issues: Issues = []
+  const valid = (item: string) => item.trim() !== '' && [...item].length <= KAOMOJI_LIMITS.length && !KAOMOJI_FORBIDDEN.test(item)
+  const list = stringList(value, field, valid, KAOMOJI_LIMITS.count, issues)
+  return list === null ? { ok: false, issues } : { ok: true, value: list }
+}
+
+function parseListWidth(value: unknown, field: string): Parsed<number> {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return { ok: false, issues: [{ kind: 'field', field, problem: 'type' }] }
+  if (value < LIST_WIDTH_LIMITS.min || value > LIST_WIDTH_LIMITS.max) return { ok: false, issues: [{ kind: 'field', field, problem: 'range' }] }
+  return { ok: true, value }
+}
 
 const COLOR_SCHEMES: readonly ColorScheme[] = ['system', 'light', 'dark']
 const DENSITIES: readonly Density[] = ['comfortable', 'compact']
@@ -89,6 +237,18 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
       break
     case 'motion':
       parsed = choice(value, MOTIONS, key)
+      break
+    case 'rail':
+      parsed = parseRail(value, key)
+      break
+    case 'boards':
+      parsed = parseBoards(value, key)
+      break
+    case 'listWidth':
+      parsed = parseListWidth(value, key)
+      break
+    case 'customKaomoji':
+      parsed = parseKaomoji(value, key)
       break
     default:
       parsed = { ok: false, issues: [{ kind: 'field', field: String(key), problem: 'unknown' }] }

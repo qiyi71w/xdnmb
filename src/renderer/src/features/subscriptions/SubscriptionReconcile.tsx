@@ -4,17 +4,15 @@ import type {
   SubscriptionCandidate,
   SubscriptionMergeSource,
   SubscriptionObservation,
+  SubscriptionOperation,
   SubscriptionOverview,
   SubscriptionPlan,
   SubscriptionPreview
 } from '../../../../shared/subscriptions'
 import { Icon, Spinner } from '../../components/Icon'
-import { FailureNotice, Loading } from '../../components/Notices'
 import { formatLocalTime } from '../../lib/format'
 import { useSettingsOpener } from '../../lib/settingsOpener'
-import { WriteStatus } from './SubscriptionActivity'
-// PROTOTYPE (throwaway): automatic reads are silent; only failures show.
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
+import { ReconcileButton, UnsettledLine, WriteStatus } from './SubscriptionActivity'
 import {
   countByAction,
   currentItemIndex,
@@ -42,15 +40,6 @@ import {
   webObjectText
 } from './subscriptionText'
 import { useSubscriptionsContext } from './useSubscriptions'
-import {
-  askedThreads,
-  LinkageLine,
-  ReminderChoiceField,
-  useReminderAsk,
-  type ReminderAsk,
-  type ReminderChoice,
-  type ReminderLinkage
-} from '../reminders/ReminderLinkage'
 
 const MODE_NAME: Record<ReconcileMode, string> = {
   sync: '双向同步',
@@ -112,9 +101,7 @@ export function ReconcileView({ headingRef, onBack }: { headingRef: RefObject<HT
       </header>
       <div className="sub-recon">
         <WriteStatus />
-        {overview === null ? (
-          !PROTOTYPE_ENABLED && <Loading>正在读取订阅设置…</Loading>
-        ) : task === null || task.phase === 'preview-failed' ? (
+        {overview === null ? null : task === null || task.phase === 'preview-failed' ? (
           <StartPanel overview={overview} task={task} />
         ) : task.phase === 'previewing' ? (
           <PreviewProgress task={task} />
@@ -152,12 +139,12 @@ function StartPanel({ overview, task }: { overview: SubscriptionOverview; task: 
     .filter((text): text is string => text !== null)
   const hint =
     active !== null
-      ? '另一项订阅操作正在进行，完成后才能预览'
+      ? '另一项订阅操作正在进行'
       : blockers.length > 0
         ? blockers.join('；')
         : mode === 'merge' && chosen === null
-          ? '请先选择要从哪个旧 UUID 合并'
-          : '预览只读取两端，不写入；执行前还要你逐项勾选并确认。'
+          ? '请先选择旧 UUID'
+          : null
   const disabled = busy || blockers.length > 0 || (mode === 'merge' && chosen === null)
 
   return (
@@ -186,9 +173,6 @@ function StartPanel({ overview, task }: { overview: SubscriptionOverview; task: 
 
       {mode === 'sync' ? (
         <>
-          <p className="sub-recon-text">
-            比较 App 订阅与网页订阅，逐项列出对两端的影响。第一次同步（或更换 UUID、网页同步对象之后的第一次）只提出新增；之后才会依据已确认的共同订阅提出删除候选。
-          </p>
           <dl className="sub-recon-objects">
             <div>
               <dt>{SOURCE_NAME.app}</dt>
@@ -206,29 +190,16 @@ function StartPanel({ overview, task }: { overview: SubscriptionOverview; task: 
         </>
       ) : (
         <>
-          <p className="sub-recon-text">
-            读取之前用过的某个 App UUID 的集合，把当前 App 订阅没有的串加入当前集合。旧集合和本地阅读资料不会被改动，也不会删除任何串。
-          </p>
           {mergeSourcesFailed && (
             <div className="notice notice-error is-compact" role="alert">
               <Icon name="alert" className="notice-icon" />
-              <div className="notice-text">
-                <p className="notice-title">用过的 App UUID 读取失败</p>
-                <p className="notice-detail">
-                  {mergeSources === null
-                    ? '无法确定有哪些旧 UUID 可以合并，这不表示没有。'
-                    : '下面是之前读到的列表，可能不是最新状态。'}
-                </p>
-              </div>
+              <p className="notice-text">用过的 App UUID 读取失败</p>
               <button type="button" className="btn btn-small" onClick={() => void refreshMergeSources()}>
                 重试
               </button>
             </div>
           )}
-          {!PROTOTYPE_ENABLED && mergeSources === null && !mergeSourcesFailed && <Loading>正在读取用过的 App UUID…</Loading>}
-          {mergeSources !== null && !mergeSourcesFailed && sources.length === 0 && (
-            <p className="sub-recon-empty">还没有其他用过的 App UUID。更换 UUID 后，之前的那个会出现在这里。</p>
-          )}
+          {mergeSources !== null && !mergeSourcesFailed && sources.length === 0 && <p className="sub-recon-empty">还没有其他用过的 App UUID</p>}
           {sources.length > 0 && (
             <div className="sub-recon-field">
               <label className="field-label" htmlFor={selectId}>
@@ -247,7 +218,7 @@ function StartPanel({ overview, task }: { overview: SubscriptionOverview; task: 
           <dl className="sub-recon-objects">
             <div>
               <dt>读取自</dt>
-              <dd>{chosen === null ? '尚未选择' : `${chosen.label}（只读，不改动）`}</dd>
+              <dd>{chosen === null ? '尚未选择' : chosen.label}</dd>
             </div>
             <div>
               <dt>加入到</dt>
@@ -258,7 +229,13 @@ function StartPanel({ overview, task }: { overview: SubscriptionOverview; task: 
       )}
 
       <div className="sub-recon-actions">
-        <button type="button" className="btn btn-primary" disabled={disabled} aria-describedby={hintId} onClick={() => void startPreview(mode, mode === 'merge' ? chosen : null)}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={disabled}
+          aria-describedby={hint === null ? undefined : hintId}
+          onClick={() => void startPreview(mode, mode === 'merge' ? chosen : null)}
+        >
           {mode === 'sync' ? '预览同步' : '预览合并'}
         </button>
         {blockers.length > 0 && openSettings !== null && (
@@ -267,9 +244,11 @@ function StartPanel({ overview, task }: { overview: SubscriptionOverview; task: 
           </button>
         )}
       </div>
-      <p className="field-hint" id={hintId}>
-        {hint}
-      </p>
+      {hint !== null && (
+        <p className="field-hint" id={hintId}>
+          {hint}
+        </p>
+      )}
     </section>
   )
 }
@@ -285,12 +264,9 @@ function PreviewFailure({ task, onDismiss }: { task: Extract<ReconcileTask, { ph
   return (
     <div className={cancelled ? 'notice notice-cached is-compact' : 'notice notice-error is-compact'} role={cancelled ? 'status' : 'alert'}>
       <Icon name="alert" className="notice-icon" />
-      <div className="notice-text">
-        <p className="notice-title">
-          {MODE_NAME[task.mode]}预览没有完成：{text}
-        </p>
-        <p className="notice-detail">预览只读取，没有发出任何写入。可以重新预览。</p>
-      </div>
+      <p className="notice-text">
+        {MODE_NAME[task.mode]}预览没有完成：{text}
+      </p>
       <button type="button" className="icon-btn" onClick={onDismiss} aria-label="关闭这条提示">
         <Icon name="close" size={14} />
       </button>
@@ -310,11 +286,7 @@ function PreviewProgress({ task }: { task: Extract<ReconcileTask, { phase: 'prev
       </h3>
       <div className="sub-recon-progress" role="status">
         <Spinner />
-        <div className="sub-recon-progress-text">
-          <p>正在逐页读取{what}，直到空页或出错为止。</p>
-          <p className="field-hint">预览只读取，不写入；页数多时需要一些时间。</p>
-          {task.stopRequested && <p className="field-hint">已请求停止：正在进行的那一页结束后不再继续读取。</p>}
-        </div>
+        <p className="sub-recon-progress-text">正在读取{what}…</p>
       </div>
       <div className="sub-recon-actions">
         <button type="button" className="btn" onClick={stopTask} disabled={task.stopRequested}>
@@ -344,47 +316,23 @@ function ObservationSide({ role, label, observation }: { role: string; label: st
   )
 }
 
+/** Only what limits this preview, one sentence each; nothing when it is complete and plain. */
 function PreviewRules({ preview, complete }: { preview: SubscriptionPreview; complete: boolean }) {
   const removals = preview.items.some((item) => item.action === 'remove')
-  let rule: { tone: 'info' | 'warn'; text: string }
-  if (preview.mode === 'merge') {
-    rule = { tone: 'info', text: '合并只加入，不删除；旧集合保持不变。' }
-  } else if (preview.firstSync) {
-    rule = {
-      tone: 'info',
-      text: '这是当前 App UUID 与网页同步对象的第一次同步：只提出把一端有、另一端没有的串加入另一端，不提出删除。执行并确认之后，两端共同的串才会成为以后判断删除的依据。'
-    }
-  } else if (preview.deletionsAllowed) {
-    rule = {
-      tone: 'info',
-      text: '删除候选只来自上次确认时两端都有、现在一端缺少的串。删除候选默认不勾选；不勾选就不会动它。'
-    }
-  } else {
-    rule = {
-      tone: 'warn',
-      text: '这次有一端没有完整读到空页、读取出错或身份有变化，因此不推断任何删除，只列出新增。'
-    }
-  }
+  const rules: string[] = []
+  if (preview.mode === 'sync' && preview.firstSync) rules.push('第一次同步只提出新增')
+  else if (preview.mode === 'sync' && !preview.deletionsAllowed) rules.push('有一端没有读完或身份有变化，不推断删除')
+  if (removals) rules.push('删除候选只表示这次没有在一端读到，不能证明是你删除的')
+  if (!complete) rules.push('有一端只读到部分页')
+  if (rules.length === 0) return null
   return (
     <div className="sub-recon-rules">
-      <p className={rule.tone === 'warn' ? 'notice-inline is-warning' : 'notice-inline'}>
-        <Icon name={rule.tone === 'warn' ? 'alert' : 'info'} size={14} />
-        <span>{rule.text}</span>
-      </p>
-      {removals && (
-        <p className="notice-inline is-warning">
+      {rules.map((rule) => (
+        <p key={rule} className="notice-inline is-warning">
           <Icon name="alert" size={14} />
-          <span>
-            删除候选只表示这次读取没有在一端读到该串，不能证明是你主动删除的。即使两端都连续读到了空页，读取也不是同一时刻的原子快照，读取期间远端仍可能变化；请逐项核对后再勾选。
-          </span>
+          <span>{rule}</span>
         </p>
-      )}
-      {!complete && (
-        <p className="notice-inline is-warning">
-          <Icon name="alert" size={14} />
-          <span>有一端只读到部分页：只能按已读到的页比较，没读到的页里可能还有订阅。</span>
-        </p>
-      )}
+      ))}
     </div>
   )
 }
@@ -396,14 +344,6 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
   const executeRef = useRef<HTMLButtonElement>(null)
   const cancelConfirmRef = useRef<HTMLButtonElement>(null)
   const [confirming, setConfirming] = useState(false)
-  /** Selected deletions whose threads may have reminders: asked once for the whole plan. */
-  const removals = useMemo(() => {
-    if (!confirming) return null
-    const ids = [...new Set(preview.items.filter((item) => item.action === 'remove' && selected.has(item.id)).map((item) => item.threadId))]
-    return ids.length === 0 ? null : ids
-  }, [confirming, preview, selected])
-  const reminderAsk = useReminderAsk(removals)
-  const [reminderChoice, setReminderChoice] = useState<ReminderChoice>('keep')
   const labels = useMemo(() => threadLabels(preview), [preview])
   const groups = useMemo(() => groupCandidates(preview.items), [preview])
   const complete = observationState(preview.left).complete && observationState(preview.right).complete
@@ -422,7 +362,6 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
 
   const closeConfirm = () => {
     setConfirming(false)
-    setReminderChoice('keep')
     executeRef.current?.focus()
   }
   const onConfirmKeyDown = (event: KeyboardEvent) => {
@@ -432,8 +371,8 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
     closeConfirm()
   }
 
-  const left = preview.mode === 'sync' ? 'App 端' : '读取自（旧集合，不改动）'
-  const right = preview.mode === 'sync' ? '网页端' : '加入到（当前 App 订阅）'
+  const left = preview.mode === 'sync' ? 'App 端' : '读取自'
+  const right = preview.mode === 'sync' ? '网页端' : '加入到'
 
   return (
     <section className="sub-recon-panel" aria-labelledby={titleId}>
@@ -449,10 +388,7 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
       {!current && (
         <div className="notice notice-error is-compact" role="alert">
           <Icon name="alert" className="notice-icon" />
-          <div className="notice-text">
-            <p className="notice-title">这份预览已失效</p>
-            <p className="notice-detail">App UUID 或网页同步对象在预览之后变了。预览固定的是之前的对象，不会改用新的身份执行；请重新预览。</p>
-          </div>
+          <p className="notice-text">这份预览已失效</p>
           <button
             type="button"
             className="btn btn-small"
@@ -475,13 +411,7 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
 
       {preview.items.length === 0 ? (
         <p className="sub-recon-empty" role="status">
-          {!complete
-            ? preview.mode === 'sync'
-              ? '没有可以安全执行的候选。有一端没有完整读取，这只是按已读到的页做的部分比较，不表示两端订阅一致。'
-              : '没有可以安全执行的候选。有一端没有完整读取，这只是按已读到的页做的部分比较，不表示旧集合的串都已在当前集合里。'
-            : preview.mode === 'sync'
-              ? '按已读到的内容，两端订阅一致，没有需要改变的项。'
-              : '旧集合中读到的串都已在当前集合里，没有需要加入的项。'}
+          {!complete ? '按已读到的页没有候选' : preview.mode === 'sync' ? '两端订阅一致' : '没有需要加入的项'}
         </p>
       ) : (
         <div className="sub-recon-groups">
@@ -495,7 +425,6 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
                   {name}
                   <span className="sub-recon-count">{group.items.length} 项</span>
                 </legend>
-                {group.action === 'remove' && <p className="sub-recon-group-hint">删除候选，默认不勾选。</p>}
                 <button type="button" className="btn btn-small btn-quiet sub-recon-toggle" onClick={() => setSelected(ids, !allChecked)} aria-label={`${allChecked ? '全不选' : '全选'}：${name}`}>
                   {allChecked ? '全不选' : '全选'}
                 </button>
@@ -520,11 +449,7 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
 
       <div className="sub-recon-footer">
         <p className="sub-recon-summary" role="status">
-          {total === 0
-            ? preview.mode === 'sync'
-              ? '没有勾选任何项：执行只记录这次比较，不改动两端。'
-              : '没有勾选任何项。'
-            : `已勾选 ${total} 项：加入 ${counts.add} 项${counts.remove > 0 ? `，取消 ${counts.remove} 项` : ''}`}
+          {total === 0 ? '没有勾选任何项' : `已勾选 ${total} 项：加入 ${counts.add} 项${counts.remove > 0 ? `，取消 ${counts.remove} 项` : ''}`}
         </p>
         <div className="sub-recon-actions">
           <button
@@ -552,20 +477,10 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
           cancelRef={cancelConfirmRef}
           onKeyDown={onConfirmKeyDown}
           onCancel={closeConfirm}
-          reminder={{
-            ask: reminderAsk,
-            all: removals ?? [],
-            choice: reminderChoice,
-            onChoice: setReminderChoice,
-            labelOf: (threadId) => itemName(threadId, labels)
-          }}
           onConfirm={() => {
-            const asked = removals === null ? [] : askedThreads(reminderAsk, removals)
-            if (asked === null) return
-            const linkage: ReminderLinkage | null = asked.length === 0 ? null : { threadIds: asked, choice: reminderChoice, result: null }
+            // Sync deletions never ask about or change reminders (spec I8).
             setConfirming(false)
-            setReminderChoice('keep')
-            void execute(linkage)
+            void execute()
           }}
         />
       )}
@@ -579,8 +494,7 @@ function ExecuteConfirm({
   cancelRef,
   onKeyDown,
   onCancel,
-  onConfirm,
-  reminder
+  onConfirm
 }: {
   preview: SubscriptionPreview
   selected: ReadonlySet<string>
@@ -588,14 +502,6 @@ function ExecuteConfirm({
   onKeyDown: (event: KeyboardEvent) => void
   onCancel: () => void
   onConfirm: () => void
-  /** One 保留 / 关闭 choice for every selected deletion whose thread has enabled reminders. */
-  reminder: {
-    ask: ReminderAsk | null
-    all: readonly ThreadId[]
-    choice: ReminderChoice
-    onChoice: (choice: ReminderChoice) => void
-    labelOf: (threadId: ThreadId) => string
-  }
 }) {
   const titleId = useId()
   const textId = useId()
@@ -610,7 +516,7 @@ function ExecuteConfirm({
       </p>
       <div className="sub-confirm-text" id={textId}>
         {empty ? (
-          <p>不会改动两端。确认后，开始前重新读取两端仍与预览一致时，两端共同的串会记为确认基线。</p>
+          <p>不会改动两端，两端共同的串记为确认基线。</p>
         ) : (
           <ul className="sub-confirm-list">
             {groups.map((group) => (
@@ -620,28 +526,10 @@ function ExecuteConfirm({
             ))}
           </ul>
         )}
-        <p>开始前会重新读取两端受影响的范围，核对配置代次、两端对象、集合与页覆盖；有任何变化就整份作废、不发出任何写入，需要重新预览。</p>
-        <p>这只是开始前的检查，不是锁定：确认之后，外部仍可能同时改变订阅。</p>
-        {!empty && (
-          <p>按列表顺序逐项执行，每项先在本机保存意图，再写入并回读核对。某项失败或无法确认时立即停止后续写入；之前成功的保留，不会自动撤回或补救。</p>
-        )}
-        {preview.mode === 'merge' && <p>旧集合不会被改动。</p>}
+        <p>开始前会重新读取两端，有变化就不执行。</p>
       </div>
-      <ReminderChoiceField
-        ask={reminder.ask}
-        all={reminder.all}
-        choice={reminder.choice}
-        onChoice={reminder.onChoice}
-        labelOf={reminder.labelOf}
-        single={false}
-      />
       <div className="credential-confirm-actions">
-        <button
-          type="button"
-          className={removes ? 'btn btn-small btn-danger' : 'btn btn-small btn-primary'}
-          onClick={onConfirm}
-          disabled={reminder.ask?.status === 'loading'}
-        >
+        <button type="button" className={removes ? 'btn btn-small btn-danger' : 'btn btn-small btn-primary'} onClick={onConfirm}>
           {empty ? '确认记录' : '确认执行'}
         </button>
         <button type="button" ref={cancelRef} className="btn btn-small" onClick={onCancel}>
@@ -672,10 +560,7 @@ function PlanProgress({ task }: { task: Extract<ReconcileTask, { phase: 'executi
       <div className="sub-recon-progress" role="status">
         <Spinner />
         <div className="sub-recon-progress-text">
-          <p>{plan === null ? '正在重新读取两端并核对，确认没有变化后才开始写入…' : `已处理 ${done} / ${total} 项`}</p>
-          <p className="field-hint">进度来自本机保存的记录，这里定时重读本机记录，不额外请求论坛。</p>
-          {task.stopRequested && <p className="field-hint">已请求停止：不再开始新的读取或写入；已经发出的写入不会撤回。</p>}
-          {task.reminders !== null && <LinkageLine linkage={task.reminders} className="field-hint" />}
+          <p>{plan === null ? '正在核对两端…' : `已处理 ${done} / ${total} 项`}</p>
         </div>
       </div>
       <div className="sub-recon-actions">
@@ -688,62 +573,87 @@ function PlanProgress({ task }: { task: Extract<ReconcileTask, { phase: 'executi
   )
 }
 
+/**
+ * Unsettled journal entries of a plan whose local record was not found: writes of its selected
+ * items made since the preview. Each gets its read-only 核对订阅 in place.
+ */
+function unsettledOfPlan(
+  task: Extract<ReconcileTask, { phase: 'finished' }>,
+  operations: readonly SubscriptionOperation[] | null,
+  active: Parameters<typeof isReconcilable>[1]
+): SubscriptionOperation[] {
+  const chosen = task.preview.items.filter((item) => task.selectedIds.includes(item.id))
+  return (operations ?? []).filter(
+    (operation) =>
+      operation.createdAt >= task.preview.createdAt &&
+      isReconcilable(operation, active) &&
+      chosen.some((item) => item.threadId === operation.threadId && item.target === operation.source && item.action === operation.action)
+  )
+}
+
 function PlanOutcome({ task }: { task: Extract<ReconcileTask, { phase: 'finished' }> }) {
-  const { dismissTask, startPreview, busy } = useSubscriptionsContext()
+  const { dismissTask, startPreview, busy, operations, active, refreshPlans, refreshOperations } = useSubscriptionsContext()
   const stored = usePlanFor(task.preview.id)
   const { outcome } = task
   const plan = stored ?? (outcome.type === 'plan' ? outcome.plan : null)
   const titleId = useId()
 
-  let notice: { tone: 'error' | 'warn'; title: string; detail: string } | null = null
+  let notice: { tone: 'error' | 'warn'; text: string } | null = null
   if (outcome.type === 'failed') {
-    notice = {
-      tone: 'warn',
-      title: '执行请求失败，结果未知',
-      detail:
-        plan !== null
-          ? '下面是本机保存的逐项结果，以它为准。'
-          : PROTOTYPE_ENABLED
-            ? '本机没有找到这次计划的记录；若之后出现，以记录为准。请打开相关的串核对订阅，不要直接重复执行。'
-            : '本机没有找到这次计划的记录；若之后出现，以记录为准。请在操作记录中核对，不要直接重复执行。'
-    }
+    notice = { tone: 'warn', text: plan === null ? '执行结果未知：本机没有找到这次计划的记录' : '执行结果未知' }
   } else if (outcome.type === 'refused') {
     switch (outcome.reason) {
       case 'stale':
-        notice = { tone: 'error', title: '没有执行：两端或订阅身份在预览之后变了', detail: '开始前重新读取时发现变化，没有发出任何写入。请重新预览。' }
+        notice = { tone: 'error', text: '没有执行：两端或订阅身份在预览之后变了' }
         break
       case 'cancelled':
-        notice = { tone: 'warn', title: '已在第一次写入前停止', detail: '没有发出任何写入。' }
+        notice = { tone: 'warn', text: '已在第一次写入前停止' }
         break
       case 'result-storage':
-        notice = {
-          tone: 'warn',
-          title: `结果未知：${failureText(outcome.reason)}`,
-          detail: PROTOTYPE_ENABLED
-            ? '请打开相关的串核对订阅（只读，不会重发写入），不要直接重复执行。'
-            : '请在操作记录中核对（只读，不会重发写入），不要直接重复执行。'
-        }
+        notice = { tone: 'warn', text: `结果未知：${failureText(outcome.reason)}` }
         break
       default:
-        notice = { tone: 'error', title: `没有执行：${failureText(outcome.reason)}`, detail: '这份预览已用过；如需继续，请重新预览。' }
+        notice = { tone: 'error', text: `没有执行：${failureText(outcome.reason)}` }
     }
   }
+  // Without its record the plan's writes are checked here, each from its own journal entry.
+  const inPlace = plan === null && (outcome.type === 'failed' || (outcome.type === 'refused' && outcome.reason === 'result-storage'))
+  const unsettled = inPlace ? unsettledOfPlan(task, operations, active) : []
 
   return (
     <section className="sub-recon-panel" aria-labelledby={titleId}>
       <h3 className="sub-recon-title" id={titleId} tabIndex={-1} data-phase-focus="">
         {MODE_NAME[task.preview.mode]}计划结果
       </h3>
-      {/* The local reminder choice is reported on its own, whatever the plan's remote outcome. */}
-      {task.reminders !== null && <LinkageLine linkage={task.reminders} className="sub-recon-linkage" />}
       {notice !== null && (
         <div className={notice.tone === 'error' ? 'notice notice-error is-compact' : 'notice notice-cached is-compact'} role="alert">
           <Icon name="alert" className="notice-icon" />
-          <div className="notice-text">
-            <p className="notice-title">{notice.title}</p>
-            <p className="notice-detail">{notice.detail}</p>
-          </div>
+          <p className="notice-text">{notice.text}</p>
+          {inPlace && unsettled.length === 0 && (
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={() => {
+                void refreshPlans()
+                void refreshOperations()
+              }}
+            >
+              重新读取记录
+            </button>
+          )}
         </div>
+      )}
+      {unsettled.length > 0 && (
+        <ul className="sub-unsettled" aria-label="待核对的订阅操作">
+          {unsettled.map((operation) => (
+            <li key={operation.id}>
+              <UnsettledLine
+                operation={operation}
+                text={`${ACTION_NAME[operation.action]} → ${SOURCE_NAME[operation.source]} · No.${operation.threadId}：结果未确认`}
+              />
+            </li>
+          ))}
+        </ul>
       )}
       {plan !== null && (
         <>
@@ -751,7 +661,6 @@ function PlanOutcome({ task }: { task: Extract<ReconcileTask, { phase: 'finished
           <PlanItems plan={plan} />
         </>
       )}
-      <p className="field-hint">这份预览已经用过，不能再次执行。未执行的项不会自动继续；如需继续，请重新读取并预览。</p>
       <div className="sub-recon-actions">
         <button
           type="button"
@@ -781,15 +690,10 @@ function PlanSummary({ plan }: { plan: SubscriptionPlan }) {
   const reason = stopReasonText(plan)
   const lines: string[] = []
   if (plan.items.length === 0 && plan.state === 'completed') {
-    lines.push(plan.preview.mode === 'sync' ? '没有改动两端；这次两端共同读到的串已记为确认基线。' : '没有改动任何集合。')
+    lines.push(plan.preview.mode === 'sync' ? '没有改动两端，已记为确认基线' : '没有改动任何集合')
   } else {
     lines.push(`已确认 ${confirmed} 项 · 失败 ${failed} 项 · 无法确认 ${unknown} 项 · 未执行 ${notRun} 项`)
   }
-  if (plan.state !== 'completed' && plan.state !== 'running' && confirmed > 0) {
-    lines.push(`部分完成：已确认的 ${confirmed} 项保留，不会撤回。`)
-  }
-  if (unknown > 0) lines.push('无法确认的项可能已经生效，可在下方逐项核对；不会自动重发。')
-  if (plan.preview.mode === 'merge') lines.push('旧集合没有被改动。')
   const tone = plan.state === 'completed' ? 'is-done' : plan.state === 'running' ? 'is-active' : 'is-warn'
   return (
     <div className={`sub-write ${tone}`} role="status">
@@ -849,16 +753,7 @@ function PlanItems({ plan }: { plan: SubscriptionPlan }) {
             )}
             {canReconcile && (
               <div className="sub-journal-actions">
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  disabled={busy}
-                  onClick={() => void reconcile(operation)}
-                  aria-label={`核对：${ACTION_NAME[item.candidate.action]} No.${item.candidate.threadId}`}
-                >
-                  核对
-                </button>
-                <span className="field-hint">只读取，使用这一项当时的身份，不重发写入。</span>
+                <ReconcileButton operation={operation} />
               </div>
             )}
           </li>
@@ -901,7 +796,6 @@ function PlanHistory() {
             </button>
           </div>
         )}
-        {!PROTOTYPE_ENABLED && plans === null && !plansFailed && <p className="settings-empty">正在读取记录…</p>}
         {plans !== null && plans.length === 0 && <p className="sub-journal-empty">还没有执行过同步或合并。</p>}
         {plans !== null && plans.length > 0 && (
           <ul className="sub-journal-list" aria-labelledby={headingId}>
@@ -919,9 +813,6 @@ function PlanHistory() {
                   {formatLocalTime(plan.createdAt)} 开始
                   {plan.finishedAt !== null && ` · ${formatLocalTime(plan.finishedAt)} 结束`} · 配置代次 {plan.preview.context.generation}
                 </p>
-                {plan.state === 'interrupted' && (
-                  <p className="sub-journal-meta">启动时不会自动继续；如需继续，请重新预览。</p>
-                )}
                 <PlanSummary plan={plan} />
                 {plan.items.length > 0 && (
                   <details className="sub-plan-details">

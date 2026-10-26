@@ -16,7 +16,7 @@ export function useSearchOpener(): ((request: SearchRequest) => void) | null {
   return useContext(SearchOpenerContext)
 }
 
-/** PROTOTYPE: the app's local search, for the 本机 side of 搜索 pages. Null outside the prototype. */
+/** The app's local search, for the 本机 side of 搜索 pages. Null outside the shell. */
 export interface LocalSearchHost {
   state: SearchState
   commands: SearchCommands

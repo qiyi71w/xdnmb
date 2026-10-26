@@ -92,8 +92,8 @@ export function offlineErrorText(copy: OfflineCopy): string | null {
   const error = copy.error
   if (error === null) return null
   const at = copy.failedPage === null ? '' : `第 ${copy.failedPage} 页`
-  if (error === 'storage') return `${at}${at === '' ? '' : '：'}本地写入失败或空间不足，已保存的部分保留`
-  if (error === 'page-limit') return `达到单次保存的页数上限${at === '' ? '' : `（停在${at}）`}，已保存的部分保留`
+  if (error === 'storage') return `${at}${at === '' ? '' : '：'}本地写入失败或空间不足`
+  if (error === 'page-limit') return `达到单次保存的页数上限${at === '' ? '' : `（停在${at}）`}`
   const server = error.serverMessage === undefined ? '' : `；论坛提示：${error.serverMessage}`
   return `${at === '' ? '读取' : `${at}读取`}失败：${describeReadError(error)}${server}`
 }
@@ -120,7 +120,7 @@ export function offlineStateText(copy: OfflineCopy): string {
 export function offlineImagesText(copy: OfflineCopy): string {
   const counts = `原图 ${copy.savedImages} / ${copy.imageCount} 张已保存${copy.imageFailures.length > 0 ? `，${copy.imageFailures.length} 张失败` : ''}`
   if (copy.includeImages) return counts
-  return `${counts}；最近一次仅保存文字，${copy.savedImages > 0 ? '之前保存的原图保留' : '未下载原图'}`
+  return `${counts}；最近一次仅保存文字`
 }
 
 export interface RetainedHeading {
@@ -130,7 +130,7 @@ export interface RetainedHeading {
 }
 
 /**
- * How a 收藏／历史／离线 row names its thread: the title, else the first line of the head post held
+ * How a 历史／离线 row names its thread: the title, else the first line of the head post held
  * locally (`excerpt`, shown on one line), else the number.
  */
 export function retainedHeading(entry: RetainedEntry): RetainedHeading {

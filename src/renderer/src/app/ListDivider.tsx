@@ -1,37 +1,16 @@
-// PROTOTYPE (throwaway): the draggable divider between the thread list and the reader in split view.
-// Active only with VITE_XIDAO_PROTOTYPE=1; the chosen width is kept in localStorage.
+// The draggable divider between the thread list and the reader in split view. The chosen width is
+// the `listWidth` setting, saved by the app at the end of each change.
 
 import { useRef, type KeyboardEvent, type PointerEvent } from 'react'
-import { LAYOUT_DEFAULTS } from '../features/layout/layout'
+import { LIST_WIDTH_LIMITS } from '../../../shared/settings'
 
-/** Narrowest list the divider allows. */
-export const LIST_WIDTH_MIN = 260
 /** Arrow-key step, CSS pixels. */
 const STEP = 16
-const LIST_WIDTH_KEY = 'xidao.prototype.listWidth'
-
-/** The saved list width; the default when nothing usable is saved. */
-export function readListWidth(): number {
-  try {
-    const saved = Number(localStorage.getItem(LIST_WIDTH_KEY))
-    return Number.isFinite(saved) && saved >= LIST_WIDTH_MIN ? Math.round(saved) : LAYOUT_DEFAULTS.listWidth
-  } catch {
-    return LAYOUT_DEFAULTS.listWidth
-  }
-}
-
-export function saveListWidth(width: number): void {
-  try {
-    localStorage.setItem(LIST_WIDTH_KEY, String(Math.round(width)))
-  } catch {
-    // Not remembered across restarts; the width still applies.
-  }
-}
 
 /**
  * Pointer drag, ←/→, Home/End; a double click restores the default width. `max` is the widest list
  * the reader currently leaves room for. `onResize` gets an in-range width; `done` marks the end of
- * a change (drag released, key, double click), when it is worth saving.
+ * a change (drag released, key, double click), when it is saved.
  */
 export function ListDivider({
   width,
@@ -42,8 +21,8 @@ export function ListDivider({
   max: number
   onResize: (width: number, done: boolean) => void
 }) {
-  const ceiling = Math.max(LIST_WIDTH_MIN, max)
-  const clamp = (value: number) => Math.round(Math.min(ceiling, Math.max(LIST_WIDTH_MIN, value)))
+  const ceiling = Math.min(LIST_WIDTH_LIMITS.max, Math.max(LIST_WIDTH_LIMITS.min, max))
+  const clamp = (value: number) => Math.round(Math.min(ceiling, Math.max(LIST_WIDTH_LIMITS.min, value)))
   const drag = useRef<{ pointerId: number; startX: number; startWidth: number; last: number } | null>(null)
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -75,7 +54,7 @@ export function ListDivider({
     let next: number
     if (event.key === 'ArrowLeft') next = width - STEP
     else if (event.key === 'ArrowRight') next = width + STEP
-    else if (event.key === 'Home') next = LIST_WIDTH_MIN
+    else if (event.key === 'Home') next = LIST_WIDTH_LIMITS.min
     else if (event.key === 'End') next = ceiling
     else return
     event.preventDefault()
@@ -90,7 +69,7 @@ export function ListDivider({
       aria-orientation="vertical"
       aria-label="串列表宽度"
       aria-valuenow={width}
-      aria-valuemin={LIST_WIDTH_MIN}
+      aria-valuemin={LIST_WIDTH_LIMITS.min}
       aria-valuemax={ceiling}
       tabIndex={0}
       title="拖动调整宽度，双击还原"
@@ -98,7 +77,7 @@ export function ListDivider({
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
-      onDoubleClick={() => onResize(clamp(LAYOUT_DEFAULTS.listWidth), true)}
+      onDoubleClick={() => onResize(LIST_WIDTH_LIMITS.default, true)}
       onKeyDown={onKeyDown}
     />
   )

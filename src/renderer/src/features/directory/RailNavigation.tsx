@@ -1,21 +1,19 @@
-// PROTOTYPE (throwaway) variant D — 版块浮层: no board column. The navigation is the icon rail only,
-// with up to five favorite boards under its 版块 button; that button (and the board name at the top
-// of a board list) opens a wide panel beside the rail: a filter with 关闭 beside it, 收藏, then every
-// group laid out in columns. Choosing a board closes it.
-// The panel is not modal: Esc, 关闭 or a press outside cancels it (focus back to its opener), Tab leaving it closes it and
-// leaves focus where it went; prototypeStore's `closeBoardPanel` is the one place focus is decided.
+// The navigation: the icon rail, with up to five favorite boards under its 版块 button. That button
+// (and the board name at the top of a board list) opens a wide panel beside the rail: a filter with
+// 关闭 beside it, 收藏, then every group laid out in columns. Choosing a board closes it.
+// The panel is not modal: Esc, 关闭 or a press outside cancels it (focus back to its opener), Tab
+// leaving it closes it and leaves focus where it went; `closeBoardPanel` alone decides focus.
 
 import { useEffect, useLayoutEffect, useRef, type CSSProperties, type FocusEvent } from 'react'
-import { Icon } from '../../../components/Icon'
-import { openLayer } from '../../../lib/layers'
-import { listKey, type ListRef } from '../../tabs/tabsState'
-import { DirectoryStatus } from '../Navigation'
-import { BoardPicker } from './PrototypeBoardPicker'
-import { DirectoryPlaceholder, useBoardView, type PrototypeNavProps } from './PrototypeNavParts'
-import { PrototypeRail, RAIL_WIDTH } from './PrototypeRail'
-import { BOARD_PANEL_ID, closeBoardPanel, openBoardPanel, useBoardPanelOpen } from './prototypeStore'
+import { Icon } from '../../components/Icon'
+import { openLayer } from '../../lib/layers'
+import { listKey, type ListRef } from '../tabs/tabsState'
+import { BoardPicker } from './BoardPicker'
+import { DirectoryPlaceholder, DirectoryStatus, useBoardView, type NavProps } from './navParts'
+import { Rail, RAIL_WIDTH } from './Rail'
+import { BOARD_PANEL_ID, closeBoardPanel, openBoardPanel, useBoardPanelOpen } from './navStore'
 
-export function PrototypeNavD({
+export function RailNavigation({
   state,
   selected,
   onSelect,
@@ -26,7 +24,7 @@ export function PrototypeNavD({
   variant,
   panelRef,
   id
-}: PrototypeNavProps) {
+}: NavProps) {
   const open = useBoardPanelOpen()
   const selectedKey = settingsCurrent || selected === null ? null : listKey(selected)
   const { view } = useBoardView(state.directory)
@@ -35,16 +33,15 @@ export function PrototypeNavD({
     <nav
       ref={panelRef}
       id={id}
-      className={variant === 'overlay' ? 'nav proto-nav proto-nav-d is-overlay' : 'nav proto-nav proto-nav-d'}
+      className={variant === 'overlay' ? 'nav shell-nav is-overlay' : 'nav shell-nav'}
       aria-label="功能与版块"
-      style={{ '--proto-rail': `${RAIL_WIDTH}px` } as CSSProperties}
+      style={{ '--shell-rail': `${RAIL_WIDTH}px` } as CSSProperties}
     >
-      <PrototypeRail
+      <Rail
         features={features}
         settingsCurrent={settingsCurrent}
         onOpenSettings={onOpenSettings}
         boards={{
-          label: '版块',
           popup: { expanded: open, controls: BOARD_PANEL_ID },
           onClick: (button) => (open ? closeBoardPanel('cancel') : openBoardPanel(button))
         }}
@@ -68,7 +65,7 @@ function BoardPanel({
   onSelect,
   onRetry
 }: {
-  state: PrototypeNavProps['state']
+  state: NavProps['state']
   selectedKey: string | null
   onSelect: (ref: ListRef) => void
   onRetry: () => void
@@ -96,12 +93,7 @@ function BoardPanel({
       pressing.current = true
       setTimeout(() => (pressing.current = false))
       const target = event.target as Element | null
-      if (
-        target === null ||
-        panelRef.current?.contains(target) ||
-        target.closest('[data-proto-boards-trigger], [data-rail-board]') !== null
-      )
-        return
+      if (target === null || panelRef.current?.contains(target) || target.closest('[data-boards-trigger], [data-rail-board]') !== null) return
       closeBoardPanel('cancel', target)
     }
     document.addEventListener('keydown', onKeyDown, true)
@@ -129,20 +121,18 @@ function BoardPanel({
   }
 
   return (
-    <div ref={panelRef} id={BOARD_PANEL_ID} className="proto-pop proto-board-panel" role="dialog" aria-label="版块" onBlur={onBlur}>
+    <div ref={panelRef} id={BOARD_PANEL_ID} className="shell-pop shell-board-panel" role="dialog" aria-label="版块" onBlur={onBlur}>
       <BoardPicker
         view={view}
         hidden={hidden}
         selectedKey={selectedKey}
         onSelect={choose}
-        shape="columns"
-        autoFocus
         onClose={() => closeBoardPanel('cancel')}
         placeholder={
           state.directory === null || all.length === 0 ? <DirectoryPlaceholder state={state} onRetry={onRetry} empty={all.length === 0} /> : undefined
         }
       />
-      <DirectoryStatus state={state} />
+      <DirectoryStatus state={state} onRetry={onRetry} />
     </div>
   )
 }
@@ -153,34 +143,34 @@ export function BoardPanelTitle({ name, onOpen }: { name: string; onOpen: (butto
   return (
     <button
       type="button"
-      className="proto-list-title-btn"
+      className="shell-list-title-btn"
       aria-haspopup="dialog"
       aria-expanded={open}
       aria-controls={open ? BOARD_PANEL_ID : undefined}
       title="切换版块"
-      data-proto-board-title=""
-      data-proto-boards-trigger=""
+      data-board-title=""
+      data-boards-trigger=""
       onClick={(event) => (open ? closeBoardPanel('cancel') : onOpen(event.currentTarget))}
     >
       <span>{name}</span>
-      <Icon name="chevron" size={14} className="proto-list-title-chevron" />
+      <Icon name="chevron" size={14} className="shell-list-title-chevron" />
     </button>
   )
 }
 
-/** A tab without a list: the way to the boards. */
-export function BoardPanelEmptyPage({ onOpen }: { onOpen: (button: HTMLButtonElement) => void }) {
+/** A tab without a list (or whose board left the directory): the way to the boards. */
+export function BoardPanelEmptyPage({ title = '选择版块', onOpen }: { title?: string; onOpen: (button: HTMLButtonElement) => void }) {
   const open = useBoardPanelOpen()
   return (
     <div className="pane-empty">
-      <p className="pane-empty-title">选择版块</p>
+      <p className="pane-empty-title">{title}</p>
       <button
         type="button"
         className="btn pane-empty-action"
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? BOARD_PANEL_ID : undefined}
-        data-proto-boards-trigger=""
+        data-boards-trigger=""
         onClick={(event) => (open ? closeBoardPanel('cancel') : onOpen(event.currentTarget))}
       >
         <Icon name="forum" />

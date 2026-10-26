@@ -70,29 +70,27 @@
 
 /* ---------- Top bar ---------- */
 
-/* Wraps when narrow (200% zoom): the tab strip then takes its own line instead of being squeezed. */
+/* Wraps when narrow (200% zoom): the tab strip then takes its own line instead of being squeezed.
+   It is the window's title bar: empty space drags the window, controls do not, and it leaves room
+   for the window controls (title-bar overlay on the right; macOS traffic lights on the left). */
 .topbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   min-width: 0;
-  padding: 8px 8px 6px;
-}
-
-:root .topbar.is-native-titlebar {
-  -webkit-app-region: drag;
   min-height: 44px;
-  padding-right: max(148px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px));
+  padding: 8px max(148px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px)) 6px 8px;
+  -webkit-app-region: drag;
 }
 
-:root .topbar.is-native-titlebar.is-macos {
+.topbar.is-macos {
   padding-left: 80px;
   padding-right: 8px;
 }
 
-.topbar.is-native-titlebar button,
-.topbar.is-native-titlebar .tab {
+.topbar button,
+.topbar .tab {
   -webkit-app-region: no-drag;
 }
 
@@ -239,16 +237,8 @@
 
 /* Compact density: tab strip and top bar padding only (targets stay ≥ 24 px, text unchanged). */
 :root[data-density='compact'] .topbar {
-  padding: 5px 8px 4px;
-}
-
-:root[data-density='compact'] .topbar.is-native-titlebar:not(.is-macos) {
-  padding-right: max(148px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px));
-}
-
-:root[data-density='compact'] .topbar.is-native-titlebar.is-macos {
-  padding-left: 80px;
-  padding-right: 8px;
+  padding-top: 5px;
+  padding-bottom: 4px;
 }
 
 :root[data-density='compact'] .tab-strip {
@@ -311,8 +301,8 @@
   border-right: 0;
 }
 
-/* PROTOTYPE: list width divider, centred over the list's border. Quiet until hovered, dragged or
-   focused: then a slim line (accent while dragging) or the focus ring. */
+/* List width divider, centred over the list's border. Quiet until hovered, dragged or focused:
+   then a slim line (accent while dragging) or the focus ring. */
 .list-divider {
   position: relative;
   z-index: 1;
@@ -398,8 +388,8 @@
   text-align: center;
 }
 
-/* State above a forum's editor while the directory has not described the feed: loading, directory
-   unreadable, or the feed no longer in the directory. */
+/* State of a feed the directory has not described: loading, directory unreadable, or the feed no
+   longer in the directory. */
 .pane-empty.list-pending {
   flex: 1;
   min-height: 0;
@@ -412,7 +402,7 @@
 }
 
 .pane-empty-title {
-  font-size: 0.9375rem;
+  font-size: var(--text-md);
   font-weight: 600;
   color: var(--ink-2);
 }

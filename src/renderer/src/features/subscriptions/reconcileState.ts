@@ -10,7 +10,6 @@ import type {
   SubscriptionSource
 } from '../../../../shared/subscriptions'
 import { threadLabel } from './subscriptionText'
-import type { ReminderLinkage } from '../reminders/ReminderLinkage'
 
 export type ReconcileMode = SubscriptionPreview['mode']
 
@@ -36,8 +35,6 @@ export type ReconcileTask =
       selectedIds: readonly string[]
       operationId: string
       stopRequested: boolean
-      /** Reminder choice for the selected removals, applied locally before the plan. */
-      reminders: ReminderLinkage | null
     }
   | {
       phase: 'finished'
@@ -46,7 +43,6 @@ export type ReconcileTask =
       selectedIds: readonly string[]
       stopRequested: boolean
       outcome: ExecuteOutcome
-      reminders: ReminderLinkage | null
     }
 
 /** A preview being read or a plan being executed: no other subscription write may start meanwhile. */

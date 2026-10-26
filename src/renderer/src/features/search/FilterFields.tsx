@@ -4,8 +4,6 @@ import type { ContentFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
 import { listFilterCount, type FilteredList, type ListFilters, NO_LIST_FILTERS } from './listFilters'
 import type { MetadataState } from './useThreadMetadata'
-// PROTOTYPE (throwaway): the prototype has no read/unread tracking, so no 仅未读 filter.
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import '../identity/identity.css'
 import './search.css'
 
@@ -120,11 +118,6 @@ export function FilterFields({
   )
 }
 
-/** Footnote shared by every filter surface: what dates mean and how unknown fields are treated. */
-export function FilterRules() {
-  return <p className="filter-rules">日期按论坛显示的日期比较。字段未知的串照常显示，并标出“字段未知”。</p>
-}
-
 /**
  * Filter bar of a list view. Only threads already on screen are chosen from: no further page is
  * read to fill the list, and the thread being read stays open even when it is filtered out.
@@ -133,7 +126,6 @@ export function ListFilterBar({
   filters,
   onChange,
   forums,
-  unreadOffered,
   noun,
   total,
   result,
@@ -143,8 +135,6 @@ export function ListFilterBar({
   filters: ListFilters
   onChange: (next: ListFilters) => void
   forums: ReadonlyMap<ForumId, string> | null
-  /** 仅未读 (收藏, 订阅). */
-  unreadOffered: boolean
   noun: string
   total: number
   result: FilteredList<unknown>
@@ -156,7 +146,6 @@ export function ListFilterBar({
   const count = listFilterCount(filters)
   const [open, setOpen] = useState(count > 0)
   const panelId = useId()
-  const unreadId = useId()
   return (
     <div className="list-filters">
       <div className="list-filters-row">
@@ -186,25 +175,12 @@ export function ListFilterBar({
       </div>
       <div className="list-filters-panel" id={panelId} hidden={!open}>
         <FilterFields value={filters.content} onChange={(content) => onChange({ ...filters, content })} forums={forums} />
-        {unreadOffered && !PROTOTYPE_ENABLED && (
-          <label className="filter-unread" htmlFor={unreadId}>
-            <input
-              id={unreadId}
-              type="checkbox"
-              checked={filters.unreadOnly}
-              onChange={(event) => onChange({ ...filters, unreadOnly: event.target.checked })}
-            />
-            <span>仅显示有未读回复的串</span>
-          </label>
-        )}
-        <FilterRules />
       </div>
       {count > 0 && (
         <p className="list-filters-scope">
           <Icon name="info" size={13} />
           <span>
             只在{coverage}中筛选
-            {metadata?.status === 'loading' && '；正在读取筛选信息…'}
             {metadata?.status === 'failed' && '；筛选信息读取失败，按字段未知显示'}
           </span>
         </p>
@@ -216,7 +192,7 @@ export function ListFilterBar({
 /** Tag on an item kept by filters only because a field it was judged by is unknown. */
 export function UncertainTag() {
   return (
-    <span className="tag tag-uncertain" title="筛选所需的字段未知，所以没有排除">
+    <span className="tag tag-uncertain">
       字段未知
     </span>
   )

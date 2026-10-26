@@ -1,6 +1,3 @@
-// PROTOTYPE (throwaway): a subscription row's actions live in its context menu instead of buttons
-// on the row. Built only with VITE_XIDAO_PROTOTYPE=1.
-
 import type { Post, ThreadId } from '../../../../shared/forum'
 import { REMINDER_KINDS, type ReminderKind, type ReminderRule, type ThreadReminders } from '../../../../shared/reminders'
 import { ContextMenu, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'

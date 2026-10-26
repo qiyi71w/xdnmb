@@ -34,16 +34,16 @@ export interface OnlineSearchPaneHandle {
   focusInput(): void
 }
 
-/** PROTOTYPE 搜索 page: which search it shows. */
+/** 搜索 page: which search it shows. */
 export type SearchPageSide = 'local' | 'online'
 
-/** What the shell can ask of a mounted PROTOTYPE 搜索 page. */
+/** What the shell can ask of a mounted 搜索 page. */
 export interface SearchPageHandle {
   /** Shows that side and focuses its search box (搜索 chosen while already on the page). */
   show(side: SearchPageSide): void
 }
 
-/** PROTOTYPE 搜索 page while mounted or in navigation history: the side shown, where 本机 was scrolled. */
+/** 搜索 page while mounted or in navigation history: the side shown, where 本机 was scrolled. */
 export interface SearchPageMemory {
   side: SearchPageSide
   localScrollTop: number
@@ -64,11 +64,11 @@ export type ListMemory =
     }
   /** The 提醒 list reads its overview again on mount; only where it was scrolled is kept. */
   | { kind: 'reminders'; scrollTop: number }
-  /** PROTOTYPE 历史 / 离线 pages: read again on mount, likewise only the scroll position is kept. */
+  /** 历史 / 离线 pages: read again on mount, likewise only the scroll position is kept. */
   | { kind: 'retained'; scrollTop: number }
 
 /**
- * Mounted readers, lists, online search pages and PROTOTYPE 搜索 pages, keyed by the history entry
+ * Mounted readers, lists, online search pages and 搜索 pages, keyed by the history entry
  * key that shows them, plus the runtime memory of lists that are not mounted (split toggled, single
  * pane, back/forward), the sessions of online search entries (query, obtained pages, view) and the
  * side and 本机 scroll of 搜索 pages. Memory lives only while the app runs; the shell drops it when

@@ -1,11 +1,11 @@
 /* Remote subscriptions: the list pane reuses the forum list (feed.css) and adds the source switch,
-   explicit write tools, the operation journal and coverage lines. Field and confirm styles come
-   from identity.css. Everything wraps; nothing needs a fixed width at 200% zoom. */
+   explicit write tools and in-place 核对 lines. Field and confirm styles come from identity.css.
+   Everything wraps; nothing needs a fixed width at 200% zoom. */
 
 /* ---------- Header ---------- */
 
-/* The title row: title, (prototype) 同步与合并, the source switch, 刷新. When the column is too
-   narrow for all of them, the controls wrap below the title as one group, never squeezing it. */
+/* The title row: title, 同步与合并, the source switch, 刷新. When the column is too narrow for all
+   of them, the controls wrap below the title as one group, never squeezing it. */
 .sub-pane .list-title-row {
   flex-wrap: wrap;
   row-gap: 6px;
@@ -28,7 +28,7 @@
   flex: none;
 }
 
-/* Prototype: a quiet text control, same weight as the header's icon buttons. */
+/* A quiet text control, same weight as the header's icon buttons. */
 .sub-recon-open {
   flex: none;
   min-height: 30px;
@@ -134,8 +134,32 @@
   align-self: center;
 }
 
-.sub-write-actions {
-  margin-top: 4px;
+/* An unsettled write in place: one sentence and 核对订阅, wrapping under the sentence when narrow. */
+.sub-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: var(--text-sm);
+}
+
+.sub-inline.is-warn {
+  color: var(--warn-ink);
+}
+
+.sub-inline-icon {
+  flex: none;
+}
+
+.sub-inline-text {
+  flex: 1 1 10em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sub-unsettled {
+  display: grid;
+  gap: 4px;
 }
 
 .sub-write > .icon-btn {
@@ -144,7 +168,7 @@
   color: inherit;
 }
 
-/* Confirmation of one explicit write: the frozen object is stated before anything is sent. */
+/* Confirmation of a sync / merge plan before anything is sent. */
 .sub-confirm {
   display: grid;
   gap: 6px;
@@ -321,35 +345,9 @@
   margin-top: 2px;
 }
 
-/* ---------- Status and coverage ---------- */
+/* ---------- Status ---------- */
 
-.sub-reading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
-}
-
-.sub-coverage {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin: 6px 4px;
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.sub-coverage .icon {
-  flex: none;
-  margin-top: 2px;
-}
-
-.sub-coverage.is-partial {
-  color: var(--warn-ink);
-}
-
-/* Prototype: where the silent reading stopped on an error: one line and 重试. */
+/* Where the silent reading stopped on an error: one line and 重试. */
 .sub-stopped {
   display: flex;
   flex-wrap: wrap;
@@ -376,26 +374,7 @@
   margin-top: 12px;
 }
 
-/* ---------- Rows: open the thread, set its reminders, or ask to cancel its subscription ---------- */
-
-/* The row's width decides where its actions go, not the window: a column beside the row only when
-   the row keeps room for its header (identity + time); otherwise one wrapping line below it. */
-.sub-thread-list {
-  container-type: inline-size;
-}
-
-.sub-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-}
-
-.sub-row-actions {
-  display: grid;
-  justify-items: end;
-  gap: 2px;
-  margin: 8px 4px 0 2px;
-}
+/* ---------- Rows: open the thread; actions are in the row's context menu ---------- */
 
 /* Byline and time wrap onto two lines instead of drawing over each other when the row is narrow. */
 .sub-row .row-byline {
@@ -407,26 +386,12 @@
   flex-basis: auto;
 }
 
-@container (max-width: 32rem) {
-  .sub-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .sub-row-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 4px 6px;
-    margin: -4px 8px 8px;
-  }
+/* The row's unsettled write, under the row and aligned with its text. */
+.sub-row > .sub-inline {
+  padding: 0 12px 10px;
 }
 
-.sub-row:has(> .thread-row.is-selected) .sub-row-action {
-  color: var(--accent-ink);
-}
-
-/* Prototype: the row whose context menu is open keeps the hover layer while the pointer is on the menu. */
+/* The row whose context menu is open keeps the hover layer while the pointer is on the menu. */
 .sub-row.is-menu-open > .thread-row:not(.is-selected) {
   background: var(--hover);
 }
@@ -461,13 +426,6 @@
 
 .sub-pane > .list-scroll[hidden] {
   display: none;
-}
-
-.sub-recon-entry {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
 }
 
 .sub-recon {

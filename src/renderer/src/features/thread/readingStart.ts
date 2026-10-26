@@ -1,6 +1,6 @@
 import { MAX_MARK_READ_IDS, type OperationId, type ReadOutcome, type ThreadPageResult } from '../../../../shared/api'
 import type { PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
-import type { ReadingAnchor, ThreadReadingState, UnreadPost } from '../../../../shared/reading'
+import type { ReadingAnchor, ThreadReadingState } from '../../../../shared/reading'
 import type { ThreadOpen } from '../tabs/tabsState'
 
 /** Where a reader puts its reading line after loading a range. */
@@ -8,7 +8,7 @@ export type ReaderPosition =
   | { kind: 'top' }
   /** Restore a remembered anchor (snapshot or saved position); `anchor.page` is loaded. */
   | { kind: 'anchor'; anchor: ReadingAnchor }
-  /** Put an explicit post (target, 首条未读) at the reading line; `page` is loaded. */
+  /** Put an explicit post (quote, search or reminder target) at the reading line; `page` is loaded. */
   | { kind: 'post'; postId: PostId; page: number }
   /** Top of a page (页码 jump). */
   | { kind: 'page'; page: number }
@@ -88,12 +88,6 @@ export function decideView(
   const snapshot = open.snapshot !== null && open.snapshot.generation === generation ? open.snapshot : null
   const wasTemporary = open.target !== null || (snapshot !== null && snapshot.temporaryOf !== null)
   return { start, temporaryOf: wasTemporary && start.mode !== preference ? preference : null }
-}
-
-/** Confirmed unread posts known to sit on a page of `mode`, excluding posts read since the last fetch. */
-export function unreadInMode(state: ThreadReadingState | null, mode: ReadingMode, readNow: ReadonlySet<PostId>): UnreadPost[] {
-  if (state === null) return []
-  return state.unread.filter((post) => post.pages[mode] !== null && !readNow.has(post.postId))
 }
 
 /** IDs for one `markRead` call each. */

@@ -1,0 +1,948 @@
+/* The icon-rail navigation, its board panel and the settings page. Colors come from theme tokens
+   only; popups use the opaque list surface (--pane), never glass, so nothing behind them shows
+   through. */
+
+/* ---------- Navigation panel ---------- */
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 8px 0 8px 8px;
+  border-radius: var(--radius-l);
+  background: var(--glass);
+  backdrop-filter: blur(28px) saturate(1.6);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+  overflow: hidden;
+}
+
+/* Floating frosted panel opened from the top bar when the window is too narrow for a column. */
+.nav.is-overlay {
+  position: absolute;
+  z-index: 31;
+  top: 8px;
+  bottom: 8px;
+  left: 8px;
+  width: min(calc(var(--nav-full) - 8px), calc(100% - 16px));
+  margin: 0;
+  background: var(--glass-strong);
+}
+
+.nav-overlay-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: oklch(0.2 0.02 240 / 0.12);
+}
+
+.nav-placeholder {
+  padding: 6px 4px;
+}
+
+.nav-skeleton {
+  padding: 4px 8px;
+}
+
+.nav-empty {
+  padding: 8px 10px;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.nav-foot {
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line-soft);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.nav-foot .notice {
+  padding: 6px 8px;
+  font-size: var(--text-xs);
+}
+
+.nav-foot-text {
+  line-height: 1.5;
+}
+
+.nav-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+/* ---------- Shared pieces ---------- */
+
+.shell-chevron {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.shell-chevron.is-open,
+.shell-manage-group[open] > summary .shell-chevron {
+  transform: rotate(90deg);
+}
+
+.shell-group-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hit area 24 × 24 (the row is 28 high); the star drawn inside stays 13 px. Sits in the row's 28 px
+   right padding, 2 px clear of the label. */
+.shell-star {
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--ink-3);
+  opacity: 0;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.shell-choice:hover .shell-star,
+.shell-choice:focus-within .shell-star,
+.shell-star.is-on {
+  opacity: 1;
+}
+
+.shell-star:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.shell-star.is-on,
+.shell-manage-star.is-on {
+  color: var(--accent-ink);
+}
+
+.shell-star.is-on svg,
+.shell-manage-star.is-on svg {
+  fill: currentColor;
+}
+
+/* Count / warning dot on icon-only feature buttons (rail, 全部功能 grid). */
+.shell-dot {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.shell-dot:empty {
+  min-width: 9px;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  top: 4px;
+  right: 3px;
+}
+
+.shell-dot.is-warning {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  box-shadow: 0 0 0 1px var(--warn-ink);
+}
+
+/* ---------- Icon rail ---------- */
+
+.nav.shell-nav {
+  position: relative;
+  z-index: 5;
+  flex-direction: row;
+  overflow: visible;
+}
+
+.nav.shell-nav.is-overlay {
+  position: absolute;
+  z-index: 31;
+}
+
+.shell-rail {
+  position: relative;
+  flex: none;
+  width: var(--shell-rail);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 0;
+  border-right: 0;
+  overflow: hidden auto;
+  scrollbar-width: none;
+}
+
+.shell-rail-btn {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.shell-rail-btn:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.shell-rail-btn:focus-visible {
+  outline-offset: -2px;
+}
+
+.shell-rail-btn.is-current {
+  background: var(--nav-current);
+  color: var(--accent-ink);
+}
+
+.shell-rail-btn.is-current .icon {
+  stroke-width: 2.3;
+}
+
+.shell-rail-btn.is-open {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.shell-rail-sep {
+  flex: none;
+  width: 22px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line-soft);
+}
+
+.shell-rail-gap {
+  flex: 1;
+  min-height: 8px;
+}
+
+/* Favorite boards under 版块: round, the board's first character (two when they collide). */
+.shell-rail-btn.shell-rail-fav {
+  width: 32px;
+  height: 32px;
+  margin: 2px 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.shell-rail-btn.shell-rail-fav.is-pair {
+  font-size: 11px;
+  letter-spacing: -0.04em;
+}
+
+.shell-rail-btn.shell-rail-fav.is-current {
+  box-shadow: none;
+  font-weight: 750;
+}
+
+/* Feature buttons can be dragged along the rail. */
+.shell-rail-btn[data-rail-feature] {
+  touch-action: none;
+}
+
+.shell-rail.is-dragging,
+.shell-rail.is-dragging .shell-rail-btn {
+  cursor: grabbing;
+}
+
+.shell-rail-btn.is-dragging {
+  opacity: 0.45;
+}
+
+/* Where the dragged feature goes. */
+.shell-rail-drop {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+/* Name of the hovered or focused rail button (portal in body, beside the button). */
+.shell-rail-tip {
+  position: fixed;
+  z-index: 60;
+  max-width: 16rem;
+  padding: 4px 8px;
+  border-radius: var(--radius-m);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: translateY(-50%);
+  pointer-events: none;
+  animation: shell-tip-in 0.12s var(--ease-out);
+}
+
+@keyframes shell-tip-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ---------- Popups ---------- */
+
+.shell-pop {
+  position: absolute;
+  z-index: 40;
+  border-radius: var(--radius-l);
+  background: var(--pane);
+  box-shadow: var(--shadow-nav), 0 0 0 1px var(--line-soft);
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.shell-all-panel {
+  padding: 8px;
+  left: calc(var(--shell-rail) + 6px);
+  bottom: 8px;
+  width: 18rem;
+  max-width: calc(100vw - var(--shell-rail) - 32px);
+}
+
+.shell-all-title {
+  margin: 0;
+  padding: 2px 6px 8px;
+  font-size: inherit;
+  font-weight: 650;
+}
+
+.shell-all-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr));
+  gap: 4px;
+}
+
+.shell-all-item {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.shell-all-item:hover {
+  background: var(--hover);
+}
+
+.shell-all-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-m);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+/* ---------- Settings page ---------- */
+
+.shell-settings {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--ink);
+}
+
+.shell-settings-title {
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* Focus handed to a heading (page entered, directory entry chosen) shows as the page itself: the
+   heading is at the top of its pane and the directory marks it current. */
+.shell-settings-title:focus,
+.shell-settings .settings-section-title:focus {
+  outline: none;
+}
+
+.shell-settings-scroll {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.shell-settings-column {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 8px 28px 72px;
+}
+
+/* Hierarchy: category (page-title size, accent ink over a soft line) › section (interface size,
+   650) › group (label style) › setting. */
+.shell-category + .shell-category {
+  margin-top: 28px;
+}
+
+.shell-category-title {
+  margin: 0;
+  padding: 12px 0 6px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--accent-ink);
+}
+
+.shell-settings .settings-group-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.shell-settings-item + .shell-settings-item {
+  border-top: 1px solid var(--line-soft);
+}
+
+/* A view filling the content area. */
+.shell-settings-b {
+  margin: 8px;
+  height: auto;
+  flex: 1;
+  border-radius: var(--radius-l);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--line-soft), var(--shadow-bar);
+  overflow: hidden;
+}
+
+/* The page's top row replaces the top bar: it drags the window and leaves room for the window
+   controls (Windows / Linux: the title-bar overlay on the right; macOS: the traffic lights). */
+.shell-settings-b-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 6px max(140px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))) 6px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  -webkit-app-region: drag;
+}
+
+.shell-settings-b-head button {
+  -webkit-app-region: no-drag;
+}
+
+.shell-settings-b.is-macos .shell-settings-b-head {
+  padding-left: 72px;
+  padding-right: 16px;
+}
+
+.shell-settings-b-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.shell-settings-toc {
+  flex: none;
+  width: 172px;
+  overflow: hidden auto;
+  padding: 10px 8px 72px;
+  border-right: 1px solid var(--line-soft);
+  background: var(--pane);
+}
+
+.shell-toc-group + .shell-toc-group {
+  margin-top: 8px;
+}
+
+.shell-toc-category {
+  padding: 6px 10px 2px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--ink-3);
+}
+
+.shell-toc-item {
+  width: 100%;
+  padding: 4px 10px 4px 18px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.shell-toc-item:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.shell-toc-item.is-current {
+  background: var(--nav-current);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.shell-toc-item:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Narrow window: the directory column gives way to a sticky control on top of the scroll area. */
+.shell-settings-jump {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .shell-settings-toc {
+    display: none;
+  }
+
+  .shell-settings-jump {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--paper);
+  }
+}
+
+.shell-settings-jump-trigger {
+  gap: 6px;
+  font-weight: 600;
+}
+
+.shell-settings-jump-chevron {
+  color: var(--ink-2);
+  transform: rotate(90deg);
+}
+
+.shell-settings-jump-trigger[aria-expanded='true'] .shell-settings-jump-chevron {
+  transform: rotate(-90deg);
+}
+
+.shell-settings-jump-menu {
+  top: calc(100% + 4px);
+  left: 16px;
+  width: 14rem;
+  max-width: calc(100% - 32px);
+  max-height: min(70dvh, 28rem);
+  overflow: hidden auto;
+  padding: 6px;
+}
+
+/* ---------- 功能显示 and 版块管理 ---------- */
+
+.shell-check {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  cursor: pointer;
+}
+
+.shell-check input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.shell-check-icon {
+  flex: none;
+  color: var(--accent);
+}
+
+.shell-manage-filter {
+  max-width: 20rem;
+  margin-bottom: 8px;
+}
+
+/* While filtering, group headings are plain (not collapsible). */
+div.shell-manage-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px;
+}
+
+.shell-manage-group > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px;
+  border-radius: var(--radius-m);
+  list-style: none;
+  cursor: pointer;
+}
+
+.shell-manage-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.shell-manage-group > summary:hover {
+  background: var(--hover);
+}
+
+.shell-manage-count {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.shell-manage-list {
+  display: grid;
+  gap: 1px;
+}
+
+.shell-manage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 1px 4px 1px 8px;
+  border-radius: var(--radius-m);
+}
+
+.shell-manage-row:hover {
+  background: var(--hover);
+}
+
+.shell-manage-icon {
+  flex: none;
+  color: var(--accent);
+}
+
+.shell-manage-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.shell-manage-row.is-hidden .shell-manage-label {
+  color: var(--ink-3);
+  text-decoration: line-through;
+}
+
+.shell-manage-row.is-hidden .shell-manage-icon {
+  color: var(--ink-3);
+}
+
+.shell-manage-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.shell-manage-actions .btn-small[aria-pressed='true'] {
+  border-color: transparent;
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.shell-manage-actions .icon-btn[aria-disabled='true'] {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.shell-manage-actions .icon-btn[aria-disabled='true']:hover {
+  background: transparent;
+}
+
+.shell-flip svg {
+  transform: rotate(180deg);
+}
+
+/* ---------- Board picker (the board panel) ---------- */
+
+.shell-picker {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The filter field, and in a popup its 关闭 button on the right. */
+.shell-picker-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shell-picker-field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  color: var(--ink-3);
+}
+
+.shell-picker-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.shell-picker-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--text-md);
+}
+
+.shell-picker-input:focus-visible {
+  outline: none;
+}
+
+.shell-picker-close {
+  flex: none;
+  gap: 4px;
+}
+
+.shell-picker-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.shell-picker-heading {
+  margin: 0;
+  padding: 6px 8px 2px;
+  font-size: var(--text-xs);
+  font-weight: 650;
+  color: var(--ink-3);
+}
+
+.shell-picker-list {
+  display: grid;
+  gap: 1px;
+}
+
+.shell-choice {
+  position: relative;
+  min-width: 0;
+}
+
+.shell-choice-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 3px 28px 3px 8px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.shell-choice-btn:hover {
+  background: var(--hover);
+}
+
+.shell-choice-btn:focus-visible,
+.shell-star:focus-visible {
+  outline-offset: -2px;
+}
+
+.shell-choice-btn.is-current {
+  background: var(--nav-current);
+  font-weight: 600;
+}
+
+.shell-choice-icon {
+  flex: none;
+  color: var(--accent);
+}
+
+.shell-choice-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.shell-picker-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shell-picker-toggle:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink-2);
+}
+
+.shell-picker-toggle:disabled {
+  cursor: default;
+}
+
+.shell-picker-toggle:focus-visible {
+  outline-offset: -2px;
+}
+
+/* No match, hidden matches: one quiet line, its buttons right after the text. */
+.shell-picker-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.shell-picker-status:not(:empty) {
+  padding: 10px 8px;
+}
+
+/* Below results: set off like 收藏 is from the groups. */
+.shell-picker-status.is-below:not(:empty) {
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.shell-picker-note {
+  min-width: 0;
+  margin: 0 4px 0 0;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Groups side by side, so the whole directory is seen at once. */
+.shell-picker-groups {
+  columns: 10.5rem;
+  column-gap: 14px;
+}
+
+.shell-picker-group {
+  break-inside: avoid;
+  padding-bottom: 8px;
+}
+
+/* ---------- Board panel beside the rail ---------- */
+
+.shell-board-panel {
+  top: 0;
+  left: calc(var(--shell-rail) + 6px);
+  width: min(58rem, calc(100vw - var(--shell-rail) - 40px));
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+}
+
+.shell-board-panel > .shell-picker {
+  flex: 1;
+}
+
+/* The board name at the top of a board list opens the panel. */
+.shell-list-title-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin: -2px -6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shell-list-title-btn:hover,
+.shell-list-title-btn[aria-expanded='true'] {
+  background: var(--hover);
+}
+
+.shell-list-title-chevron {
+  flex: none;
+  color: var(--ink-3);
+  transform: rotate(90deg);
+}
+
+/* ---------- Compact density ---------- */
+
+:root[data-density='compact'] .shell-rail-btn {
+  width: 32px;
+  height: 32px;
+}
+
+:root[data-density='compact'] .shell-manage-row {
+  min-height: 28px;
+}
+
+:root[data-density='compact'] .shell-choice-btn {
+  min-height: 24px;
+  padding-block: 1px;
+}
+
+:root[data-density='compact'] .shell-picker-input {
+  min-height: 26px;
+}
+
+:root[data-density='compact'] .shell-picker-status:not(:empty) {
+  padding-block: 6px;
+}

@@ -3,6 +3,8 @@
 // https://github.com/orzogc/xdnmb_api/blob/28fdba53031a15e0de88954679afe91b9308f71a/lib/src/xdnmb.dart
 // That project is licensed under AGPL-3.0.
 
+import { KAOMOJI_LIMITS } from '../../../../shared/settings'
+
 /** A preset kaomoji: `name` is what its button shows, `text` what it inserts. */
 export interface Kaomoji {
   name: string
@@ -115,51 +117,22 @@ export const KAOMOJI_PRESETS: readonly Kaomoji[] = [
   { name: '高级骰子', text: '[n,m]' }
 ]
 
-// PROTOTYPE (throwaway): the user's own kaomoji, after the presets; kept in localStorage.
-const CUSTOM_KEY = 'xidao.prototype.customKaomoji'
+// The user's own kaomoji come after the presets; they are the `customKaomoji` setting.
 
-function readCustom(): readonly string[] {
-  try {
-    const saved: unknown = JSON.parse(localStorage.getItem(CUSTOM_KEY) ?? '[]')
-    if (!Array.isArray(saved)) return []
-    // Anything but a non-blank string is dropped, and so is a repeat.
-    return [...new Set(saved.filter((item): item is string => typeof item === 'string' && item.trim() !== ''))]
-  } catch {
-    return []
-  }
-}
+/** Control characters other than tab and line feed (refused by the setting's validation). */
+const FORBIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f]/
 
-let custom = readCustom()
-const customListeners = new Set<() => void>()
-
-function setCustom(next: readonly string[]): void {
-  custom = next
-  try {
-    localStorage.setItem(CUSTOM_KEY, JSON.stringify(next))
-  } catch {
-    // Not remembered across restarts; the change still applies.
-  }
-  for (const listener of customListeners) listener()
-}
-
-export function subscribeCustomKaomoji(listener: () => void): () => void {
-  customListeners.add(listener)
-  return () => customListeners.delete(listener)
-}
-
-export function customKaomoji(): readonly string[] {
-  return custom
-}
-
-/** Whether `text` may be added: not blank, and neither a preset's text nor already added. */
-export function canAddKaomoji(text: string): boolean {
-  return text.trim() !== '' && !custom.includes(text) && !KAOMOJI_PRESETS.some((preset) => preset.text === text)
-}
-
-export function addKaomoji(text: string): void {
-  if (canAddKaomoji(text)) setCustom([...custom, text])
-}
-
-export function removeKaomoji(text: string): void {
-  setCustom(custom.filter((item) => item !== text))
+/**
+ * Whether `text` may be added to `custom`: not blank, neither a preset's text nor already added,
+ * and within the setting's limits (`KAOMOJI_LIMITS`, no control characters).
+ */
+export function canAddKaomoji(custom: readonly string[], text: string): boolean {
+  return (
+    text.trim() !== '' &&
+    custom.length < KAOMOJI_LIMITS.count &&
+    [...text].length <= KAOMOJI_LIMITS.length &&
+    !FORBIDDEN.test(text) &&
+    !custom.includes(text) &&
+    !KAOMOJI_PRESETS.some((preset) => preset.text === text)
+  )
 }

@@ -1,4 +1,3 @@
-import { PROTOTYPE_ENABLED } from '../directory/prototype/prototypeStore'
 import { reportContent } from '../../../../shared/report'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { targetKey, type AttachmentId, type EditorId, type PostTarget, type SavedDraft } from '../../../../shared/drafts'
@@ -27,7 +26,7 @@ export function focusKey(tabId: number, target: PostTarget): string {
   return `${tabId}|${targetKey(target)}`
 }
 
-/** A confirmed send of a tab's editor for a target, shown on that target's collapsed bar. */
+/** A confirmed send of a tab's editor for a target, shown beside that target's entry. */
 export interface PublishedNote {
   postId: string
   threadId: string
@@ -319,7 +318,7 @@ export function useEditorsStore(): EditorsStore {
     async (editorId: EditorId) => {
       const editor = find(editorId)
       if (editor === undefined || editor.publication !== null || handling.current.has(editorId)) return
-      if (PROTOTYPE_ENABLED && editor.report !== undefined && reportContent(editor.report) === null) return
+      if (editor.report !== undefined && reportContent(editor.report) === null) return
       handling.current.add(editorId)
       const requestId = crypto.randomUUID()
       try {

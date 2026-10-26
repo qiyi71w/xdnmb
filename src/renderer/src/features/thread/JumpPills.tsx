@@ -1,4 +1,4 @@
-// PROTOTYPE (throwaway): the reader's floating 开头 / 末尾 pills. The reader reports its user scrolls
+// The reader's corner 开头 / 末尾 buttons. The reader reports its user scrolls
 // (never a position it set itself) and the user's input on it; the rules are in jumpPills.ts.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'

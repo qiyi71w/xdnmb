@@ -12,7 +12,7 @@ import './online-search.css'
 const SIDE_TEXT: Record<SearchPageSide, string> = { local: '本机', online: '联网' }
 
 /**
- * PROTOTYPE 搜索 page, shown by an `online-search` entry: 本机｜联网 over two separate searches.
+ * 搜索 page, shown by an `online-search` entry: 本机｜联网 over two separate searches, 本机 first.
  * 本机 is the tab's local search (the shell holds it open while this page is shown); 联网 is the
  * entry's online search session. Both sides stay mounted, so switching keeps each one's text,
  * results and scroll and sends nothing. The page is no layer: Esc only cancels a running locate.
@@ -131,13 +131,12 @@ export function SearchPage({
               commands={host.commands}
               forums={host.forums}
               focusRefs={{ input: localInputRef, list: localListRef }}
-              brief
               tabMenu
             />
           </div>
         </div>
         <div className="search-page-side" hidden={side !== 'online'}>
-          <OnlineSearchPane entryKey={entryKey} displayed={displayed && side === 'online'} directory={directory} onOpen={onOpen} embedded />
+          <OnlineSearchPane entryKey={entryKey} displayed={displayed && side === 'online'} directory={directory} onOpen={onOpen} />
         </div>
       </div>
     </section>

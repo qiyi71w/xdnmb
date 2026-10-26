@@ -10,7 +10,7 @@ type PageTask = Exclude<ThreadTask, { type: 'locate' }>
 /**
  * Continuous reading of one thread in one mode. The owning component is keyed by thread and mode:
  * switching either unmounts this hook and cancels its reads. Within a reader at most one read runs;
- * explicit actions (jump, 开头, 末尾, 首条未读, 刷新) cancel the running read, whose late result is
+ * explicit actions (jump, 开头, 末尾, 刷新) cancel the running read, whose late result is
  * then discarded. `firstPage` is the page loaded first (resume, target or page 1).
  *
  * `hold` protects the reader's content from cache eviction; every read waits for it first, so a
@@ -158,13 +158,6 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     void readPage({ type: 'append', page: last.page + 1 })
   }, [readPage])
 
-  /** Explicit 加载上一页: supersedes whatever is running. */
-  const prependPrevious = useCallback(() => {
-    const first = stateRef.current.pages[0]
-    if (first === undefined || first.page <= 1) return
-    supersede({ type: 'prepend', page: first.page - 1 })
-  }, [supersede])
-
   /** Automatic previous page (scrolling up near the top); never interrupts another read. */
   const prependAuto = useCallback(() => {
     const current = stateRef.current
@@ -203,7 +196,6 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     canAppend,
     canPrepend: canPrependPrevious(state),
     appendNext,
-    prependPrevious,
     prependAuto,
     refresh,
     jump,

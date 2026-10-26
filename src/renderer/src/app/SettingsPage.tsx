@@ -1,10 +1,10 @@
-// PROTOTYPE (throwaway): the settings page — a view filling the content area with a section directory
-// on the left — reusing the sections of the settings dialog plus 功能显示 and 版块管理.
+// The settings page: a view in place of the tabs, with a section directory on the left (a sticky
+// section menu in narrow windows). Every entry that opens settings lands on its section.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
-import type { AppPlatform } from '../../../../../shared/api'
-import type { BoardDirectory } from '../../../../../shared/forum'
-import type { AppSettings } from '../../../../../shared/settings'
+import type { AppPlatform } from '../../../shared/api'
+import type { BoardDirectory } from '../../../shared/forum'
+import type { AppSettings } from '../../../shared/settings'
 import {
   AppearanceSection,
   DensityMotionSection,
@@ -16,21 +16,21 @@ import {
   WindowSection,
   ZoomSection,
   type Write
-} from '../../../app/SettingsDialog'
-import type { SettingsWriteStatus } from '../../../app/useSettingsWriter'
-import { Icon } from '../../../components/Icon'
-import { useCover } from '../../../lib/appCovered'
-import { openLayer } from '../../../lib/layers'
-import type { SettingsSectionId } from '../../../lib/settingsOpener'
-import { usePopover } from '../../../lib/usePopover'
-import { CacheSection } from '../../content/CacheSection'
-import { CookieSection } from '../../identity/CookieSection'
-import type { IdentitiesState } from '../../identity/useIdentities'
-import { SubscriptionSection } from '../../subscriptions/SubscriptionSection'
-import type { SubscriptionsState } from '../../subscriptions/useSubscriptions'
-import { BoardManageSection, FeatureVisibilitySection } from './PrototypeNavSettings'
-import { useBlocks } from '../../thread/useBlocks'
-import './prototype.css'
+} from './settingsSections'
+import type { SettingsWriteStatus } from './useSettingsWriter'
+import { Icon } from '../components/Icon'
+import { useCover } from '../lib/appCovered'
+import { openLayer } from '../lib/layers'
+import type { SettingsSectionId } from '../lib/settingsOpener'
+import { usePopover } from '../lib/usePopover'
+import { CacheSection } from '../features/content/CacheSection'
+import { CookieSection } from '../features/identity/CookieSection'
+import type { IdentitiesState } from '../features/identity/useIdentities'
+import { SubscriptionSection } from '../features/subscriptions/SubscriptionSection'
+import type { SubscriptionsState } from '../features/subscriptions/useSubscriptions'
+import { BoardManageSection, FeatureVisibilitySection } from '../features/directory/NavigationSettings'
+import { useBlocks } from '../features/thread/useBlocks'
+import '../features/directory/shell.css'
 
 type SectionId = SettingsSectionId
 
@@ -82,7 +82,7 @@ const LAST_SECTION = SECTIONS.at(-1)?.id ?? 'appearance'
 /** Within this many pixels of the end, the pane counts as scrolled to the bottom. */
 const BOTTOM_SLACK = 4
 
-export interface PrototypeSettingsProps {
+export interface SettingsPageProps {
   identities: IdentitiesState
   subscriptions: SubscriptionsState
   settings: AppSettings
@@ -97,7 +97,7 @@ export interface PrototypeSettingsProps {
   onClose: () => void
 }
 
-export function PrototypeSettingsPage(props: PrototypeSettingsProps) {
+export function SettingsPage(props: SettingsPageProps) {
   const { identities, subscriptions, target, onClose } = props
   const { refresh } = identities
   const { refreshOverview } = subscriptions
@@ -107,7 +107,7 @@ export function PrototypeSettingsPage(props: PrototypeSettingsProps) {
     closeRef.current = onClose
   })
 
-  // Like the dialog: nothing behind the page counts as read while it is shown.
+  // The page covers the tabs as a modal would.
   useCover(true, 'app')
 
   useEffect(() => {
@@ -131,19 +131,30 @@ export function PrototypeSettingsPage(props: PrototypeSettingsProps) {
   }, [])
 
   const section = (id: SectionId) => <SectionBody id={id} {...props} />
-  return <SettingsView headingRef={headingRef} section={section} status={props.status} target={target} onClose={onClose} />
+  return (
+    <SettingsView
+      headingRef={headingRef}
+      section={section}
+      status={props.status}
+      target={target}
+      macos={props.platform === 'darwin'}
+      onClose={onClose}
+    />
+  )
 }
 
 interface ShapeProps {
   headingRef: RefObject<HTMLHeadingElement | null>
   section: (id: SectionId) => ReactNode
   status: SettingsWriteStatus
-  target: PrototypeSettingsProps['target']
+  target: SettingsPageProps['target']
+  /** macOS: the traffic lights sit at the left of the top row. */
+  macos: boolean
 }
 
 // ---------- Content-area view with a section directory ----------
 
-function SettingsView({ headingRef, section, status, target, onClose }: ShapeProps & { onClose: () => void }) {
+function SettingsView({ headingRef, section, status, target, macos, onClose }: ShapeProps & { onClose: () => void }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const jumpRef = useRef<HTMLDivElement>(null)
   const [currentId, setCurrentId] = useState<SectionId>('appearance')
@@ -161,7 +172,7 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
   const go = (id: SectionId) => {
     setCurrentId(id)
     const pane = scrollRef.current
-    const item = document.getElementById(`proto-set-${id}`)
+    const item = document.getElementById(`shell-set-${id}`)
     if (pane !== null && item !== null) {
       pane.scrollTop += item.getBoundingClientRect().top - pane.getBoundingClientRect().top - stickyOffset()
       chosenAt.current = pane.scrollTop
@@ -195,7 +206,7 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
     let frame = 0
     let tries = 0
     const settle = () => {
-      const page = scrollRef.current?.closest('.proto-settings')
+      const page = scrollRef.current?.closest('.shell-settings')
       if (page == null || page.contains(document.activeElement) || tries++ > 30) return
       if (target.section !== null) goRef.current(target.section)
       else headingRef.current?.focus({ preventScroll: true })
@@ -219,34 +230,34 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
     const top = pane.getBoundingClientRect().top + stickyOffset() + 24
     let found: SectionId = 'appearance'
     for (const item of SECTIONS) {
-      const element = document.getElementById(`proto-set-${item.id}`)
+      const element = document.getElementById(`shell-set-${item.id}`)
       if (element !== null && element.getBoundingClientRect().top <= top) found = item.id
     }
     setCurrentId(found)
   }
 
   return (
-    <div className="proto-settings proto-settings-b">
-      <header className="proto-settings-b-head">
+    <div className={macos ? 'shell-settings shell-settings-b is-macos' : 'shell-settings shell-settings-b'}>
+      <header className="shell-settings-b-head">
         <button type="button" className="btn btn-quiet" onClick={onClose}>
           <Icon name="arrowLeft" />
           返回
         </button>
-        <h1 className="proto-settings-title" ref={headingRef} tabIndex={-1}>
+        <h1 className="shell-settings-title" ref={headingRef} tabIndex={-1}>
           设置
         </h1>
       </header>
-      <div className="proto-settings-b-body">
-        <nav className="proto-settings-toc" aria-label="设置分区">
+      <div className="shell-settings-b-body">
+        <nav className="shell-settings-toc" aria-label="设置分区">
           {CATEGORIES.map((category) => (
-            <div key={category.id} className="proto-toc-group">
-              <p className="proto-toc-category">{category.title}</p>
+            <div key={category.id} className="shell-toc-group">
+              <p className="shell-toc-category">{category.title}</p>
               <ul>
                 {category.sections.map((item) => (
                   <li key={item.id}>
                     <button
                       type="button"
-                      className={item.id === currentId ? 'proto-toc-item is-current' : 'proto-toc-item'}
+                      className={item.id === currentId ? 'shell-toc-item is-current' : 'shell-toc-item'}
                       aria-current={item.id === currentId ? 'true' : undefined}
                       onClick={() => go(item.id)}
                     >
@@ -258,17 +269,17 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
             </div>
           ))}
         </nav>
-        <div className="proto-settings-scroll" ref={scrollRef} onScroll={onScroll}>
+        <div className="shell-settings-scroll" ref={scrollRef} onScroll={onScroll}>
           <SectionJump barRef={jumpRef} currentId={currentId} onGo={go} />
-          <div className="proto-settings-column">
+          <div className="shell-settings-column">
             <SettingsStatusNotices status={status} />
             {CATEGORIES.map((category) => (
-              <section key={category.id} className="proto-category" aria-labelledby={`proto-cat-${category.id}`}>
-                <h2 className="proto-category-title" id={`proto-cat-${category.id}`}>
+              <section key={category.id} className="shell-category" aria-labelledby={`shell-cat-${category.id}`}>
+                <h2 className="shell-category-title" id={`shell-cat-${category.id}`}>
                   {category.title}
                 </h2>
                 {category.sections.map((item) => (
-                  <div key={item.id} className="proto-settings-item" id={`proto-set-${item.id}`}>
+                  <div key={item.id} className="shell-settings-item" id={`shell-set-${item.id}`}>
                     {section(item.id)}
                   </div>
                 ))}
@@ -318,7 +329,7 @@ function SectionJump({
   return (
     <div
       ref={barRef}
-      className="proto-settings-jump"
+      className="shell-settings-jump"
       onBlur={(event) => {
         const next = event.relatedTarget as Node | null
         if (next !== null && !event.currentTarget.contains(next)) menu.close(false)
@@ -327,7 +338,7 @@ function SectionJump({
       <button
         ref={triggerRef}
         type="button"
-        className="btn proto-settings-jump-trigger"
+        className="btn shell-settings-jump-trigger"
         aria-haspopup="menu"
         aria-expanded={menu.open}
         aria-controls={menu.open ? menuId : undefined}
@@ -335,13 +346,13 @@ function SectionJump({
         onClick={menu.toggle}
       >
         {current}
-        <Icon name="chevron" size={14} className="proto-settings-jump-chevron" />
+        <Icon name="chevron" size={14} className="shell-settings-jump-chevron" />
       </button>
       {menu.open && (
-        <div ref={menuRef} id={menuId} className="proto-pop proto-settings-jump-menu" role="menu" aria-label="设置分区" onKeyDown={onMenuKeyDown}>
+        <div ref={menuRef} id={menuId} className="shell-pop shell-settings-jump-menu" role="menu" aria-label="设置分区" onKeyDown={onMenuKeyDown}>
           {CATEGORIES.map((category) => (
             <div key={category.id} role="group" aria-labelledby={`${menuId}-${category.id}`}>
-              <p className="proto-toc-category" id={`${menuId}-${category.id}`}>
+              <p className="shell-toc-category" id={`${menuId}-${category.id}`}>
                 {category.title}
               </p>
               {category.sections.map((item) => (
@@ -350,7 +361,7 @@ function SectionJump({
                   type="button"
                   role="menuitemradio"
                   aria-checked={item.id === currentId}
-                  className={item.id === currentId ? 'proto-toc-item is-current' : 'proto-toc-item'}
+                  className={item.id === currentId ? 'shell-toc-item is-current' : 'shell-toc-item'}
                   tabIndex={-1}
                   data-autofocus={item.id === currentId ? '' : undefined}
                   onClick={() => {
@@ -371,7 +382,7 @@ function SectionJump({
 
 // ---------- Sections ----------
 
-function SectionBody({ id, settings, write, adopt, platform, identities, subscriptions, directory }: PrototypeSettingsProps & { id: SectionId }) {
+function SectionBody({ id, settings, write, adopt, platform, identities, subscriptions, directory }: SettingsPageProps & { id: SectionId }) {
   switch (id) {
     case 'appearance':
       return <AppearanceSection settings={settings} write={write} />
@@ -405,15 +416,15 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
 }
 
 function BlocksSection() {
-  const { blocks, failure, reload, setBlocked } = useBlocks()
+  const { blocks, failure, retry, setBlocked } = useBlocks()
   const headingId = useId()
   return <section className="settings-section" aria-labelledby={headingId}>
     <h3 className="settings-section-title" id={headingId}>屏蔽</h3>
-    {failure !== null && <p role="alert">{failure} <button type="button" className="btn btn-small" onClick={() => void reload()}>重试</button></p>}
-    {blocks.length === 0 && failure === null && <p className="settings-empty">暂无屏蔽</p>}
-    <ul className="proto-manage-list">{blocks.map((block) => <li className="proto-manage-row" key={`${block.kind}:${block.value}`}>
+    {failure !== null && <p role="alert">{failure} <button type="button" className="btn btn-small" onClick={() => void retry()}>重试</button></p>}
+    {blocks.length === 0 && failure === null && <p className="settings-empty">没有屏蔽</p>}
+    <ul className="shell-manage-list">{blocks.map((block) => <li className="shell-manage-row" key={`${block.kind}:${block.value}`}>
       <span>{block.kind === 'post' ? `No.${block.value}` : `饼干 ${block.value}`}</span>
-      <span className="proto-manage-actions"><button type="button" className="btn btn-small" aria-label={`取消屏蔽${block.kind === 'post' ? ` No.${block.value}` : `饼干 ${block.value}`}`} onClick={() => void setBlocked(block.kind, block.value, false)}>取消屏蔽</button></span>
+      <span className="shell-manage-actions"><button type="button" className="btn btn-small" aria-label={`取消屏蔽${block.kind === 'post' ? ` No.${block.value}` : `饼干 ${block.value}`}`} onClick={() => void setBlocked(block.kind, block.value, false)}>取消屏蔽</button></span>
     </li>)}</ul>
   </section>
 }

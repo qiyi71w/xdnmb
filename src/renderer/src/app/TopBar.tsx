@@ -3,16 +3,16 @@ import type { AppPlatform } from '../../../shared/api'
 import { Icon } from '../components/Icon'
 import type { Tab } from '../features/tabs/tabsState'
 import { shortcutLabel } from './shortcuts'
-import { PROTOTYPE_ENABLED } from '../features/directory/prototype/prototypeStore'
 
 function withShortcut(label: string, shortcut: string): string {
   return shortcut === '' ? label : `${label}（${shortcut}）`
 }
 
 /**
- * D layout top bar: back / forward of the current tab, the tab strip, the tab's 分栏 toggle
- * (list entries only), 新标签 and the settings dialog opener. While the navigation is an overlay
- * its trigger sits first.
+ * D layout top bar, which is also the window's title bar: back / forward of the current tab, the tab
+ * strip, the tab's 分栏 toggle (list entries only), 新标签 and, while the navigation is an overlay,
+ * its trigger first and 设置 last. Its empty space drags the window; the controls do not. It leaves
+ * room for the window controls (Windows / Linux overlay on the right, macOS traffic lights on the left).
  */
 export function TopBar({
   tabs,
@@ -45,8 +45,8 @@ export function TopBar({
   /** Shown only for list entries. */
   splitToggle: { pressed: boolean; onToggle: () => void } | null
   navTrigger: { ref: RefObject<HTMLButtonElement | null>; expanded: boolean; onToggle: () => void } | null
-  /** Opens the settings dialog (also Ctrl/Cmd+,); focus returns to the opener when it closes. `null` hides it. */
-  settingsTrigger: { ref: RefObject<HTMLButtonElement | null>; expanded: boolean; onOpen: () => void } | null
+  /** Opens the settings page (also Ctrl/Cmd+,); `null` hides it (the rail has 设置). */
+  settingsTrigger: { ref: RefObject<HTMLButtonElement | null>; onOpen: () => void } | null
   onBack: () => void
   onForward: () => void
   onActivate: (tabId: number) => void
@@ -76,14 +76,14 @@ export function TopBar({
   }
 
   return (
-    <header className={`topbar${PROTOTYPE_ENABLED ? ` is-native-titlebar${platform === 'darwin' ? ' is-macos' : ''}` : ''}`}>
+    <header className={platform === 'darwin' ? 'topbar is-macos' : 'topbar'}>
       {navTrigger !== null && (
         <button
           ref={navTrigger.ref}
           type="button"
           className="icon-btn"
           aria-label="打开导航"
-          title="时间线与版面"
+          title="导航"
           aria-haspopup="true"
           aria-expanded={navTrigger.expanded}
           aria-controls="nav-overlay"
@@ -153,13 +153,7 @@ export function TopBar({
       </div>
 
       {splitToggle !== null && (
-        <button
-          type="button"
-          className="btn btn-toggle"
-          aria-pressed={splitToggle.pressed}
-          title="只改变当前标签的分栏"
-          onClick={splitToggle.onToggle}
-        >
+        <button type="button" className="btn btn-toggle" aria-pressed={splitToggle.pressed} onClick={splitToggle.onToggle}>
           <Icon name="split" />
           分栏
         </button>
@@ -180,8 +174,6 @@ export function TopBar({
           className="icon-btn"
           aria-label="设置"
           title={withShortcut('设置', shortcutLabel('open-settings', platform))}
-          aria-haspopup="dialog"
-          aria-expanded={settingsTrigger.expanded}
           onClick={settingsTrigger.onOpen}
         >
           <Icon name="settings" />

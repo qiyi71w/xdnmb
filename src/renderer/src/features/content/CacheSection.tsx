@@ -89,15 +89,9 @@ export function CacheSection() {
     if (result?.ok === true) {
       apply(result.value)
       const left = result.value.cacheTextBytes + result.value.cacheImageBytes
-      setMessage({
-        error: false,
-        text:
-          left === 0
-            ? '普通缓存已清理。数据库文件不一定立刻缩小。'
-            : `普通缓存已清理，仍有 ${formatBytes(left)} 暂时无法删除（例如正在使用）。数据库文件不一定立刻缩小。`
-      })
+      setMessage({ error: false, text: left === 0 ? '普通缓存已清理' : `普通缓存已清理，${formatBytes(left)} 暂时无法删除` })
     } else {
-      setMessage({ error: true, text: `清理未完成：${contentFailureText(result?.ok === false ? result : null)}，缓存保持原样或只清理了一部分` })
+      setMessage({ error: true, text: `清理未完成：${contentFailureText(result?.ok === false ? result : null)}` })
     }
   }
 
@@ -154,13 +148,13 @@ export function CacheSection() {
             {usage.protectedOverLimit && (
               <p className="notice-inline is-warning" role="status">
                 <Icon name="alert" size={14} />
-                受保护的内容让占用无法回到上限以内；汐岛不会为满足上限删除正在阅读的串、离线副本或草稿
+                受保护的内容使占用无法回到上限以内
               </p>
             )}
           </div>
 
           <div className="usage-block">
-            <span className="setting-label">受保护内容（不会被清理）</span>
+            <span className="setting-label">受保护内容</span>
             <dl className="usage-list">
               <div>
                 <dt>文字</dt>
@@ -175,7 +169,6 @@ export function CacheSection() {
                 <dd title={exactBytes(usage.personalDataBytes)}>{formatBytes(usage.personalDataBytes)}</dd>
               </div>
             </dl>
-            <p className="setting-help">正在打开的串、离线副本和草稿受保护，不随普通缓存清理。</p>
           </div>
 
           <div className="usage-block">
@@ -185,7 +178,6 @@ export function CacheSection() {
                 {formatBytes(usage.databaseBytes)}
               </span>
             </div>
-            <p className="setting-help">磁盘上的实际大小，不含图片文件。</p>
           </div>
 
           <form className="limit-form" onSubmit={onSubmit}>
@@ -229,9 +221,7 @@ export function CacheSection() {
           {confirming ? (
             <div className="history-confirm" role="group" aria-label="确认清理普通缓存">
               <p className="history-confirm-title">清理普通缓存？</p>
-              <p className="history-confirm-impact">
-                将删除约 {formatBytes(cacheBytes)} 可清理的文字和图片缓存；之后再看这些内容需要重新从论坛读取。正在打开的串、离线副本、草稿、收藏、历史和阅读进度都不受影响。数据库文件不一定立刻缩小。
-              </p>
+              <p className="history-confirm-impact">将删除约 {formatBytes(cacheBytes)} 普通缓存。</p>
               <div className="history-confirm-actions">
                 <button ref={confirmRef} type="button" className="btn btn-small btn-danger" aria-busy={busy === 'clear' || undefined} onClick={() => void clear()}>
                   {busy === 'clear' ? '正在清理…' : '确认清理'}
