@@ -480,9 +480,7 @@ export function SubscriptionPane({
           {blocker !== null && (
             <div className="notice notice-cached is-compact" role="status">
               <Icon name="alert" className="notice-icon" />
-              <p className="notice-text">
-                {SOURCE_NAME[source]}暂时不可用：{blocker}
-              </p>
+              <p className="notice-text">{blocker}</p>
               {openSettings !== null && (
                 <button type="button" className="btn btn-small" onClick={() => openSettings('subscriptions')}>
                   打开设置

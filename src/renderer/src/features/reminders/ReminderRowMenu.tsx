@@ -7,9 +7,9 @@ import { useReminderToggle } from './ReminderMenu'
 import { KIND_NAME } from './reminderText'
 
 /**
- * Context menu of one 提醒 row: 在新标签页打开, the three kinds as checkable items (saved like the
- * 提醒 panel: one rule at a time, never starting a check) and 清除提醒, unavailable while the thread
- * has no count.
+ * Context menu of one 提醒 row: 在新标签页打开, the three kinds as checkable items (saved through
+ * `useReminderToggle` like the thread's 更多 › 提醒: one rule at a time, never starting a check) and
+ * 清除提醒, unavailable while the thread has no count.
  */
 export function ReminderRowMenu({
   point,

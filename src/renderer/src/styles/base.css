@@ -149,6 +149,13 @@ ul {
   background: var(--accent);
 }
 
+/* Unavailable: the whole button fades; its text keeps the on-accent ink, never the grey of .btn. */
+.btn-primary:disabled,
+.btn-primary[aria-disabled='true'] {
+  color: var(--on-accent);
+  opacity: 0.5;
+}
+
 .icon-btn {
   display: inline-grid;
   place-items: center;

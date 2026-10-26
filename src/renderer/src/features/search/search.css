@@ -417,7 +417,6 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  border-inline: 1px solid var(--line-soft);
 }
 
 .search-page-bar {
