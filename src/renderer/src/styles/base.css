@@ -358,6 +358,12 @@ ul {
   animation: spin 0.9s linear infinite;
 }
 
+/* A manual-refresh ↻ turning while its request runs (components/RefreshIcon.tsx). The period is
+   paired with REFRESH_TURN_MS there; change both together. */
+.icon.is-turning {
+  animation: spin 0.9s linear infinite;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);

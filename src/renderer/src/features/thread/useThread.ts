@@ -171,9 +171,14 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     void readPage({ type: 'prepend', page: first.page - 1 })
   }, [readPage])
 
-  /** 刷新 (toolbar, end of the thread, Ctrl/Cmd+R); an empty reader loads its first page again. */
+  /**
+   * 刷新 (end of the thread, 更多 › 刷新, Ctrl/Cmd+R); an empty reader loads its first page again.
+   * A refresh already running is left alone: the entries never start a second one.
+   */
   const refresh = useCallback(() => {
-    supersede(stateRef.current.pages.length === 0 ? { type: 'initial', page: firstPageRef.current } : { type: 'refresh' })
+    const state = stateRef.current
+    if (state.task?.type === 'refresh') return
+    supersede(state.pages.length === 0 ? { type: 'initial', page: firstPageRef.current } : { type: 'refresh' })
   }, [supersede])
 
   const jump = useCallback((page: number) => {

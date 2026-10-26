@@ -7,7 +7,8 @@ import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useStat
 import type { ForumId, ThreadId } from '../../../../shared/forum'
 import type { ReminderThreadRow } from '../../../../shared/reminders'
 import { contextMenuPoint, isContextMenuKey, type ContextMenuPoint } from '../../components/ContextMenu'
-import { Icon, Spinner } from '../../components/Icon'
+import { Icon } from '../../components/Icon'
+import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { formatClockTime, meaningfulTitle } from '../../lib/format'
 import { SettingsContext } from '../../lib/settingsContext'
 import { useRovingFocus } from '../../lib/useRovingFocus'
@@ -129,13 +130,14 @@ export function ReminderPane({
   const running = overview?.checker.running === true
   const blockedReason = running ? '正在检查' : cooldownLeft > 0 ? `${secondsText(cooldownLeft)}后可再次检查` : null
   const blocked = overview === null || requesting || blockedReason !== null
+  const checkTurn = useRefreshTurn(running || requesting)
   // A refusal said why the click did nothing; once a check can start again it no longer applies.
   useEffect(() => {
     if (blockedReason === null) setMessage((current) => (current?.tone === 'warn' ? null : current))
   }, [blockedReason])
 
   const startCheck = async () => {
-    if (blocked) return
+    if (blocked || checkTurn.turning) return
     setRequesting(true)
     setMessage(null)
     try {
@@ -262,12 +264,12 @@ export function ReminderPane({
                 type="button"
                 className="btn btn-small btn-quiet reminder-check"
                 aria-disabled={blocked || undefined}
-                aria-busy={running || requesting || undefined}
+                aria-busy={checkTurn.turning || undefined}
                 aria-describedby={blockedReason !== null ? checkReasonId : undefined}
                 title={blockedReason ?? undefined}
                 onClick={() => void startCheck()}
               >
-                {running ? <Spinner /> : <Icon name="refresh" size={14} />}
+                <RefreshIcon turn={checkTurn} size={14} />
                 手动检查
               </button>
               {/* Counts down every second: deliberately outside any live region. */}

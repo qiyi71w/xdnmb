@@ -214,25 +214,22 @@
   color: var(--ink);
 }
 
-.btn-toggle {
-  flex: none;
-  border-color: transparent;
-  background: transparent;
-  color: var(--ink-2);
-}
-
-.btn-toggle[aria-pressed='true'] {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-  font-weight: 600;
-}
-
-.btn-toggle[aria-pressed='true'] .icon {
-  color: var(--accent-ink);
-}
-
-.btn-toggle[aria-pressed='false'] .icon {
+/* 分栏: an icon button with no fill. On is the accent-ink icon drawn heavier (1.7 → 2.3, as the
+   rail's current item), so the state is not told by colour alone; off is the faint ink-3 icon. */
+.split-toggle[aria-pressed='false'] {
   color: var(--ink-3);
+}
+
+.split-toggle[aria-pressed='true'] {
+  color: var(--accent-ink);
+}
+
+.split-toggle[aria-pressed='true'] .icon {
+  stroke-width: 2.3;
+}
+
+.split-toggle[aria-pressed='false']:hover {
+  color: var(--ink);
 }
 
 /* Compact density: tab strip and top bar padding only (targets stay ≥ 24 px, text unchanged). */

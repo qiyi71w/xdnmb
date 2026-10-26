@@ -95,8 +95,12 @@ export function useFeed(feed: FeedRef, maxPage: number | null, remembered: FeedS
     void read('append', nextPage)
   }, [read])
 
-  /** Reloads page 1 and replaces the list; anything still loading (a restore too) is superseded. */
+  /**
+   * Reloads page 1 and replaces the list; anything else still loading (a restore too) is
+   * superseded. A refresh already running is left alone, so no entry starts a second one.
+   */
   const refresh = useCallback(() => {
+    if (stateRef.current.activity === 'refresh') return
     restoring.current = null
     restoreRun.current = null
     scope.current.cancelAll()

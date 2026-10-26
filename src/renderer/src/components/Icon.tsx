@@ -178,10 +178,22 @@ const PATHS = {
 
 export type IconName = keyof typeof PATHS
 
-export function Icon({ name, size = 16, className }: { name: IconName; size?: number; className?: string }) {
+export function Icon({
+  name,
+  size = 16,
+  className,
+  onAnimationIteration
+}: {
+  name: IconName
+  size?: number
+  className?: string
+  /** For icons that animate themselves (the turning ↻ in RefreshIcon). */
+  onAnimationIteration?: () => void
+}) {
   return (
     <svg
       className={className === undefined ? 'icon' : `icon ${className}`}
+      onAnimationIteration={onAnimationIteration}
       width={size}
       height={size}
       viewBox="0 0 24 24"

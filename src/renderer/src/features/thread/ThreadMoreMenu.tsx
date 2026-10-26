@@ -1,5 +1,6 @@
-// 更多 of the one-row thread toolbar: 在新标签页打开, 开头 / 末尾 (also Ctrl/⌘+Home / End and the
-// corner buttons), 举报 (the head post), 提醒 and 离线保存; choosing 提醒 opens its check menu under
+// 更多 of the one-row thread toolbar: 刷新 (also Ctrl/⌘+R and the end of the thread), 在新标签页打开,
+// 开头 / 末尾 (also Ctrl/⌘+Home / End and the corner buttons), 举报 (the head post), 提醒 and
+// 离线保存; choosing 提醒 opens its check menu under
 // 更多 (as the 提醒 and 订阅 row menus), 离线保存 the 离线副本 dialog. Deleting the copy from that
 // dialog closes it, puts focus back on 更多 and leaves the result under the toolbar (OfflineDeleteNote).
 
@@ -17,6 +18,7 @@ import type { LoadFailure } from '../reminders/useReminders'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 
 export function ThreadMoreMenu({
+  onRefresh,
   threadId,
   mode,
   label,
@@ -28,6 +30,8 @@ export function ThreadMoreMenu({
   onToStart,
   onToEnd
 }: {
+  /** The reader's 刷新; the same path as the end of the thread and Ctrl/Cmd+R. */
+  onRefresh: () => void
   threadId: ThreadId
   mode: ReadingMode
   /** Thread title or `No.x`. */
@@ -120,6 +124,10 @@ export function ThreadMoreMenu({
       </button>
       {menu.open && (
         <div ref={menuRef} id={menuId} className="thread-more-menu" role="menu" aria-label="更多操作" onKeyDown={onMenuKeyDown}>
+          <button type="button" role="menuitem" className="thread-more-item" aria-keyshortcuts="Control+R Meta+R" onClick={() => { menu.close(); onRefresh() }}>
+            <Icon name="refresh" />
+            刷新
+          </button>
           {openInTab !== null && (
             <button type="button" role="menuitem" className="thread-more-item" onClick={() => { menu.close(); openInTab(threadId, null, mode) }}>
               <Icon name="newTab" />
