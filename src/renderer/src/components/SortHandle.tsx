@@ -51,8 +51,8 @@ export interface SortableList {
   listStyle: CSSProperties | undefined
   /** The row being dragged (marked `is-sort-dragging` by its owner). */
   dragging: string | null
-  /** What the polite status says after a move: `第 n 项，共 m 项`. */
-  status: string
+  /** What the polite status says after a move (`第 n 项，共 m 项`); `seq` counts moves, so a repeated text is announced again. */
+  status: { text: string; seq: number }
   pointerDown(event: PointerEvent<HTMLElement>, key: string, disabled: boolean): void
   pointerMove(event: PointerEvent<HTMLElement>): void
   pointerUp(event: PointerEvent<HTMLElement>): void
@@ -74,7 +74,7 @@ export function useSortableList(keys: readonly string[], onMove: (from: number, 
   const lastY = useRef(0)
   const [dragging, setDragging] = useState<string | null>(null)
   const [dropTop, setDropTop] = useState<number | null>(null)
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState({ text: '', seq: 0 })
   /** The handle that keeps focus after a move, until focus or a press goes elsewhere. */
   const [focusKey, setFocusKey] = useState<string | null>(null)
 
@@ -132,7 +132,7 @@ export function useSortableList(keys: readonly string[], onMove: (from: number, 
   const moved = (key: string, from: number, to: number) => {
     onMove(from, to)
     setFocusKey(key)
-    setStatus(`第 ${to + 1} 项，共 ${keys.length} 项`)
+    setStatus((previous) => ({ text: `第 ${to + 1} 项，共 ${keys.length} 项`, seq: previous.seq + 1 }))
   }
 
   const classes = ['sort-list', dragging !== null ? 'is-sorting' : null, dropTop !== null ? 'has-drop' : null]
@@ -218,11 +218,11 @@ export function SortHandle({ sort, itemKey, label, disabled = false }: { sort: S
   )
 }
 
-/** The list's polite status: always mounted, so each new position is announced. */
+/** The list's polite status: always mounted; each move adds a new text node, so even a repeated position is announced. */
 export function SortStatus({ sort }: { sort: SortableList }) {
   return (
     <div className="visually-hidden" role="status">
-      {sort.status}
+      {sort.status.text !== '' && <span key={sort.status.seq}>{sort.status.text}</span>}
     </div>
   )
 }
