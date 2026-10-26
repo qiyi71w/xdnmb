@@ -20,7 +20,7 @@ import {
   type ListHost
 } from '../features/directory/navStore'
 import { useDirectory } from '../features/directory/useDirectory'
-import { HistoryPageContext, type HistoryPageHost, type HistoryView } from '../features/content/RetainedPane'
+import { HistoryPageContext, type HistoryPageHost } from '../features/content/RetainedPane'
 import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
 import { editorFor, editorForDraft, isUnsaved, unsavedInTab } from '../features/editor/editorsState'
 import { targetText } from '../features/editor/editorText'
@@ -43,7 +43,7 @@ import { LocalSearchContext, SearchOpenerContext, type LocalSearchHost, type Sea
 import { SearchSheet } from '../features/search/SearchSheet'
 import { tabSearchOf } from '../features/search/searchState'
 import { useSearch } from '../features/search/useSearch'
-import { captureLists, ContentRegistryContext, createContentRegistry, type SearchPageSide } from '../features/tabs/contentRegistry'
+import { captureLists, ContentRegistryContext, createContentRegistry, type HistoryView, type SearchPageSide } from '../features/tabs/contentRegistry'
 import {
   activeTab,
   currentEntry,
@@ -790,16 +790,46 @@ export function App() {
     [selectFeed]
   )
 
-  /** Every 查看发送记录 opens the 历史 page on 发送记录; the active tab's open editors fold away first (content kept). */
-  const openAttempts = useCallback(() => {
-    closeNav(false)
-    setDraftsOpen(false)
-    const tabId = stateRef.current.tabs?.activeId
-    for (const editor of currentEditors().editors) {
-      if (tabId !== undefined && editor.tabIds.includes(tabId) && editor.expanded) dispatchEditors({ type: 'set-expanded', editorId: editor.id, expanded: false })
-    }
-    openHistoryView('attempts')
-  }, [closeNav, currentEditors, dispatchEditors, openHistoryView])
+  /**
+   * Every 查看发送记录 opens the 历史 page of that kind of send (新串 or 回复); the active tab's open
+   * editors fold away first (content kept).
+   */
+  const openAttempts = useCallback(
+    (kind: PostTarget['kind']) => {
+      closeNav(false)
+      setDraftsOpen(false)
+      const tabId = stateRef.current.tabs?.activeId
+      for (const editor of currentEditors().editors) {
+        if (tabId !== undefined && editor.tabIds.includes(tabId) && editor.expanded) dispatchEditors({ type: 'set-expanded', editorId: editor.id, expanded: false })
+      }
+      openHistoryView(kind === 'thread' ? 'threads' : 'replies')
+    },
+    [closeNav, currentEditors, dispatchEditors, openHistoryView]
+  )
+
+  /**
+   * A sent record of 历史 opens as a new step of the tab still showing that 历史 entry, so 后退
+   * returns to it: a thread at a target beside the list when split (the list keeps its memory),
+   * otherwise as a page; a forum list as a new list step.
+   */
+  const openFromHistory = useCallback(
+    (entryKey: number, init: EntryInit): boolean => {
+      const state = stateRef.current.tabs
+      const tab = state?.tabs.find((item) => currentEntry(item).key === entryKey)
+      if (state == null || tab === undefined) return false
+      const entry = currentEntry(tab)
+      leave(tab)
+      if (init.kind === 'thread' && tab.split && entry.kind === 'list') {
+        const memory = registry.listMemory.get(entry.key)
+        if (memory !== undefined) registry.listMemory.set(state.nextKey, memory)
+        dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'list', feed: entry.feed, thread: init.thread } })
+        return true
+      }
+      dispatch({ type: 'navigate', tabId: tab.id, entry: init })
+      return true
+    },
+    [leave, registry]
+  )
 
   /**
    * A reminder notification was clicked (the main process already revealed the window without a
@@ -847,9 +877,9 @@ export function App() {
     quote.cardProps?.onClose()
   }, [closeNav, searchCommands, quote.cardProps])
 
-  /** Opens a target from 发送记录 in a new tab (global split default), to read or check it. */
-  const openTargetInTab = useCallback((target: PostTarget) => {
-    dispatch({ type: 'open-tab', entry: entryFor(target), split: stateRef.current.settings.newTabSplitDefault, background: false })
+  /** Opens a sent record's place from 历史 in a new active tab (global split default). */
+  const openEntryInTab = useCallback((entry: EntryInit) => {
+    dispatch({ type: 'open-tab', entry, split: stateRef.current.settings.newTabSplitDefault, background: false })
   }, [])
 
   /** Opens a thread from a list row / thread menu in a new active tab (global split default). */
@@ -1072,8 +1102,8 @@ export function App() {
   )
 
   const historyHost = useMemo<HistoryPageHost>(
-    () => ({ request: historyRequest, tabTitle, onContinue: continueDraft, onOpenTarget: openTargetInTab, pendingAttempts }),
-    [historyRequest, tabTitle, continueDraft, openTargetInTab, pendingAttempts]
+    () => ({ request: historyRequest, pendingAttempts, openStep: openFromHistory, openInTab: openEntryInTab }),
+    [historyRequest, pendingAttempts, openFromHistory, openEntryInTab]
   )
 
   /** Where focus goes when a notice it was in goes away: the active tab. */

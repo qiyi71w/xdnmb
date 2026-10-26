@@ -150,13 +150,25 @@ async function harness(options: { cookieIds?: string[] } = {}) {
       if (!row) throw new Error(`no row for ${threadId}`)
       return row
     },
-    /** A publication confirmed as the user's own post `postId`. */
+    /** A publication confirmed as the user's own post `postId` by the read-back check. */
     confirmOwn(postId: string) {
       const raw = new Database(path)
       try {
-        raw.prepare(`INSERT INTO publication_attempts(request_id, editor_id, payload_json, credential_id, forum_id, state, created_at, updated_at, post_id, thread_id)
-          VALUES (?, 'editor', '{}', 1, '4', 'confirmed', ?, ?, ?, '500')`).run(`request-${postId}`, t0, t0, postId)
+        raw.prepare(`INSERT INTO publication_attempts(request_id, editor_id, payload_json, credential_id, forum_id, state, created_at, updated_at, post_id, thread_id, confirmed_by)
+          VALUES (?, 'editor', '{}', 1, '4', 'confirmed', ?, ?, ?, '500', 'check')`).run(`request-${postId}`, t0, t0, postId)
       } finally { raw.close() }
+    },
+    /** A reply left 待核对, then ended by the user as 已发出 with `postId` (or without a number). */
+    userConfirms(postId: string | null) {
+      const payload = { draftId: null, target: { kind: 'reply', threadId: '500' }, credentialId: '1',
+        fields: { content: '回复', title: '', name: '', email: '', watermark: false }, attachmentId: null }
+      const raw = new Database(path)
+      let id: number
+      try {
+        id = Number(raw.prepare(`INSERT INTO publication_attempts(request_id, editor_id, payload_json, credential_id, forum_id, state, problem, created_at, updated_at)
+          VALUES (?, 'editor', ?, 1, '4', 'unknown', 'network', ?, ?)`).run(`request-user-${postId}`, JSON.stringify(payload), t0, t0).lastInsertRowid)
+      } finally { raw.close() }
+      expect(db.resolvePublication({ id: String(id), choice: 'sent', postId, at: t0 })).toMatchObject({ ok: true, attempt: { confirmedBy: 'user', postId } })
     }
   }
 }
@@ -288,6 +300,18 @@ describe('引用我的发言', () => {
     await h.enable('100', 'quote')
     expect(await h.check()).toEqual(['thread:100:1'])
     Object.assign(thread, { count: 21, quotes: new Map([[20, ['92']], [21, ['90']]]) })
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:2'])
+    expect(await h.row('100')).toMatchObject({ counts: { quote: 1 }, unverifiedQuotes: 0, issues: [] })
+  })
+
+  it('matches a send the user confirmed with its number, never one confirmed without a number', async () => {
+    const h = await harness()
+    const thread = h.thread('100', { count: 19 })
+    await h.enable('100', 'quote')
+    expect(await h.check()).toEqual(['thread:100:1'])
+    h.userConfirms('90')
+    h.userConfirms(null)
+    Object.assign(thread, { count: 22, quotes: new Map([[20, ['90']], [21, ['91']], [22, ['500']]]) })
     expect(await h.check()).toEqual(['thread:100:1', 'thread:100:2'])
     expect(await h.row('100')).toMatchObject({ counts: { quote: 1 }, unverifiedQuotes: 0, issues: [] })
   })

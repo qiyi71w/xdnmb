@@ -18,8 +18,8 @@ export interface EditorWorkspace {
    */
   retarget: (editorId: EditorId, target: PostTarget) => 'done' | 'occupied'
   showTarget: (tabId: number, target: PostTarget) => void
-  /** Opens 发送记录, where every attempt (including ended editors') can be reviewed. */
-  openAttempts: () => void
+  /** 查看发送记录: opens 历史 on the page of that kind of send (新串 or 回复). */
+  openAttempts: (kind: PostTarget['kind']) => void
 }
 
 export const EditorWorkspaceContext = createContext<EditorWorkspace | null>(null)

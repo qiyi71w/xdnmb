@@ -147,7 +147,7 @@ export interface RetainedHeading {
 }
 
 /**
- * How a 浏览记录 row names its thread: the title, else the first line of the head post held
+ * How a 浏览 row of 历史 names its thread: the title, else the first line of the head post held
  * locally (`excerpt`, shown on one line), else the number.
  */
 export function retainedHeading(entry: RetainedEntry): RetainedHeading {

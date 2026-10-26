@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import { EMPTY_FIELDS, type DraftSaveInput } from '../src/shared/drafts'
-import type { PublicationAttempt, SubmitResult } from '../src/shared/publication'
+import { isPending, type PublicationAttempt, type SubmitResult } from '../src/shared/publication'
 import type { Post } from '../src/shared/forum'
 import type { AppStore } from '../src/main/storage/contract'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
@@ -491,4 +491,93 @@ it('leaves a launch notice for a send the last run left unfinished', async () =>
   await s.restart()
   expect(s.db.listLaunchNotices()).toMatchObject([{ id: sent.id, state: 'unknown' }])
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
+})
+
+it('ends each kind of 待核对 attempt only by the user’s answer, locally, and keeps that answer across a restart', async () => {
+  const s = await setup()
+  // 结果未知: the POST connection dropped (a new thread).
+  s.remote.setMode('drop')
+  const lost = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'lost', payload: payload(s.a, '断开的新串') }))
+  expect(await finished(s.service, lost.id)).toMatchObject({ state: 'unknown' })
+  // 串号未确认: accepted, but the latest post could not be shown to be this reply (sent from a saved draft).
+  s.remote.setMode('empty')
+  const reply = { ...payload(s.b, '没确认的回复'), target: { kind: 'reply' as const, threadId: '500' } }
+  const source = await s.drafts.save(reply)
+  if (!source.ok) throw new Error('save failed')
+  const unconfirmed = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'reply', payload: { ...reply, draftId: source.draft.id } }))
+  expect(await finished(s.service, unconfirmed.id)).toMatchObject({ state: 'unconfirmed' })
+  // 发送中: still running now, then left by this run.
+  s.remote.setMode('hold')
+  const left = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'left', payload: { ...payload(s.a, '上次没结束'), target: { kind: 'reply', threadId: '600' } } }))
+  await expect.poll(() => s.remote.seen.filter(r => r.path.startsWith('/Home/')).length).toBe(3)
+  expect(await s.service.resolvePending({ attemptId: left.id, choice: 'not-sent', postId: null })).toEqual({ ok: false, reason: 'busy' })
+  await s.restart()
+  expect(s.db.listPublications().filter(isPending).map(item => item.id).sort()).toEqual([lost.id, unconfirmed.id, left.id].sort())
+  const requests = s.remote.seen.length
+
+  // The reply's own thread, or a number another sent record already holds, is not this reply.
+  expect(await s.service.resolvePending({ attemptId: unconfirmed.id, choice: 'sent', postId: '500' })).toEqual({ ok: false, reason: 'post-id' })
+  expect(await s.service.resolvePending({ attemptId: unconfirmed.id, choice: 'sent', postId: '9001' })).toMatchObject({
+    ok: true, attempt: { state: 'confirmed', confirmedBy: 'user', postId: '9001', threadId: '500' }
+  })
+  // Its source draft goes away as for a checked confirmation.
+  expect(s.db.listDrafts()).toEqual([])
+  expect(await s.service.resolvePending({ attemptId: lost.id, choice: 'sent', postId: '9001' })).toEqual({ ok: false, reason: 'post-id' })
+  // Without a number a new thread has nothing to open but its forum.
+  expect(await s.service.resolvePending({ attemptId: lost.id, choice: 'sent', postId: null })).toMatchObject({
+    ok: true, attempt: { state: 'confirmed', confirmedBy: 'user', postId: null, threadId: null }
+  })
+  expect(await s.service.resolvePending({ attemptId: left.id, choice: 'not-sent', postId: null })).toMatchObject({ ok: true, attempt: { state: 'failed' } })
+  expect(await s.service.resolvePending({ attemptId: lost.id, choice: 'not-sent', postId: null })).toEqual({ ok: false, reason: 'not-pending' })
+  expect(await s.service.resolvePending({ attemptId: '999', choice: 'sent', postId: null })).toEqual({ ok: false, reason: 'not-pending' })
+
+  await s.restart()
+  expect(s.db.listPublications().filter(isPending)).toEqual([])
+  expect(s.db.getPublication(unconfirmed.id)).toMatchObject({ state: 'confirmed', confirmedBy: 'user', postId: '9001', threadId: '500' })
+  expect(s.db.getPublication(lost.id)).toMatchObject({ state: 'confirmed', confirmedBy: 'user', postId: null })
+  expect(s.db.listDrafts().map(draft => draft.fields.content)).toEqual(['上次没结束'])
+  expect(s.db.listLaunchNotices()).toEqual([])
+  expect(s.remote.seen).toHaveLength(requests)
+})
+
+it('moves a 没发出 attempt into its draft with the image kept and unlocks the editor for a new send', async () => {
+  const s = await setup()
+  const image = Buffer.alloc(64)
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]).copy(image)
+  image.write('IHDR', 12); image.writeUInt32BE(2, 16); image.writeUInt32BE(1, 20)
+  const file = join(s.dir, 'source.png'); writeFileSync(file, image)
+  const attached = await s.drafts.attachImage('window', 'editor-1', file)
+  if (!attached.ok) throw new Error('attach failed')
+  const data = { ...payload(s.a), attachmentId: attached.attachment.id }
+  const saved = await s.drafts.save(data)
+  if (!saved.ok) throw new Error('save failed')
+  data.draftId = saved.draft.id
+  s.remote.setMode('drop')
+  const lost = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: data }))
+  expect(await finished(s.service, lost.id)).toMatchObject({ state: 'unknown' })
+  expect(attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: data })).id).toBe(lost.id)
+
+  expect(await s.service.resolvePending({ attemptId: lost.id, choice: 'not-sent', postId: null })).toMatchObject({
+    ok: true, attempt: { state: 'failed', savedDraftId: data.draftId }
+  })
+  const drafts = s.db.listDrafts()
+  expect(drafts).toMatchObject([{ id: data.draftId, fields: { content: '测试正文' }, attachment: { id: data.attachmentId } }])
+  expect(existsSync(s.files.pathOf(s.db.getDraftAttachment(data.attachmentId)!.fileName)!)).toBe(true)
+  expect(await s.drafts.save({ ...data, fields: { ...data.fields, content: '改过再发' } })).toMatchObject({ ok: true })
+
+  s.remote.setMode('success')
+  const again = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: { ...data, fields: { ...data.fields, content: '改过再发' } } }))
+  expect(again.id).not.toBe(lost.id)
+  expect(await finished(s.service, again.id)).toMatchObject({ state: 'confirmed', confirmedBy: 'check' })
+})
+
+it('keeps the 饼干 ID a send was made with after that cookie’s ID changes or the cookie is removed', async () => {
+  const s = await setup()
+  const sent = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: payload(s.a) }))
+  expect(await finished(s.service, sent.id)).toMatchObject({ state: 'confirmed', cookieId: 'IdA' })
+  s.db.setCredentialCookieId(s.a, 'Changed')
+  expect(s.db.getPublication(sent.id)).toMatchObject({ cookieId: 'IdA' })
+  s.db.deleteCredential(s.a)
+  await s.restart()
+  expect(s.db.getPublication(sent.id)).toMatchObject({ cookieId: 'IdA' })
 })

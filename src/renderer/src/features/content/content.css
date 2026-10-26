@@ -55,18 +55,33 @@
   overflow-wrap: anywhere;
 }
 
-.history-confirm .choice-row:hover {
-  background: color-mix(in oklch, var(--danger-ink) 6%, transparent);
-}
-
 .history-confirm-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.history-confirm .form-message {
+/* 删除…／清空历史… of 历史's 浏览 page. */
+.history-delete-dialog {
+  width: min(440px, calc(100vw - 32px));
+}
+
+.history-delete-body {
+  gap: 10px;
+}
+
+.history-delete-body > p {
   margin: 0;
+}
+
+.history-delete-body .choice-row {
+  margin-inline: -8px;
+}
+
+.history-delete-impact {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
 }
 
 /* ---------- Offline copy ---------- */
@@ -220,7 +235,7 @@
 .history-view-switch {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   isolation: isolate;
 }
 
@@ -228,7 +243,7 @@
   content: '';
   position: absolute;
   inset: 2px auto 2px 2px;
-  width: calc((100% - 4px) / 2);
+  width: calc((100% - 4px) / 3);
   border-radius: calc(var(--radius-m) - 2px);
   background: var(--paper);
   box-shadow: 0 1px 2px oklch(0 0 0 / 0.1);
@@ -236,8 +251,12 @@
   z-index: -1;
 }
 
-.history-view-switch[data-view='attempts']::before {
+.history-view-switch[data-view='threads']::before {
   transform: translateX(100%);
+}
+
+.history-view-switch[data-view='replies']::before {
+  transform: translateX(200%);
 }
 
 .history-view-switch .segmented-item[aria-pressed='true'] {
@@ -245,7 +264,7 @@
   box-shadow: none;
 }
 
-/* Attempts still to be checked: the label-size count used by the rail's badges. */
+/* 待核对 sends of that page: the label-size count used by the rail's badges. */
 .history-view-badge {
   display: inline-grid;
   place-items: center;
@@ -276,11 +295,6 @@
   display: none;
 }
 
-.history-attempts-scroll {
-  overflow: hidden auto;
-  overscroll-behavior: contain;
-}
-
 .history-page-view .list-title-row {
   justify-content: flex-end;
 }
@@ -289,90 +303,13 @@
   display: none;
 }
 
-.retained-page > .list-scroll > .history-confirm {
-  margin: 8px 10px 0;
-}
-
 .retained-page .list-status > .notice-inline {
   margin: 6px 0;
 }
 
-/* One row: the open button (heading + meta), its side action, then what the row adds below. */
-.retained-row {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  border-radius: var(--radius-m);
-}
-
-.retained-row + .retained-row::before {
-  content: '';
-  position: absolute;
-  top: -1px;
-  left: 12px;
-  right: 12px;
-  height: 1px;
-  background: var(--line-soft);
-}
-
-.retained-row:hover {
-  background: var(--hover);
-}
-
-/* Selected row as in the thread lists: tint plus a darker, bolder meta line (not colour alone). */
-.retained-row.is-selected {
-  background: var(--selected);
-}
-
-.retained-row.is-selected::before,
-.retained-row.is-selected + .retained-row::before {
-  display: none;
-}
-
-.retained-row.is-selected .row-byline,
-.retained-row.is-selected .row-meta {
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.retained-row.is-selected .retained-excerpt {
-  color: var(--ink);
-}
-
-.retained-row.is-selected .row-name,
-.retained-row.is-selected .row-time,
-.retained-row.is-selected .user-hash:not(.is-admin) {
-  color: var(--ink);
-}
-
-.retained-open {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 0;
-  border-radius: var(--radius-m);
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.retained-open:has(.row-thumb) {
-  --row-thumb: 64px;
-  grid-template-columns: minmax(0, 1fr) var(--row-thumb);
-  align-items: start;
-  column-gap: 12px;
-}
-
-.retained-open:focus-visible {
-  outline-offset: -2px;
-}
-
-/* Match the thread list's generous excerpt clamp and keep original line breaks. */
-.retained-excerpt {
+/* A row's text kept as plain text (历史: the visited head post's excerpt, a sent post's content):
+   the thread lists' clamp, original line breaks kept. */
+.row-excerpt.is-plain {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 20;
@@ -384,28 +321,9 @@
   color: var(--ink-2);
 }
 
-.retained-row-action {
-  margin: 6px 6px 0 0;
-}
-
-.retained-row-below {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 6px;
-  padding: 0 12px 10px;
-}
-
-.retained-row-below .notice-inline {
-  margin: 0;
-}
-
-:root[data-density='compact'] .retained-open {
-  gap: 2px;
-  padding: 6px 10px;
-}
-
-:root[data-density='compact'] .retained-row-below {
-  padding: 0 10px 6px;
+/* The 历史 row whose context menu is open keeps the hover layer while the pointer is on the menu. */
+.history-row.is-menu-open > .thread-row:not(.is-selected) {
+  background: var(--hover);
 }
 
 /* ---------- 离线 page: the thread lists' row, with the copy's status at the end of its meta ---------- */

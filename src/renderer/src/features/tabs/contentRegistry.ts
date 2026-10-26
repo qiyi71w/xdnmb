@@ -8,8 +8,17 @@ import type { SubscriptionListState } from '../subscriptions/subscriptionListSta
 import type { TabsState, ThreadSnapshot, ThreadTarget } from './tabsState'
 import { MAX_LIST_PAGES, type WorkspaceList } from './workspaceSnapshot'
 
-/** The two lists of this app's retained content: 历史 (浏览记录) and 离线. */
+/** The two lists of this app's retained content: 历史 (its 浏览 page) and 离线. */
 export type RetainedPage = 'history' | 'offline'
+
+/** The three pages of 历史: 浏览, then the sent records of 新串 and of 回复. */
+export type HistoryView = 'browsing' | 'threads' | 'replies'
+
+/** 历史 while mounted or in navigation history: the page shown and where 新串／回复 were scrolled. */
+export interface HistoryMemory {
+  view: HistoryView
+  sentScroll: Record<'threads' | 'replies', number>
+}
 
 /** What the shell can ask of the reader mounted for a history entry. */
 export interface ReaderHandle {
@@ -66,8 +75,11 @@ export type ListMemory =
     }
   /** The 提醒 list reads its overview again on mount; only where it was scrolled is kept. */
   | { kind: 'reminders'; scrollTop: number }
-  /** 历史 / 离线 pages: read again on mount, likewise only the scroll position is kept. */
-  | { kind: 'retained'; scrollTop: number }
+  /**
+   * 历史 / 离线 pages: read again on mount, likewise only the scroll position is kept (历史: of its
+   * 浏览 page, plus its runtime `history` memory).
+   */
+  | { kind: 'retained'; scrollTop: number; history?: HistoryMemory }
 
 /**
  * Mounted readers, lists, online search pages and 搜索 pages, keyed by the history entry

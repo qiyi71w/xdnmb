@@ -31,6 +31,9 @@ type Predecessor = 'subscriptions-v5' | 'retained-v6' | typeof heads[number]
 const hasSubscriptions = (kind: Predecessor) => kind === 'subscriptions-v5' || kind === 'integrated-v7' || kind === 'reconciliation-v6' || kind === 'integrated-v8' || kind === 'reminders-v9'
 const hasDrafts = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'lifecycle-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
 const hasRetained = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
+/** Publication columns every version keeps; v18 adds `confirmed_by`, so snapshots taken before it compare these. */
+const publicationColumns = 'id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem, created_at, updated_at, post_id, thread_id, saved_draft_id, launch_notice'
+const keptColumns = (table: string) => table === 'publication_attempts' ? `SELECT ${publicationColumns} FROM publication_attempts` : `SELECT * FROM ${table}`
 
 function plan(): SubscriptionPlan {
   return { id: 'historical-plan', preview: { id: 'historical-preview', mode: 'sync', context, createdAt: at,
@@ -367,8 +370,8 @@ describe('schema v14: thread favourites and read state removed', () => {
     const raw = new Database(path, { readonly: true })
     try {
       const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
-      // Later versions add columns (credentials.cookie_id in v15); compare the columns v13 had.
-      const query = (table: string) => table === 'credentials' ? 'SELECT id, name, source, imported_at, ciphertext, position FROM credentials' : `SELECT * FROM ${table}`
+      // Later versions add columns (credentials.cookie_id in v15, publication_attempts.confirmed_by in v18); compare the columns kept throughout.
+      const query = (table: string) => table === 'credentials' ? 'SELECT id, name, source, imported_at, ciphertext, position FROM credentials' : keptColumns(table)
       const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(query(table)).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
       return { version: raw.pragma('user_version', { simple: true }), tables, rows }
     } finally { raw.close() }
@@ -435,7 +438,7 @@ describe('schema v15: 饼干 IDs replace the own-post record', () => {
     const raw = new Database(path, { readonly: true })
     try {
       const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
-      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(`SELECT * FROM ${table}`).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
+      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(keptColumns(table)).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
       return { version: raw.pragma('user_version', { simple: true }), tables, rows }
     } finally { raw.close() }
   }
@@ -504,7 +507,7 @@ describe('schema v16: reminders count reply growth from a baseline', () => {
     const raw = new Database(path, { readonly: true })
     try {
       const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
-      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(`SELECT * FROM ${table}`).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
+      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(keptColumns(table)).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
       return { version: raw.pragma('user_version', { simple: true }), tables, rows }
     } finally { raw.close() }
   }
@@ -597,5 +600,62 @@ describe('reminder scheduling upgrade', () => {
     db.close()
     expect(readFileSync(path)).toEqual(original)
     expect(open(path).reminderOverview().threads[0]?.counts.all).toBe(3)
+  })
+})
+
+describe('schema v18: a confirmed send records who confirmed it', () => {
+  const payload = (content: string) => JSON.stringify({ draftId: null, target: { kind: 'reply', threadId: '500' }, credentialId: '7',
+    fields: { content, title: '', name: '', email: '', watermark: false }, attachmentId: null })
+
+  /** A v17 database with a checked, an unresolved and a failed send; a deleted row raised the ID counter. */
+  function v17(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 17)).close()
+    const raw = new Database(path)
+    try {
+      expect(raw.pragma('user_version', { simple: true })).toBe(17)
+      const insert = raw.prepare(`INSERT INTO publication_attempts(id, request_id, editor_id, payload_json, credential_id, forum_id, state, problem,
+        created_at, updated_at, post_id, thread_id, launch_notice) VALUES (?, ?, 'editor', ?, 7, '4', ?, ?, ?, ?, ?, ?, ?)`)
+      insert.run(101, 'checked', payload('已确认'), 'confirmed', null, at, later, '700', '500', 0)
+      insert.run(102, 'unknown', payload('未知'), 'unknown', 'network', at, later, null, null, 1)
+      insert.run(103, 'failed', payload('失败'), 'failed', 'rejected', at, later, null, null, 0)
+      insert.run(140, 'gone', payload('已删'), 'failed', 'rejected', at, later, null, null, 0)
+      raw.prepare('DELETE FROM publication_attempts WHERE id = 140').run()
+      raw.prepare("UPDATE credentials SET cookie_id = 'Old7' WHERE id = 7").run()
+    } finally { raw.close() }
+    return path
+  }
+
+  it('keeps every send and its ID, marks existing confirmations as checked, and lets the user confirm without a number', () => {
+    const db = open(v17())
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    const mine = (id: string) => ['101', '102', '103'].includes(id)
+    expect(db.listPublications().filter((item) => mine(item.id)).map(({ id, state, problem, postId, threadId, confirmedBy, cookieId, createdAt, updatedAt }) =>
+      ({ id, state, problem, postId, threadId, confirmedBy, cookieId, createdAt, updatedAt }))).toEqual([
+      { id: '103', state: 'failed', problem: 'rejected', postId: null, threadId: null, confirmedBy: null, cookieId: 'Old7', createdAt: at, updatedAt: later },
+      { id: '102', state: 'unknown', problem: 'network', postId: null, threadId: null, confirmedBy: null, cookieId: 'Old7', createdAt: at, updatedAt: later },
+      { id: '101', state: 'confirmed', problem: null, postId: '700', threadId: '500', confirmedBy: 'check', cookieId: 'Old7', createdAt: at, updatedAt: later }
+    ])
+    expect(db.listLaunchNotices().map((item) => item.id).filter(mine)).toEqual(['102'])
+    expect(db.resolvePublication({ id: '102', choice: 'sent', postId: null, at: later })).toMatchObject({
+      ok: true, attempt: { state: 'confirmed', confirmedBy: 'user', postId: null, threadId: '500' }
+    })
+    // IDs are never reused: the counter survives the rebuild.
+    const created = db.createPublication({ requestId: 'after-upgrade', editorId: 'editor', forumId: '4', at: later,
+      payload: { draftId: null, target: { kind: 'thread', forumId: '4' }, credentialId: '7', fields: { content: '新', title: '', name: '', email: '', watermark: false }, attachmentId: null } })
+    expect(created.id).toBe('141')
+  })
+
+  it('rolls back an interrupted rebuild without changing the v17 file', () => {
+    const path = v17()
+    const original = readFileSync(path)
+    const db = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 17), { version: 18, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 18)!.up(connection)
+      throw new Error('injected publication upgrade failure')
+    } }])
+    expect(db.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    db.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(open(path).getPublication('101')).toMatchObject({ state: 'confirmed', confirmedBy: 'check', postId: '700' })
   })
 })

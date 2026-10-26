@@ -96,7 +96,8 @@ export function createPublicationService(deps: {
     }
     const best = writes[0]!
     unstored.set(attempt.id, {
-      attempt: { ...attempt, state: best.state, problem: best.problem, postId: best.postId, threadId: best.threadId, updatedAt: best.at },
+      attempt: { ...attempt, state: best.state, problem: best.problem, postId: best.postId, threadId: best.threadId,
+        confirmedBy: best.state === 'confirmed' ? 'check' : null, updatedAt: best.at },
       writes
     })
     return null
@@ -311,6 +312,19 @@ export function createPublicationService(deps: {
         if (store.status.state === 'unavailable') throw new Error('storage')
         const attempts = await store.listPublications()
         return { ok: true, attempts: attempts.map(attempt => [...editorAttempts.values()].find(value => value.id === attempt.id) ?? attempt) }
+      } catch { return { ok: false, reason: 'storage' } }
+    },
+    async resolvePending({ attemptId, choice, postId }) {
+      // A running send has no result yet: only its own outcome (or abandon) may end it.
+      if (running.has(attemptId)) return { ok: false, reason: 'busy' }
+      try {
+        if (!recovered || store.status.state !== 'ready') return { ok: false, reason: 'storage' }
+        const result = await store.resolvePublication({ id: attemptId, choice, postId, at: now().toISOString() })
+        if (!result.ok) return result
+        // The user's answer supersedes a result this process could not store, and unlocks the editor.
+        unstored.delete(attemptId)
+        for (const [editorId, held] of editorAttempts) if (held.id === attemptId) editorAttempts.delete(editorId)
+        return result
       } catch { return { ok: false, reason: 'storage' } }
     },
     async getAttempt({ attemptId }) {

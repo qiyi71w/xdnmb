@@ -95,6 +95,7 @@ export function asStore(db: ReadingDatabase): AppStore {
     getPublication: async (...args) => db.getPublication(...args),
     finishPublication: async (...args) => db.finishPublication(...args),
     recoverPublications: async (...args) => db.recoverPublications(...args),
+    resolvePublication: async (...args) => db.resolvePublication(...args),
     listLaunchNotices: async () => db.listLaunchNotices(),
     dismissLaunchNotices: async (...args) => db.dismissLaunchNotices(...args),
     getPoWarningEnabled: async () => db.getPoWarningEnabled(),

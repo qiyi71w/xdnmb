@@ -104,12 +104,8 @@ export function TabView({
       ((focused === null || focused === document.body) && lastRegion.current === hiddenRegion)
     if (!stranded) return
     const target =
-      // A list pane may hide its list behind another view (订阅 › 同步与合并); 历史 / 离线 rows.
-      (pane === 'list'
-        ? shown.querySelector<HTMLElement>(
-            '.list-scroll:not([hidden]) .thread-row.is-selected, .list-scroll:not([hidden]) .retained-row.is-selected > .retained-open'
-          )
-        : null) ??
+      // A list pane may hide its list behind another view (订阅 › 同步与合并, the other pages of 历史).
+      (pane === 'list' ? shown.querySelector<HTMLElement>('.list-scroll:not([hidden]) .thread-row.is-selected') : null) ??
       shown.querySelector<HTMLElement>('[data-pane-focus]') ??
       shown
     target.focus({ preventScroll: pane === 'reader' })

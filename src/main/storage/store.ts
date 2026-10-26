@@ -221,6 +221,7 @@ export async function openReadingStore(options: {
     getPublication: (id) => request('getPublication', id),
     finishPublication: (input) => request('finishPublication', input),
     recoverPublications: (at) => request('recoverPublications', at),
+    resolvePublication: (input) => request('resolvePublication', input),
     listLaunchNotices: () => request('listLaunchNotices'),
     dismissLaunchNotices: (ids) => request('dismissLaunchNotices', ids),
     loadWorkspace: () => request('loadWorkspace'),

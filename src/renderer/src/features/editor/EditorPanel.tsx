@@ -338,7 +338,7 @@ export function EditorPanel({
     <div className="editor-actions">
       {ended ? (
         <>
-          <button type="button" className={textButton} onClick={openAttempts}>
+          <button type="button" className={textButton} onClick={() => openAttempts(editor.target.kind)}>
             <Icon name="history" />
             查看发送记录
           </button>

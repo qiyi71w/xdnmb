@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import type { PostTarget } from '../../../../shared/drafts'
 import type { PublicationAttempt } from '../../../../shared/publication'
 import { Icon } from '../../components/Icon'
 import { targetText } from '../editor/editorText'
@@ -14,7 +15,8 @@ function stateText(attempt: PublicationAttempt): string {
 
 /**
  * Once per launch: sends that failed or stayed unknown while no window was open (finishing after
- * the last quit) or that were found unfinished at startup. Non-blocking; 查看发送记录 and 知道了 both
+ * the last quit) or that were found unfinished at startup. Non-blocking; 查看发送记录 (历史's 新串
+ * page when every attempt shown is a new thread, else 回复) and 知道了 both
  * dismiss exactly the attempts shown. A failed dismissal only hides it for this run. Focus inside
  * the notice moves to `fallbackFocus` before it goes away.
  */
@@ -22,7 +24,7 @@ export function LaunchNotice({
   onOpenAttempts,
   fallbackFocus
 }: {
-  onOpenAttempts: () => void
+  onOpenAttempts: (kind: PostTarget['kind']) => void
   fallbackFocus: () => HTMLElement | null
 }) {
   const { forumName } = useEditorWorkspace()
@@ -73,8 +75,9 @@ export function LaunchNotice({
           type="button"
           className="btn btn-small"
           onClick={() => {
+            const kind = attempts.every((attempt) => attempt.payload.target.kind === 'thread') ? 'thread' : 'reply'
             dismiss()
-            onOpenAttempts()
+            onOpenAttempts(kind)
           }}
         >
           <Icon name="history" size={14} />

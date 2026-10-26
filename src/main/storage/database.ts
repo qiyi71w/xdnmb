@@ -23,8 +23,8 @@ import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, R
 import type { AttachmentId, DraftId, DraftSaveInput, PostTarget } from '../../shared/drafts'
 import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionPlan, SubscriptionSource } from '../../shared/subscriptions'
 import type { SubscriptionBaseline, SubscriptionConfiguration } from './contract'
-import type { PublicationAttempt } from '../../shared/publication'
-import type { PublicationStore } from '../publication/contract'
+import { isPending, type PublicationAttempt } from '../../shared/publication'
+import type { PublicationResolution, PublicationStore } from '../publication/contract'
 import { StorageWriteRefusedError } from './contract'
 import type {
   AppStore, DraftAttachmentRecord, DraftRecord, DraftWriteOutcome, ImageHolder, ImageResourceRecord, NewImageResource, PostThreadRelation, Stored
@@ -213,6 +213,8 @@ interface PublicationRow {
   post_id: string | null
   thread_id: string | null
   saved_draft_id: number | null
+  confirmed_by: PublicationAttempt['confirmedBy']
+  cookie_id: string | null
 }
 
 function publicationAttempt(row: PublicationRow): PublicationAttempt {
@@ -228,6 +230,8 @@ function publicationAttempt(row: PublicationRow): PublicationAttempt {
     updatedAt: row.updated_at,
     postId: row.post_id,
     threadId: row.thread_id,
+    confirmedBy: row.confirmed_by,
+    cookieId: row.cookie_id,
     savedDraftId: row.saved_draft_id === null ? null : String(row.saved_draft_id)
   }
 }
@@ -1018,9 +1022,9 @@ class SqliteReadingDatabase implements ReadingDatabase {
       }, PublicationRow>(`
         INSERT INTO publication_attempts (
           request_id, editor_id, draft_id, payload_json, credential_id, forum_id,
-          attachment_id, state, created_at, updated_at
+          attachment_id, state, created_at, updated_at, cookie_id
         ) VALUES (@requestId, @editorId, @draftId, @payload, @credentialId, @forumId,
-          @attachmentId, 'sending', @at, @at)
+          @attachmentId, 'sending', @at, @at, (SELECT cookie_id FROM credentials WHERE id = @credentialId))
         RETURNING *
       `).get({
         requestId: input.requestId, editorId: input.editorId, draftId: payload.draftId,
@@ -1078,11 +1082,11 @@ class SqliteReadingDatabase implements ReadingDatabase {
       // later result (e.g. positive evidence resolving an unknown one) replaces it.
       const launchNotice = input.launchNotice === true && (input.state === 'failed' || input.state === 'unknown')
       db.prepare(`
-        UPDATE publication_attempts SET state = ?, problem = ?, post_id = ?, thread_id = ?, updated_at = ?, launch_notice = ?
+        UPDATE publication_attempts SET state = ?, problem = ?, post_id = ?, thread_id = ?, confirmed_by = ?, updated_at = ?, launch_notice = ?
         WHERE id = ?
       `).run(input.state, input.state === 'confirmed' ? null : input.problem,
-        input.state === 'confirmed' ? input.postId : null, input.state === 'confirmed' ? input.threadId : null, input.at,
-        Number(launchNotice), input.id)
+        input.state === 'confirmed' ? input.postId : null, input.state === 'confirmed' ? input.threadId : null,
+        input.state === 'confirmed' ? 'check' : null, input.at, Number(launchNotice), input.id)
 
       if (input.state === 'failed') {
         // Changing the state above releases the source lock within this same transaction only.
@@ -1106,6 +1110,37 @@ class SqliteReadingDatabase implements ReadingDatabase {
     this.writable().prepare(`
       UPDATE publication_attempts SET state = 'unknown', problem = 'network', updated_at = ?, launch_notice = 1 WHERE state = 'sending'
     `).run(at)
+  }
+
+  resolvePublication(input: Parameters<PublicationStore['resolvePublication']>[0]): PublicationResolution {
+    const db = this.writable()
+    return db.transaction((): PublicationResolution => {
+      const attempt = this.getPublication(input.id)
+      if (!attempt || !isPending(attempt)) return { ok: false, reason: 'not-pending' }
+      const { payload } = attempt
+      if (input.choice === 'sent') {
+        const { postId } = input
+        if (postId !== null && ((payload.target.kind === 'reply' && payload.target.threadId === postId) || db.prepare(
+          "SELECT 1 FROM publication_attempts WHERE post_id = ? AND state = 'confirmed' AND id <> ?"
+        ).get(postId, input.id))) return { ok: false, reason: 'post-id' }
+        const threadId = payload.target.kind === 'reply' ? payload.target.threadId : postId
+        if (attempt.draftId !== null) db.prepare('DELETE FROM drafts WHERE id = ?').run(attempt.draftId)
+        db.prepare(`
+          UPDATE publication_attempts SET state = 'confirmed', confirmed_by = 'user', problem = NULL, post_id = ?, thread_id = ?,
+            updated_at = ?, launch_notice = 0, attachment_id = NULL, saved_draft_id = NULL
+          WHERE id = ?
+        `).run(postId, threadId, input.at, input.id)
+      } else {
+        // Leaving the pending states releases the source draft's lock for the save below.
+        db.prepare("UPDATE publication_attempts SET state = 'failed', updated_at = ?, launch_notice = 0 WHERE id = ?").run(input.at, input.id)
+        const saved = this.saveDraft(payload, input.at)
+        if (!saved.ok) throw new Error('withdrawn publication draft could not be saved')
+        db.prepare('UPDATE publication_attempts SET attachment_id = NULL, saved_draft_id = ? WHERE id = ?').run(saved.draft.id, input.id)
+      }
+      const resolved = this.getPublication(input.id)
+      if (!resolved) throw new Error('publication resolution returned no row')
+      return { ok: true, attempt: resolved }
+    }).immediate()
   }
 
   listLaunchNotices(): PublicationAttempt[] {

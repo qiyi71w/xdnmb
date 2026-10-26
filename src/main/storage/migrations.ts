@@ -596,6 +596,59 @@ export const MIGRATIONS: readonly Migration[] = [
         ALTER TABLE reminder_checker ADD COLUMN notified INTEGER NOT NULL DEFAULT 0 CHECK (notified IN (0, 1));
         ALTER TABLE reminder_checker ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0 CHECK (dismissed IN (0, 1));`)
     }
+  },
+  {
+    // A confirmed attempt records who confirmed it: the read-back check, or the user ending a 待核对
+    // attempt (已发出), who may give no post number. Each attempt also keeps the sending cookie's
+    // 饼干 ID; existing attempts take the ID their (never reused) credential has now, if any. SQLite
+    // cannot relax a CHECK in place, so the table is rebuilt; every row, ID and the ID counter are kept.
+    version: 18,
+    up(db) {
+      const sequence = db.prepare<[], { seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'publication_attempts'").get()
+      db.exec(`CREATE TABLE publication_attempts_v18 (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          request_id TEXT NOT NULL UNIQUE,
+          editor_id TEXT NOT NULL,
+          draft_id INTEGER,
+          payload_json TEXT NOT NULL,
+          credential_id INTEGER NOT NULL CHECK (credential_id >= 1),
+          forum_id TEXT NOT NULL,
+          attachment_id INTEGER REFERENCES draft_attachments(id),
+          state TEXT NOT NULL CHECK (state IN ('sending', 'confirmed', 'failed', 'unknown', 'unconfirmed')),
+          problem TEXT CHECK (problem IS NULL OR problem IN (
+            'storage', 'identity', 'attachment', 'target', 'empty', 'busy', 'interval',
+            'rejected', 'rate-limited', 'captcha', 'network', 'response'
+          )),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          post_id TEXT,
+          thread_id TEXT,
+          saved_draft_id INTEGER,
+          launch_notice INTEGER NOT NULL DEFAULT 0 CHECK (launch_notice IN (0, 1)),
+          confirmed_by TEXT CHECK (confirmed_by IN ('check', 'user')),
+          cookie_id TEXT,
+          CHECK ((state = 'confirmed') = (confirmed_by IS NOT NULL)),
+          CHECK (state != 'confirmed' OR confirmed_by = 'user' OR (post_id IS NOT NULL AND thread_id IS NOT NULL))
+        );
+        INSERT INTO publication_attempts_v18 (
+          id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem,
+          created_at, updated_at, post_id, thread_id, saved_draft_id, launch_notice, confirmed_by, cookie_id
+        ) SELECT id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem,
+          created_at, updated_at, post_id, thread_id, saved_draft_id, launch_notice,
+          CASE WHEN state = 'confirmed' THEN 'check' END,
+          (SELECT cookie_id FROM credentials WHERE credentials.id = publication_attempts.credential_id)
+        FROM publication_attempts;
+        DROP TABLE publication_attempts;
+        ALTER TABLE publication_attempts_v18 RENAME TO publication_attempts;
+        CREATE UNIQUE INDEX publication_locked_draft ON publication_attempts(draft_id)
+          WHERE draft_id IS NOT NULL AND state IN ('sending', 'unknown', 'unconfirmed');
+        CREATE INDEX publication_attachment_id ON publication_attempts(attachment_id);
+        CREATE INDEX publication_identity_forum ON publication_attempts(credential_id, forum_id, created_at);`)
+      if (sequence !== undefined) {
+        db.prepare("DELETE FROM sqlite_sequence WHERE name = 'publication_attempts'").run()
+        db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('publication_attempts', ?)").run(sequence.seq)
+      }
+    }
   }
 ]
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { DraftId, SavedDraft } from '../../../../shared/drafts'
+import type { DraftId, PostTarget, SavedDraft } from '../../../../shared/drafts'
 import { Icon } from '../../components/Icon'
 import { Modal, ModalHeader } from '../../components/Modal'
 import { formatRecordTime } from '../../lib/time'
@@ -17,7 +17,7 @@ type Locks = ReadonlySet<DraftId> | null
  * 草稿 library: every saved draft, most recently saved first; several may share a target.
  * 继续 hands the draft to the shell (focus its editor, or open it in a new tab); 删除 removes the
  * record after confirmation and is unavailable while the draft is being edited. A draft whose send
- * is still sending or unresolved is locked: it can only be looked up in 发送记录.
+ * is still sending or unresolved is locked: it can only be looked up in 历史 (the page of its kind).
  */
 export function DraftLibraryDialog({
   tabTitle,
@@ -28,7 +28,8 @@ export function DraftLibraryDialog({
 }: {
   tabTitle: (tabId: number) => string
   onContinue: (draft: SavedDraft) => void
-  onOpenAttempts: () => void
+  /** 查看发送记录 of a locked draft: 历史 on the page of its target's kind. */
+  onOpenAttempts: (kind: PostTarget['kind']) => void
   onClose: () => void
   fallbackFocus?: () => HTMLElement | null
 }) {
@@ -225,7 +226,7 @@ export function DraftLibraryDialog({
                           type="button"
                           className="btn btn-small"
                           aria-describedby={`${rowId}-locked`}
-                          onClick={onOpenAttempts}
+                          onClick={() => onOpenAttempts(draft.target.kind)}
                         >
                           <Icon name="history" size={14} />
                           查看发送记录

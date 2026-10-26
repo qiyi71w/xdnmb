@@ -129,6 +129,8 @@ export type EditorsAction =
   | { type: 'publish-released'; editorId: EditorId; notice: SendNotice | null }
   /** Explicit failure: unlocks and continues the automatically saved draft when there is one. */
   | { type: 'publish-failed'; editorId: EditorId; problem: PublicationProblem | null; draft: SavedDraft | null }
+  /** The user answered 没发出 for this editor's attempt: unlocks and continues the draft it went to. */
+  | { type: 'publish-withdrawn'; editorId: EditorId; draft: SavedDraft | null }
   /**
    * Removes a locked editor whose content now lives in its durable attempt: sent and confirmed,
    * or ended by the user while the result is unknown / the ID unconfirmed.
@@ -344,11 +346,14 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
     case 'publish-released':
       return update(state, action.editorId, locked((editor) => ({ ...editor, publication: null, sendNotice: action.notice })))
     case 'publish-failed':
+    case 'publish-withdrawn':
       return update(
         state,
         action.editorId,
         locked((editor) => {
-          const notice: SendNotice = { kind: 'failed', problem: action.problem, saved: action.draft !== null }
+          const notice: SendNotice = action.type === 'publish-failed'
+            ? { kind: 'failed', problem: action.problem, saved: action.draft !== null }
+            : { kind: 'not-sent' }
           const draft = action.draft
           if (draft === null) return { ...editor, publication: null, sendNotice: notice }
           return { ...editor, ...fromDraft(draft), identityUnknown: false, draft, publication: null, sendNotice: notice }

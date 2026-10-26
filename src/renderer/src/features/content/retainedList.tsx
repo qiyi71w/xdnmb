@@ -3,8 +3,9 @@ import type { OfflineCopy, RetainedEntry } from '../../../../shared/content'
 import type { ThreadId } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
+import { Modal } from '../../components/Modal'
 import { NO_CONTENT_FILTERS } from '../search/searchState'
-import { ContentRegistryContext, type RetainedPage } from '../tabs/contentRegistry'
+import { ContentRegistryContext, type HistoryMemory, type ListMemory, type RetainedPage } from '../tabs/contentRegistry'
 import { attempt, contentFailureText, type Refused } from './contentText'
 import { offlineEpoch, offlineGeneration, subscribeOffline } from './offlineSync'
 import type { ReadingResets } from './readingResets'
@@ -20,12 +21,12 @@ export type RetainedListState =
 export type Confirming = { threadId: ThreadId | null; clearReading: boolean }
 
 /**
- * The 浏览记录 list as stored, read on mount, with history deletion.
- * Focus: a confirmation takes it, leaving one returns it to the control that asked; after a row
- * disappears it goes to the first enabled button of the row now at that position in `listRef`
- * (rows carry `data-retained-row`), else of `bodyRef`. History deletion removes visit records only
- * unless the reader's progress is explicitly included. A row's 有离线副本 follows copies saved,
- * cancelled or deleted meanwhile; a read overtaken by such a change is dropped.
+ * The 浏览 list as stored, read on mount, with history deletion (asked in `HistoryConfirm`).
+ * Focus: after a row disappears it goes to the first enabled button of the row now at that
+ * position in `listRef` (rows carry `data-retained-row`), else of `bodyRef`. History deletion
+ * removes visit records only unless the reader's progress is explicitly included. A row's
+ * 有离线副本 follows copies saved, cancelled or deleted meanwhile; a read overtaken by such a
+ * change is dropped.
  */
 export function useRetainedList(resets: ReadingResets) {
   const [list, setList] = useState<RetainedListState>({ status: 'loading' })
@@ -89,20 +90,6 @@ export function useRetainedList(resets: ReadingResets) {
     })
   }, [])
 
-  // Confirmation takes focus; leaving it returns focus to the control that asked.
-  const confirmRef = useRef<HTMLButtonElement>(null)
-  const askedBy = useRef<HTMLElement | null>(null)
-  const confirmKey = confirming === null ? null : (confirming.threadId ?? '*')
-  useLayoutEffect(() => {
-    if (confirmKey !== null) {
-      confirmRef.current?.focus()
-      return
-    }
-    const opener = askedBy.current
-    askedBy.current = null
-    if (opener?.isConnected) opener.focus()
-  }, [confirmKey])
-
   // After a row disappears, focus the row now at its position, else the list heading area.
   useLayoutEffect(() => {
     const index = focusAfterRemove.current
@@ -113,8 +100,7 @@ export function useRetainedList(resets: ReadingResets) {
     ;(row?.querySelector<HTMLElement>('button:not(:disabled)') ?? bodyRef.current?.querySelector<HTMLElement>('button:not(:disabled)'))?.focus()
   }, [list])
 
-  const ask = (threadId: ThreadId | null, opener: HTMLElement) => {
-    askedBy.current = opener
+  const ask = (threadId: ThreadId | null) => {
     setFailure(null)
     setDone(null)
     setConfirming({ threadId, clearReading: false })
@@ -145,7 +131,6 @@ export function useRetainedList(resets: ReadingResets) {
       setFailure({ threadId, text: `删除未完成：${contentFailureText(result?.ok === false ? result : null)}` })
       return
     }
-    askedBy.current = null
     setConfirming(null)
     setDone(
       threadId === null
@@ -166,78 +151,102 @@ export function useRetainedList(resets: ReadingResets) {
     confirming,
     setConfirming,
     busy,
-    setBusy,
     failure,
     setFailure,
     done,
-    setDone,
-    alive,
     listRef,
     bodyRef,
-    confirmRef,
     ask,
-    removeRows,
     clearHistory
   }
 }
 
-/** Confirmation of a history deletion; clearing reading data is opt-in and spelled out. */
+/**
+ * 删除…／清空历史… of 浏览: a dialog naming what goes, with 同时清除阅读进度 opt-in and spelled out.
+ * Focus starts on 取消; 取消 or Esc changes nothing (ignored while the deletion runs). A refusal
+ * stays here; a deletion closes it from its owner.
+ */
 export function HistoryConfirm({
   confirming,
   title,
   busy,
-  confirmRef,
   failure,
   onChange,
   onConfirm,
-  onCancel
+  onCancel,
+  fallbackFocus
 }: {
   confirming: Confirming
+  /** The thread's heading; unused when clearing all history. */
   title?: string
   busy: boolean
-  confirmRef: RefObject<HTMLButtonElement | null>
   failure: string | null
   onChange: (next: Confirming) => void
   onConfirm: () => void
   onCancel: () => void
+  fallbackFocus?: () => HTMLElement | null
 }) {
+  const titleId = useId()
   const checkId = useId()
   const impactId = useId()
+  const cancelRef = useRef<HTMLButtonElement>(null)
   const all = confirming.threadId === null
+
+  // Start on 取消, the choice that changes nothing (Modal focused its first control).
+  useLayoutEffect(() => {
+    cancelRef.current?.focus()
+  }, [])
+
+  const cancel = () => {
+    if (!busy) onCancel()
+  }
+
   return (
-    <div className="history-confirm" role="group" aria-label={all ? '确认清空浏览历史' : `确认删除访问记录：${title ?? ''}`}>
-      <p className="history-confirm-title">{all ? '清空全部浏览历史？' : '删除这条访问记录？'}</p>
-      <label className="choice-row" htmlFor={checkId}>
-        <input
-          id={checkId}
-          type="checkbox"
-          checked={confirming.clearReading}
-          disabled={busy}
-          aria-describedby={confirming.clearReading ? impactId : undefined}
-          onChange={(event) => onChange({ ...confirming, clearReading: event.target.checked })}
-        />
-        <span className="choice-title">同时清除{all ? '这些串' : '这个串'}的{READING}</span>
-      </label>
-      {confirming.clearReading && (
-        <p className="history-confirm-impact" id={impactId}>
-          之后打开会从开头阅读。
-        </p>
-      )}
-      {failure !== null && (
-        <p className="form-message is-error" role="alert">
-          <Icon name="alert" size={14} />
-          {failure}
-        </p>
-      )}
-      <div className="history-confirm-actions">
-        <button ref={confirmRef} type="button" className="btn btn-small btn-danger" aria-busy={busy || undefined} onClick={onConfirm}>
-          {busy ? '正在删除…' : all ? '确认清空' : '确认删除'}
-        </button>
-        <button type="button" className="btn btn-small" disabled={busy} onClick={onCancel}>
+    <Modal className="history-delete-dialog" labelledBy={titleId} onClose={cancel} fallbackFocus={fallbackFocus}>
+      <header className="modal-header">
+        <h2 className="modal-title" id={titleId}>
+          {all ? '清空全部浏览历史？' : '删除这条访问记录？'}
+        </h2>
+      </header>
+      <div className="modal-body history-delete-body">
+        {confirming.threadId !== null && (
+          <p className="offline-thread">
+            {title}
+            <span className="offline-thread-id">No.{confirming.threadId}</span>
+          </p>
+        )}
+        <label className="choice-row" htmlFor={checkId}>
+          <input
+            id={checkId}
+            type="checkbox"
+            checked={confirming.clearReading}
+            disabled={busy}
+            aria-describedby={confirming.clearReading ? impactId : undefined}
+            onChange={(event) => onChange({ ...confirming, clearReading: event.target.checked })}
+          />
+          <span className="choice-title">同时清除{READING}</span>
+        </label>
+        {confirming.clearReading && (
+          <p className="history-delete-impact" id={impactId}>
+            {all ? '这些串之后打开会从开头阅读。' : '这个串之后打开会从开头阅读。'}
+          </p>
+        )}
+        {failure !== null && (
+          <p className="form-message is-error" role="alert">
+            <Icon name="alert" size={14} />
+            {failure}
+          </p>
+        )}
+      </div>
+      <div className="modal-actions">
+        <button ref={cancelRef} type="button" className="btn" aria-disabled={busy || undefined} onClick={cancel}>
           取消
         </button>
+        <button type="button" className="btn btn-danger" aria-disabled={busy || undefined} aria-busy={busy || undefined} onClick={onConfirm}>
+          {busy ? '正在删除…' : all ? '清空历史' : '删除'}
+        </button>
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -263,14 +272,35 @@ export function useRetainedScroll(entryKey: number, bodyRef: RefObject<HTMLDivEl
     registry?.savedLists.delete(entryKey)
   }, [ready, displayed, registry, entryKey, bodyRef])
   useLayoutEffect(() => {
-    registry?.listMemory.set(entryKey, { kind: 'retained', scrollTop: scrollTop.current })
+    if (registry !== null) rememberRetained(registry.listMemory, entryKey, { scrollTop: scrollTop.current })
   })
   return () => {
     const scroller = bodyRef.current
     if (scroller === null || scroller.clientHeight === 0 || !placed.current) return
     scrollTop.current = scroller.scrollTop
-    registry?.listMemory.set(entryKey, { kind: 'retained', scrollTop: scrollTop.current })
+    if (registry !== null) rememberRetained(registry.listMemory, entryKey, { scrollTop: scrollTop.current })
   }
+}
+
+type RetainedMemory = Extract<ListMemory, { kind: 'retained' }>
+
+/** Updates part of a 历史／离线 entry's memory, keeping the rest (浏览 scroll, 历史 pages). */
+export function rememberRetained(memory: Map<number, ListMemory>, entryKey: number, patch: Partial<Omit<RetainedMemory, 'kind'>>): void {
+  const current = memory.get(entryKey)
+  const base: RetainedMemory = current?.kind === 'retained' ? current : { kind: 'retained', scrollTop: 0 }
+  memory.set(entryKey, { ...base, ...patch })
+}
+
+/** 历史's runtime memory of entry `entryKey`, if any. */
+export function historyMemory(memory: Map<number, ListMemory>, entryKey: number): HistoryMemory | undefined {
+  const current = memory.get(entryKey)
+  return current?.kind === 'retained' ? current.history : undefined
+}
+
+/** Updates part of 历史's runtime memory (page shown, 新串／回复 scroll), keeping the rest. */
+export function rememberHistory(memory: Map<number, ListMemory>, entryKey: number, patch: Partial<HistoryMemory>): void {
+  const history = historyMemory(memory, entryKey) ?? { view: 'browsing', sentScroll: { threads: 0, replies: 0 } }
+  rememberRetained(memory, entryKey, { history: { ...history, ...patch } })
 }
 
 /** Filters of a 历史／离线 list: kept per page while the app runs (outside the shell, per pane). */

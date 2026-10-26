@@ -119,6 +119,7 @@ port.on('message', (request: StorageRequest) => {
       case 'getPublication': value = db.getPublication(...request.args); break
       case 'finishPublication': value = db.finishPublication(...request.args); break
       case 'recoverPublications': value = db.recoverPublications(...request.args); break
+      case 'resolvePublication': value = db.resolvePublication(...request.args); break
       case 'listLaunchNotices': value = db.listLaunchNotices(...request.args); break
       case 'dismissLaunchNotices': value = db.dismissLaunchNotices(...request.args); break
       case 'loadWorkspace': value = db.loadWorkspace(...request.args); break

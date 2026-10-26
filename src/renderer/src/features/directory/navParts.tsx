@@ -8,7 +8,7 @@ import { Icon } from '../../components/Icon'
 import { FailureNotice, IdentitySettingsAction, SourceNotice } from '../../components/Notices'
 import { formatRecordTime } from '../../lib/time'
 import { useSettings } from '../../lib/settingsContext'
-import type { PendingAttempts } from '../publication/usePendingAttempts'
+import { pendingTotal, type PendingAttempts } from '../publication/usePendingAttempts'
 import type { ListRef } from '../tabs/tabsState'
 import type { DirectoryState } from './useDirectory'
 import { boardGroups, FEATURES, hiddenBoardGroups, visibleBoards, type FeatureId } from './navStore'
@@ -60,7 +60,7 @@ export function featureInfo(id: FeatureId) {
   return FEATURES.find((feature) => feature.id === id) ?? FEATURES[0]!
 }
 
-/** Badge of a feature: threads with new reminders, or sends to check. */
+/** Badge of a feature: threads with new reminders, or sends 待核对 (of 新串 and 回复 together). */
 function featureBadge(id: FeatureId, host: FeatureHost): { text: string; spoken: string; tone: 'count' | 'warning' } | null {
   if (id === 'reminders') {
     const threads = host.reminderBadge?.threads ?? 0
@@ -68,9 +68,9 @@ function featureBadge(id: FeatureId, host: FeatureHost): { text: string; spoken:
     return { text: formatReminderCount(threads), spoken: `${threads} 个串有新提醒`, tone: 'count' }
   }
   if (id !== 'history') return null
-  const count = host.pendingAttempts.count
+  const count = pendingTotal(host.pendingAttempts)
   if (count === null || count <= 0) return null
-  return { text: String(count), spoken: `${count} 项发送待核对`, tone: 'warning' }
+  return { text: count > 99 ? '99+' : String(count), spoken: `${count} 项发送待核对`, tone: 'warning' }
 }
 
 function featureMarked(id: FeatureId, host: FeatureHost): boolean {

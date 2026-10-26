@@ -1,4 +1,5 @@
-import type { PublicationProblem, PublicationState } from '../../../../shared/publication'
+import type { PublicationProblem, PublicationState, ResolvePendingResult } from '../../../../shared/publication'
+import type { SentKind } from './sentRecords'
 
 export const ATTEMPT_STATE_LABEL: Record<PublicationState, string> = {
   sending: '正在发送',
@@ -41,4 +42,27 @@ export const PROBLEM_TEXT: Record<PublicationProblem, string> = {
 export const ATTEMPT_PROBLEM_TEXT: Record<PublicationProblem, string> = {
   ...PROBLEM_TEXT,
   storage: '发送结果没能保存，这次发言可能已经发出'
+}
+
+/** A 待核对 attempt's state, named in words in 历史 (colour only reinforces it). */
+export const PENDING_MARK: Record<'sending' | 'unknown' | 'unconfirmed', string> = {
+  sending: '正在发送',
+  unknown: '结果待确认',
+  unconfirmed: '串号未确认'
+}
+
+/** Why 已发出／没发出 changed nothing; `not-pending` is answered by reading the list again. */
+export function resolveFailureText(reason: Extract<ResolvePendingResult, { ok: false }>['reason'] | 'internal', kind: SentKind): string {
+  switch (reason) {
+    case 'post-id':
+      return kind === 'thread' ? '这个串号已属于另一条发送记录' : '这个串号已属于另一条发送记录，或是所回复的串本身'
+    case 'busy':
+      return '这次发送还没结束，结束后再选择'
+    case 'not-pending':
+      return '这条发送已不在待核对中，列表已重新读取'
+    case 'storage':
+      return '本地存储不可用，没有改动'
+    case 'internal':
+      return '应用内部请求失败，请重新读取列表后再试'
+  }
 }

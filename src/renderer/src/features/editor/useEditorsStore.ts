@@ -77,6 +77,12 @@ export interface EditorsStore {
   recheck: (editorId: EditorId) => Promise<void>
   /** Ends a locked editor whose attempt is `unknown` / `unconfirmed`; the attempt keeps its content. */
   endPublication: (editorId: EditorId) => void
+  /**
+   * A 待核对 attempt was ended by the user (已发出 / 没发出) outside its editor: an editor still
+   * showing it closes (sent) or continues the draft its content went to (not sent). Always counts as
+   * a publication change, so 发送记录 and its badges read again.
+   */
+  adoptResolved: (attempt: PublicationAttempt) => Promise<void>
   /** Confirmed sends by `focusKey`, until a new editor opens there or the tab closes. */
   published: ReadonlyMap<string, PublishedNote>
   clearPublished: (key: string) => void
@@ -388,6 +394,35 @@ export function useEditorsStore(): EditorsStore {
     [find, bump]
   )
 
+  const adoptResolved = useCallback(
+    async (attempt: PublicationAttempt) => {
+      bump()
+      const holders = stateRef.current.editors.filter(
+        (editor) => editor.publication?.phase === 'attempt' && editor.publication.attempt.id === attempt.id
+      )
+      if (holders.length === 0) return
+      if (attempt.state === 'confirmed') {
+        for (const editor of holders) rawDispatch({ type: 'publish-ended', editorId: editor.id })
+        return
+      }
+      if (attempt.state !== 'failed') return
+      let saved: SavedDraft | null = null
+      try {
+        const read = await window.xidao.publication.getAttempt({ attemptId: attempt.id })
+        if (read.ok) saved = read.draft
+      } catch {
+        saved = null
+      }
+      for (const editor of holders) {
+        const now = find(editor.id)?.publication
+        if (now?.phase !== 'attempt' || now.attempt.id !== attempt.id) continue
+        if (saved !== null) lastSaved.current.set(editor.id, saved)
+        rawDispatch({ type: 'publish-withdrawn', editorId: editor.id, draft: saved })
+      }
+    },
+    [bump, find]
+  )
+
   // While any editor's attempt is sending, read its local record until it has a result. Runs for
   // hidden editors too; an editor that went away leaves its attempt to 发送记录.
   const sendingKey = state.editors
@@ -449,6 +484,7 @@ export function useEditorsStore(): EditorsStore {
       resolvePrompt,
       recheck,
       endPublication,
+      adoptResolved,
       published,
       clearPublished,
       publicationRevision,
@@ -466,6 +502,7 @@ export function useEditorsStore(): EditorsStore {
       resolvePrompt,
       recheck,
       endPublication,
+      adoptResolved,
       published,
       clearPublished,
       publicationRevision,

@@ -1,21 +1,30 @@
 import { useEffect, useState } from 'react'
+import { isPending } from '../../../../shared/publication'
+import type { SentKind } from './sentRecords'
 
-/** Attempts still sending or waiting to be checked; `null` until read or while unreadable. */
+/** 待核对 attempts (sending, result unknown, number unconfirmed) by what they went to. */
 export interface PendingAttempts {
-  count: number | null
+  /** `null` until read or while unreadable. */
+  counts: Readonly<Record<SentKind, number>> | null
   /** The local record could not be read. */
   failed: boolean
+}
+
+/** All 待核对 attempts, of both kinds; `null` while unknown. */
+export function pendingTotal(pending: PendingAttempts): number | null {
+  return pending.counts === null ? null : pending.counts.thread + pending.counts.reply
 }
 
 /** While something is still sending without an editor watching it, how often to read again. */
 const POLL_MS = 2000
 
 /**
- * Unresolved attempts for the 发送记录 entry, read at start (attempts left `unknown` by a restart
- * show up here) and again whenever `revision` changes. Reading is local and never sends.
+ * 待核对 attempts for the 历史 badges (the rail's, and those of its 新串／回复 pages), read at start
+ * (attempts left `unknown` by a restart show up here) and again whenever `revision` changes.
+ * Reading is local and never sends.
  */
 export function usePendingAttempts(revision: number): PendingAttempts {
-  const [pending, setPending] = useState<PendingAttempts>({ count: null, failed: false })
+  const [pending, setPending] = useState<PendingAttempts>({ counts: null, failed: false })
   const [sending, setSending] = useState(false)
   const [tick, setTick] = useState(0)
 
@@ -26,17 +35,17 @@ export function usePendingAttempts(revision: number): PendingAttempts {
       .then((result) => {
         if (!alive) return
         if (!result.ok) {
-          setPending({ count: null, failed: true })
+          setPending({ counts: null, failed: true })
           return
         }
-        const open = result.attempts.filter(
-          (attempt) => attempt.state === 'sending' || attempt.state === 'unknown' || attempt.state === 'unconfirmed'
-        )
-        setPending({ count: open.length, failed: false })
+        const open = result.attempts.filter(isPending)
+        const counts = { thread: 0, reply: 0 }
+        for (const attempt of open) counts[attempt.payload.target.kind] += 1
+        setPending({ counts, failed: false })
         setSending(open.some((attempt) => attempt.state === 'sending'))
       })
       .catch(() => {
-        if (alive) setPending({ count: null, failed: true })
+        if (alive) setPending({ counts: null, failed: true })
       })
     return () => {
       alive = false

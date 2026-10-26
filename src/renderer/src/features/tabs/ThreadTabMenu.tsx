@@ -26,6 +26,38 @@ export interface ThreadTabMenu {
 }
 
 /**
+ * Gestures of a list row (`li`) whose own context menu holds its actions: right-click and the
+ * ContextMenu key / Shift+F10 call `openMenu`; middle-click and Ctrl/Cmd+click call `openInTab`
+ * (`null`: the row has no new-tab variant) instead of the row's click.
+ */
+export function listRowGestures(
+  openMenu: (event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => void,
+  openInTab: (() => void) | null
+): ThreadRowHandlers & { onClickCapture: (event: MouseEvent<HTMLElement>) => void } {
+  return {
+    onContextMenu: openMenu,
+    onKeyDown: (event) => {
+      if (isContextMenuKey(event)) openMenu(event)
+    },
+    onClickCapture: (event) => {
+      if (openInTab === null || (!event.ctrlKey && !event.metaKey)) return
+      event.preventDefault()
+      event.stopPropagation()
+      openInTab()
+    },
+    // Middle press: no autoscroll; the release opens the tab.
+    onMouseDown: (event) => {
+      if (openInTab !== null && event.button === 1) event.preventDefault()
+    },
+    onAuxClick: (event) => {
+      if (openInTab === null || event.button !== 1) return
+      event.preventDefault()
+      openInTab()
+    }
+  }
+}
+
+/**
  * 在新标签页打开 for the thread rows of one list: one context menu at a time (right-click,
  * ContextMenu key, Shift+F10 on the focused row), middle-click and Ctrl/Cmd+click. Closing the
  * menu returns focus to its row.

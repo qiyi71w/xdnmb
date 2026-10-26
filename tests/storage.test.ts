@@ -422,21 +422,21 @@ describe('reading context', () => {
 describe('window lifecycle storage', () => {
   it('upgrades a version 6 database keeping its sends, without launch notices, and keeps only the latest saved workspace', () => {
     const path = databasePath()
-    const v6 = openReadingDatabase(path, PUBLICATION_MIGRATIONS.filter((migration) => migration.version <= 6))
-    // Seed the frozen v6 table directly: the current write interface also maintains later columns.
+    openReadingDatabase(path, PUBLICATION_MIGRATIONS.filter((migration) => migration.version <= 6)).close()
+    // Seed the frozen v6 tables directly: the current write interface also maintains later columns.
     const seed = new Database(path)
-    const credential = { id: String(seed.prepare("INSERT INTO credentials (name, source, imported_at, ciphertext) VALUES ('甲', 'raw', ?, ?)").run(fetchedAt, Buffer.from('synthetic')).lastInsertRowid) }
+    const credentialId = String(seed.prepare("INSERT INTO credentials (name, source, imported_at, ciphertext) VALUES ('甲', 'raw', ?, ?)").run(fetchedAt, Buffer.from('synthetic')).lastInsertRowid)
+    const payload = { draftId: null, target: { kind: 'thread' as const, forumId: '1' }, credentialId,
+      fields: { content: '正文', title: '', name: '', email: '', watermark: false }, attachmentId: null }
+    seed.prepare(`INSERT INTO publication_attempts (request_id, editor_id, payload_json, credential_id, forum_id, state, created_at, updated_at)
+      VALUES ('request-1', 'editor-1', ?, ?, '1', 'sending', ?, ?)`).run(JSON.stringify(payload), credentialId, fetchedAt, fetchedAt)
     seed.close()
-    const sent = v6.createPublication({
-      requestId: 'request-1', editorId: 'editor-1', forumId: '1', at: fetchedAt,
-      payload: { draftId: null, target: { kind: 'thread', forumId: '1' }, credentialId: credential.id,
-        fields: { content: '正文', title: '', name: '', email: '', watermark: false }, attachmentId: null }
-    })
-    v6.close()
 
     const db = open(path)
     expect(db.status).toEqual({ state: 'ready', schemaVersion: SUPPORTED_VERSION })
-    expect(db.listPublications()).toEqual([sent])
+    // A cookie without a known 饼干 ID leaves the send's ID unknown; nothing confirmed it.
+    expect(db.listPublications()).toMatchObject([{ requestId: 'request-1', editorId: 'editor-1', payload, state: 'sending',
+      problem: null, postId: null, threadId: null, confirmedBy: null, cookieId: null, createdAt: fetchedAt }])
     expect(db.listLaunchNotices()).toEqual([])
     expect(db.loadWorkspace()).toBeNull()
     db.saveWorkspace('{"first":true}', later)
