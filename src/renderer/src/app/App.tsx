@@ -72,7 +72,7 @@ import { usePopover } from '../lib/usePopover'
 import { ListOpenerContext } from '../features/reminders/openList'
 import { ThreadTabOpenerContext, type ThreadTabOpener } from '../features/tabs/openThreadInTab'
 import { isEditableTarget, matchShortcut, shortcutLabel, type ShortcutAction } from './shortcuts'
-import { TabView } from './TabView'
+import { composeTargetsOf, TabView } from './TabView'
 import { TopBar } from './TopBar'
 import { useSettingsWriter } from './useSettingsWriter'
 import './layout.css'
@@ -865,15 +865,16 @@ export function App() {
   )
 
   /**
-   * The failed send's editor is on screen now (expanded in the active tab, settings page not over
-   * it): it already shows the failure and holds the draft, so no bottom notice is added. The
-   * report editor is displayed whenever the tab displays any target (see `ComposeFrame`).
+   * The failed send's editor is on screen now (expanded among the active tab's editor panels, which
+   * float over either pane of the single-pane fallback; settings page not over them): it already
+   * shows the failure and holds the draft, so no bottom notice is added. The report editor is
+   * displayed whenever the tab displays any target (see `ComposeFrame`).
    */
   const failureShownInEditor = useCallback(
     (notice: SendFailureNotice): boolean => {
       const tabs = stateRef.current.tabs
       if (tabs === null || settingsShownRef.current) return false
-      const displayed = shownTargets(activeTab(tabs), stateRef.current.singlePane)
+      const displayed = composeTargetsOf(activeTab(tabs))
       if (displayed.length > 0) displayed.push({ kind: 'thread', forumId: '18' })
       return editorOnScreen(currentEditors(), notice.editorId, displayed)
     },
