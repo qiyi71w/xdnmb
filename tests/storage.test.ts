@@ -430,7 +430,7 @@ describe('window lifecycle storage', () => {
     const sent = v6.createPublication({
       requestId: 'request-1', editorId: 'editor-1', forumId: '1', at: fetchedAt,
       payload: { draftId: null, target: { kind: 'thread', forumId: '1' }, credentialId: credential.id,
-        fields: { content: '正文', title: '', name: '', email: '', watermark: false }, attachmentId: null }
+        fields: { content: '正文', title: '', name: '', watermark: false }, attachmentId: null }
     })
     v6.close()
 

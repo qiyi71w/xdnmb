@@ -179,7 +179,6 @@ interface DraftRow {
   content: string
   title: string
   name: string
-  email: string
   watermark: number
   attachment_id: number | null
   version: number
@@ -192,7 +191,7 @@ function draftRecord(row: DraftRow, attachment: DraftAttachmentRecord | null): D
     id: String(row.id),
     target: row.target_kind === 'reply' ? { kind: 'reply', threadId: row.target_id } : { kind: 'thread', forumId: row.target_id },
     credentialId: row.credential_id === null ? null : String(row.credential_id),
-    fields: { content: row.content, title: row.title, name: row.name, email: row.email, watermark: row.watermark === 1 },
+    fields: { content: row.content, title: row.title, name: row.name, watermark: row.watermark === 1 },
     attachment,
     version: row.version,
     createdAt: row.created_at,
@@ -960,26 +959,29 @@ class SqliteReadingDatabase implements ReadingDatabase {
       if (input.draftId !== null && this.draftLocked(db, input.draftId)) return { ok: false, reason: 'locked' }
       const attachment = input.attachmentId === null ? null : this.attachmentById(db, input.attachmentId)
       if (input.attachmentId !== null && attachment === null) return { ok: false, reason: 'attachment-missing' }
+      // Bind each column explicitly: an older send payload may still carry fields drafts no longer keep.
       const values = {
         targetKind: input.target.kind,
         targetId: input.target.kind === 'reply' ? input.target.threadId : input.target.forumId,
         credentialId: input.credentialId,
-        ...input.fields,
+        content: input.fields.content,
+        title: input.fields.title,
+        name: input.fields.name,
         watermark: input.fields.watermark ? 1 : 0,
         attachmentId: input.attachmentId,
         at
       }
       const row = input.draftId === null
         ? db.prepare<typeof values, DraftRow>(`
-            INSERT INTO drafts (target_kind, target_id, credential_id, content, title, name, email, watermark,
+            INSERT INTO drafts (target_kind, target_id, credential_id, content, title, name, watermark,
               attachment_id, version, created_at, saved_at)
-            VALUES (@targetKind, @targetId, @credentialId, @content, @title, @name, @email, @watermark,
+            VALUES (@targetKind, @targetId, @credentialId, @content, @title, @name, @watermark,
               @attachmentId, 1, @at, @at)
             RETURNING *
           `).get(values)
         : db.prepare<typeof values & { id: string }, DraftRow>(`
             UPDATE drafts SET target_kind = @targetKind, target_id = @targetId, credential_id = @credentialId,
-              content = @content, title = @title, name = @name, email = @email, watermark = @watermark,
+              content = @content, title = @title, name = @name, watermark = @watermark,
               attachment_id = @attachmentId, version = version + 1, saved_at = @at
             WHERE id = @id
             RETURNING *

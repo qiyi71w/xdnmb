@@ -167,12 +167,6 @@ export function AttemptsBody({ tabTitle, onContinue, onOpenTarget, refreshRevisi
                 <dd>{payload.fields.name}</dd>
               </div>
             )}
-            {payload.fields.email !== '' && (
-              <div>
-                <dt>E-mail</dt>
-                <dd>{payload.fields.email}</dd>
-              </div>
-            )}
             <div>
               <dt>正文</dt>
               <dd className="attempt-body">{payload.fields.content === '' ? '（无正文）' : payload.fields.content}</dd>

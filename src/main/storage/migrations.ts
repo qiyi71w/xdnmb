@@ -596,6 +596,14 @@ export const MIGRATIONS: readonly Migration[] = [
         ALTER TABLE reminder_checker ADD COLUMN notified INTEGER NOT NULL DEFAULT 0 CHECK (notified IN (0, 1));
         ALTER TABLE reminder_checker ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0 CHECK (dismissed IN (0, 1));`)
     }
+  },
+  {
+    // Drafts no longer keep an E-mail field; every other draft column and its attachment stay.
+    // Send attempts keep their stored payload_json unchanged; a leftover email there is ignored.
+    version: 18,
+    up(db) {
+      db.exec('ALTER TABLE drafts DROP COLUMN email;')
+    }
   }
 ]
 

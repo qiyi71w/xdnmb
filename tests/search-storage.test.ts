@@ -89,7 +89,7 @@ describe('real SQLite retained search', () => {
     db.savePost(post('100', 'cdef', { title: 'ab', userHash: 'identity-only', name: 'name-only' }), at)
     db.savePost(post('101', '开头'.repeat(1000) + 'needle' + '结尾'.repeat(1000)), at)
     db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: null,
-      fields: { content: 'draft-only', title: 'draft-title', name: '', email: '', watermark: false }, attachmentId: null }, at)
+      fields: { content: 'draft-only', title: 'draft-title', name: '', watermark: false }, attachmentId: null }, at)
     expect(search(db, 'bc')).toEqual([])
     expect(search(db, 'identity-only')).toEqual([])
     expect(search(db, 'name-only')).toEqual([])

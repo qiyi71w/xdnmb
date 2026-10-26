@@ -7,7 +7,7 @@ import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib'
 import { Parser } from 'htmlparser2'
 import type { DraftSaveInput } from '../../shared/drafts'
 import type { PublicationProblem } from '../../shared/publication'
-import { parseContent } from '../forum/content'
+import { parseContent, submittedText } from '../forum/content'
 import { createForumClient } from '../forum/client'
 import { createForumTransport } from '../forum/transport'
 import { PUBLISH_DEADLINE_MS, type PublicationAdapter, type PublishReport } from './contract'
@@ -79,8 +79,8 @@ function object(value: unknown): value is Record<string, unknown> {
 function comparableText(text: string): string { return text.replace(/\r\n?/g, '\n').replace(/\n+$/, '') }
 function bodyMatches(value: Record<string, unknown>, input: DraftSaveInput): boolean {
   if (typeof value.content !== 'string') return false
-  if (comparableText(parseContent(value.content).plainText) !== comparableText(input.fields.content)) return false
-  for (const field of ['title', 'name', 'email'] as const) {
+  if (comparableText(submittedText(parseContent(value.content).nodes)) !== comparableText(input.fields.content)) return false
+  for (const field of ['title', 'name'] as const) {
     if (input.fields[field] !== '' && value[field] !== input.fields[field]) return false
   }
   return true
@@ -165,7 +165,7 @@ export function createPublicationAdapter(options: {
 
     const fields: Record<string, string> = {
       ...(payload.target.kind === 'thread' ? { fid: payload.target.forumId } : { resto: payload.target.threadId }),
-      content: payload.fields.content, title: payload.fields.title, name: payload.fields.name, email: payload.fields.email,
+      content: payload.fields.content, title: payload.fields.title, name: payload.fields.name,
       ...(payload.fields.watermark ? { water: 'true' } : {})
     }
     let result: 'success' | PublicationProblem
@@ -182,7 +182,7 @@ export function createPublicationAdapter(options: {
       if (payload.target.kind === 'thread') {
         if (candidate.resto !== '0') return { state: 'unconfirmed', problem: null }
         const page = await publicClient.getThreadPage(postId, 'all', 1, new AbortController().signal)
-        if (page.head.forumId !== payload.target.forumId || comparableText(page.head.plainText) !== comparableText(payload.fields.content) ||
+        if (page.head.forumId !== payload.target.forumId || comparableText(submittedText(page.head.content)) !== comparableText(payload.fields.content) ||
             (payload.fields.title !== '' && page.head.title !== payload.fields.title) || (attachment !== null && page.head.image === null)) return { state: 'unconfirmed', problem: null }
         return { state: 'confirmed', postId, threadId: postId }
       }
@@ -190,7 +190,7 @@ export function createPublicationAdapter(options: {
       const url = new URL('/api/ref', apiOrigin)
       url.searchParams.set('id', postId)
       const ref = json((await publicTransport.get(url, new AbortController().signal)).text)
-      if (!object(ref) || ref.id !== postId || !bodyMatches(ref, { ...payload, fields: { ...payload.fields, email: '' } }) ||
+      if (!object(ref) || ref.id !== postId || !bodyMatches(ref, payload) ||
           (attachment !== null && !(typeof ref.img === 'string' && ref.img.length > 0))) return { state: 'unconfirmed', problem: null }
       return { state: 'confirmed', postId, threadId: payload.target.threadId }
     } catch { return { state: 'unconfirmed', problem: 'network' } }

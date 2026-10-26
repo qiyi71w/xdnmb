@@ -230,7 +230,7 @@ describe('retained content storage', () => {
     const attachment = db.insertDraftAttachment({ fileName: 'draft.jpg', bytes: statSync(join(folder, 'draft.jpg')).size,
       format: 'jpeg', width: 1, height: 1, originalName: 'user.jpg', createdAt: t0 })
     const saved = db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '200' }, credentialId: null,
-      fields: { content: 'private draft', title: '', name: '', email: '', watermark: false }, attachmentId: attachment.id }, t0)
+      fields: { content: 'private draft', title: '', name: '', watermark: false }, attachmentId: attachment.id }, t0)
     expect(saved.ok).toBe(true)
     const old = db.listDrafts()
     db.setCacheLimit(0)
@@ -379,7 +379,7 @@ describe('retained content storage', () => {
     const attachment = db.insertDraftAttachment({ fileName: 'delete-draft.jpg', bytes: statSync(join(folder, 'delete-draft.jpg')).size,
       format: 'jpeg', width: 1, height: 1, originalName: 'user.jpg', createdAt: t0 })
     const saved = db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '200' }, credentialId: null,
-      fields: { content: 'private draft', title: '', name: '', email: '', watermark: false }, attachmentId: attachment.id }, t1)
+      fields: { content: 'private draft', title: '', name: '', watermark: false }, attachmentId: attachment.id }, t1)
     expect(saved.ok).toBe(true)
     const drafts = db.listDrafts()
     const reading = db.getReadingState('100')

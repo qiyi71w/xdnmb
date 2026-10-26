@@ -31,6 +31,9 @@ type Predecessor = 'subscriptions-v5' | 'retained-v6' | typeof heads[number]
 const hasSubscriptions = (kind: Predecessor) => kind === 'subscriptions-v5' || kind === 'integrated-v7' || kind === 'reconciliation-v6' || kind === 'integrated-v8' || kind === 'reminders-v9'
 const hasDrafts = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'lifecycle-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
 const hasRetained = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
+/** Draft columns every version keeps; v18 drops `email`, so snapshots taken before it compare these. */
+const draftColumns = 'id, target_kind, target_id, credential_id, content, title, name, watermark, attachment_id, version, created_at, saved_at'
+const keptColumns = (table: string) => table === 'drafts' ? `SELECT ${draftColumns} FROM drafts` : `SELECT * FROM ${table}`
 
 function plan(): SubscriptionPlan {
   return { id: 'historical-plan', preview: { id: 'historical-preview', mode: 'sync', context, createdAt: at,
@@ -285,7 +288,7 @@ describe('combined predecessor migration', () => {
     expect(requests).toEqual(['/Api/feed'])
     expect(db.getReadingState('100').positions.all?.anchor.postId).toBe('101')
     expect(db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: '7',
-      fields: { content: '新草稿', title: '', name: '', email: '', watermark: false }, attachmentId: null }, later)).toMatchObject({ ok: true })
+      fields: { content: '新草稿', title: '', name: '', watermark: false }, attachmentId: null }, later)).toMatchObject({ ok: true })
     db.close()
     const reopened = open(path)
     expect(reopened.loadSubscriptionOperations()[0]).toMatchObject({ state: 'settled', verification: 'present' })
@@ -367,8 +370,8 @@ describe('schema v14: thread favourites and read state removed', () => {
     const raw = new Database(path, { readonly: true })
     try {
       const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
-      // Later versions add columns (credentials.cookie_id in v15); compare the columns v13 had.
-      const query = (table: string) => table === 'credentials' ? 'SELECT id, name, source, imported_at, ciphertext, position FROM credentials' : `SELECT * FROM ${table}`
+      // Later versions add columns (credentials.cookie_id in v15) or drop them (drafts.email in v18); compare the columns kept throughout.
+      const query = (table: string) => table === 'credentials' ? 'SELECT id, name, source, imported_at, ciphertext, position FROM credentials' : keptColumns(table)
       const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(query(table)).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
       return { version: raw.pragma('user_version', { simple: true }), tables, rows }
     } finally { raw.close() }
@@ -435,7 +438,7 @@ describe('schema v15: 饼干 IDs replace the own-post record', () => {
     const raw = new Database(path, { readonly: true })
     try {
       const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
-      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(`SELECT * FROM ${table}`).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
+      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(keptColumns(table)).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
       return { version: raw.pragma('user_version', { simple: true }), tables, rows }
     } finally { raw.close() }
   }
@@ -504,7 +507,7 @@ describe('schema v16: reminders count reply growth from a baseline', () => {
     const raw = new Database(path, { readonly: true })
     try {
       const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
-      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(`SELECT * FROM ${table}`).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
+      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(keptColumns(table)).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
       return { version: raw.pragma('user_version', { simple: true }), tables, rows }
     } finally { raw.close() }
   }
@@ -597,5 +600,61 @@ describe('reminder scheduling upgrade', () => {
     db.close()
     expect(readFileSync(path)).toEqual(original)
     expect(open(path).reminderOverview().threads[0]?.counts.all).toBe(3)
+  })
+})
+
+describe('schema v18: drafts drop the E-mail field', () => {
+  /** A v17 database whose saved draft has a title, name, E-mail, identity and attached image. */
+  function v17(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 17)).close()
+    const raw = new Database(path)
+    try {
+      expect(raw.pragma('user_version', { simple: true })).toBe(17)
+      raw.prepare("UPDATE drafts SET name = '旧名称', email = 'sage' WHERE id = 8").run()
+    } finally { raw.close() }
+    return path
+  }
+  function draftTable(path: string) {
+    const raw = new Database(path, { readonly: true })
+    try {
+      const columns = (raw.prepare('PRAGMA table_info(drafts)').all() as { name: string }[]).map((column) => column.name)
+      const kept = columns.filter((column) => column !== 'email').join(', ')
+      return { columns, rows: raw.prepare(`SELECT ${kept} FROM drafts`).all(), attempts: raw.prepare('SELECT * FROM publication_attempts').all() }
+    } finally { raw.close() }
+  }
+
+  it('removes only the E-mail column and keeps every draft field, its identity, target and image', () => {
+    const path = v17()
+    const before = draftTable(path)
+    expect(before.columns).toContain('email')
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    const after = draftTable(path)
+    expect(after.columns).not.toContain('email')
+    expect(after.columns).toEqual(before.columns.filter((column) => column !== 'email'))
+    expect(after.rows).toEqual(before.rows)
+    // Stored send payloads are not rewritten, even where they still name an E-mail.
+    expect(after.attempts).toEqual(before.attempts)
+    expect(db.listDrafts()).toEqual([expect.objectContaining({ id: '8', version: 3, target: { kind: 'reply', threadId: '100' }, credentialId: '7',
+      fields: { content: '未发送草稿', title: '草稿标题', name: '旧名称', watermark: true },
+      attachment: expect.objectContaining({ id: '4', fileName: 'old-copy.png', originalName: 'original.png' }) })])
+    expect(db.saveDraft({ draftId: '8', target: { kind: 'reply', threadId: '100' }, credentialId: '7',
+      fields: { content: '升级后改写', title: '草稿标题', name: '旧名称', watermark: true }, attachmentId: '4' }, later)).toMatchObject({ ok: true, draft: { version: 4 } })
+  })
+
+  it('leaves the v17 file byte-for-byte unchanged when the v18 migration fails', () => {
+    const path = v17()
+    const original = readFileSync(path)
+    const failing = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 17), { version: 18, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 18)!.up(connection)
+      throw new Error('injected failure after dropping the column')
+    } }])
+    connections.push(failing)
+    expect(failing.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failing.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(draftTable(path).columns).toContain('email')
+    expect(open(path).listDrafts()[0]?.fields).toEqual({ content: '未发送草稿', title: '草稿标题', name: '旧名称', watermark: true })
   })
 })

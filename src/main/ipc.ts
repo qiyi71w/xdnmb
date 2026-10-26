@@ -184,7 +184,6 @@ function postFields(value: unknown): PostFields {
     content: boundedText(input.content, MAX_DRAFT_CONTENT_LENGTH),
     title: boundedText(input.title, MAX_DRAFT_FIELD_LENGTH),
     name: boundedText(input.name, MAX_DRAFT_FIELD_LENGTH),
-    email: boundedText(input.email, MAX_DRAFT_FIELD_LENGTH),
     watermark: input.watermark
   }
 }

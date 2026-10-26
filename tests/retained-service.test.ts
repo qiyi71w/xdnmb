@@ -400,7 +400,7 @@ describe('retained content operations', () => {
     const draftPath = join(dir, 'draft-images', draftAttachment.fileName)
     copyFileSync(source, draftPath)
     db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: null,
-      fields: { content: '草稿保留', title: '', name: '', email: '', watermark: false }, attachmentId: draftAttachment.id }, '2026-10-24T00:00:00Z')
+      fields: { content: '草稿保留', title: '', name: '', watermark: false }, attachmentId: draftAttachment.id }, '2026-10-24T00:00:00Z')
     await service.setCacheLimit({ bytes: 0 })
     await service.clearCache()
     expect(existsSync(path)).toBe(true)
