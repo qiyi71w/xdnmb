@@ -1,82 +1,10 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import type { ThreadId } from '../../../../shared/forum'
 import { REMINDER_KINDS, type ReminderKind, type ReminderRule, type ThreadReminders } from '../../../../shared/reminders'
 import { Icon } from '../../components/Icon'
-import { usePopover } from '../../lib/usePopover'
 import { enabledKinds, KIND_NAME, KIND_SHORT, ruleStateText } from './reminderText'
 import { failureText, type LoadFailure } from './useReminders'
 import './reminders.css'
-
-/**
- * 提醒 control of one thread: a button stating which kinds are on, opening a small panel with one
- * real checkbox per kind and its start (提醒起点). Toggling only saves the rule: it never starts a
- * check. Esc, a press outside or Tab leaving the panel closes it;
- * Esc returns focus to the button.
- */
-export function ReminderMenu({
-  threadId,
-  label,
-  rules,
-  failure,
-  onRetry,
-  onUpdated,
-  small = false,
-  tabIndex
-}: {
-  threadId: ThreadId
-  /** Thread title or `No.x`, for accessible names. */
-  label: string
-  /** `undefined` while not known. */
-  rules: Record<ReminderKind, ReminderRule> | undefined
-  failure: LoadFailure | null
-  onRetry: () => void
-  onUpdated: (thread: ThreadReminders) => void
-  small?: boolean
-  tabIndex?: number
-}) {
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
-  const popover = usePopover(triggerRef, panelRef)
-  const panelId = useId()
-  const { on, known, text, state } = reminderSummary(rules, failure)
-  const saving = useReminderToggle(threadId, onUpdated, popover.open)
-
-  return (
-    <span
-      className="reminder-menu"
-      onBlur={(event) => {
-        const next = event.relatedTarget as Node | null
-        if (popover.open && next !== null && !event.currentTarget.contains(next)) popover.close(false)
-      }}
-    >
-      <button
-        ref={triggerRef}
-        type="button"
-        className={`btn${small ? ' btn-small btn-quiet' : ''} reminder-trigger${on.length > 0 ? ' is-on' : ''}${!known && failure !== null ? ' is-warning' : ''}`}
-        aria-expanded={popover.open}
-        aria-controls={popover.open ? panelId : undefined}
-        aria-label={`提醒设置：${label}，${state}`}
-        title="提醒"
-        tabIndex={tabIndex}
-        onClick={popover.toggle}
-      >
-        <Icon name={!known && failure !== null ? 'alert' : 'bell'} size={small ? 14 : 16} />
-        {text}
-      </button>
-      {popover.open && (
-        <ReminderPanel
-          panelRef={panelRef}
-          id={panelId}
-          label={label}
-          rules={rules}
-          failure={failure}
-          onRetry={onRetry}
-          saving={saving}
-        />
-      )}
-    </span>
-  )
-}
 
 /** What a thread's 提醒 control says: the kinds on, whether the rules are known, label and state. */
 export function reminderSummary(rules: Record<ReminderKind, ReminderRule> | undefined, failure: LoadFailure | null) {
@@ -141,7 +69,8 @@ export function useReminderToggle(threadId: ThreadId, onUpdated: (thread: Thread
 }
 
 /**
- * The open 提醒 panel: one real checkbox per kind and its start. Anchored to the end of its
+ * The open 提醒 panel: one real checkbox per kind and its state. Toggling only saves the rule: it
+ * never starts a check. Anchored to the end of its
  * positioned parent; kept inside the scroller that would clip it (or the window) when that is
  * narrow or zoomed: narrowed to fit, then shifted sideways.
  */

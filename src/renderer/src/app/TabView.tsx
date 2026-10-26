@@ -65,7 +65,7 @@ export function TabView({
   onSelectThread: (tabId: number, threadId: ThreadId, head: Post | null) => void
   onShowPane: (tabId: number, pane: Region) => void
   /**
-   * A list item resolved to an explicit target (a located reminder event): shows it from the list
+   * A list item opened at an explicit target (a reminder's first new page): shows it from the list
    * entry `entryKey`. False when that entry is no longer the tab's current one.
    */
   onOpenTarget: (tabId: number, entryKey: number, thread: ThreadOpen) => boolean
@@ -175,7 +175,9 @@ export function TabView({
         <ReminderPane
           key={`${entry.key}:reminders`}
           entryKey={entry.key}
+          forumNames={forumNames}
           selectedThreadId={selectedThreadId}
+          onOpenThread={(threadId, head) => onSelectThread(tab.id, threadId, head)}
           onOpenTarget={(thread) => onOpenTarget(tab.id, entry.key, thread)}
         />
       )

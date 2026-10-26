@@ -1,6 +1,4 @@
-import type {
-  CheckRequestResult, CheckTrigger, RemindersApi, RoundStopReason, NotificationCoverage
-} from '../../shared/reminders'
+import type { CheckRequestResult, RemindersApi } from '../../shared/reminders'
 import type { ForumClient } from '../forum/contract'
 import type { RequestScheduler } from '../reading/scheduler'
 import type { AppStore } from '../storage/contract'
@@ -8,8 +6,8 @@ import type { ReminderNotifier } from './contract'
 import { runReminderRound } from './engine'
 
 export interface ReminderService extends Omit<RemindersApi, 'onOpenList'> {
-  request(trigger: CheckTrigger): Promise<CheckRequestResult>
-  recover(): Promise<void>
+  /** Cold start, explicit reopen and manual checks share one single-flight and the 60 s cooldown. */
+  request(): Promise<CheckRequestResult>
   stop(reason: 'quit' | 'user'): Promise<void>
   /** Deterministic completion seam; does not trigger or enqueue a check. */
   whenIdle(): Promise<void>
@@ -27,7 +25,7 @@ export function createReminderService(deps: {
   const now = deps.now ?? (() => new Date().toISOString())
   const monotonicNow = deps.monotonicNow ?? (() => performance.now())
   let lastStart = -Infinity
-  let active: { abort: AbortController; reason: RoundStopReason | null; done: Promise<void>; resolve(): void } | null = null
+  let active: { abort: AbortController; reason: 'quit' | 'user' | null; done: Promise<void>; resolve(): void } | null = null
   const listeners = new Set<() => void>()
   let changePending = false
   function changed(): void {
@@ -38,60 +36,51 @@ export function createReminderService(deps: {
       for (const listener of listeners) listener()
     })
   }
-  async function request(trigger: CheckTrigger): Promise<CheckRequestResult> {
+  const cooldownRemaining = () => Math.max(0, 60_000 - (monotonicNow() - lastStart))
+  async function request(): Promise<CheckRequestResult> {
     if (active !== null) return { accepted: false, reason: 'running', retryAfterMs: 0 }
-    const remaining = Math.max(0, 60_000 - (monotonicNow() - lastStart))
+    const remaining = cooldownRemaining()
     if (remaining > 0) return { accepted: false, reason: 'cooldown', retryAfterMs: remaining }
     const completion = Promise.withResolvers<void>()
-    const current = { abort: new AbortController(), reason: null as RoundStopReason | null, done: completion.promise, resolve: () => completion.resolve() }
+    const current = { abort: new AbortController(), reason: null as 'quit' | 'user' | null, done: completion.promise, resolve: () => completion.resolve() }
     active = current // Reserve before the first worker await: simultaneous triggers never queue.
     const acceptedAt = monotonicNow()
+    let rules
     try {
-      const rules = await deps.store.reminderRuleSnapshots()
-      const round = await deps.store.createReminderRound(trigger, now(), new Set(rules.map((rule) => rule.threadId)).size)
-      lastStart = acceptedAt
-      changed()
-      void (async () => {
-        try {
-          const result = await runReminderRound({ ...deps, now, changed }, {
-            round, rules, signal: current.abort.signal, stopReason: () => current.reason
-          })
-          const scope: NotificationCoverage = round.state !== 'finished' ? 'interrupted' : round.threadsFailed > 0 ? 'failed-some'
-            : result.partial ? 'partial' : 'complete'
-          // Registration also atomically revalidates each event kind's live generation. It is the
-          // irreversible notification attempt boundary, even on unsupported systems or a crash.
-          const record = await deps.store.registerReminderNotification(round.id, scope, now())
-          if (record !== null) {
-            const suffix = scope === 'failed-some' ? '；部分串检查失败，数量不是全部新增'
-              : scope !== 'complete' ? '；本轮检查未完成，仅含已确认的命中' : ''
-            const settle = (state: 'shown' | 'failed' | 'unavailable') => {
-              void deps.store.settleReminderNotification(record.id, state).then(changed, () => undefined)
-            }
-            try {
-              if (!deps.notifier.show({ title: '汐岛提醒', body: `${record.threadCount} 个串有 ${record.eventCount} 条新提醒${suffix}` }, settle)) settle('unavailable')
-            } catch {
-              settle('failed')
-            }
-          }
-        } catch {
-          // Storage refusal is not a forum failure. Keep all existing personal records; if this
-          // write is also unavailable startup recovery still marks the unfinished round.
-          round.state = 'interrupted'
-          round.finishedAt = now()
-          round.stopReason = current.reason
-          await deps.store.saveReminderRound(round).catch(() => undefined)
-        } finally {
-          if (active === current) active = null
-          current.resolve()
-          changed()
-        }
-      })()
-      return { accepted: true, roundId: round.id }
+      rules = await deps.store.reminderRuleSnapshots()
     } catch {
-      if (active === current) active = null
+      active = null
       current.resolve()
       return { accepted: false, reason: 'storage', retryAfterMs: 0 }
     }
+    lastStart = acceptedAt
+    changed()
+    void (async () => {
+      const increased = new Set<string>()
+      try {
+        await runReminderRound({ ...deps, now, changed }, { rules, signal: current.abort.signal, increased })
+      } catch {
+        // Storage refusal is not a forum failure: counts and positions already saved stay.
+      }
+      try {
+        await deps.store.finishReminderCheck(now())
+      } catch {
+        // The previous 上次检查 time stays.
+      }
+      // One notification per check with new counts, whether it finished or was interrupted (quit
+      // included). A failed or unavailable notification changes nothing in the app.
+      if (increased.size > 0) {
+        try {
+          deps.notifier.show({ title: '汐岛提醒', body: `${increased.size} 个串有新提醒` })
+        } catch {
+          console.error('[reminders] notification failed')
+        }
+      }
+      if (active === current) active = null
+      current.resolve()
+      changed()
+    })()
+    return { accepted: true }
   }
   async function stop(reason: 'quit' | 'user'): Promise<void> {
     const current = active
@@ -100,38 +89,35 @@ export function createReminderService(deps: {
     current.abort.abort()
     await current.done
   }
+  async function storage<T extends object>(work: () => Promise<T>): Promise<({ ok: true } & T) | { ok: false; reason: 'storage' }> {
+    try { return { ok: true, ...await work() } }
+    catch { return { ok: false, reason: 'storage' } }
+  }
   return {
     request,
-    check: () => request('manual'),
+    check: request,
     cancel: () => stop('user'),
     stop,
     whenIdle: () => active?.done ?? Promise.resolve(),
-    async recover() { await deps.store.recoverReminders(now()); changed() },
-    async getRules({ threadIds }) {
-      try { return { ok: true, threads: await deps.store.getReminderRules(threadIds) } }
-      catch { return { ok: false, reason: 'storage' } }
-    },
-    async setRule({ threadId, kind, enabled }) {
-      try {
-        const thread = await deps.store.setReminderRule(threadId, kind, enabled, now())
-        changed()
-        return { ok: true, thread }
-      } catch { return { ok: false, reason: 'storage' } }
-    },
-    async closeForThreads({ threadIds, reason }) {
-      try {
-        const closed = await deps.store.closeReminderThreads(threadIds, reason, now())
-        changed()
-        return { ok: true, closed }
-      } catch { return { ok: false, reason: 'storage' } }
-    },
-    async overview() {
-      try {
-        return { ok: true, overview: { ...await deps.store.reminderOverview(), checker: {
-          running: active !== null, cooldownRemainingMs: Math.max(0, 60_000 - (monotonicNow() - lastStart))
-        } } }
-      } catch { return { ok: false, reason: 'storage' } }
-    },
+    getRules: ({ threadIds }) => storage(async () => ({ threads: await deps.store.getReminderRules(threadIds) })),
+    setRule: ({ threadId, kind, enabled }) => storage(async () => {
+      const thread = await deps.store.setReminderRule(threadId, kind, enabled, now())
+      changed()
+      return { thread }
+    }),
+    closeForThreads: ({ threadIds, reason }) => storage(async () => {
+      const closed = await deps.store.closeReminderThreads(threadIds, reason, now())
+      changed()
+      return { closed }
+    }),
+    clear: ({ threadId }) => storage(async () => {
+      if (await deps.store.clearReminderCounts(threadId)) changed()
+      return {}
+    }),
+    overview: () => storage(async () => {
+      const { lastCheckedAt, ...stored } = await deps.store.reminderOverview()
+      return { overview: { ...stored, checker: { running: active !== null, cooldownRemainingMs: cooldownRemaining(), lastCheckedAt } } }
+    }),
     onChanged(listener) { listeners.add(listener); return () => { listeners.delete(listener) } }
   }
 }

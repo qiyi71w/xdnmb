@@ -108,10 +108,10 @@ export class RetainedContentDatabase {
       const protectedImageBytes = scalar('SELECT coalesce(sum(bytes), 0) AS bytes FROM image_resources r WHERE EXISTS(SELECT 1 FROM image_holders h WHERE h.resource_id = r.id) OR EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)')
         + scalar('SELECT coalesce(sum(bytes), 0) AS bytes FROM draft_attachments')
       // Logical record bytes, independent of SQLite pages, freelists and indexes.
-      const personalTables = ['thread_reading', 'reading_positions', 'end_observations', 'thread_visits', 'settings', 'credentials', 'identity_roles', 'drafts', 'thread_post_identities', 'retained_titles', 'post_threads', 'reading_observations', 'offline_copies', 'offline_pages', 'offline_page_posts', 'offline_images', 'image_holders', 'content_readers', 'draft_attachments']
+      const personalTables = ['thread_reading', 'reading_positions', 'thread_visits', 'settings', 'credentials', 'identity_roles', 'drafts', 'thread_post_identities', 'retained_titles', 'post_threads', 'reading_observations', 'offline_copies', 'offline_pages', 'offline_page_posts', 'offline_images', 'image_holders', 'content_readers', 'draft_attachments']
       // Observations and fixed-context write/readback evidence are durable, not ordinary cache.
       personalTables.push('subscription_app_credentials', 'subscription_configuration', 'subscription_observations', 'subscription_operations')
-      personalTables.push('reminder_rules', 'reminder_coverage', 'reminder_events', 'reminder_rounds', 'reminder_notifications')
+      personalTables.push('reminder_rules', 'reminder_state', 'reminder_checker')
       let personalDataBytes = 0
       for (const table of personalTables) {
         const columns = db.prepare<[], { name: string }>(`PRAGMA table_info(${table})`).all().map((column) => `coalesce(length(CAST("${column.name}" AS BLOB)), 0)`)

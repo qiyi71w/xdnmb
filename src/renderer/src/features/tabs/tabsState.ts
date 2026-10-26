@@ -2,12 +2,14 @@ import type { FeedRef, Post, PostId, ReadingMode, ThreadId } from '../../../../s
 import type { ReadingAnchor } from '../../../../shared/reading'
 
 /**
- * Explicit target inside a thread (a located quote or search hit, a reminder event). It
- * takes priority over every remembered position. When `mode` differs from the thread's saved
- * preference the reader shows the target in `mode` temporarily and leaves the preference unchanged.
+ * Explicit target inside a thread (a located quote or search hit, or the page of a reminder's first
+ * new reply). It takes priority over every remembered position. When `mode` differs from the
+ * thread's saved preference the reader shows the target in `mode` temporarily and leaves the
+ * preference unchanged.
  */
 export interface ThreadTarget {
-  postId: PostId
+  /** The post to put at the reading line; null for the top of `page`. */
+  postId: PostId | null
   /** Page where the target was observed in `mode`. */
   page: number
   mode: ReadingMode
@@ -66,7 +68,7 @@ export type EntryOrigin = 'quote' | 'local-search' | 'online-search' | null
 
 /**
  * What a list entry shows: a forum/timeline feed, the remote subscription list of whichever
- * source (App / 网页) is currently selected, the local 提醒 list (reminder events by thread), or
+ * source (App / 网页) is currently selected, the local 提醒 list (threads with reminders), or
  * the local 历史 / 离线 page. Renderer-only; forum reads still take a `FeedRef`.
  */
 export type ListRef = FeedRef | { kind: 'subscriptions' } | { kind: 'reminders' } | { kind: 'history' } | { kind: 'offline' }

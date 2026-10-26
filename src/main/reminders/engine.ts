@@ -1,344 +1,316 @@
 import type { ReadError } from '../../shared/api'
-import { comparePostIds, type PostId, type ThreadPage } from '../../shared/forum'
-import { threadTotalPages } from '../../shared/threadPages'
-import type { CheckRound, RoundStopReason } from '../../shared/reminders'
+import { comparePostIds, type ContentNode, type Post, type PostId, type ReadingMode, type ThreadPage } from '../../shared/forum'
+import { REMINDER_KINDS, type CoverageIssue, type ReminderKind } from '../../shared/reminders'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
 import type { RequestScheduler } from '../reading/scheduler'
 import type { AppStore } from '../storage/contract'
 import { assertReadablePage } from '../storage/coverage'
-import type { ReminderCoverage, RuleSnapshot } from './contract'
-import { quotedPostIds } from './evaluation'
+import type { QuoteSource, ReminderKindState, ReminderUpdate, RuleSnapshot } from './contract'
 
-interface ModeWork {
-  coverage: ReminderCoverage
-  rules: RuleSnapshot[]
-  phase: 'probe' | 'verify' | 'scan' | 'quote' | 'done'
-  fetched: Map<number, ThreadPage>
-  target: { page: number; id: string } | null
-  probeStart: number | null
-  probePage: number | null
-  forward: number
-  backward: number
-  /** The probe moved once to the estimate of a fresher ReplyCount seen on this round's first probe page. */
-  reanchored: boolean
-  verifyPages: number[]
-  nextPage: number
-  missingPages: number[] | null
-  /** Quoted posts without local content, read one by one through the controlled quote read. */
-  pendingRefs: PostId[] | null
+/** Replies per thread page: the forum splits `ReplyCount` into pages of 19. */
+const PAGE_SIZE = 19
+/** Network reads (pages and quoted posts) of one thread before the round turns to the next thread. */
+const BATCH_READS = 5
+
+/** Page holding reply number `reply` (1-based); page 1 for an empty thread. */
+function pageOf(reply: number): number {
+  return Math.max(1, Math.ceil(reply / PAGE_SIZE))
 }
-interface ThreadWork { threadId: string; modes: ModeWork[]; failed: boolean; counted: boolean }
+
+/** IDs this content explicitly quotes (`>>No.x`), in order of first appearance. */
+function quotedPostIds(nodes: ContentNode[], result: Set<PostId> = new Set()): Set<PostId> {
+  for (const node of nodes) {
+    if (node.type === 'quoteRef') result.add(node.postId)
+    else if ('children' in node) quotedPostIds(node.children, result)
+  }
+  return result
+}
+
+interface KindRun {
+  rule: RuleSnapshot
+  state: ReminderKindState | undefined
+  issues: Set<CoverageIssue>
+  error: ReadError | null
+  done: boolean
+}
+/** Quote pages still to read in this check; committed page by page. */
+interface QuoteRun {
+  /** First read after enabling: only the last page, for the initial checked reply ID. */
+  init: boolean
+  replyCount: number
+  /** First page of this check's new range: where the first new reply after the baseline is. */
+  first: number
+  next: number
+  last: number
+  checked: PostId
+  /** `next` page as read, kept across batches until its quoted posts are resolved. */
+  page: ThreadPage | null
+  sources: Map<PostId, QuoteSource> | null
+  refs: PostId[]
+}
+type Step = 'all' | 'po' | 'quote'
+interface ThreadRun {
+  threadId: string
+  kinds: Partial<Record<ReminderKind, KindRun>>
+  steps: Step[]
+  /** Page 1 read by this check, per mode. */
+  first: Partial<Record<ReadingMode, ThreadPage>>
+  /** Modes whose reply-count read was refused without a cookie; read again with the browse cookie. */
+  withCookie: Set<ReadingMode>
+  quote: QuoteRun | null
+}
+
 export interface RoundEngineDeps {
   store: AppStore
   client: Pick<ForumClient, 'getThreadPage' | 'getRef'>
   scheduler: RequestScheduler
   now(): string
   changed(): void
-  /** Reuses ordinary cache cleanup after confirmed events have their durable snapshots. */
+  /** Reuses ordinary cache cleanup after each batch. */
   afterBatch?(): Promise<void>
 }
-function ids(page: ThreadPage): string[] { return page.replies.map((post) => post.id) }
-function issue(work: ModeWork, value: ReminderCoverage['issues'][number]): void {
-  if (!work.coverage.issues.includes(value)) work.coverage.issues.push(value)
-}
 
-/** One trigger owns one engine. A batch contains at most five network reads (pages or quoted posts) for a thread. */
+/**
+ * One check of every enabled kind (ADR 0001): 全串 and PO compare page 1's reply count of their mode
+ * with the baseline; 引用 reads only the pages after its checked position. A batch holds at most five
+ * network reads of one thread, then the next thread follows; a thread resumes in later batches.
+ * A rate limit or captcha stops the whole round at once. Threads whose counts grew are added to
+ * `increased`.
+ */
 export async function runReminderRound(deps: RoundEngineDeps, input: {
-  round: CheckRound
   rules: RuleSnapshot[]
   signal: AbortSignal
-  stopReason(): RoundStopReason | null
-}): Promise<{ partial: boolean }> {
-  const { store } = deps
-  const round = input.round
-  const threads: ThreadWork[] = []
-  // 饼干 IDs as of this round. A changed set is not a trigger; it makes this check revisit retained replies.
-  const cookieIds = await store.reminderCookieIds()
-  const cookieRevision = JSON.stringify(cookieIds)
+  increased: Set<string>
+}): Promise<void> {
+  const { store, now } = deps
+  const states = new Map((await store.reminderStates()).map((state) => [`${state.threadId}:${state.kind}`, state]))
+  const cookieIds = new Set(await store.reminderCookieIds())
+  const hasCookie = (await store.listCredentials()).length > 0
+  const runs: ThreadRun[] = []
   for (const threadId of new Set(input.rules.map((rule) => rule.threadId))) {
-    const rules = input.rules.filter((rule) => rule.threadId === threadId)
-    const modes: ModeWork[] = []
-    for (const mode of ['all', 'po'] as const) {
-      const applicable = rules.filter((rule) => mode === 'po' ? rule.kind === 'po' : rule.kind !== 'po')
-      if (applicable.length === 0) continue
-      const coverage = await store.getReminderCoverage(threadId, mode)
-      coverage.state = 'checking'
-      coverage.issues = []
-      coverage.lastError = null
-      coverage.lastRoundId = round.id
-      coverage.updatedAt = deps.now()
-      await store.saveReminderCoverage(coverage)
-      modes.push({ coverage, rules: applicable, phase: 'probe', fetched: new Map(), target: null,
-        probeStart: null, probePage: null, forward: 0, backward: 0, reanchored: false, verifyPages: [], nextPage: 1, missingPages: null, pendingRefs: null })
+    const kinds: ThreadRun['kinds'] = {}
+    for (const rule of input.rules.filter((item) => item.threadId === threadId)) {
+      kinds[rule.kind] = { rule, state: states.get(`${threadId}:${rule.kind}`), issues: new Set(), error: null, done: false }
     }
-    threads.push({ threadId, modes, failed: false, counted: false })
+    const steps: Step[] = []
+    if (kinds.all || kinds.quote) steps.push('all')
+    if (kinds.po) steps.push('po')
+    if (kinds.quote) steps.push('quote')
+    runs.push({ threadId, kinds, steps, first: {}, withCookie: new Set(), quote: null })
   }
-  deps.changed()
-  let rateLimited = false
 
-  async function persist(work: ModeWork): Promise<void> {
-    work.coverage.updatedAt = deps.now()
-    await store.saveReminderCoverage(work.coverage)
+  async function write(run: ThreadRun, kind: ReminderKind, update: Omit<ReminderUpdate, 'threadId' | 'kind' | 'generation' | 'at'>): Promise<void> {
+    const applied = await store.updateReminderState({ ...update, threadId: run.threadId, kind, generation: run.kinds[kind]!.rule.generation, at: now() })
+    if (applied && (update.add ?? 0) > 0) input.increased.add(run.threadId)
   }
-  async function evaluate(work: ModeWork): Promise<void> {
-    if (work.target === null) { await persist(work); return }
-    const result = await store.evaluateReminders({ roundId: round.id, threadId: work.coverage.threadId,
-      mode: work.coverage.mode, target: work.target?.id ?? null, rules: work.rules, at: deps.now() })
-    round.newEvents += result.newEvents
-    work.coverage.uncertainCount = result.uncertainCount
-    work.coverage.uncertainty = result.uncertainty
-    work.coverage.issues = work.coverage.issues.filter((value) => value !== 'boundary-uncertain' && value !== 'quote-unverified')
-    if (result.uncertainCount > 0) issue(work, 'boundary-uncertain')
-    if (result.quoteUnverified > 0) issue(work, 'quote-unverified')
-    if (work.phase === 'done' && work.coverage.state !== 'failed' && work.coverage.state !== 'incomplete') {
-      work.coverage.state = result.baselinePending ? 'baseline-pending' : work.coverage.issues.length ? 'uncertain' : 'done'
+  /** Saves the kind's issues of this check and marks it checked. */
+  async function finish(run: ThreadRun, kind: ReminderKind): Promise<void> {
+    const value = run.kinds[kind]
+    if (!value || value.done) return
+    value.done = true
+    await write(run, kind, { issues: [...value.issues], lastError: value.error, checked: true })
+  }
+  /**
+   * The kind stops before it finished this check. Quote pages still unread (this check's, or a
+   * previous check's 尚未补完 not reached yet) stay 尚未补完 and resume next time.
+   */
+  async function interrupt(run: ThreadRun, kind: ReminderKind, error: ReadError | null): Promise<void> {
+    const value = run.kinds[kind]
+    if (!value || value.done) return
+    if (error !== null) {
+      value.issues.add(error.kind === 'not-found' ? 'not-found' : error.kind === 'rate-limited' ? 'rate-limited' : 'read-failed')
+      value.error = error
     }
-    await persist(work)
+    if (kind === 'quote' && (run.quote !== null || value.state?.issues.includes('incomplete'))) value.issues.add('incomplete')
+    await finish(run, kind)
   }
-  async function page(work: ModeWork, number: number, budget: { remaining: number }): Promise<ThreadPage | null> {
+  function drop(run: ThreadRun, step: Step): void {
+    run.steps = run.steps.filter((item) => item !== step)
+  }
+
+  /** `cost`: forum requests this read makes; a batch never exceeds five of them. */
+  async function read<T>(budget: { remaining: number }, work: (signal: AbortSignal) => Promise<T>, cost = 1): Promise<T | null> {
     if (input.signal.aborted) throw new ReadCancelledError()
-    const existing = work.fetched.get(number)
-    if (existing) return existing
-    if (budget.remaining === 0) return null
-    budget.remaining--
-    const value = await deps.scheduler.run('background', input.signal,
-      (signal) => deps.client.getThreadPage(work.coverage.threadId, work.coverage.mode, number, signal))
+    if (budget.remaining < cost) return null
+    budget.remaining -= cost
+    return deps.scheduler.run('background', input.signal, work)
+  }
+  async function readPage(budget: { remaining: number }, run: ThreadRun, mode: ReadingMode, number: number, anonymous: boolean): Promise<ThreadPage | null> {
+    // A page past 100 also makes the client read page 100 to detect the forum's page cap.
+    const value = await read(budget, (signal) => deps.client.getThreadPage(run.threadId, mode, number, signal, anonymous ? { anonymous: true } : undefined),
+      number > 100 ? 2 : 1)
+    if (value === null) return null
     assertReadablePage(value, await store.getThreadCoverage(value.threadId, value.mode))
-    // Even when cancellation races a completed read, save its observation, but never continue work.
-    await store.saveThreadPage(value, deps.now())
-    work.fetched.set(number, value)
-    if (value.skippedItems > 0) issue(work, 'gaps')
+    await store.saveThreadPage(value, now())
     return value
   }
-  async function freeze(work: ModeWork, lastPage: number, value: ThreadPage): Promise<void> {
-    work.target = { page: lastPage, id: ids(value).reduce((max, id) => comparePostIds(id, max) > 0 ? id : max, work.coverage.threadId) }
-    work.coverage.probe = null
-    const checkpoint = work.coverage.checkpoint
-    work.verifyPages = checkpoint ? checkpoint.page > 1 ? [checkpoint.page - 1, checkpoint.page] : [1] : []
-    work.phase = checkpoint ? 'verify' : 'scan'
-    work.nextPage = 1
-    await persist(work)
-  }
-  async function probe(work: ModeWork, budget: { remaining: number }): Promise<boolean> {
-    if (work.probeStart === null) {
-      // A saved probe position is continued as is (the bounded probe resumes where it stopped).
-      // Otherwise ReplyCount only estimates where to start; the latest stored count is preferred over
-      // an older verified end, so a thread that grew is not crawled two pages per trigger.
-      const old = work.coverage.probe
-      const known = old ? null : await store.getThreadCoverage(work.coverage.threadId, work.coverage.mode)
-      const estimate = threadTotalPages(known?.reportedReplyCount ?? null)
-      const checkpoint = work.coverage.checkpoint
-      if (old) {
-        work.probeStart = old.page
-        work.reanchored = true
-      } else if (checkpoint?.complete) work.probeStart = estimate !== null ? Math.max(checkpoint.page, estimate) : checkpoint.page
-      else if (estimate !== null) work.probeStart = estimate
-      else {
-        const first = await page(work, 1, budget)
-        if (!first) return false
-        work.probeStart = threadTotalPages(first.replyCount) ?? 1
-      }
-      work.probePage = work.probeStart
-    }
-    const number = work.probePage!
-    const value = await page(work, number, budget)
-    if (!value) return false
-    if (!work.reanchored && work.forward === 0 && work.backward === 0 && value.replyCount !== null && value.replies.length > 0) {
-      // Bounded: at most one move per round, then the usual two pages forward / backward.
-      const fresh = threadTotalPages(value.replyCount)!
-      work.reanchored = true
-      if (fresh > number + 2) {
-        work.probePage = fresh
-        return true
-      }
-    }
-    const empty = value.replies.length === 0 && value.skippedItems === 0
-    if (empty && number === 1) {
-      await freeze(work, 1, value)
+
+  /** Page 1 of `mode`: its reply count against the 全串 or PO baseline; 全部 also sets up the quote pages. */
+  async function countStep(run: ThreadRun, mode: ReadingMode, budget: { remaining: number }): Promise<boolean> {
+    let page: ThreadPage | null
+    try {
+      // Reply counts need no identity; a refusal is read once more with the browse cookie.
+      page = await readPage(budget, run, mode, 1, !run.withCookie.has(mode))
+    } catch (error) {
+      if (!(error instanceof ForumReadError) || error.error.kind !== 'permission' || !hasCookie || run.withCookie.has(mode)) throw error
+      run.withCookie.add(mode)
       return true
     }
-    for (const [candidate, observed] of work.fetched) {
-      const successor = work.fetched.get(candidate + 1)
-      if (observed.replies.length > 0 && observed.skippedItems === 0 && successor?.replies.length === 0 && successor.skippedItems === 0) {
-        await freeze(work, candidate, observed)
-        return true
+    if (page === null) return false
+    run.first[mode] = page
+    const replyCount = page.replyCount
+    const kind: ReminderKind = mode === 'all' ? 'all' : 'po'
+    const value = run.kinds[kind]
+    if (value) {
+      const baseline = value.state?.baseline ?? null
+      if (replyCount === null) value.issues.add('count-invalid')
+      else if (baseline !== null && replyCount > baseline) {
+        await write(run, kind, { baseline: replyCount, add: replyCount - baseline, firstPage: pageOf(baseline + 1) })
+      } else {
+        if (baseline !== null && replyCount < baseline) value.issues.add('count-decreased')
+        await write(run, kind, { baseline: replyCount })
       }
+      await finish(run, kind)
     }
-    const direction = empty ? 'backward' : 'forward'
-    const used = direction === 'forward' ? work.forward : work.backward
-    const next = direction === 'forward' ? number + 1 : Math.max(1, number - 1)
-    work.coverage.probe = { page: next, direction }
-    await persist(work)
-    if (used >= 2 || next === number) {
-      issue(work, 'target-unverified')
-      work.coverage.state = 'incomplete'
-      work.phase = 'done'
-      return true
-    }
-    if (direction === 'forward') work.forward++
-    else work.backward++
-    work.probePage = next
-    return true
-  }
-  async function verify(work: ModeWork, budget: { remaining: number }): Promise<boolean> {
-    for (const number of work.verifyPages) if (!(await page(work, number, budget))) return false
-    const checkpoint = work.coverage.checkpoint!
-    const previous = checkpoint.page === 1 ? [] : ids(work.fetched.get(checkpoint.page - 1)!)
-    const current = ids(work.fetched.get(checkpoint.page)!)
-    const previousUnchanged = checkpoint.prevIds.length === previous.length && checkpoint.prevIds.every((id, index) => id === previous[index])
-    const currentPrefix = checkpoint.pageIds.length <= current.length && checkpoint.pageIds.every((id, index) => id === current[index])
-    if (checkpoint.page > work.target!.page || !previousUnchanged || !currentPrefix) {
-      issue(work, 'shifted')
-      work.coverage.checkpoint = null
-      work.nextPage = 1
-    } else {
-      work.coverage.checkpoint = { page: checkpoint.page, pageIds: current, prevIds: previous, complete: false }
-      work.nextPage = checkpoint.page + 1
-    }
-    work.phase = 'scan'
-    await persist(work)
-    return true
-  }
-  async function scan(work: ModeWork, budget: { remaining: number }): Promise<boolean> {
-    if (work.nextPage > work.target!.page) {
-      work.phase = 'quote'
-      return true
-    }
-    const number = work.nextPage
-    const value = await page(work, number, budget)
-    if (!value) return false
-    if (value.replies.length === 0 && number < work.target!.page) issue(work, 'gaps')
-    const previous = number === 1 ? [] : work.coverage.checkpoint?.pageIds ?? []
-    work.coverage.checkpoint = { page: number, pageIds: ids(value), prevIds: previous, complete: false }
-    work.nextPage++
-    await persist(work)
-    return true
-  }
-  async function quote(work: ModeWork, budget: { remaining: number }): Promise<boolean> {
-    const quoteRule = work.rules.find((rule) => rule.kind === 'quote')
-    if (quoteRule && work.missingPages === null) {
-      const observations = await store.getReminderObservations(work.coverage.threadId, work.coverage.mode)
-      const candidates = observations.filter((observation) => observation.replyIds.some((id) =>
-        (quoteRule.watermarkPostId === null || comparePostIds(id, quoteRule.watermarkPostId) > 0) && comparePostIds(id, work.target!.id) <= 0))
-      const missing = new Set(candidates.filter((observation) => observation.replyIds.some((id, index) =>
-        (quoteRule.watermarkPostId === null || comparePostIds(id, quoteRule.watermarkPostId) > 0) &&
-        comparePostIds(id, work.target!.id) <= 0 && observation.posts[index] === null)).map((observation) => observation.page))
-      // A changed 饼干 ID set revisits retained replies, not their network pages. Only absent content
-      // and gaps need reads; the revision advances only after the entire evaluation completes.
-      if (work.coverage.quoteCookieRevision !== cookieRevision && candidates.length > 0) {
-        const first = candidates[0]!.page // Observations are ordered by page in the worker.
-        const present = new Set(observations.filter((observation) => observation.skippedItems === 0).map((observation) => observation.page))
-        for (let number = first; number <= work.target!.page; number++) if (!present.has(number)) missing.add(number)
-      }
-      work.missingPages = [...missing].sort((a, b) => a - b)
-    }
-    while (work.missingPages?.length) {
-      const number = work.missingPages[0]!
-      // A page already obtained during this round is not retried endlessly if the server omitted
-      // content; its skipped-items evidence remains a coverage issue.
-      if (!(await page(work, number, budget))) return false
-      work.missingPages.shift()
-    }
-    if (quoteRule && cookieIds.length > 0 && work.pendingRefs === null) {
-      // Whose post a reply quotes is known from the quoted post's 饼干 ID: stored content first, then
-      // a controlled quote read by ID. The quoted post's thread is never searched for.
-      const observations = await store.getReminderObservations(work.coverage.threadId, work.coverage.mode)
-      const quoted = new Set<PostId>()
-      for (const observation of observations) {
-        observation.replyIds.forEach((id, index) => {
-          const post = observation.posts[index]
-          if (!post || comparePostIds(id, work.target!.id) > 0) return
-          if (quoteRule.watermarkPostId !== null && comparePostIds(id, quoteRule.watermarkPostId) <= 0) return
-          quotedPostIds(post.content, quoted)
-        })
-      }
-      const absent: PostId[] = []
-      for (const id of quoted) if ((await store.loadPost(id)) === null) absent.push(id)
-      work.pendingRefs = absent.sort(comparePostIds)
-    }
-    while (work.pendingRefs?.length) {
-      const id = work.pendingRefs[0]!
-      if (input.signal.aborted) throw new ReadCancelledError()
-      if (budget.remaining === 0) return false
-      budget.remaining--
-      try {
-        const post = await deps.scheduler.run('background', input.signal, (signal) => deps.client.getRef(id, signal))
-        await store.savePost(post, deps.now())
-      } catch (error) {
-        // Not obtained: the reply stays unverified (never a non-match) and is read again next check.
-        // A rate limit or captcha stops the round exactly as for pages.
-        if (!(error instanceof ForumReadError) || error.error.kind === 'rate-limited') throw error
-      }
-      work.pendingRefs.shift()
-    }
-    const observed = await store.getReminderObservations(work.coverage.threadId, work.coverage.mode)
-    const upToTarget = observed.filter((observation) => observation.page <= work.target!.page)
-    const obtained = new Set(upToTarget.flatMap((observation) => observation.replyIds).filter((id) => comparePostIds(id, work.target!.id) <= 0))
-    const targetPage = work.fetched.get(work.target!.page)
-    const count = targetPage?.replyCount
-    if (count != null && obtained.size !== count) issue(work, 'count-mismatch')
-    if (upToTarget.some((observation) => observation.skippedItems > 0)) issue(work, 'gaps')
-    work.coverage.checkpoint = work.coverage.checkpoint ? { ...work.coverage.checkpoint, complete: true } : null
-    work.coverage.quoteCookieRevision = cookieRevision
-    work.coverage.state = 'done'
-    work.phase = 'done'
+    drop(run, mode)
+    if (mode === 'all' && run.kinds.quote) await startQuote(run, page)
     return true
   }
 
+  async function startQuote(run: ThreadRun, first: ThreadPage): Promise<void> {
+    const value = run.kinds.quote!
+    const replyCount = first.replyCount
+    const checked = value.state?.checkedPostId ?? null
+    const verified = value.state?.baseline ?? 0
+    const highest = first.replies.reduce((max, reply) => comparePostIds(reply.id, max) > 0 ? reply.id : max, run.threadId)
+    if (replyCount === null) {
+      value.issues.add('count-invalid')
+      await interrupt(run, 'quote', null)
+    } else if (checked === null && pageOf(replyCount) === 1) await write(run, 'quote', { baseline: replyCount, checkedPostId: highest })
+    else if (checked === null) {
+      run.quote = { init: true, replyCount, first: pageOf(replyCount), next: pageOf(replyCount), last: pageOf(replyCount), checked: run.threadId, page: null, sources: null, refs: [] }
+      return
+    } else if (replyCount < verified) {
+      value.issues.add('count-decreased')
+      await write(run, 'quote', { baseline: replyCount })
+    } else if (replyCount > verified) {
+      run.quote = { init: false, replyCount, first: pageOf(verified + 1), next: pageOf(verified + 1), last: pageOf(replyCount), checked, page: null, sources: null, refs: [] }
+      return
+    }
+    await finish(run, 'quote')
+    drop(run, 'quote')
+  }
+
+  /**
+   * One quote page: its replies newer than the checked ID are new. A quoted post is mine when it is a
+   * confirmed own publication, else when its 饼干 ID (stored, or read by a controlled quote read)
+   * matches an imported cookie's. A reply counts once however many of my posts it quotes.
+   */
+  async function quoteStep(run: ThreadRun, budget: { remaining: number }): Promise<boolean> {
+    const q = run.quote!
+    const value = run.kinds.quote!
+    if (q.page === null) {
+      const page = (q.next === 1 ? run.first.all : undefined) ?? await readPage(budget, run, 'all', q.next, false)
+      if (page === null) return false
+      q.page = page
+      q.sources = null
+    }
+    const page = q.page
+    const stop = async () => {
+      run.quote = null
+      await finish(run, 'quote')
+      drop(run, 'quote')
+      return true
+    }
+    const highest = page.replies.reduce((max, reply) => comparePostIds(reply.id, max) > 0 ? reply.id : max, q.checked)
+    if (q.init) {
+      // An empty last page proves no position; the next check reads it again.
+      if (page.replies.length === 0) value.issues.add('incomplete')
+      else await write(run, 'quote', { baseline: q.replyCount, checkedPostId: highest })
+      return stop()
+    }
+    if (page.replies.length === 0) {
+      // A page the reply count says has replies came back empty: stop here, the next check resumes at it.
+      value.issues.add('incomplete')
+      return stop()
+    }
+    const quotes = page.replies.filter((reply) => comparePostIds(reply.id, q.checked) > 0).map((reply) => [...quotedPostIds(reply.content)])
+    if (q.sources === null) {
+      const ids = [...new Set(quotes.flat())]
+      q.sources = new Map((ids.length > 0 ? await store.reminderQuoteSources(ids) : []).map((source) => [source.postId, source]))
+      // Without any known 饼干 ID a quote read could not match anything.
+      q.refs = cookieIds.size === 0 ? [] : [...q.sources.values()].filter((source) => !source.own && source.cookieId === null)
+        .map((source) => source.postId).sort(comparePostIds)
+    }
+    while (q.refs.length > 0) {
+      const id = q.refs[0]!
+      let post: Post | null
+      try {
+        post = await read(budget, (signal) => deps.client.getRef(id, signal))
+      } catch (error) {
+        // Not obtained: the reply stays unverified, never a non-match. A rate limit stops the round.
+        if (!(error instanceof ForumReadError) || error.error.kind === 'rate-limited') throw error
+        q.refs.shift()
+        continue
+      }
+      if (post === null) return false
+      await store.savePost(post, now())
+      q.sources.set(id, { postId: id, own: false, cookieId: post.userHash })
+      q.refs.shift()
+    }
+    let add = 0
+    let unverified = 0
+    for (const ids of quotes) {
+      const sources = ids.map((id) => q.sources!.get(id)!)
+      if (sources.some((source) => source.own || (source.cookieId !== null && cookieIds.has(source.cookieId)))) add++
+      else if (cookieIds.size > 0 && sources.some((source) => source.cookieId === null)) unverified++
+    }
+    const last = q.next === q.last
+    await write(run, 'quote', { baseline: last ? q.replyCount : q.next * PAGE_SIZE, checkedPostId: highest, add, firstPage: q.first, unverified })
+    q.checked = highest
+    q.page = null
+    q.next++
+    return last ? stop() : true
+  }
+
+  /** A read of the current step failed: its kinds keep their counts and rules, and get the issue. */
+  async function failStep(run: ThreadRun, error: ReadError): Promise<void> {
+    const step = run.steps[0]!
+    const affected: ReminderKind[] = step === 'po' ? ['po'] : step === 'all' ? ['all', 'quote'] : ['quote']
+    for (const kind of affected) await interrupt(run, kind, error)
+    run.quote = null
+    for (const kind of affected) drop(run, kind)
+  }
+
+  let rateLimit: ReadError | null = null
   try {
-    while (threads.some((thread) => !thread.counted) && !input.signal.aborted && !rateLimited) {
-      for (const thread of threads) {
-        if (thread.counted || input.signal.aborted || rateLimited) continue
-        const budget = { remaining: 5 }
+    while (rateLimit === null && !input.signal.aborted && runs.some((run) => run.steps.length > 0)) {
+      for (const run of runs) {
+        if (rateLimit !== null || input.signal.aborted) break
+        if (run.steps.length === 0) continue
+        const budget = { remaining: BATCH_READS }
         try {
-          for (const work of thread.modes) {
-            while (work.phase !== 'done' && !input.signal.aborted) {
-              const advanced = work.phase === 'probe' ? await probe(work, budget) : work.phase === 'verify' ? await verify(work, budget)
-                : work.phase === 'scan' ? await scan(work, budget) : await quote(work, budget)
-              if (!advanced) break
-            }
-            await evaluate(work)
-            if (budget.remaining === 0) break
+          while (run.steps.length > 0) {
+            const step = run.steps[0]!
+            if (!(step === 'quote' ? await quoteStep(run, budget) : await countStep(run, step, budget))) break
           }
         } catch (error) {
           if (input.signal.aborted || error instanceof ReadCancelledError) break
           if (!(error instanceof ForumReadError)) throw error
-          const problem: ReadError = error.error
-          thread.failed = true
-          for (const work of thread.modes) {
-            if (work.phase === 'done') continue
-            work.coverage.state = 'failed'
-            work.coverage.lastError = problem
-            work.phase = 'done'
-            await evaluate(work)
-          }
-          if (problem.kind === 'rate-limited') rateLimited = true
+          await failStep(run, error.error)
+          if (error.error.kind === 'rate-limited') rateLimit = error.error
         }
-        if (thread.modes.every((work) => work.phase === 'done')) {
-          thread.counted = true
-          if (thread.failed) round.threadsFailed++
-          else if (thread.modes.every((work) => work.coverage.state !== 'incomplete')) round.threadsDone++
-        }
-        await store.saveReminderRound(round)
         await deps.afterBatch?.()
         deps.changed()
       }
     }
   } finally {
-    // A cancelled read leaves the last successful checkpoint and next probe on disk.
-    for (const thread of threads) for (const work of thread.modes) {
-      if (work.phase !== 'done') {
-        work.coverage.state = 'incomplete'
-        issue(work, work.target === null ? 'target-unverified' : 'gaps')
-      }
-      await evaluate(work)
+    // Saved counts and positions stay. A rate limit marks every kind it kept from finishing; a
+    // cancelled or quitting check leaves unreached kinds as they were, except unfinished quote pages.
+    for (const run of runs) for (const kind of REMINDER_KINDS) {
+      if (rateLimit !== null) await interrupt(run, kind, rateLimit)
+      else if (kind === 'quote' && run.quote !== null) await interrupt(run, kind, null)
     }
-    const reason = rateLimited ? 'rate-limited' : input.stopReason()
-    round.state = reason === 'user' ? 'cancelled' : reason !== null ? 'interrupted' : 'finished'
-    round.stopReason = reason
-    round.finishedAt = deps.now()
-    await store.saveReminderRound(round)
     deps.changed()
   }
-  return { partial: threads.some((thread) => thread.modes.some((work) => work.coverage.state !== 'done')) }
 }

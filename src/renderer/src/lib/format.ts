@@ -60,6 +60,16 @@ export function formatLocalTime(iso: string): string {
   return Number.isNaN(date.getTime()) ? iso : timeFormat.format(date)
 }
 
+const clockFormat = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+const dayClockFormat = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+
+/** `HH:MM` of an ISO timestamp, with the date in front when it is not today; raw text when unparsable. */
+export function formatClockTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toDateString() === new Date().toDateString() ? clockFormat.format(date) : dayClockFormat.format(date)
+}
+
 /** `[1,2,3,5,7,8]` → `1–3、5、7–8` */
 export function formatPageList(pages: readonly number[]): string {
   const sorted = [...pages].sort((a, b) => a - b)

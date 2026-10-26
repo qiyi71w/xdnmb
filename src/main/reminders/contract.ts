@@ -1,89 +1,77 @@
 import type { ReadError } from '../../shared/api'
-import type { Post, PostId, ReadingMode, ThreadId } from '../../shared/forum'
-import type {
-  CheckRound, CheckTrigger, CoverageIssue, NotificationCoverage, ReminderCloseReason, ReminderKind,
-  ReminderNotificationRecord, ReminderOverview, ThreadCheckState, ThreadReminders
-} from '../../shared/reminders'
+import type { PostId, ThreadId } from '../../shared/forum'
+import type { CoverageIssue, ReminderCloseReason, ReminderKind, ReminderOverview, ThreadReminders } from '../../shared/reminders'
 
+/** An enabled kind as a check found it; a write carrying an older generation is dropped. */
 export interface RuleSnapshot {
   threadId: ThreadId
   kind: ReminderKind
   generation: number
-  startedAt: string
-  watermarkPostId: PostId | null
 }
-export interface ReminderCheckpoint {
-  page: number
-  pageIds: PostId[]
-  prevIds: PostId[]
-  complete: boolean
-}
-export type ReminderUncertainty = Partial<Record<ReminderKind, { generation: number; postIds: PostId[] }>>
-export interface ReminderCoverage {
+
+/** What a check needs from an enabled kind's stored state (absent before its first check). */
+export interface ReminderKindState {
   threadId: ThreadId
-  mode: ReadingMode
-  checkpoint: ReminderCheckpoint | null
-  probe: { page: number; direction: 'forward' | 'backward' } | null
-  state: ThreadCheckState
+  kind: ReminderKind
+  /** Last reply count of the kind's mode (quote: replies whose quotes are checked); null until set. */
+  baseline: number | null
+  /** Quote kind: highest reply ID whose quotes are checked; null until the first check sets it. */
+  checkedPostId: PostId | null
   issues: CoverageIssue[]
-  lastError: ReadError | null
-  lastRoundId: number | null
-  updatedAt: string | null
-  uncertainCount: number
-  uncertainty: ReminderUncertainty
-  /** 饼干 ID set (JSON) against which the retained replies were last fully re-checked for quotes. */
-  quoteCookieRevision: string | null
 }
-export interface ReminderObservation {
-  page: number
-  replyIds: PostId[]
-  skippedItems: number
-  posts: Array<Post | null>
-}
-export interface EvaluationInput {
-  roundId: number
+
+/**
+ * One write for one kind, applied only while the rule still has `generation` (enabled). Omitted
+ * fields stay as stored; `issues` and `lastError` replace the stored ones together.
+ */
+export interface ReminderUpdate {
   threadId: ThreadId
-  mode: ReadingMode
-  target: PostId | null
-  rules: RuleSnapshot[]
+  kind: ReminderKind
+  generation: number
   at: string
+  baseline?: number
+  checkedPostId?: PostId
+  /** New replies counted by this write. */
+  add?: number
+  /** Page of this write's first new reply; kept only when the count was 0 before. */
+  firstPage?: number
+  /** New replies whose quotes could not be verified. */
+  unverified?: number
+  issues?: CoverageIssue[]
+  lastError?: ReadError | null
+  /** The check finished reading this kind (sets its last-checked time). */
+  checked?: boolean
 }
-export interface EvaluationResult {
-  newEvents: number
-  uncertainCount: number
-  uncertainty: ReminderUncertainty
-  /** Replies past the quote rule's start whose quoted posts have no known 饼干 ID. */
-  quoteUnverified: number
-  baselinePending: boolean
+
+/** Whether a quoted post is the user's: a confirmed own publication, or its 饼干 ID as held locally. */
+export interface QuoteSource {
+  postId: PostId
+  own: boolean
+  cookieId: string | null
 }
-export type ReminderStoredOverview = Omit<ReminderOverview, 'checker'>
+
+export type ReminderStoredOverview = Omit<ReminderOverview, 'checker'> & { lastCheckedAt: string | null }
 
 /** Short worker transactions only. Network requests and notification attempts never run in SQLite. */
 export interface ReminderStore {
-  firstProvenNewPost(since: string): Promise<PostId | null>
   getReminderRules(threadIds: ThreadId[]): Promise<ThreadReminders[]>
   setReminderRule(threadId: ThreadId, kind: ReminderKind, enabled: boolean, at: string): Promise<ThreadReminders>
   closeReminderThreads(threadIds: ThreadId[], reason: ReminderCloseReason, at: string): Promise<ThreadId[]>
   reminderRuleSnapshots(): Promise<RuleSnapshot[]>
-  getReminderCoverage(threadId: ThreadId, mode: ReadingMode): Promise<ReminderCoverage>
-  saveReminderCoverage(coverage: ReminderCoverage): Promise<void>
-  getReminderObservations(threadId: ThreadId, mode: ReadingMode): Promise<ReminderObservation[]>
+  /** Stored state of the enabled kinds. */
+  reminderStates(): Promise<ReminderKindState[]>
   /** Distinct known 饼干 IDs of the imported cookies, sorted. */
   reminderCookieIds(): Promise<string[]>
-  evaluateReminders(input: EvaluationInput): Promise<EvaluationResult>
-  createReminderRound(trigger: CheckTrigger, at: string, threadsTotal: number): Promise<CheckRound>
-  saveReminderRound(round: CheckRound): Promise<void>
-  recoverReminders(at: string): Promise<void>
-  registerReminderNotification(roundId: number, coverage: NotificationCoverage, at: string): Promise<ReminderNotificationRecord | null>
-  settleReminderNotification(id: number, state: 'shown' | 'unavailable' | 'failed'): Promise<void>
+  reminderQuoteSources(postIds: PostId[]): Promise<QuoteSource[]>
+  /** `false` when the rule was disabled or re-enabled since the snapshot: nothing was written. */
+  updateReminderState(update: ReminderUpdate): Promise<boolean>
+  /** Every count of the thread becomes 0; `false` when there was nothing to clear. */
+  clearReminderCounts(threadId: ThreadId): Promise<boolean>
+  finishReminderCheck(at: string): Promise<void>
   reminderOverview(): Promise<ReminderStoredOverview>
 }
 
 export interface ReminderNotifier {
-  /**
-   * `false`: unsupported/unavailable; a throw: the attempt failed synchronously. `true` only means
-   * the attempt was handed to the system: `settle` later reports the system's own `shown` / `failed`
-   * signal (at most once). Without a signal the record stays `registered`, never claimed shown.
-   */
-  show(message: { title: string; body: string }, settle: (state: 'shown' | 'failed') => void): boolean
+  /** `false`: unsupported/unavailable; a throw: the attempt failed. Either way nothing else changes. */
+  show(message: { title: string; body: string }): boolean
 }

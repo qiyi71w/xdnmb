@@ -9,6 +9,7 @@ import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/d
 import { MIGRATIONS } from '../src/main/storage/migrations'
 import { DEFAULT_SETTINGS } from '../src/shared/settings'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
+import { createReminderService } from '../src/main/reminders/service'
 import { createSubscriptionService } from '../src/main/subscriptions/service'
 import { asStore } from './helpers/store'
 import { MIGRATIONS as INTEGRATED_V7 } from './fixtures/integrated-v7'
@@ -189,7 +190,7 @@ describe('combined predecessor migration', () => {
     } finally { unchanged.close() }
   })
 
-  it('upgrades frozen reminders-v9 to the current schema and keeps reminder and notification records', () => {
+  it('upgrades frozen reminders-v9 to the current schema, keeping reminder rules but not the old event records', () => {
     const path = predecessor('reminders-v9')
     const db = open(path)
     expect(db.status).toEqual({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((migration) => migration.version)) })
@@ -206,8 +207,7 @@ describe('combined predecessor migration', () => {
       const bytes = raw.prepare<[], { bytes: number }>('SELECT sum(derived_bytes) AS bytes FROM posts').get()
       expect(bytes?.bytes).toBeGreaterThan(0)
       expect(raw.prepare('SELECT generation, enabled FROM reminder_rules').get()).toEqual({ generation: 3, enabled: 1 })
-      expect(raw.prepare('SELECT excerpt, notification_id FROM reminder_events').get()).toEqual({ excerpt: '保留提醒摘要', notification_id: 1 })
-      expect(raw.prepare('SELECT state FROM reminder_notifications').get()).toEqual({ state: 'shown' })
+      expect(raw.prepare("SELECT name FROM sqlite_master WHERE name IN ('reminder_events', 'reminder_notifications', 'reminder_rounds')").all()).toEqual([])
     } finally { raw.close() }
   })
 
@@ -345,9 +345,9 @@ describe('combined predecessor migration', () => {
 
 describe('schema v14: thread favourites and read state removed', () => {
   const removed = ['favorites', 'post_reads', 'thread_attention']
-  const kept = ['thread_reading', 'reading_positions', 'thread_visits', 'end_observations', 'reading_observations', 'post_threads',
-    'reminder_rules', 'reminder_events', 'reminder_rounds', 'reminder_notifications', 'local_blocks', 'drafts', 'draft_attachments',
-    'publication_attempts', 'settings', 'credentials', 'subscription_operations', 'offline_copies', 'workspace']
+  const kept = ['thread_reading', 'reading_positions', 'thread_visits', 'reading_observations', 'post_threads',
+    'local_blocks', 'drafts', 'draft_attachments', 'publication_attempts', 'settings', 'credentials', 'subscription_operations',
+    'offline_copies', 'workspace']
 
   /** A v13 database with favourites, read records, attention starts and reminder observation data. */
   function v13(): string {
@@ -357,7 +357,6 @@ describe('schema v14: thread favourites and read state removed', () => {
     try {
       expect(raw.pragma('user_version', { simple: true })).toBe(13)
       raw.prepare("INSERT INTO local_blocks VALUES ('cookie', 'blocked-id', ?)").run(at)
-      raw.prepare("INSERT INTO end_observations VALUES ('100', ?, '101')").run(later)
       expect(raw.prepare('SELECT count(*) AS n FROM favorites').get()).toEqual({ n: 1 })
       expect(raw.prepare('SELECT count(*) AS n FROM post_reads').get()).toEqual({ n: 1 })
       expect(raw.prepare('SELECT count(*) AS n FROM thread_attention').get()).toEqual({ n: 1 })
@@ -387,10 +386,8 @@ describe('schema v14: thread favourites and read state removed', () => {
     expect(before.rows.reading_observations?.length).toBeGreaterThan(0)
     expect(db.getReadingState('100')).toMatchObject({ mode: 'po', positions: { all: { anchor: { postId: '101', offsetRatio: 0.4 } }, po: null } })
     expect(db.listHistory().map((entry) => entry.threadId)).toEqual(['100'])
-    expect(db.reminderOverview().threads[0]).toMatchObject({ threadId: '100', eventCount: 1 })
     expect(db.listBlocks()).toEqual([{ kind: 'cookie', value: 'blocked-id', createdAt: at }])
     expect(db.listDrafts()[0]?.fields.content).toBe('未发送草稿')
-    expect(db.firstProvenNewPost(at)).toBeNull()
   })
 
   it('leaves the v13 file byte-for-byte unchanged when the v14 migration fails', () => {
@@ -412,10 +409,9 @@ describe('schema v14: thread favourites and read state removed', () => {
 })
 
 describe('schema v15: 饼干 IDs replace the own-post record', () => {
-  const kept = ['thread_reading', 'reading_positions', 'thread_visits', 'end_observations', 'reading_observations', 'post_threads',
-    'reminder_rules', 'reminder_events', 'reminder_rounds', 'reminder_notifications', 'local_blocks', 'drafts', 'draft_attachments',
-    'publication_attempts', 'publication_settings', 'thread_post_identities', 'identity_roles', 'settings', 'subscription_operations',
-    'offline_copies', 'workspace']
+  const kept = ['thread_reading', 'reading_positions', 'thread_visits', 'reading_observations', 'post_threads',
+    'local_blocks', 'drafts', 'draft_attachments', 'publication_attempts', 'publication_settings', 'thread_post_identities',
+    'identity_roles', 'settings', 'subscription_operations', 'offline_copies', 'workspace']
 
   /** A v14 database with an own-post record, a confirmed send and quote re-check markers. */
   function v14(): string {
@@ -448,7 +444,7 @@ describe('schema v15: 饼干 IDs replace the own-post record', () => {
     const path = v14()
     const before = snapshot(path)
     const db = open(path)
-    expect(db.status).toEqual({ state: 'ready', schemaVersion: 15 })
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
     const after = snapshot(path)
     expect(after.tables.has('own_posts')).toBe(false)
     expect(after.rows).toEqual(before.rows)
@@ -457,9 +453,6 @@ describe('schema v15: 饼干 IDs replace the own-post record', () => {
     expect(db.loadRoleSelections()['web-sync']).toEqual({ state: 'selected', credentialId: '7' })
     expect(db.reminderCookieIds()).toEqual([])
     expect(db.listPublications().find((item) => item.requestId === 'confirmed-send')).toMatchObject({ state: 'confirmed', postId: '700', threadId: '700' })
-    // Retained replies were already evaluated against an empty 饼干 ID set; a never-run marker stays unset.
-    expect(db.getReminderCoverage('100', 'all').quoteCookieRevision).toBe('[]')
-    expect(db.getReminderCoverage('100', 'po').quoteCookieRevision).toBeNull()
     expect(db.fillCredentialCookieId('7', 'Filled1')).toBe(true)
     expect(db.fillCredentialCookieId('7', 'Other22')).toBe(false)
     expect(db.listCredentials()[0]).toMatchObject({ name: '旧同步饼干', cookieId: 'Filled1' })
@@ -479,6 +472,94 @@ describe('schema v15: 饼干 IDs replace the own-post record', () => {
     const unchanged = snapshot(path)
     expect(unchanged.version).toBe(14)
     expect(unchanged.tables.has('own_posts')).toBe(true)
-    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: 15 })
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+  })
+})
+
+describe('schema v16: reminders count reply growth from a baseline', () => {
+  const kept = ['thread_reading', 'reading_positions', 'thread_visits', 'reading_observations', 'post_threads', 'local_blocks',
+    'drafts', 'draft_attachments', 'publication_attempts', 'publication_settings', 'thread_post_identities', 'identity_roles',
+    'settings', 'credentials', 'subscription_operations', 'offline_copies', 'workspace']
+  const dropped = ['reminder_events', 'reminder_notifications', 'reminder_rounds', 'reminder_coverage', 'end_observations']
+
+  /** A v15 database with enabled and closed rules and old per-event, coverage, round and notification records. */
+  function v15(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 15)).close()
+    const raw = new Database(path)
+    try {
+      expect(raw.pragma('user_version', { simple: true })).toBe(15)
+      raw.prepare("INSERT INTO reminder_rules VALUES ('100', 'quote', 0, 2, ?, NULL, 'unsubscribe', ?), ('200', 'po', 1, 5, ?, '201', NULL, ?)")
+        .run(at, later, later, later)
+      raw.prepare(`INSERT INTO reminder_coverage(thread_id, mode, checkpoint_json, state, issues_json, quote_cookie_revision)
+        VALUES ('100', 'all', '{"page":1,"pageIds":["101"],"prevIds":[],"complete":true}', 'done', '["gaps"]', '[]')`).run()
+      raw.prepare("INSERT INTO end_observations VALUES ('100', ?, '101')").run(later)
+      for (const table of ['reminder_events', 'reminder_notifications', 'reminder_rounds']) {
+        expect(raw.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 1 })
+      }
+    } finally { raw.close() }
+    return path
+  }
+  function snapshot(path: string) {
+    const raw = new Database(path, { readonly: true })
+    try {
+      const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
+      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(`SELECT * FROM ${table}`).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
+      return { version: raw.pragma('user_version', { simple: true }), tables, rows }
+    } finally { raw.close() }
+  }
+
+  it('keeps rules, enabled state and generations, clears all other reminder data, and the first check only sets baselines', async () => {
+    const path = v15()
+    const before = snapshot(path)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: 16 })
+    const after = snapshot(path)
+    expect(after.rows).toEqual(before.rows)
+    for (const table of dropped) expect(after.tables.has(table)).toBe(false)
+    const raw = new Database(path, { readonly: true })
+    try {
+      expect(raw.prepare('SELECT thread_id, kind, enabled, generation, enabled_at, closed_by FROM reminder_rules ORDER BY thread_id, kind').all()).toEqual([
+        { thread_id: '100', kind: 'all', enabled: 1, generation: 3, enabled_at: at, closed_by: null },
+        { thread_id: '100', kind: 'quote', enabled: 0, generation: 2, enabled_at: at, closed_by: 'unsubscribe' },
+        { thread_id: '200', kind: 'po', enabled: 1, generation: 5, enabled_at: later, closed_by: null }
+      ])
+      expect(raw.prepare('SELECT count(*) AS n FROM reminder_state').get()).toEqual({ n: 0 })
+      expect(raw.prepare('SELECT count(*) AS n FROM reminder_checker').get()).toEqual({ n: 0 })
+    } finally { raw.close() }
+
+    const reads: string[] = []
+    const service = createReminderService({ store: asStore(db), scheduler: createRequestScheduler(), notifier: { show: () => true },
+      client: {
+        async getThreadPage(threadId, mode, number) {
+          reads.push(`${mode}:${threadId}:${number}`)
+          return { threadId, mode, page: number, head: post(threadId), replies: [], replyCount: 40, skippedItems: 0, endCandidate: true }
+        },
+        async getRef() { throw new Error('no quote reads') }
+      } })
+    expect((await service.check()).accepted).toBe(true)
+    await service.whenIdle()
+    expect(reads).toEqual(['all:100:1', 'po:200:1'])
+    const overview = await service.overview()
+    expect(overview.ok && overview.overview.threads.map((row) => [row.threadId, row.counts])).toEqual([
+      ['200', { all: 0, po: 0, quote: 0 }], ['100', { all: 0, po: 0, quote: 0 }]
+    ])
+  })
+
+  it('leaves the v15 file byte-for-byte unchanged when the v16 migration fails', () => {
+    const path = v15()
+    const original = readFileSync(path)
+    const failing = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 15), { version: 16, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 16)!.up(connection)
+      throw new Error('injected failure after the v16 changes')
+    } }])
+    connections.push(failing)
+    expect(failing.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failing.close()
+    expect(readFileSync(path)).toEqual(original)
+    const unchanged = snapshot(path)
+    expect(unchanged.version).toBe(15)
+    for (const table of dropped) expect(unchanged.tables.has(table)).toBe(true)
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: 16 })
   })
 })

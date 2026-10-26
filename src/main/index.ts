@@ -273,8 +273,6 @@ async function start(): Promise<void> {
       }
     })
   })
-  await reminders.recover().catch(() => console.error('[reminders] recovery failed'))
-
   const subscriptions = createSubscriptionService({
     store: openedStore,
     protector,
@@ -394,7 +392,7 @@ async function start(): Promise<void> {
     exit: () => app.quit(),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    onTrigger: (trigger) => { void reminders.request(trigger) }
+    onTrigger: () => { void reminders.request() }
   })
   lifecycle = controller
 

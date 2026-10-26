@@ -470,6 +470,7 @@ export const IpcChannel = {
   reminderCheck: 'reminders:check',
   reminderCancel: 'reminders:cancel',
   reminderCloseForThreads: 'reminders:close-for-threads',
+  reminderClear: 'reminders:clear',
   getStatus: 'app:get-status'
 } as const
 

@@ -383,54 +383,6 @@ describe('reading context', () => {
     expect(state.coverage.po.pages.map((page) => page.page)).toEqual([1])
   })
 
-  it('proves replies first seen after a start new only from an end observed after it', () => {
-    const db = open(databasePath())
-    const thread = '50000000'
-    const t = (minute: number) => `2026-10-23T09:${String(minute).padStart(2, '0')}:00.000Z`
-    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002']), t(0))
-    // 50000003 may have been posted before the start at t(1): first seen later, but not provably new.
-    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002', '50000003']), t(2))
-    expect(db.firstProvenNewPost(t(1))).toBeNull()
-    // Page 1 then an empty page 2, both after the start: nothing above 50000003 existed at t(2).
-    db.saveThreadPage(pageOf(thread, 'all', 2, []), t(3))
-    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002', '50000003', '50000004']), t(4))
-    expect(db.firstProvenNewPost(t(1))).toBe('50000004')
-  })
-
-  it('does not use end observations made before the start as proof', () => {
-    const db = open(databasePath())
-    const thread = '50000000'
-    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001']), fetchedAt)
-    db.saveThreadPage(pageOf(thread, 'all', 2, []), fetchedAt)
-    db.saveThreadPage(pageOf(thread, 'all', 1, ['50000001', '50000002']), latest)
-    expect(db.firstProvenNewPost(later)).toBeNull()
-  })
-
-  it('confirms new replies from another thread’s evidence before this thread has its own', () => {
-    const db = open(databasePath())
-    const t = (minute: number) => `2026-10-23T10:${String(minute).padStart(2, '0')}:00.000Z`
-    db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001']), t(0))
-    // Another thread's end is seen after the start t(1); a later reply there was posted after it.
-    db.saveThreadPage(pageOf('60000002', 'all', 1, ['60000003']), t(2))
-    db.saveThreadPage(pageOf('60000002', 'all', 2, []), t(2))
-    db.saveThreadPage(pageOf('60000002', 'all', 1, ['60000003', '60000005']), t(4))
-    // This thread's end has never been observed.
-    db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001', '60000004', '60000006']), t(5))
-    expect(db.firstProvenNewPost(t(1))).toBe('60000005')
-  })
-
-  it('does not take a reply that vanished before the end observation as proof of a new one', () => {
-    const db = open(databasePath())
-    const t = (minute: number) => `2026-10-23T11:${String(minute).padStart(2, '0')}:00.000Z`
-    db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001', '60000003']), t(0))
-    // 60000003 was removed from the thread after the start t(1); its end is then observed without it.
-    db.saveThreadPage(pageOf('60000000', 'all', 1, ['60000001']), t(2))
-    db.saveThreadPage(pageOf('60000000', 'all', 2, []), t(3))
-    // 60000004 existed before the start but is only fetched now.
-    db.saveThreadPage(pageOf('50000000', 'all', 1, ['60000004']), t(4))
-    expect(db.firstProvenNewPost(t(1))).toBeNull()
-  })
-
   it('upgrades a version 1 database without losing content and starts with empty reading state', () => {
     const path = databasePath()
     const raw = new Database(path)

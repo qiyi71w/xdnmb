@@ -1,89 +1,82 @@
-import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import type { QuoteLocation, ReadError } from '../../../../shared/api'
-import type { Post, PostId, ThreadId } from '../../../../shared/forum'
-import { formatReminderCount, MAX_EVENTS_PER_GROUP, type ReminderEvent, type ThreadReminderGroup } from '../../../../shared/reminders'
-import { Icon } from '../../components/Icon'
-import { IdentitySettingsAction, Loading } from '../../components/Notices'
-import { describeReadError, formatLocalTime } from '../../lib/format'
+// 提醒 as a list page of a tab: the thread lists' row for every thread with an enabled kind, in the
+// order the overview gives (counted threads first). The meta line ends with the thread's counts
+// (全串:3 PO:2 引用:1) and, when its latest check left something unknown, a warning icon whose
+// accessible name and tip give the reasons. Refreshed by `reminders.onChanged` only (no polling).
+
+import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import type { ForumId, ThreadId } from '../../../../shared/forum'
+import type { ReminderThreadRow } from '../../../../shared/reminders'
+import { contextMenuPoint, isContextMenuKey, type ContextMenuPoint } from '../../components/ContextMenu'
+import { Icon, Spinner } from '../../components/Icon'
+import { formatClockTime, meaningfulTitle } from '../../lib/format'
+import { useRovingFocus } from '../../lib/useRovingFocus'
+import { ThreadRow } from '../feed/ThreadRow'
+import { useImageScope } from '../image/useImageLoad'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
+import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 import type { ThreadOpen } from '../tabs/tabsState'
-import { savedStart, startPage } from '../thread/readingStart'
-import { ReminderMenu } from './ReminderMenu'
-import {
-  emptyText,
-  enabledKinds,
-  hasCoverageProblem,
-  ISSUE_TEXT,
-  KIND_NAME,
-  KIND_SHORT,
-  notificationText,
-  overviewHasCoverageProblem,
-  progressText,
-  refusalText,
-  roundOutcomeText,
-  secondsText,
-  STATE_NAME,
-  stateDetail
-} from './reminderText'
-import { failureText, useRemindersContext } from './useReminders'
+import { savedStart } from '../thread/readingStart'
 import { useListOpener } from './openList'
+import { ReminderRowMenu } from './ReminderRowMenu'
+import { countsText, hasCounts, issuesText, refusalText, secondsText } from './reminderText'
+import { failureText, useRemindersContext } from './useReminders'
 import '../feed/feed.css'
 import './reminders.css'
 
-/**
- * Opening one event: the post is located with the quote rules (`quotes.locate`) and navigation is
- * committed only once it was located; anything else stays here as an inline state. As with quotes,
- * a 重试 after a failure only resolves: a located result is shown here and the user opens it.
- * 打开原串 (owner known, post not located) commits only after the resume page was obtained.
- */
-type LocateIntent = 'navigate' | 'resolve'
-
-interface OpenState {
-  postId: PostId
-  seq: number
-  busy: 'locate' | 'thread' | null
-  /** Settled locate result other than `cancelled`; `located` only after a 重试 (resolve). */
-  result: Exclude<QuoteLocation, { status: 'cancelled' }> | null
-  /** 打开原串 failed to read the page the thread resumes at. */
-  threadError: { threadId: ThreadId; head: Post; error: ReadError } | null
-  /** The IPC call itself rejected. */
-  internal: 'locate' | 'thread' | null
-}
-
-function unavailableText(error: ReadError): string | null {
-  if (error.kind === 'not-found') return '这条回复不存在'
-  if (error.kind === 'permission') return '当前身份无法访问这条回复'
-  return null
-}
-
-function groupTitle(group: ThreadReminderGroup): string {
-  return group.title === null || group.title.trim() === '' ? `No.${group.threadId}` : group.title
-}
+const TITLE = '提醒'
 
 /**
- * 提醒 list: checker status and actions, then reminder events grouped by thread with each thread's
- * rules and coverage state. Refreshed by `reminders.onChanged` only (no polling). Counts are confirmed
- * events (99, then 99+); coverage problems are marked separately. Automatic checks show no loading
- * text.
+ * Coverage issues at the end of the row's meta line: an icon whose accessible name is the reasons
+ * (so the row's name ends with them), repeated as a tip on hover or keyboard focus of the row.
  */
+function IssueStatus({ text }: { text: string }) {
+  return (
+    <span className="row-status is-warning">
+      <span className="row-status-icon" role="img" aria-label={text}>
+        <Icon name="alert" size={14} />
+      </span>
+      <span className="row-status-tip" aria-hidden="true">
+        {text}
+      </span>
+    </span>
+  )
+}
+
 export function ReminderPane({
   entryKey,
+  forumNames,
   selectedThreadId,
+  onOpenThread,
   onOpenTarget
 }: {
   entryKey: number
+  forumNames: ReadonlyMap<ForumId, string>
+  /** The thread shown beside the list (split), highlighted. */
   selectedThreadId: ThreadId | null
-  /** Commits navigation to a thread; false when this list's entry is no longer current. */
+  /** Opens a row by the usual resume rules; `head` when held here, shown until page 1 arrives. */
+  onOpenThread: (threadId: ThreadId, head: ReminderThreadRow['head']) => void
+  /** Opens a row at an explicit target; false when this list's entry is no longer current. */
   onOpenTarget: (thread: ThreadOpen) => boolean
 }) {
-  const { overview, failure, reload } = useRemindersContext()
+  const { overview, failure, reload, updated } = useRemindersContext()
   const openList = useListOpener()
+  const openInTab = useOpenThreadInTab()
   const registry = useContext(ContentRegistryContext)
   const headingId = useId()
+  const checkReasonId = useId()
   useRegisterContent('lists', entryKey, { refresh: () => void reload() })
+
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
 
   // ---------- Scroll memory (runtime and restored after a quit) ----------
   const scrollRef = useRef<HTMLDivElement>(null)
+  const images = useImageScope(scrollRef)
   const [initialScroll] = useState(() => {
     const memory = registry?.listMemory.get(entryKey)
     if (memory?.kind === 'reminders') return memory.scrollTop
@@ -109,20 +102,12 @@ export function ReminderPane({
     registry?.listMemory.set(entryKey, { kind: 'reminders', scrollTop: scrollTop.current })
   }
 
-  // ---------- Check / cancel ----------
-  const [request, setRequest] = useState<'check' | 'cancel' | null>(null)
-  const [message, setMessage] = useState<{ text: string; tone: 'info' | 'warn' | 'error' } | null>(null)
+  // ---------- 手动检查 ----------
+  const [requesting, setRequesting] = useState(false)
+  const [message, setMessage] = useState<{ text: string; tone: 'warn' | 'error' } | null>(null)
   /** End of the cooldown on the monotonic clock, for display only: nothing is retried when it ends. */
   const [cooldownUntil, setCooldownUntil] = useState<number | null>(null)
   const [now, setNow] = useState(() => performance.now())
-  const alive = useRef(true)
-  useEffect(() => {
-    alive.current = true
-    return () => {
-      alive.current = false
-    }
-  }, [])
-
   useEffect(() => {
     if (overview === null) return
     const at = performance.now()
@@ -140,18 +125,22 @@ export function ReminderPane({
     return () => window.clearInterval(timer)
   }, [cooldownUntil])
   const cooldownLeft = cooldownUntil === null ? 0 : Math.max(0, cooldownUntil - now)
+  const running = overview?.checker.running === true
+  const blockedReason = running ? '正在检查' : cooldownLeft > 0 ? `${secondsText(cooldownLeft)}后可再次检查` : null
+  const blocked = overview === null || requesting || blockedReason !== null
+  // A refusal said why the click did nothing; once a check can start again it no longer applies.
+  useEffect(() => {
+    if (blockedReason === null) setMessage((current) => (current?.tone === 'warn' ? null : current))
+  }, [blockedReason])
 
   const startCheck = async () => {
-    if (request !== null) return
-    setRequest('check')
+    if (blocked) return
+    setRequesting(true)
     setMessage(null)
     try {
       const result = await window.xidao.reminders.check()
       if (!alive.current) return
-      if (result.accepted) {
-        // The running check shows its own progress, then its outcome: no separate “started” line.
-        setMessage(null)
-      } else {
+      if (!result.accepted) {
         setMessage({ text: refusalText(result), tone: result.reason === 'storage' ? 'error' : 'warn' })
         if (result.reason === 'cooldown' && result.retryAfterMs > 0) {
           const at = performance.now()
@@ -162,181 +151,134 @@ export function ReminderPane({
     } catch {
       if (alive.current) setMessage({ text: '检查请求失败', tone: 'error' })
     } finally {
-      if (alive.current) setRequest(null)
+      if (alive.current) setRequesting(false)
     }
     void reload()
   }
 
-  const cancelCheck = async () => {
-    if (request !== null) return
-    setRequest('cancel')
-    setMessage(null)
-    try {
-      await window.xidao.reminders.cancel()
-      if (alive.current) setMessage({ text: '已请求取消', tone: 'info' })
-    } catch {
-      if (alive.current) setMessage({ text: '取消请求失败', tone: 'error' })
-    } finally {
-      if (alive.current) setRequest(null)
+  // ---------- Rows ----------
+  const rows = useMemo(() => overview?.threads ?? [], [overview])
+  const rowIds = useMemo(() => rows.map((row) => row.threadId), [rows])
+  const roving = useRovingFocus(rowIds, selectedThreadId)
+
+  /**
+   * Opens a row by the usual resume rules. A thread without a saved reading position opens at the
+   * page of its first new reply instead (in that reply's mode, shown temporarily). Only the latest
+   * click counts.
+   */
+  const openSeq = useRef(0)
+  const openRow = (row: ReminderThreadRow) => {
+    const at = ++openSeq.current
+    const firstNew = row.firstNew
+    if (firstNew === null) {
+      onOpenThread(row.threadId, row.head)
+      return
     }
-    void reload()
-  }
-
-  // ---------- Opening events ----------
-  const [open, setOpen] = useState<OpenState | null>(null)
-  const openRef = useRef<OpenState | null>(null)
-  const seq = useRef(0)
-  const update = useCallback((next: OpenState | null) => {
-    openRef.current = next
-    setOpen(next)
-  }, [])
-  const operationId = (at: number) => `reminder-open-${entryKey}-${at}`
-  const isCurrent = (at: number) => openRef.current?.seq === at && alive.current
-
-  /** Cancels a running locate / 打开原串; its late result is ignored. */
-  const cancelOpen = useCallback(() => {
-    const current = openRef.current
-    if (current === null || current.busy === null) return
-    window.xidao.reading.cancel({ operationId: `reminder-open-${entryKey}-${current.seq}` }).catch(() => undefined)
-    update(null)
-  }, [entryKey, update])
-  useEffect(() => cancelOpen, [cancelOpen])
-
-  /** Commits the navigation of a located result (the same step a first successful click takes). */
-  const commitLocated = (result: Extract<QuoteLocation, { status: 'located' }>) => {
-    const target = { postId: result.target.postId, page: result.target.page, mode: result.target.mode }
-    onOpenTarget({ threadId: result.threadId, head: result.head, target, snapshot: null, unlocatedPostId: null })
-  }
-
-  const locate = (postId: PostId, intent: LocateIntent) => {
-    cancelOpen()
-    const at = ++seq.current
-    update({ postId, seq: at, busy: 'locate', result: null, threadError: null, internal: null })
-    window.xidao.quotes.locate({ operationId: operationId(at), postId }).then(
-      (result) => {
-        if (!isCurrent(at) || result.status === 'cancelled') return
-        if (result.status !== 'located' || intent === 'resolve') {
-          update({ postId, seq: at, busy: null, result, threadError: null, internal: null })
+    void window.xidao.readingState
+      .get({ threadId: row.threadId })
+      .catch(() => null)
+      .then((reading) => {
+        if (!alive.current || at !== openSeq.current) return
+        if (savedStart(reading, reading?.mode ?? 'all').position.kind !== 'top') {
+          onOpenThread(row.threadId, row.head)
           return
         }
-        update(null)
-        commitLocated(result)
+        onOpenTarget({
+          threadId: row.threadId,
+          head: row.head,
+          target: { postId: null, page: firstNew.page, mode: firstNew.mode },
+          snapshot: null,
+          unlocatedPostId: null
+        })
+      })
+  }
+
+  // ---------- Row context menu and 清除提醒 ----------
+  /** The row whose context menu is open, where it opened and the row control focus returns to. */
+  const [rowMenu, setRowMenu] = useState<{ threadId: ThreadId; point: ContextMenuPoint; row: HTMLElement } | null>(null)
+  /** 清除提醒 that did not apply, by thread. */
+  const [clearFailures, setClearFailures] = useState<ReadonlyMap<ThreadId, string>>(() => new Map())
+  const openRowMenu = (threadId: ThreadId, event: ReactMouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
+    const row = event.currentTarget.querySelector<HTMLElement>('[data-roving-item]')
+    if (row === null) return
+    event.preventDefault()
+    // No scrolling into view: a scroll closes the menu that is about to open.
+    row.focus({ preventScroll: true })
+    setRowMenu({ threadId, point: contextMenuPoint(event, row), row })
+  }
+  const closeRowMenu = (returnFocus: boolean) => {
+    const row = rowMenu?.row
+    setRowMenu(null)
+    if (returnFocus && row?.isConnected === true) row.focus()
+  }
+  const menuRow = rowMenu === null ? undefined : rows.find((row) => row.threadId === rowMenu.threadId)
+  // Its last kind turned off, the row left the list: the menu goes with it, focus to the list.
+  useEffect(() => {
+    if (rowMenu === null || menuRow !== undefined || overview === null) return
+    setRowMenu(null)
+    scrollRef.current?.focus({ preventScroll: true })
+  }, [rowMenu, menuRow, overview])
+
+  const setClearFailure = (threadId: ThreadId, text: string | null) =>
+    setClearFailures((current) => {
+      if (text === null && !current.has(threadId)) return current
+      const next = new Map(current)
+      if (text === null) next.delete(threadId)
+      else next.set(threadId, text)
+      return next
+    })
+  const clearRow = (threadId: ThreadId) => {
+    setClearFailure(threadId, null)
+    window.xidao.reminders.clear({ threadId }).then(
+      (result) => {
+        if (alive.current && !result.ok) setClearFailure(threadId, `清除提醒失败：${failureText('storage')}`)
       },
       () => {
-        if (isCurrent(at)) update({ postId, seq: at, busy: null, result: null, threadError: null, internal: 'locate' })
+        if (alive.current) setClearFailure(threadId, `清除提醒失败：${failureText('internal')}`)
       }
     )
   }
 
-  /** 打开 on a result located by a 重试: commits now, as a first successful click would. */
-  const openLocated = (postId: PostId) => {
-    const current = openRef.current
-    if (current === null || current.postId !== postId || current.busy !== null || current.result?.status !== 'located') return
-    const result = current.result
-    update(null)
-    commitLocated(result)
-  }
-
-  /** 打开原串 for a post whose thread is known: commits once the resume page was obtained. */
-  const openThread = (postId: PostId, threadId: ThreadId, head: Post) => {
-    cancelOpen()
-    const at = ++seq.current
-    update({ postId, seq: at, busy: 'thread', result: null, threadError: null, internal: null })
-    const run = async () => {
-      const reading = await window.xidao.readingState.get({ threadId }).catch(() => null)
-      if (!isCurrent(at)) return
-      const start = savedStart(reading, reading?.mode ?? 'all')
-      const outcome = await window.xidao.reading.readThreadPage({ operationId: operationId(at), threadId, mode: start.mode, page: startPage(start.position) })
-      if (!isCurrent(at) || outcome.status === 'cancelled') return
-      if (outcome.status === 'failed') {
-        update({ postId, seq: at, busy: null, result: null, threadError: { threadId, head, error: outcome.error }, internal: null })
-        return
-      }
-      update(null)
-      onOpenTarget({ threadId, head, target: null, snapshot: null, unlocatedPostId: postId })
-    }
-    run().catch(() => {
-      if (isCurrent(at)) update({ postId, seq: at, busy: null, result: { status: 'thread-known', threadId, head }, threadError: null, internal: 'thread' })
-    })
-  }
-
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== 'Escape' || event.defaultPrevented || openRef.current?.busy == null) return
-    event.preventDefault()
-    event.stopPropagation()
-    cancelOpen()
-  }
-
-  // ---------- Render ----------
-  const running = overview?.checker.running === true
-  const round = overview?.currentRound ?? null
-  /** A check the user started here shows its progress; automatic ones only mark the region busy. */
-  const manualRun = running && (round === null ? request === 'check' : round.trigger === 'manual')
-  const coverageProblem = overview !== null && overviewHasCoverageProblem(overview)
-  const empty = overview !== null && overview.threads.length === 0
-  const notification = overview?.lastNotification != null ? notificationText(overview.lastNotification) : null
-  /** After a check: one line only — the click's own refusal, else a failed notification, else the round's outcome. */
-  const result: { text: string; tone: 'info' | 'warn' | 'error' } | null = running
-    ? null
-    : message !== null
-      ? message
-      : notification?.warn === true
-        ? { text: notification.text, tone: 'warn' }
-        : overview?.lastRound != null
-          ? { text: roundOutcomeText(overview.lastRound), tone: 'info' }
-          : null
+  const lastChecked = overview?.checker.lastCheckedAt ?? null
 
   return (
     <section className="list-pane reminder-pane" aria-labelledby={headingId}>
-      <div className="list-scroll" ref={scrollRef} onScroll={onScroll} onKeyDown={onKeyDown} tabIndex={-1} data-pane-focus="">
+      <div className="list-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1} data-pane-focus="">
         <header className="list-header">
           <div className="list-title-row">
             <h2 className="list-title" id={headingId}>
-              <span className="list-name">提醒</span>
+              <span className="list-name">{TITLE}</span>
             </h2>
-            {coverageProblem && (
-              <p className="reminder-total">
-                <span className="reminder-total-note">
-                  <Icon name="alert" size={13} />
-                  部分串覆盖不完整
-                </span>
-              </p>
-            )}
-          </div>
-        </header>
-
-        <div className="reminder-checker">
-          <div className="reminder-checker-row">
-            {running ? (
-              <button type="button" className="btn btn-small" aria-busy={request === 'cancel' || undefined} onClick={() => void cancelCheck()}>
-                <Icon name="close" size={14} />
-                {request === 'cancel' ? '正在取消…' : '取消检查'}
-              </button>
-            ) : (
+            <div className="reminder-header-tools">
+              {lastChecked !== null && <span className="reminder-last-checked">上次检查 {formatClockTime(lastChecked)}</span>}
               <button
                 type="button"
-                className="btn btn-small btn-quiet"
-                aria-busy={request === 'check' || undefined}
-                disabled={overview === null}
+                className="btn btn-small btn-quiet reminder-check"
+                aria-disabled={blocked || undefined}
+                aria-busy={running || requesting || undefined}
+                aria-describedby={blockedReason !== null ? checkReasonId : undefined}
+                title={blockedReason ?? undefined}
                 onClick={() => void startCheck()}
               >
-                <Icon name="refresh" size={14} />
-                {request === 'check' ? '正在开始…' : '检查更新'}
+                {running ? <Spinner /> : <Icon name="refresh" size={14} />}
+                手动检查
               </button>
-            )}
-            <div className="reminder-checker-status" role="status" aria-busy={running || undefined}>
-              {manualRun && <Loading live={false}>{round !== null ? progressText(round) : '正在检查…'}</Loading>}
+              {/* Counts down every second: deliberately outside any live region. */}
+              <span id={checkReasonId} className="visually-hidden">
+                {blockedReason}
+              </span>
             </div>
-            {/* Counts down every second: deliberately outside any live region. */}
-            {!running && cooldownLeft > 0 && <p className="reminder-checker-line">{secondsText(cooldownLeft)}后可再次检查</p>}
           </div>
-          {result !== null && (
-            <p className={`reminder-checker-message is-${result.tone}`} role={result.tone === 'error' ? 'alert' : 'status'}>
-              {result.tone !== 'info' && <Icon name="alert" size={14} />}
-              <span>{result.text}</span>
+          {message !== null && (
+            <p
+              className={message.tone === 'error' ? 'form-message is-error reminder-check-message' : 'notice-inline is-warning reminder-check-message'}
+              role={message.tone === 'error' ? 'alert' : 'status'}
+            >
+              <Icon name="alert" size={14} />
+              <span>{message.text}</span>
             </p>
           )}
-        </div>
+        </header>
 
         {/* The first read is quiet; only a failure says anything. */}
         <div className="list-status" aria-busy={overview === null && failure === null ? true : undefined}>
@@ -353,7 +295,7 @@ export function ReminderPane({
           )}
         </div>
 
-        {empty && (
+        {overview !== null && rows.length === 0 && (
           <div className="list-empty" role="status">
             <p className="list-empty-title">还没有开启提醒的串</p>
             {openList !== null && (
@@ -364,331 +306,86 @@ export function ReminderPane({
           </div>
         )}
 
-        {overview !== null && overview.threads.length > 0 && (
-          <div className="reminder-groups">
-            {overview.threads.map((group) => (
-              <ReminderGroup
-                key={group.threadId}
-                group={group}
-                selected={group.threadId === selectedThreadId}
-                open={open !== null && group.events.some((event) => event.postId === open.postId) ? open : null}
-                onLocate={locate}
-                onOpenLocated={openLocated}
-                onOpenThread={openThread}
-                onCancelOpen={cancelOpen}
-                onDismissOpen={() => update(null)}
-                onRulesUpdated={() => void reload()}
-              />
-            ))}
-          </div>
+        {rows.length > 0 && (
+          <ul className="thread-list" aria-label={TITLE} onKeyDown={roving.onKeyDown}>
+            {rows.map((row) => {
+              const counts = countsText(row)
+              const issues = issuesText(row)
+              const clearFailure = clearFailures.get(row.threadId)
+              // 在新标签页打开, the three kinds and 清除提醒 live in the row's context menu (right-click,
+              // ContextMenu, Shift+F10); middle-click or Ctrl/Cmd+click opens a new tab, as in 订阅.
+              return (
+                <li
+                  key={row.threadId}
+                  className={rowMenu?.threadId === row.threadId ? 'reminder-row is-menu-open' : 'reminder-row'}
+                  onContextMenu={(event) => openRowMenu(row.threadId, event)}
+                  onKeyDown={(event) => {
+                    if (isContextMenuKey(event)) openRowMenu(row.threadId, event)
+                  }}
+                  onClickCapture={(event) => {
+                    if (openInTab === null || (!event.ctrlKey && !event.metaKey)) return
+                    event.preventDefault()
+                    event.stopPropagation()
+                    openInTab(row.threadId, row.head)
+                  }}
+                  // Middle press: no autoscroll; the release opens the tab.
+                  onMouseDown={(event) => {
+                    if (openInTab !== null && event.button === 1) event.preventDefault()
+                  }}
+                  onAuxClick={(event) => {
+                    if (openInTab === null || event.button !== 1) return
+                    event.preventDefault()
+                    openInTab(row.threadId, row.head)
+                  }}
+                >
+                  <ThreadRow
+                    thread={
+                      row.head === null
+                        ? { head: null, id: row.threadId, title: row.title, replyCount: row.replyCount }
+                        : { head: row.head, replyCount: row.replyCount }
+                    }
+                    forumName={row.head !== null && row.head.forumId !== null ? (forumNames.get(row.head.forumId) ?? null) : null}
+                    selected={row.threadId === selectedThreadId}
+                    images={images}
+                    onOpen={() => openRow(row)}
+                    itemProps={roving.itemProps(row.threadId)}
+                    metaEnd={
+                      (counts !== null || issues !== null) && (
+                        <>
+                          {counts !== null && <span className="reminder-counts">{counts}</span>}
+                          {issues !== null && <IssueStatus text={issues} />}
+                        </>
+                      )
+                    }
+                  />
+                  {clearFailure !== undefined && (
+                    <p className="notice-inline is-warning" role="alert">
+                      <Icon name="alert" size={14} />
+                      {clearFailure}
+                    </p>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
         )}
         <div className="list-footer" />
       </div>
-    </section>
-  )
-}
-
-function ReminderGroup({
-  group,
-  selected,
-  open,
-  onLocate,
-  onOpenLocated,
-  onOpenThread,
-  onCancelOpen,
-  onDismissOpen,
-  onRulesUpdated
-}: {
-  group: ThreadReminderGroup
-  selected: boolean
-  open: OpenState | null
-  onLocate: (postId: PostId, intent: LocateIntent) => void
-  onOpenLocated: (postId: PostId) => void
-  onOpenThread: (postId: PostId, threadId: ThreadId, head: Post) => void
-  onCancelOpen: () => void
-  onDismissOpen: () => void
-  onRulesUpdated: () => void
-}) {
-  const titleId = useId()
-  const title = groupTitle(group)
-  const on = enabledKinds(group.rules)
-  const problem = hasCoverageProblem(group)
-  const tone = group.state === 'failed' ? 'is-error' : problem || group.state === 'baseline-pending' ? 'is-warning' : ''
-  return (
-    <section className={selected ? 'reminder-group is-selected' : 'reminder-group'} aria-labelledby={titleId}>
-      <div className="reminder-group-head">
-        <div className="reminder-group-text">
-          <h3 className="reminder-group-title" id={titleId}>
-            {title}
-          </h3>
-          <p className="reminder-group-meta">
-            <span>No.{group.threadId}</span>
-            {group.lastCheckedAt !== null && <span>最近检查 {formatLocalTime(group.lastCheckedAt)}</span>}
-          </p>
-        </div>
-        <ReminderMenu
-          threadId={group.threadId}
-          label={title}
-          rules={group.rules}
-          failure={null}
-          onRetry={onRulesUpdated}
-          onUpdated={onRulesUpdated}
-          small
+      {rowMenu !== null && menuRow !== undefined && (
+        <ReminderRowMenu
+          key={rowMenu.threadId}
+          point={rowMenu.point}
+          threadId={rowMenu.threadId}
+          head={menuRow.head}
+          // Thread title or `No.x`, as the thread's own menus name it.
+          label={meaningfulTitle(menuRow.head === null ? menuRow.title : menuRow.head.title) ?? `No.${menuRow.threadId}`}
+          rules={menuRow.rules}
+          clearable={hasCounts(menuRow)}
+          onUpdated={updated}
+          onClear={() => clearRow(menuRow.threadId)}
+          onClose={closeRowMenu}
         />
-      </div>
-
-      {on.length > 0 ? (
-        <ul className="reminder-chips" aria-label="已开启的提醒">
-          {on.map((kind) => (
-            <li key={kind} className="reminder-chip">
-              {KIND_SHORT[kind]}
-              {group.rules[kind].startedAt !== null && <span className="reminder-chip-start">起点 {formatLocalTime(group.rules[kind].startedAt as string)}</span>}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="reminder-group-line">提醒已全部关闭</p>
-      )}
-
-      <div className={`reminder-state ${tone}`}>
-        <p className="reminder-state-name">
-          <span className="tag">{STATE_NAME[group.state]}</span>
-          <span className="reminder-state-detail">{stateDetail(group)}</span>
-        </p>
-        {group.issues.length > 0 && (
-          <ul className="reminder-issues" aria-label="覆盖问题">
-            {group.issues.map((issue) => (
-              <li key={issue}>
-                <Icon name="alert" size={13} />
-                {ISSUE_TEXT[issue]}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <p className="reminder-counts">
-        <span>{group.eventCount > 0 ? `${formatReminderCount(group.eventCount)} 条提醒` : emptyText(group)}</span>
-        {group.uncertainCount > 0 && (
-          <span className="reminder-uncertain">
-            <Icon name="alert" size={13} />
-            另有 {group.uncertainCount} 条无法确认是否在提醒起点之后
-          </span>
-        )}
-      </p>
-
-      {group.events.length > 0 && (
-        <ul className="reminder-events" aria-label={`${title} 的提醒，共 ${group.eventCount} 条`}>
-          {group.events.map((event) => (
-            <li key={event.postId}>
-              <EventRow
-                event={event}
-                open={open?.postId === event.postId ? open : null}
-                onLocate={onLocate}
-                onOpenLocated={onOpenLocated}
-                onOpenThread={onOpenThread}
-                onCancelOpen={onCancelOpen}
-                onDismissOpen={onDismissOpen}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
-      {group.eventCount > group.events.length && (
-        <p className="reminder-group-line">
-          只列出最新的 {Math.min(group.events.length, MAX_EVENTS_PER_GROUP)} 条，共 {group.eventCount} 条
-        </p>
       )}
     </section>
   )
-}
-
-function EventRow({
-  event,
-  open,
-  onLocate,
-  onOpenLocated,
-  onOpenThread,
-  onCancelOpen,
-  onDismissOpen
-}: {
-  event: ReminderEvent
-  open: OpenState | null
-  onLocate: (postId: PostId, intent: LocateIntent) => void
-  onOpenLocated: (postId: PostId) => void
-  onOpenThread: (postId: PostId, threadId: ThreadId, head: Post) => void
-  onCancelOpen: () => void
-  onDismissOpen: () => void
-}) {
-  const statusId = useId()
-  const busy = open?.busy ?? null
-  return (
-    <>
-      <button
-        type="button"
-        className="reminder-event"
-        aria-describedby={open !== null ? statusId : undefined}
-        aria-busy={busy !== null || undefined}
-        onClick={() => onLocate(event.postId, 'navigate')}
-      >
-        <span className="reminder-event-top">
-          {event.kinds.map((kind) => (
-            <span key={kind} className="reminder-event-kind">
-              {KIND_NAME[kind]}
-            </span>
-          ))}
-          <span className="reminder-event-time">{event.createdAt ?? '时间未知'}</span>
-        </span>
-        <span className="reminder-event-excerpt">{event.excerpt.trim() === '' ? '（没有文字内容）' : event.excerpt}</span>
-        <span className="reminder-event-meta">
-          <span>No.{event.postId}</span>
-          <span>
-            {event.mode === 'po' ? '只看 PO ' : ''}第 {event.page} 页
-          </span>
-          {event.quotedOwnIds.length > 0 && <span>引用了你的 {event.quotedOwnIds.map((id) => `No.${id}`).join('、')}</span>}
-        </span>
-      </button>
-      {open !== null && (
-        <div className="reminder-open" id={statusId} role="status">
-          <OpenStatus
-            open={open}
-            onLocate={onLocate}
-            onOpenLocated={onOpenLocated}
-            onOpenThread={onOpenThread}
-            onCancel={onCancelOpen}
-            onDismiss={onDismissOpen}
-          />
-        </div>
-      )}
-    </>
-  )
-}
-
-function OpenStatus({
-  open,
-  onLocate,
-  onOpenLocated,
-  onOpenThread,
-  onCancel,
-  onDismiss
-}: {
-  open: OpenState
-  onLocate: (postId: PostId, intent: LocateIntent) => void
-  onOpenLocated: (postId: PostId) => void
-  onOpenThread: (postId: PostId, threadId: ThreadId, head: Post) => void
-  onCancel: () => void
-  onDismiss: () => void
-}) {
-  const { postId } = open
-  if (open.busy !== null) {
-    return (
-      <div className="reminder-open-row">
-        <Loading live={false}>{open.busy === 'locate' ? '正在定位这条回复…（Esc 取消）' : '正在打开原串…（Esc 取消）'}</Loading>
-        <button type="button" className="btn btn-small" onClick={onCancel}>
-          取消
-        </button>
-      </div>
-    )
-  }
-  const dismiss = (
-    <button type="button" className="btn btn-small btn-quiet" onClick={onDismiss}>
-      关闭
-    </button>
-  )
-  if (open.internal !== null) {
-    return (
-      <div className="reminder-open-row is-error">
-        <p className="reminder-open-text">
-          <Icon name="alert" size={14} />
-          {open.internal === 'thread' ? '打开原串失败' : '定位失败'}：应用内部请求失败
-        </p>
-        <button
-          type="button"
-          className="btn btn-small"
-          // A 重试 only resolves (spec I6): a located result is shown, opening it stays the user's choice.
-          onClick={() => (open.internal === 'thread' && open.result?.status === 'thread-known' ? onOpenThread(postId, open.result.threadId, open.result.head) : onLocate(postId, 'resolve'))}
-        >
-          重试
-        </button>
-        {dismiss}
-      </div>
-    )
-  }
-  if (open.threadError !== null) {
-    const { threadId, head, error } = open.threadError
-    return (
-      <div className="reminder-open-row is-error">
-        <p className="reminder-open-text">
-          <Icon name="alert" size={14} />
-          原串读取失败：{describeReadError(error)}
-          {error.serverMessage !== undefined && `；论坛提示：${error.serverMessage}`}
-        </p>
-        <IdentitySettingsAction error={error} />
-        <button type="button" className="btn btn-small" onClick={() => onOpenThread(postId, threadId, head)}>
-          重试
-        </button>
-        {dismiss}
-      </div>
-    )
-  }
-  const result = open.result
-  if (result === null) return null
-  switch (result.status) {
-    case 'located':
-      return (
-        <div className="reminder-open-row">
-          <p className="reminder-open-text">
-            <Icon name="check" size={14} />
-            已定位：串 No.{result.threadId}，{result.target.mode === 'po' ? '只看 PO ' : ''}第 {result.target.page} 页
-            {result.source === 'cached' && result.networkError !== null && `（依据本地缓存的页面：${describeReadError(result.networkError)}）`}
-          </p>
-          <button type="button" className="btn btn-small" onClick={() => onOpenLocated(postId)}>
-            <Icon name="arrowRight" size={14} />
-            打开
-          </button>
-          {dismiss}
-        </div>
-      )
-    case 'unknown-thread':
-      return (
-        <div className="reminder-open-row">
-          <p className="reminder-open-text">
-            <Icon name="info" size={14} />
-            无法确定这条回复所属的串
-          </p>
-          {dismiss}
-        </div>
-      )
-    case 'thread-known':
-      return (
-        <div className="reminder-open-row">
-          <p className="reminder-open-text">
-            <Icon name="info" size={14} />
-            已知原串 No.{result.threadId}，未定位到这条回复
-          </p>
-          <button type="button" className="btn btn-small" onClick={() => onOpenThread(postId, result.threadId, result.head)}>
-            打开原串
-          </button>
-          {dismiss}
-        </div>
-      )
-    case 'failed': {
-      const unavailable = unavailableText(result.error)
-      return (
-        <div className="reminder-open-row is-error">
-          <p className="reminder-open-text">
-            <Icon name="alert" size={14} />
-            {unavailable ?? `定位失败：${describeReadError(result.error)}${result.error.serverMessage !== undefined ? `；论坛提示：${result.error.serverMessage}` : ''}`}
-          </p>
-          <IdentitySettingsAction error={result.error} />
-          {unavailable === null && (
-            <button type="button" className="btn btn-small" onClick={() => onLocate(postId, 'resolve')}>
-              重试
-            </button>
-          )}
-          {dismiss}
-        </div>
-      )
-    }
-  }
 }

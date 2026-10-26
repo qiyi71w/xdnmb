@@ -383,6 +383,7 @@ export function registerIpc({
     if (reason !== 'unsubscribe' && reason !== 'sync-delete') throw new InvalidRequestError()
     return reminders.closeForThreads({ threadIds: threadIds(input.threadIds), reason })
   })
+  handle(IpcChannel.reminderClear, async (_event, raw) => reminders.clear({ threadId: forumId(record(raw).threadId) }))
   handle(IpcChannel.listHistory, async () => content.listHistory())
   handle(IpcChannel.listOffline, async () => content.listOffline())
   handle(IpcChannel.clearHistory, async (_event, raw) => {

@@ -89,6 +89,8 @@ export interface RemindersState {
   overview: ReminderOverview | null
   failure: LoadFailure | null
   reload: () => Promise<void>
+  /** A `setRule` call succeeded: show its rules in the overview's row until the next read. */
+  updated: (thread: ThreadReminders) => void
 }
 
 async function loadOverview(): Promise<ReminderOverview> {
@@ -100,7 +102,19 @@ async function loadOverview(): Promise<ReminderOverview> {
 /** App-wide reminder overview: the navigation badge and every reminders list share it. */
 export function useReminderOverview(): RemindersState {
   const live = useLiveReminders('overview', loadOverview)
-  return useMemo(() => ({ overview: live.data, failure: live.failure, reload: live.reload }), [live.data, live.failure, live.reload])
+  const { replace } = live
+  const updated = useCallback(
+    (thread: ThreadReminders) =>
+      replace((overview) => ({
+        ...overview,
+        threads: overview.threads.map((row) => (row.threadId === thread.threadId ? { ...row, rules: thread.rules } : row))
+      })),
+    [replace]
+  )
+  return useMemo(
+    () => ({ overview: live.data, failure: live.failure, reload: live.reload, updated }),
+    [live.data, live.failure, live.reload, updated]
+  )
 }
 
 export const RemindersContext = createContext<RemindersState | null>(null)

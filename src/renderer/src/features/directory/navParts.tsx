@@ -3,6 +3,7 @@
 
 import { useMemo, type Ref } from 'react'
 import type { BoardDirectory } from '../../../../shared/forum'
+import { formatReminderCount } from '../../../../shared/reminders'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, IdentitySettingsAction, SourceNotice } from '../../components/Notices'
 import { formatLocalTime } from '../../lib/format'
@@ -22,9 +23,9 @@ export interface RovingItemProps {
   'data-autofocus'?: string
 }
 
-/** Marker of the 提醒 entry: some reminder coverage is incomplete, failed or uncertain. */
+/** Count of the 提醒 entry: threads with a non-zero reminder count (coverage issues never count). */
 export interface ReminderBadge {
-  coverageProblem: boolean
+  threads: number
 }
 
 /** What the app gives the rail for its feature entries. */
@@ -59,18 +60,21 @@ export function featureInfo(id: FeatureId) {
   return FEATURES.find((feature) => feature.id === id) ?? FEATURES[0]!
 }
 
-/** Badge of a feature: sends to check. */
-function featureBadge(id: FeatureId, host: FeatureHost): { text: string; spoken: string } | null {
+/** Badge of a feature: threads with new reminders, or sends to check. */
+function featureBadge(id: FeatureId, host: FeatureHost): { text: string; spoken: string; tone: 'count' | 'warning' } | null {
+  if (id === 'reminders') {
+    const threads = host.reminderBadge?.threads ?? 0
+    if (threads <= 0) return null
+    return { text: formatReminderCount(threads), spoken: `${threads} 个串有新提醒`, tone: 'count' }
+  }
   if (id !== 'history') return null
   const count = host.pendingAttempts.count
   if (count === null || count <= 0) return null
-  return { text: String(count), spoken: `${count} 项发送待核对` }
+  return { text: String(count), spoken: `${count} 项发送待核对`, tone: 'warning' }
 }
 
 function featureMarked(id: FeatureId, host: FeatureHost): boolean {
-  if (id === 'reminders') return host.reminderBadge?.coverageProblem === true
-  if (id === 'history') return host.pendingAttempts.failed
-  return false
+  return id === 'history' && host.pendingAttempts.failed
 }
 
 /** Accessible name: the feature's name, then what its badge or marker says. */
@@ -78,7 +82,7 @@ export function featureLabel(id: FeatureId, host: FeatureHost): string {
   const badge = featureBadge(id, host)
   const marked = featureMarked(id, host)
   const label = featureInfo(id).label
-  return `${label}${badge === null ? '' : `，${badge.spoken}`}${marked ? (id === 'history' ? '，发送记录读取失败' : '，部分串未检查') : ''}`
+  return `${label}${badge === null ? '' : `，${badge.spoken}`}${marked ? '，发送记录读取失败' : ''}`
 }
 
 /** Tooltip: the name, with the shortcut of 搜索. */
@@ -97,7 +101,7 @@ export function FeatureDot({ id, host }: { id: FeatureId; host: FeatureHost }) {
   const badge = featureBadge(id, host)
   if (badge === null && !featureMarked(id, host)) return null
   return (
-    <span className="shell-dot is-warning" aria-hidden="true">
+    <span className={badge?.tone === 'count' ? 'shell-dot is-count' : 'shell-dot is-warning'} aria-hidden="true">
       {badge?.text ?? ''}
     </span>
   )

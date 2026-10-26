@@ -47,7 +47,7 @@ const FORUM_ID = /^\d{1,20}$/
 const DRAFT_ID = /^[1-9]\d{0,14}$/
 
 /**
- * One-shot targets (quotes, search hits, reminder events) are dropped: once restarted, the thread
+ * One-shot targets (quotes, search hits, a reminder's first new page) are dropped: once restarted, the thread
  * opens where it was left (the entry's snapshot) or at its saved reading position. Search sessions (the local search sheet
  * and online search pages) are not kept past the run either: an entry opened from a search result
  * comes back as a plain step (plain 后退), and an online search page comes back empty, without its

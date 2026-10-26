@@ -104,7 +104,7 @@ export function createForumClient(options: {
   }
 
   /** `page` is omitted only by reads that address a single post (`ref`). */
-  async function read(path: string, signal: AbortSignal, params?: { id: string; page?: number }): Promise<unknown> {
+  async function read(path: string, signal: AbortSignal, params?: { id: string; page?: number }, anonymous = false): Promise<unknown> {
     const url = new URL(path, baseUrl)
     if (params) {
       if (typeof params.id !== 'string' || !idPattern.test(params.id) ||
@@ -114,7 +114,7 @@ export function createForumClient(options: {
       url.searchParams.set('id', params.id)
       if (params.page !== undefined) url.searchParams.set('page', String(params.page))
     }
-    const userhash = options.browseIdentity ? await options.browseIdentity() : null
+    const userhash = !anonymous && options.browseIdentity ? await options.browseIdentity() : null
     const response = await options.transport.get(url, signal, userhash === null ? undefined : { userhash })
     if (response.text.trimStart().startsWith('<') || response.mediaType === 'text/html') {
       throw new ForumReadError({
@@ -221,10 +221,10 @@ export function createForumClient(options: {
       }
       return { feed, page, threads, skippedItems }
     },
-    async getThreadPage(threadId, mode, page, signal): Promise<ThreadPage> {
+    async getThreadPage(threadId, mode, page, signal, readOptions): Promise<ThreadPage> {
       if (mode !== 'all' && mode !== 'po') throw new Error('Invalid reading mode')
       const fetchPage = async (number: number): Promise<ThreadPage> => {
-        const value = await read(mode === 'po' ? '/api/po' : '/api/thread', signal, { id: threadId, page: number })
+        const value = await read(mode === 'po' ? '/api/po' : '/api/thread', signal, { id: threadId, page: number }, readOptions?.anonymous)
         if (!isObject(value) || value.id !== threadId || !Array.isArray(value.Replies)) throw shapeError()
         const head = normalizePost(value)
         if (head === null) throw shapeError()

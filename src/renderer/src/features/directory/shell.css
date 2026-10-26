@@ -160,6 +160,12 @@
   box-shadow: 0 0 0 1px var(--warn-ink);
 }
 
+/* News, not a problem: figures on a solid accent fill (on-accent, as the primary button). */
+.shell-dot.is-count {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
 /* ---------- Icon rail ---------- */
 
 .nav.shell-nav {

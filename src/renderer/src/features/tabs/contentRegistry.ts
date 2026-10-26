@@ -18,7 +18,8 @@ export interface ReaderHandle {
   refresh(): void
   /**
    * A located quote target: when this reader shows the same thread in the same mode and the target
-   * post is visible in its viewport, highlights it and returns true (no navigation needed).
+   * post is visible in its viewport, highlights it and returns true (no navigation needed). A
+   * page-only target is never shown in place.
    */
   showInPlace(threadId: ThreadId, target: ThreadTarget): boolean
   /** Thread and mode on screen now (a temporary target mode included), for 串内搜索. */

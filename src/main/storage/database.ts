@@ -30,7 +30,7 @@ import type {
   AppStore, DraftAttachmentRecord, DraftRecord, DraftWriteOutcome, ImageHolder, ImageResourceRecord, NewImageResource, PostThreadRelation, Stored
 } from './contract'
 import { assertReadablePage, computeCoverage } from './coverage'
-import { emptyReadingState, endObservation } from './reading-state'
+import { emptyReadingState } from './reading-state'
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
 import { RetainedContentDatabase, contentTick, touchThread } from './retained'
@@ -297,24 +297,21 @@ class SqliteReadingDatabase implements ReadingDatabase {
   private readonly reminders = new ReminderDatabase(
     () => this.writable(),
     () => this.publicationDatabase(),
-    (since) => this.firstProvenNewPost(since),
-    (postId) => this.loadPost(postId)?.value ?? null,
-    (threadId, mode) => this.getThreadCoverage(threadId, mode)
+    (postId) => {
+      const row = this.publicationDatabase().prepare<[string], PostRow>('SELECT * FROM posts WHERE id = ?').get(postId)
+      return row ? postFromRow(row) : null
+    }
   )
   getReminderRules: ReadingDatabase['getReminderRules'] = (ids) => this.reminders.getRules(ids)
   setReminderRule: ReadingDatabase['setReminderRule'] = (id, kind, enabled, at) => this.reminders.setRule(id, kind, enabled, at)
   closeReminderThreads: ReadingDatabase['closeReminderThreads'] = (ids, reason, at) => this.reminders.closeThreads(ids, reason, at)
   reminderRuleSnapshots: ReadingDatabase['reminderRuleSnapshots'] = () => this.reminders.snapshots()
-  getReminderCoverage: ReadingDatabase['getReminderCoverage'] = (id, mode) => this.reminders.getCoverage(id, mode)
-  saveReminderCoverage: ReadingDatabase['saveReminderCoverage'] = (value) => this.reminders.saveCoverage(value)
-  getReminderObservations: ReadingDatabase['getReminderObservations'] = (id, mode) => this.reminders.observations(id, mode)
+  reminderStates: ReadingDatabase['reminderStates'] = () => this.reminders.states()
   reminderCookieIds: ReadingDatabase['reminderCookieIds'] = () => this.reminders.cookieIds()
-  evaluateReminders: ReadingDatabase['evaluateReminders'] = (input) => this.reminders.evaluate(input)
-  createReminderRound: ReadingDatabase['createReminderRound'] = (trigger, at, total) => this.reminders.createRound(trigger, at, total)
-  saveReminderRound: ReadingDatabase['saveReminderRound'] = (value) => this.reminders.saveRound(value)
-  recoverReminders: ReadingDatabase['recoverReminders'] = (at) => this.reminders.recover(at)
-  registerReminderNotification: ReadingDatabase['registerReminderNotification'] = (id, scope, at) => this.reminders.registerNotification(id, scope, at)
-  settleReminderNotification: ReadingDatabase['settleReminderNotification'] = (id, state) => this.reminders.settleNotification(id, state)
+  reminderQuoteSources: ReadingDatabase['reminderQuoteSources'] = (ids) => this.reminders.quoteSources(ids)
+  updateReminderState: ReadingDatabase['updateReminderState'] = (value) => this.reminders.update(value)
+  clearReminderCounts: ReadingDatabase['clearReminderCounts'] = (id) => this.reminders.clearCounts(id)
+  finishReminderCheck: ReadingDatabase['finishReminderCheck'] = (at) => this.reminders.finishCheck(at)
   reminderOverview: ReadingDatabase['reminderOverview'] = () => this.reminders.overview()
   private readonly search = new SearchDatabase(() => this.writable(), (id, mode) => this.getThreadCoverage(id, mode))
   searchBoundary: ReadingDatabase['searchBoundary'] = () => this.search.boundary()
@@ -531,15 +528,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
           WHERE julianday(excluded.fetched_at) >= julianday(thread_reply_counts.fetched_at)
         `).run(page.threadId, page.mode, page.replyCount, fetchedAt)
       }
-      const coverage = this.getThreadCoverage(page.threadId, page.mode)
-      if (page.mode === 'all') {
-        const end = endObservation(page.threadId, coverage)
-        if (end !== null) {
-          db.prepare('INSERT INTO end_observations (thread_id, observed_at, bound_post_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING')
-            .run(page.threadId, end.observedAt, end.boundPostId)
-        }
-      }
-      return coverage
+      return this.getThreadCoverage(page.threadId, page.mode)
     })()
   }
 
@@ -706,29 +695,6 @@ class SqliteReadingDatabase implements ReadingDatabase {
       ON CONFLICT(thread_id) DO UPDATE SET
         last_visited_at = excluded.last_visited_at, visit_count = thread_visits.visit_count + 1
     `).run(threadId, at, at)
-  }
-
-  /**
-   * Lowest observed post ID proven to be posted after `since`: a reply of any thread that was first
-   * seen after an end observation made at or after `since` and lies above that observation's bound.
-   * A reply seen before the observation existed then and only fell outside the bound because it
-   * was removed, so it proves nothing. Post IDs increase with time, so every post with an ID at or
-   * above the result was posted after `since` too. Uses only observations already stored.
-   */
-  firstProvenNewPost(since: string): PostId | null {
-    if (!this.db) return null
-    const row = this.db.prepare<[string], { post_id: string }>(`
-      SELECT relation.post_id FROM end_observations AS observation
-      JOIN post_threads AS relation
-        ON relation.thread_id = observation.thread_id AND relation.post_id <> observation.thread_id
-      WHERE julianday(observation.observed_at) >= julianday(?)
-        AND julianday(relation.fetched_at) > julianday(observation.observed_at)
-        AND (length(relation.post_id) > length(observation.bound_post_id)
-          OR (length(relation.post_id) = length(observation.bound_post_id) AND relation.post_id > observation.bound_post_id))
-      ORDER BY length(relation.post_id), relation.post_id
-      LIMIT 1
-    `).get(since)
-    return row?.post_id ?? null
   }
 
   /** Each stored value is validated again; an unreadable or invalid value falls back to its default. */

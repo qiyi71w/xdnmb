@@ -1,702 +1,552 @@
 import { mkdtempSync, rmSync } from 'node:fs'
+import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { Post, ReadingMode, ThreadPage } from '../src/shared/forum'
-import { formatReminderCount, type ReminderKind } from '../src/shared/reminders'
-import { ForumReadError, ReadCancelledError } from '../src/main/forum/contract'
-import { createReminderService } from '../src/main/reminders/service'
+import type { Post } from '../src/shared/forum'
+import { formatReminderCount, type ReminderKind, type ReminderOverview } from '../src/shared/reminders'
+import { createForumClient } from '../src/main/forum/client'
+import { createForumTransport } from '../src/main/forum/transport'
 import { createReminderNotifier } from '../src/main/reminders/notifier'
+import { createReminderService } from '../src/main/reminders/service'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
-import { MIGRATIONS } from '../src/main/storage/migrations'
 import { asStore } from './helpers/store'
 
 const t0 = '2026-10-24T00:00:00.000Z'
-const start = '2026-10-24T00:01:00.000Z'
-const t2 = '2026-10-24T00:02:00.000Z'
-const t3 = '2026-10-24T00:03:00.000Z'
-const later = '2026-10-24T00:04:00.000Z'
 const folders: string[] = []
 const databases: ReadingDatabase[] = []
-function post(id: string, quotes: string[] = [], userHash: string | null = 'public-not-an-identity'): Post {
-  return { id, forumId: '4', createdAt: '2026-10-24 08:03', userHash, name: null,
-    title: null, isAdmin: false, isSage: false, image: null,
-    content: [{ type: 'text', text: `正文 ${id}\n\n` }, ...quotes.map((postId) => ({ type: 'quoteRef' as const, postId, raw: `>>No.${postId}` }))],
-    plainText: `正文 ${id}\n\n${quotes.map((id) => `>>No.${id}`).join(' ')}` }
+const servers: Server[] = []
+
+afterEach(async () => {
+  for (const db of databases.splice(0)) db.close()
+  for (const server of servers.splice(0)) {
+    const closed = Promise.withResolvers<void>()
+    server.close(() => closed.resolve())
+    await closed.promise
+  }
+  for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true })
+})
+
+/** One thread of the controlled forum. Reply n (1-based) has ID thread × 100000 + n. */
+interface ForumThread {
+  count: number
+  /** Reply numbers written by the PO, listed by `/api/po` in order. */
+  po: number[]
+  /** Posts quoted by reply n. */
+  quotes: Map<number, string[]>
+  /** `ReplyCount` served instead of the real count; `null` omits it. */
+  reported?: number | null
 }
-/** An imported cookie with the given public 饼干 ID (secret irrelevant to reminders). */
-function cookie(db: ReadingDatabase, cookieId: string, name = cookieId): string {
-  return db.insertCredential({ name, cookieId, source: 'raw', importedAt: t0, ciphertext: Uint8Array.of(1) }).id
+/** A post as the forum's JSON API serves it. */
+interface ForumPost {
+  id: number; fid: number; now: string; user_hash: string; name: string; title: string
+  content: string; img: string; ext: string; admin: number; sage: number
 }
-/** Post No.90 as seen in another thread, written by the cookie whose 饼干 ID is `Mine90`. */
-function storeQuoted(db: ReadingDatabase): void {
-  db.savePost(post('90', [], 'Mine90'), t0)
+interface Seen { path: string; id: string; page: number | null; cookie: string | undefined }
+interface Reply { status?: number; body: string }
+type Override = (seen: Seen) => Promise<Reply | undefined> | Reply | undefined
+
+function replyId(threadId: string, n: number): string {
+  return String(Number(threadId) * 100000 + n)
 }
-function page(threadId: string, number: number, replies: Post[], count: number | null = replies.length, mode: ReadingMode = 'all'): ThreadPage {
-  return { threadId, page: number, head: { ...post(threadId), title: `串 ${threadId}` }, replies, replyCount: count,
-    mode, skippedItems: 0, endCandidate: replies.length === 0 }
+function forumPost(id: string, content: string, userHash: string): ForumPost {
+  return { id: Number(id), fid: 4, now: '2026-10-24(五)08:03:00', user_hash: userHash, name: '无名氏', title: '无标题',
+    content, img: '', ext: '', admin: 0, sage: 0 }
 }
-function proof(db: ReadingDatabase): void {
-  db.saveThreadPage(page('1', 1, [post('102')]), t2)
-  db.saveThreadPage(page('1', 2, []), t2)
-  db.saveThreadPage(page('1', 1, [post('102'), post('103')]), t3)
-  expect(db.firstProvenNewPost(start)).toBe('103')
+function localPost(id: string, userHash: string): Post {
+  return { id, forumId: '4', createdAt: null, userHash, name: null, title: null, isAdmin: false, isSage: false,
+    image: null, imageKnown: true, content: [{ type: 'text', text: '正文' }], plainText: '正文' }
 }
-/** `prepare` writes an older database at `path` before the current app opens (and upgrades) it. */
-function fixture(prepare?: (path: string) => void) {
+
+async function harness(options: { cookieIds?: string[] } = {}) {
   const folder = mkdtempSync(join(tmpdir(), 'xidao-reminders-'))
   folders.push(folder)
   const path = join(folder, 'app.sqlite')
-  prepare?.(path)
   const db = openReadingDatabase(path)
   databases.push(db)
-  db.saveThreadPage(page('100', 1, [post('101')]), t0)
+  for (const cookieId of options.cookieIds ?? []) {
+    db.insertCredential({ name: cookieId, cookieId, source: 'raw', importedAt: t0, ciphertext: Uint8Array.of(1) })
+  }
+  const threads = new Map<string, ForumThread>()
+  /** Posts served by `/api/ref`; others are 该串不存在. */
+  const refs = new Map<string, ForumPost>()
+  const seen: Seen[] = []
+  const remote = { override: undefined as Override | undefined }
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://local')
+    const id = url.searchParams.get('id') ?? ''
+    const number = url.searchParams.get('page')
+    const entry: Seen = { path: url.pathname, id, page: number === null ? null : Number(number), cookie: request.headers.cookie }
+    seen.push(entry)
+    const send = (status: number, body: string) => {
+      response.writeHead(status, { 'Content-Type': 'application/json' })
+      response.end(body)
+    }
+    const custom = await remote.override?.(entry)
+    if (custom) return send(custom.status ?? 200, custom.body)
+    if (url.pathname === '/api/ref') return send(200, JSON.stringify(refs.get(id) ?? '该串不存在'))
+    const thread = threads.get(id)
+    if (!thread) return send(200, JSON.stringify('该串不存在'))
+    const po = url.pathname === '/api/po'
+    const numbers = po ? thread.po : Array.from({ length: thread.count }, (_, index) => index + 1)
+    const page = entry.page ?? 1
+    const replies = numbers.slice((page - 1) * 19, page * 19).map((n) => forumPost(replyId(id, n),
+      [`回复 ${n}`, ...(thread.quotes.get(n) ?? []).map((quoted) => `>>No.${quoted}`)].join(' '), thread.po.includes(n) ? 'PoHash' : 'Someone'))
+    const reported = po ? numbers.length : thread.reported === undefined ? thread.count : thread.reported
+    send(200, JSON.stringify({ ...forumPost(id, '主帖', 'PoHash'), ...(reported === null ? {} : { ReplyCount: reported }), Replies: replies }))
+  })
+  servers.push(server)
+  const listening = Promise.withResolvers<void>()
+  server.listen(0, '127.0.0.1', () => listening.resolve())
+  await listening.promise
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('no server address')
+  const origin = `http://127.0.0.1:${address.port}`
+  const client = createForumClient({ baseUrl: origin,
+    transport: createForumTransport({ allowedOrigins: [origin], credentialOrigins: [origin] }),
+    browseIdentity: async () => db.listCredentials().length > 0 ? 'browse-secret' : null })
   let monotonic = 0
-  let wall = start
-  let read = async (threadId: string, mode: ReadingMode, number: number, _signal: AbortSignal) =>
-    page(threadId, number, number === 1 ? [post('101'), post('200')] : [], 2, mode)
-  const requests: Array<{ threadId: string; mode: ReadingMode; page: number; lane: string }> = []
-  const refs: string[] = []
-  let ref = async (_postId: string): Promise<Post> => { throw new ForumReadError({ kind: 'not-found', detail: 'business' }) }
-  const notifications: Array<{ title: string; body: string }> = []
-  let notify = (_message: { title: string; body: string }, settle: (state: 'shown' | 'failed') => void): boolean => { settle('shown'); return true }
-  const scheduler = createRequestScheduler()
-  const service = createReminderService({ store: asStore(db), now: () => wall, monotonicNow: () => monotonic,
-    client: {
-      async getThreadPage(threadId, mode, number, signal) {
-        requests.push({ threadId, mode, page: number, lane: 'background' })
-        return read(threadId, mode, number, signal)
-      },
-      async getRef(postId) { refs.push(postId); return ref(postId) }
+  let wall = Date.parse(t0)
+  const notifications: string[] = []
+  const notifier = { show: (_body: string): boolean => true }
+  const service = createReminderService({ store: asStore(db), client, scheduler: createRequestScheduler(),
+    notifier: { show(message) { notifications.push(message.body); return notifier.show(message.body) } },
+    now: () => new Date(wall).toISOString(), monotonicNow: () => monotonic })
+  async function overview(): Promise<ReminderOverview> {
+    const result = await service.overview()
+    if (!result.ok) throw new Error('overview failed')
+    return result.overview
+  }
+  return {
+    db, path, service, refs, remote, notifications, notifier, seen, overview,
+    thread(threadId: string, value: Partial<ForumThread> = {}): ForumThread {
+      const thread: ForumThread = { count: 0, po: [], quotes: new Map(), ...value }
+      threads.set(threadId, thread)
+      return thread
     },
-    scheduler: { run(lane, signal, work) { expect(lane).toBe('background'); return scheduler.run(lane, signal, work) } },
-    notifier: { show(message, settle) { notifications.push(message); return notify(message, settle) } } })
-  return { db, path, service, requests, refs, notifications,
-    enable(kind: ReminderKind = 'all', threadId = '100') { return service.setRule({ threadId, kind, enabled: true }) },
-    next() { monotonic += 60_000; wall = later },
-    setClock(value: number, at = later) { monotonic = value; wall = at },
-    setRead(value: typeof read) { read = value },
-    setRef(value: typeof ref) { ref = value },
-    setNotify(value: typeof notify) { notify = value },
-    async run() { const result = await service.check(); expect(result.accepted).toBe(true); await service.whenIdle(); return result },
-    raw<T>(sql: string): T[] {
-      const connection = new Database(path, { readonly: true })
-      try { return connection.prepare(sql).all() as T[] } finally { connection.close() }
+    async enable(threadId: string, ...kinds: ReminderKind[]) {
+      for (const kind of kinds) {
+        wall += 1000
+        expect((await service.setRule({ threadId, kind, enabled: true })).ok).toBe(true)
+      }
+    },
+    /** Starts a manual check once the cooldown has passed, without waiting for it. */
+    async begin() {
+      monotonic += 60_000
+      wall += 60_000
+      seen.length = 0
+      expect((await service.check()).accepted).toBe(true)
+    },
+    /** Runs one manual check; returns its requests as `thread:100:1`, with `+cookie` when sent with one. */
+    async check(): Promise<string[]> {
+      await this.begin()
+      await service.whenIdle()
+      return seen.map((entry) => `${entry.path.slice(5)}:${entry.id}${entry.page === null ? '' : `:${entry.page}`}${entry.cookie === undefined ? '' : '+cookie'}`)
+    },
+    async row(threadId: string) {
+      const row = (await overview()).threads.find((item) => item.threadId === threadId)
+      if (!row) throw new Error(`no row for ${threadId}`)
+      return row
+    },
+    /** A publication confirmed as the user's own post `postId`. */
+    confirmOwn(postId: string) {
+      const raw = new Database(path)
+      try {
+        raw.prepare(`INSERT INTO publication_attempts(request_id, editor_id, payload_json, credential_id, forum_id, state, created_at, updated_at, post_id, thread_id)
+          VALUES (?, 'editor', '{}', 1, '4', 'confirmed', ?, ?, ?, '500')`).run(`request-${postId}`, t0, t0, postId)
+      } finally { raw.close() }
     }
   }
 }
 
-afterEach(() => {
-  for (const db of databases.splice(0)) db.close()
-  for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true })
-})
+describe('全串 and PO reply counts', () => {
+  it('establishes baselines first, then counts each mode’s growth, PO included in 全串 and shown separately', async () => {
+    const h = await harness()
+    const thread = h.thread('100', { count: 3, po: [2] })
+    await h.enable('100', 'all', 'po')
+    expect(await h.check()).toEqual(['thread:100:1', 'po:100:1'])
+    expect((await h.row('100')).counts).toEqual({ all: 0, po: 0, quote: 0 })
+    expect(h.notifications).toEqual([])
 
-describe('reminder rules and durable events', () => {
-  it('does not store a capped tail as new content or an end observation', async () => {
-    const s = fixture()
-    s.db.saveThreadPage(page('100', 100, [post('9000'), post('9001')], 2194), t0)
-    await s.enable()
-    s.setRead(async (threadId, mode, number) => page(threadId, number, [post('9000'), post('9001')], 2194, mode))
-    await s.run()
-    expect(s.requests.map((request) => request.page)).toEqual([116])
-    expect(s.db.loadThreadPage('100', 'all', 116)).toBeNull()
-    expect(s.db.getThreadCoverage('100', 'all').endCandidatePage).toBeNull()
-    expect(s.db.getReminderCoverage('100', 'all')).toMatchObject({ state: 'failed', lastError: { kind: 'page-cap', highestReadablePage: 100 } })
-    expect(s.raw('SELECT * FROM reminder_events')).toEqual([])
-    expect(s.notifications).toEqual([])
+    Object.assign(thread, { count: 6, po: [2, 4, 6] })
+    expect(await h.check()).toEqual(['thread:100:1', 'po:100:1'])
+    expect(await h.row('100')).toMatchObject({ counts: { all: 3, po: 2, quote: 0 }, issues: [], firstNew: { mode: 'all', page: 1 } })
+    expect((await h.overview()).badge).toBe(1)
+    expect(h.notifications).toEqual(['1 个串有新提醒'])
+
+    await h.check()
+    expect((await h.row('100')).counts).toEqual({ all: 3, po: 2, quote: 0 })
+    expect(h.notifications).toHaveLength(1)
   })
 
-  it('enables independent starts and generations, re-enables from a new watermark, and never moves a start on failure', async () => {
-    const s = fixture()
-    await s.enable('all')
-    await s.enable('quote')
-    s.setRead(async () => { throw new ForumReadError({ kind: 'network', detail: 'connection' }) })
-    await s.run()
-    expect(s.db.getReminderRules(['100'])[0]?.rules.all.startedAt).toBe(start)
-    await s.service.setRule({ threadId: '100', kind: 'all', enabled: false })
-    s.db.saveThreadPage(page('100', 1, [post('250')]), later)
-    s.setClock(60_000)
-    await s.enable('all')
-    expect(s.db.reminderRuleSnapshots()).toEqual(expect.arrayContaining([
-      { threadId: '100', kind: 'all', generation: 3, startedAt: later, watermarkPostId: '250' },
-      { threadId: '100', kind: 'quote', generation: 1, startedAt: start, watermarkPostId: '101' }
-    ]))
-    expect(s.requests).toHaveLength(1) // Neither toggling a rule nor re-enabling performs a check.
+  it('sends only page 1 of the needed mode for a 1000-page thread, first and unchanged checks alike', async () => {
+    const h = await harness()
+    h.thread('200', { count: 19_000, po: [1, 5] })
+    h.thread('300', { count: 19_000, po: [3] })
+    await h.enable('200', 'all')
+    await h.enable('300', 'po')
+    expect(await h.check()).toEqual(['thread:200:1', 'po:300:1'])
+    expect(await h.check()).toEqual(['thread:200:1', 'po:300:1'])
   })
 
-  it('deduplicates all/PO/quote hits and never re-notifies a kind merged into an existing event', async () => {
-    const s = fixture()
-    for (const kind of ['all', 'po', 'quote'] as const) await s.enable(kind)
-    proof(s.db)
-    let poVisible = false
-    s.setRead(async (threadId, mode, number) => page(threadId, number,
-      number === 1 ? mode === 'po' && !poVisible ? [] : [post('200', ['90'])] : [], mode === 'po' && !poVisible ? 0 : 1, mode))
-    await s.run()
-    expect(s.db.reminderOverview().threads[0]?.events[0]?.kinds).toEqual(['all'])
-    poVisible = true
-    cookie(s.db, 'Mine90')
-    storeQuoted(s.db)
-    s.next()
-    await s.run()
-    const overview = s.db.reminderOverview()
-    expect(overview.threads[0]?.eventCount).toBe(1)
-    expect(overview.threads[0]?.events[0]).toMatchObject({ postId: '200', kinds: ['all', 'po', 'quote'], quotedOwnIds: ['90'], excerpt: '正文 200 >>No.90' })
-    expect(s.notifications).toHaveLength(1)
-    expect(s.raw<{ notification_id: number }>('SELECT notification_id FROM reminder_events')[0]?.notification_id).toBe(1)
+  it('opens a PO-only count at the PO page of the first new reply', async () => {
+    const h = await harness()
+    const thread = h.thread('300', { count: 40, po: Array.from({ length: 19 }, (_, index) => index + 1) })
+    await h.enable('300', 'po')
+    await h.check()
+    thread.po = Array.from({ length: 21 }, (_, index) => index + 1)
+    await h.check()
+    expect(await h.row('300')).toMatchObject({ counts: { all: 0, po: 2, quote: 0 }, firstNew: { mode: 'po', page: 2 } })
   })
 
-  it('drops a kind disabled mid-round in the event transaction while another kind still hits', async () => {
-    const s = fixture()
-    await s.enable('all')
-    await s.enable('quote')
-    proof(s.db)
-    cookie(s.db, 'Mine90')
-    storeQuoted(s.db)
-    const entered = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    s.setRead(async (threadId, mode, number) => {
-      if (number === 1) { entered.resolve(); await release.promise }
-      return page(threadId, number, number === 1 ? [post('200', ['90'])] : [], 1, mode)
-    })
-    expect((await s.service.check()).accepted).toBe(true)
-    await entered.promise
-    await s.service.setRule({ threadId: '100', kind: 'quote', enabled: false })
-    release.resolve()
-    await s.service.whenIdle()
-    expect(s.db.reminderOverview().threads[0]?.events[0]?.kinds).toEqual(['all'])
-    expect(s.notifications).toHaveLength(1)
-  })
+  it('resets on a smaller count, keeps the baseline on a missing one, and keeps rules and counts on failures', async () => {
+    const h = await harness()
+    const thread = h.thread('100', { count: 10 })
+    await h.enable('100', 'all')
+    await h.check()
+    thread.count = 12
+    await h.check()
+    thread.count = 11
+    await h.check()
+    expect(await h.row('100')).toMatchObject({ counts: { all: 2 }, issues: ['count-decreased'] })
+    thread.count = 13
+    await h.check()
+    expect(await h.row('100')).toMatchObject({ counts: { all: 4 }, issues: [] })
+    Object.assign(thread, { count: 20, reported: null })
+    await h.check()
+    expect(await h.row('100')).toMatchObject({ counts: { all: 4 }, issues: ['count-invalid'] })
+    delete thread.reported
+    await h.check()
+    expect(await h.row('100')).toMatchObject({ counts: { all: 11 }, issues: [] })
 
-  it('does not notify a result when all matching rules were closed after a page was requested', async () => {
-    const s = fixture()
-    await s.enable()
-    proof(s.db)
-    s.setRead(async (threadId, mode, number) => {
-      await s.service.closeForThreads({ threadIds: ['100'], reason: 'unsubscribe' })
-      return page(threadId, number, number === 1 ? [post('200')] : [], 1, mode)
-    })
-    await s.run()
-    expect(s.raw('SELECT * FROM reminder_events')).toEqual([])
-    expect(s.notifications).toEqual([])
-    expect(s.db.getReminderRules(['100'])[0]?.rules.all).toMatchObject({ enabled: false, closedBy: 'unsubscribe' })
-  })
-
-  it.each(['shown', 'failed', 'unavailable'] as const)('registers before the notifier and keeps events when notification is %s', async (outcome) => {
-    const s = fixture()
-    await s.enable()
-    proof(s.db)
-    s.setNotify((_message, settle) => {
-      expect(s.raw<{ state: string }>('SELECT state FROM reminder_notifications')).toEqual([{ state: 'registered' }])
-      expect(s.raw<{ notification_id: number }>('SELECT notification_id FROM reminder_events')).toEqual([{ notification_id: 1 }])
-      if (outcome === 'failed') throw new Error('desktop service unavailable')
-      if (outcome === 'shown') settle('shown') // the system's own show signal
-      return outcome === 'shown'
-    })
-    await s.run()
-    await nextTask()
-    expect(s.db.reminderOverview().lastNotification?.state).toBe(outcome)
-    expect(s.db.reminderOverview().threads[0]?.eventCount).toBe(1)
-    s.next()
-    await s.run()
-    expect(s.notifications).toHaveLength(1)
-  })
-
-  it('recovers registered notification as unknown and a running round as interrupted without resending', async () => {
-    const s = fixture()
-    await s.enable()
-    proof(s.db)
-    s.db.saveThreadPage(page('100', 1, [post('200')]), later)
-    const round = s.db.createReminderRound('manual', later, 1)
-    s.db.evaluateReminders({ roundId: round.id, threadId: '100', mode: 'all', rules: s.db.reminderRuleSnapshots(), target: '200', at: later })
-    s.db.registerReminderNotification(round.id, 'partial', later)
-    s.db.close()
-    const reopened = openReadingDatabase(s.path)
-    databases.push(reopened)
-    const notices: unknown[] = []
-    const service = createReminderService({ store: asStore(reopened), now: () => later,
-      client: { async getThreadPage(threadId, mode, number) { return page(threadId, number, number === 1 ? [post('200')] : [], 1, mode) },
-        async getRef() { throw new Error('no quote read expected') } },
-      scheduler: createRequestScheduler(), notifier: { show(message) { notices.push(message); return true } } })
-    await service.recover()
-    expect(reopened.reminderOverview().lastRound).toMatchObject({ state: 'interrupted', stopReason: 'crash' })
-    expect(reopened.reminderOverview().lastNotification?.state).toBe('unknown')
-    await service.check()
-    await service.whenIdle()
-    expect(notices).toEqual([])
-    expect(reopened.reminderOverview().lastNotification?.state).toBe('unknown')
-  })
-
-  it('re-evaluates retained replies after a 饼干 ID is filled in: no immediate read, start bounded, never duplicated', async () => {
-    const s = fixture()
-    const mine = cookie(s.db, 'Unrelated')
-    storeQuoted(s.db)
-    s.db.saveThreadPage(page('100', 1, [post('101', ['90'])], 57), t0)
-    await s.enable('quote')
-    proof(s.db)
-    s.setRead(async (threadId, mode, number) => page(threadId, number,
-      number === 1 ? [post('101', ['90'])] : number === 2 ? [post('200', ['90'])] : number === 3 ? [post('201', ['90'])] : [], 57, mode))
-    await s.run()
-    expect(s.notifications).toEqual([])
-    expect(s.db.reminderOverview().threads[0]?.issues).not.toContain('quote-unverified')
-    // No.90 is not the PO's post: matching is by its 饼干 ID alone. Changing an ID never starts a check.
-    expect(s.db.setCredentialCookieId(mine, 'Mine90')).toBe(true)
-    const requestCount = s.requests.length
-    await nextTask()
-    expect(s.requests).toHaveLength(requestCount)
-    expect(s.notifications).toEqual([])
-    s.next()
-    await s.run()
-    expect(s.db.reminderOverview().threads[0]?.events).toMatchObject([{ postId: '201', quotedOwnIds: ['90'] }, { postId: '200', quotedOwnIds: ['90'] }])
-    expect(s.requests.slice(requestCount).map((request) => request.page)).not.toContain(1) // Page 1 retained content was reused.
-    expect(s.refs).toEqual([])
-    expect(s.notifications).toHaveLength(1)
-    s.next()
-    await s.run()
-    expect(s.db.reminderOverview().threads[0]?.eventCount).toBe(2)
-    expect(s.notifications).toHaveLength(1)
-  })
-
-  it('reads an unknown quoted post by ID, keeps a failed read as an unverified gap and never as a non-match', async () => {
-    const s = fixture()
-    cookie(s.db, 'Other')
-    cookie(s.db, 'Mine90')
-    await s.enable('quote')
-    proof(s.db)
-    s.setRead(async (threadId, mode, number) => page(threadId, number, number === 1 ? [post('101'), post('200', ['90'])] : [], 2, mode))
-    s.setRef(async () => { throw new ForumReadError({ kind: 'network', detail: 'connection' }) })
-    await s.run()
-    expect(s.refs).toEqual(['90'])
-    expect(s.raw('SELECT * FROM reminder_events')).toEqual([])
-    expect(s.db.reminderOverview().threads[0]).toMatchObject({ state: 'uncertain', issues: ['quote-unverified'] })
-    expect(s.notifications).toEqual([])
-    // Next check: read again (no thread scan for its owner); once obtained, the match is an event.
-    s.setRef(async (postId) => post(postId, [], 'Mine90'))
-    s.next()
-    await s.run()
-    expect(s.refs).toEqual(['90', '90'])
-    expect(s.db.reminderOverview().threads[0]).toMatchObject({ state: 'done', issues: [], events: [{ postId: '200', quotedOwnIds: ['90'] }] })
-    expect(s.db.loadPost('90')?.value.userHash).toBe('Mine90')
-    expect(s.notifications).toHaveLength(1)
-    s.next()
-    await s.run()
-    expect(s.refs).toEqual(['90', '90'])
-    expect(s.notifications).toHaveLength(1)
-  })
-
-  it('keeps the gap of a failed quoted read even when another quote of the same reply already matches', async () => {
-    const s = fixture()
-    cookie(s.db, 'Mine90')
-    storeQuoted(s.db)
-    await s.enable('quote')
-    proof(s.db)
-    s.setRead(async (threadId, mode, number) => page(threadId, number, number === 1 ? [post('101'), post('200', ['90', '91'])] : [], 2, mode))
-    s.setRef(async () => { throw new ForumReadError({ kind: 'network', detail: 'connection' }) })
-    await s.run()
-    expect(s.refs).toEqual(['91'])
-    expect(s.db.reminderOverview().threads[0]).toMatchObject({ state: 'uncertain', issues: ['quote-unverified'], events: [{ postId: '200', quotedOwnIds: ['90'] }] })
-    expect(s.notifications).toHaveLength(1)
-    s.setRef(async (postId) => post(postId, [], 'Mine90'))
-    s.next()
-    await s.run()
-    expect(s.db.reminderOverview().threads[0]).toMatchObject({ state: 'done', issues: [], eventCount: 1, events: [{ postId: '200', quotedOwnIds: ['90', '91'] }] })
-    expect(s.notifications).toHaveLength(1)
-  })
-
-  it('makes no quote reads and no quote events while no imported cookie has a 饼干 ID', async () => {
-    const s = fixture()
-    const legacy = cookie(s.db, 'Mine90')
-    const connection = new Database(s.path)
-    try { connection.prepare('UPDATE credentials SET cookie_id = NULL WHERE id = ?').run(legacy) } finally { connection.close() }
-    await s.enable('quote')
-    proof(s.db)
-    s.setRead(async (threadId, mode, number) => page(threadId, number, number === 1 ? [post('101'), post('200', ['90'])] : [], 2, mode))
-    s.setRef(async (postId) => post(postId, [], 'Mine90'))
-    await s.run()
-    expect(s.refs).toEqual([])
-    expect(s.raw('SELECT * FROM reminder_events')).toEqual([])
-    expect(s.db.reminderOverview().threads[0]?.issues).toEqual([])
-  })
-
-  it('fetches only missing retained quote content after the 饼干 ID set changes', async () => {
-    const s = fixture()
-    s.db.saveThreadPage(page('100', 1, [post('101')], 57), t0)
-    await s.enable('quote')
-    proof(s.db)
-    s.setRead(async (threadId, mode, number) => page(threadId, number, number === 1 ? [post('101'), post('200', ['90'])]
-      : number === 2 ? [post('201')] : number === 3 ? [post('202')] : [], 57, mode))
-    await s.run()
-    const connection = new Database(s.path)
-    try { connection.prepare('DELETE FROM posts WHERE id = ?').run('200') } finally { connection.close() }
-    cookie(s.db, 'Mine90')
-    storeQuoted(s.db)
-    const before = s.requests.length
-    s.next()
-    await s.run()
-    expect(s.requests.slice(before).map((request) => request.page)).toEqual([3, 4, 2, 1])
-    expect(s.db.reminderOverview().threads[0]?.events.map((event) => event.postId)).toEqual(['200'])
-    expect(s.notifications).toHaveLength(1)
-  })
-
-  it('closes only enabled kinds of the selected threads and records the local sync-delete decision', async () => {
-    const s = fixture()
-    await s.enable('all', '100')
-    await s.enable('quote', '100')
-    await s.enable('all', '200')
-    expect(await s.service.closeForThreads({ threadIds: ['100', '100', '300'], reason: 'sync-delete' }))
-      .toEqual({ ok: true, closed: ['100'] })
-    const rules = s.db.getReminderRules(['100', '200'])
-    expect(rules[0]?.rules.all).toMatchObject({ enabled: false, startedAt: start, closedBy: 'sync-delete' })
-    expect(rules[0]?.rules.quote).toMatchObject({ enabled: false, startedAt: start, closedBy: 'sync-delete' })
-    expect(rules[1]?.rules.all.enabled).toBe(true)
-    expect(s.requests).toEqual([])
-  })
-
-  it('leaves starts, checkpoints, events and notification records intact when history and reading positions are cleared', async () => {
-    const s = fixture()
-    await s.enable()
-    proof(s.db)
-    await s.run()
-    s.db.recordVisit('100', later)
-    const rules = s.db.reminderRuleSnapshots()
-    const coverage = s.db.getReminderCoverage('100', 'all')
-    const events = s.raw('SELECT * FROM reminder_events')
-    const notifications = s.raw('SELECT * FROM reminder_notifications')
-    s.db.clearHistory('100', true)
-    expect(s.db.reminderRuleSnapshots()).toEqual(rules)
-    expect(s.db.getReminderCoverage('100', 'all')).toEqual(coverage)
-    expect(s.raw('SELECT * FROM reminder_events')).toEqual(events)
-    expect(s.raw('SELECT * FROM reminder_notifications')).toEqual(notifications)
-    expect(s.db.reminderOverview().threads[0]?.eventCount).toBe(1)
-    const usage = s.db.getContentUsage()
-    expect(usage.personalDataBytes).toBeGreaterThan(0)
-    for (let count = 0; count < 100; count++) if (!s.db.evictContentBatch(true).more) break
-    expect(s.db.reminderOverview().threads[0]?.events[0]?.excerpt).toBe('正文 200')
-    s.next()
-    await s.run()
-    expect(s.notifications).toHaveLength(1)
+    h.remote.override = () => ({ body: JSON.stringify('该串不存在') })
+    await h.check()
+    expect(await h.row('100')).toMatchObject({ counts: { all: 11 }, issues: ['not-found'], lastError: { kind: 'not-found' }, rules: { all: { enabled: true } } })
+    h.remote.override = () => ({ status: 500, body: '{}' })
+    await h.check()
+    expect(await h.row('100')).toMatchObject({ counts: { all: 11 }, issues: ['read-failed'], rules: { all: { enabled: true } } })
+    h.remote.override = undefined
+    thread.count = 21
+    await h.check()
+    expect(await h.row('100')).toMatchObject({ counts: { all: 12 }, issues: [], lastError: null })
   })
 })
 
-describe('after the schema v14 upgrade', () => {
-  it('confirms and notifies a new event once and counts every event, read records of v13 included', async () => {
-    const s = fixture((path) => {
-      const old = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 13))
-      try { old.saveThreadPage(page('100', 1, [post('101')]), t0) } finally { old.close() }
-      const raw = new Database(path)
-      try {
-        raw.prepare("INSERT INTO reminder_rules VALUES ('100', 'all', 1, 1, ?, '101', NULL, ?)").run(start, start)
-        raw.prepare(`INSERT INTO reminder_rounds(id, trigger, started_at, finished_at, state, threads_total, threads_done, new_events)
-          VALUES (1, 'manual', ?, ?, 'finished', 1, 1, 98)`).run(start, start)
-        raw.prepare("INSERT INTO reminder_notifications VALUES (1, 1, 98, 1, 'complete', 'shown', ?)").run(start)
-        const event = raw.prepare(`INSERT INTO reminder_events VALUES (?, '100', '{"all":1}', 'all', 1, '旧提醒', NULL,
-          '{"isAdmin":false,"isSage":false,"userHash":null}', '[]', 1, ?, 1)`)
-        const read = raw.prepare("INSERT INTO post_reads VALUES (?, '100', ?)")
-        // 98 earlier events, all read under v13; the next new reply makes 99, a further one 100.
-        for (let index = 0; index < 98; index++) {
-          event.run(String(1000 + index), t0)
-          read.run(String(1000 + index), start)
-        }
-        read.run('200', start)
-        raw.prepare("INSERT INTO favorites VALUES ('100', ?)").run(t0)
-        raw.prepare("INSERT INTO thread_attention VALUES ('100', ?, 'favorite', '101')").run(t0)
-      } finally { raw.close() }
-    })
-    expect(s.db.status).toMatchObject({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((migration) => migration.version)) })
-    proof(s.db)
-    await s.run()
-    const group = s.db.reminderOverview().threads[0]!
-    expect(group).toMatchObject({ threadId: '100', state: 'done', eventCount: 99 })
-    expect(group.events[0]).toMatchObject({ postId: '200', kinds: ['all'] })
-    expect(formatReminderCount(group.eventCount)).toBe('99')
-    expect(s.notifications).toHaveLength(1)
+describe('credentials of reminder reads', () => {
+  it('reads reply counts without the cookie, retries a refusal once with it, and reads new pages with it', async () => {
+    const h = await harness({ cookieIds: ['Mine'] })
+    const thread = h.thread('100', { count: 20 })
+    await h.enable('100', 'quote')
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:2+cookie'])
+    expect(h.seen[1]?.cookie).toBe('userhash=browse-secret')
 
-    s.next()
-    s.setRead(async (threadId, mode, number) => page(threadId, number, number === 1 ? [post('101'), post('200'), post('201')] : [], 3, mode))
-    await s.run()
-    const after = s.db.reminderOverview().threads[0]!
-    expect(after.eventCount).toBe(100)
-    expect(formatReminderCount(after.eventCount)).toBe('99+')
-    expect(s.notifications).toHaveLength(2)
-    s.next()
-    s.setClock(180_000)
-    await s.run()
-    expect(s.notifications).toHaveLength(2)
+    h.remote.override = (entry) => entry.page === 1 && entry.cookie === undefined ? { body: JSON.stringify('本版需要饼干才能浏览') } : undefined
+    thread.count = 40
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:1+cookie', 'thread:100:2+cookie', 'thread:100:3+cookie'])
+    expect((await h.row('100')).issues).toEqual([])
+  })
+
+  it('sends no credential at all and does not retry when no cookie is imported', async () => {
+    const h = await harness()
+    h.thread('100', { count: 20 })
+    await h.enable('100', 'all', 'quote')
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:2'])
+    h.remote.override = (entry) => entry.page === 1 ? { body: JSON.stringify('本版需要饼干才能浏览') } : undefined
+    expect(await h.check()).toEqual(['thread:100:1'])
+    expect(await h.row('100')).toMatchObject({ issues: ['read-failed'], lastError: { kind: 'permission' } })
   })
 })
 
-describe('effective triggers and bounded catch-up', () => {
-  it('shares single-flight and monotonic 60-second cooldown across launch/reopen/manual with no queued check', async () => {
-    const s = fixture()
-    await s.enable()
-    const entered = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    s.setRead(async (threadId, mode, number) => {
-      entered.resolve()
-      await release.promise
-      return page(threadId, number, [], 0, mode)
-    })
-    expect((await s.service.request('cold-start')).accepted).toBe(true)
-    await entered.promise
-    s.setClock(60_000, '2026-10-23T00:00:00.000Z') // Wall clock does not affect the running guard.
-    expect(await s.service.request('reopen')).toEqual({ accepted: false, reason: 'running', retryAfterMs: 0 })
-    release.resolve()
-    await s.service.whenIdle()
-    const total = s.raw('SELECT * FROM reminder_rounds').length
-    s.setClock(59_999, '2030-01-01T00:00:00.000Z')
-    expect(await s.service.check()).toEqual({ accepted: false, reason: 'cooldown', retryAfterMs: 1 })
-    expect(s.raw('SELECT * FROM reminder_rounds')).toHaveLength(total)
-    s.setClock(60_000)
-    expect((await s.service.request('reopen')).accepted).toBe(true)
-    await s.service.whenIdle()
-    expect(s.raw('SELECT * FROM reminder_rounds')).toHaveLength(total + 1)
+describe('引用我的发言', () => {
+  it('reads only new pages and matches confirmed sends, stored and quoted 饼干 IDs, never treating unknown as a non-match', async () => {
+    const h = await harness({ cookieIds: ['Mine'] })
+    const thread = h.thread('100', { count: 50 })
+    h.confirmOwn('90')
+    h.db.savePost(localPost('91', 'Mine'), t0)
+    h.db.savePost(localPost('94', 'Other'), t0)
+    h.refs.set('92', forumPost('92', '别处', 'Mine'))
+    await h.enable('100', 'quote')
+    // The initial checked reply comes from the current last page; nothing is counted.
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:3+cookie'])
+    expect((await h.row('100')).counts.quote).toBe(0)
+
+    thread.count = 60
+    thread.quotes = new Map([[52, ['90']], [53, ['94']], [55, ['91']], [58, ['92']], [59, ['93']], [60, ['90', '91']]])
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:3+cookie', 'thread:100:4+cookie', 'ref:92+cookie', 'ref:93+cookie'])
+    expect(await h.row('100')).toMatchObject({ counts: { all: 0, po: 0, quote: 4 }, unverifiedQuotes: 1,
+      issues: ['quote-unverified'], firstNew: { mode: 'all', page: 3 } })
+    expect(h.db.loadPost('92')?.value.userHash).toBe('Mine')
   })
 
-  it.each(['forward', 'backward'] as const)('bounds %s probing to two offsets and continues from the saved position next trigger', async (direction) => {
-    const s = fixture()
-    s.db.saveThreadPage(page('100', 1, [post('101')], 1900), t0)
-    await s.enable()
-    s.setRead(async (threadId, mode, number) => page(threadId, number, direction === 'forward' ? [post(String(1000 + number))] : [], 1900, mode))
-    await s.run()
-    expect(s.requests.map((request) => request.page)).toEqual(direction === 'forward' ? [100, 101, 102] : [100, 99, 98])
-    const saved = s.db.getReminderCoverage('100', 'all')
-    expect(saved.issues).toContain('target-unverified')
-    expect(saved.probe).toEqual({ page: direction === 'forward' ? 103 : 97, direction })
-    const fetched = s.requests.length
-    s.next()
-    await s.run()
-    expect(s.requests[fetched]?.page).toBe(saved.probe!.page)
-    expect(s.requests.length - fetched).toBe(3)
-    expect(s.db.reminderOverview().lastRound?.threadsDone).toBe(0)
+  it('never reads /api/ref without any 饼干 ID, while confirmed sends still match', async () => {
+    const h = await harness()
+    const thread = h.thread('100', { count: 19 })
+    h.confirmOwn('90')
+    h.refs.set('92', forumPost('92', '别处', 'Mine'))
+    await h.enable('100', 'quote')
+    expect(await h.check()).toEqual(['thread:100:1'])
+    Object.assign(thread, { count: 21, quotes: new Map([[20, ['92']], [21, ['90']]]) })
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:2'])
+    expect(await h.row('100')).toMatchObject({ counts: { quote: 1 }, unverifiedQuotes: 0, issues: [] })
   })
 
-  it('re-anchors the tail probe on a fresher ReplyCount so a thread that grew is reached in one trigger', async () => {
-    const s = fixture()
-    await s.enable()
-    let total = 30
-    s.setRead(async (threadId, mode, number) => {
-      const replies = Array.from({ length: total }, (_, index) => post(String(1000 + index)))
-      return page(threadId, number, replies.slice((number - 1) * 19, number * 19), total, mode)
-    })
-    await s.run()
-    expect(s.db.getReminderCoverage('100', 'all').checkpoint).toMatchObject({ page: 2, complete: true })
-    total = 150
-    s.next()
-    await s.run()
-    const coverage = s.db.getReminderCoverage('100', 'all')
-    expect(coverage.issues).not.toContain('target-unverified')
-    expect(coverage.checkpoint).toMatchObject({ page: 8, complete: true })
+  it('yields after five reads per thread and continues the same check in later batches', async () => {
+    const h = await harness({ cookieIds: ['Mine'] })
+    const long = h.thread('100', { count: 19 })
+    const short = h.thread('200', { count: 1 })
+    await h.enable('100', 'quote')
+    await h.enable('200', 'all')
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:200:1'])
+    long.count = 19 * 9
+    short.count = 2
+    expect(await h.check()).toEqual([
+      'thread:100:1', 'thread:100:2+cookie', 'thread:100:3+cookie', 'thread:100:4+cookie', 'thread:100:5+cookie',
+      'thread:200:1',
+      'thread:100:6+cookie', 'thread:100:7+cookie', 'thread:100:8+cookie', 'thread:100:9+cookie'
+    ])
+    expect((await h.row('100')).issues).toEqual([])
   })
 
-  it('rotates threads after at most five page fetches and automatically continues batches within the same trigger', async () => {
-    const s = fixture()
-    s.db.saveThreadPage(page('100', 1, [post('101')], 152), t0)
-    await s.enable('all', '100')
-    await s.enable('all', '200')
-    proof(s.db)
-    s.setRead(async (threadId, mode, number) => page(threadId, number, number <= 8
-      ? Array.from({ length: 19 }, (_, index) => post(String((threadId === '100' ? 1000 : 10000) + number * 19 + index))) : [], 152, mode))
-    await s.run()
-    const sequence = s.requests.map((request) => request.threadId)
-    expect(sequence.length).toBeGreaterThan(10)
-    expect(sequence.slice(0, 5)).toEqual(Array(5).fill('100'))
-    expect(sequence[5]).toBe('200')
-    let consecutive = 0
-    let previous = ''
-    for (const threadId of sequence) {
-      consecutive = threadId === previous ? consecutive + 1 : 1
-      previous = threadId
-      expect(consecutive).toBeLessThanOrEqual(5)
+  it('stops at a failed page as 尚未补完 and resumes there next check, never from page 1', async () => {
+    const h = await harness({ cookieIds: ['Mine'] })
+    h.db.savePost(localPost('91', 'Mine'), t0)
+    const thread = h.thread('100', { count: 19 })
+    await h.enable('100', 'quote')
+    await h.check()
+    Object.assign(thread, { count: 19 * 9, quotes: new Map([[30, ['91']], [70, ['91']]]) })
+    h.remote.override = (entry) => entry.page === 4 ? { status: 500, body: '{}' } : undefined
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:2+cookie', 'thread:100:3+cookie', 'thread:100:4+cookie'])
+    expect(await h.row('100')).toMatchObject({ counts: { quote: 1 }, issues: expect.arrayContaining(['incomplete', 'read-failed']) })
+    h.remote.override = undefined
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:4+cookie', 'thread:100:5+cookie', 'thread:100:6+cookie',
+      'thread:100:7+cookie', 'thread:100:8+cookie', 'thread:100:9+cookie'])
+    expect(await h.row('100')).toMatchObject({ counts: { quote: 2 }, issues: [] })
+  })
+
+  it('counts the page-100 check behind every page past 100 against the five reads of a batch', async () => {
+    const h = await harness({ cookieIds: ['Mine'] })
+    const long = h.thread('100', { count: 1900 })
+    const short = h.thread('200', { count: 1 })
+    await h.enable('100', 'quote')
+    await h.enable('200', 'all')
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:100+cookie', 'thread:200:1'])
+    long.count = 19 * 104
+    short.count = 2
+    expect(await h.check()).toEqual([
+      'thread:100:1', 'thread:100:101+cookie', 'thread:100:100+cookie', 'thread:100:102+cookie', 'thread:100:100+cookie',
+      'thread:200:1',
+      'thread:100:103+cookie', 'thread:100:100+cookie', 'thread:100:104+cookie', 'thread:100:100+cookie'
+    ])
+  })
+
+  it('treats an empty last page of the new range as 尚未补完 and reads it again next check', async () => {
+    const h = await harness({ cookieIds: ['Mine'] })
+    h.db.savePost(localPost('91', 'Mine'), t0)
+    const thread = h.thread('100', { count: 19 })
+    await h.enable('100', 'quote')
+    await h.check()
+    Object.assign(thread, { count: 20, quotes: new Map([[20, ['91']]]) })
+    h.remote.override = (entry) => entry.page === 2
+      ? { body: JSON.stringify({ ...forumPost('100', '主帖', 'PoHash'), ReplyCount: 20, Replies: [] }) } : undefined
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:2+cookie'])
+    expect(await h.row('100')).toMatchObject({ counts: { quote: 0 }, issues: ['incomplete'] })
+    h.remote.override = undefined
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:2+cookie'])
+    expect(await h.row('100')).toMatchObject({ counts: { quote: 1 }, issues: [] })
+  })
+
+  it('opens a quote-only count at the first new reply after the baseline, not at the first match', async () => {
+    const h = await harness({ cookieIds: ['Mine'] })
+    h.db.savePost(localPost('91', 'Mine'), t0)
+    const thread = h.thread('100', { count: 19 })
+    await h.enable('100', 'quote')
+    await h.check()
+    Object.assign(thread, { count: 57, quotes: new Map([[50, ['91']]]) })
+    await h.check()
+    expect(await h.row('100')).toMatchObject({ counts: { quote: 1 }, firstNew: { mode: 'all', page: 2 } })
+  })
+})
+
+describe('counts, clearing and rule generations', () => {
+  it('clears every count of a thread, deletes a disabled kind’s count and re-baselines it when enabled again', async () => {
+    const h = await harness()
+    const thread = h.thread('100', { count: 1, po: [1] })
+    await h.enable('100', 'all', 'po')
+    await h.check()
+    Object.assign(thread, { count: 3, po: [1, 3] })
+    await h.check()
+    expect((await h.row('100')).counts).toEqual({ all: 2, po: 1, quote: 0 })
+    expect((await h.service.clear({ threadId: '100' })).ok).toBe(true)
+    expect(await h.row('100')).toMatchObject({ counts: { all: 0, po: 0, quote: 0 }, firstNew: null, lastIncreasedAt: null })
+    expect((await h.overview()).badge).toBe(0)
+
+    thread.count = 5
+    await h.check()
+    expect((await h.row('100')).counts.all).toBe(2)
+    await h.service.setRule({ threadId: '100', kind: 'all', enabled: false })
+    expect((await h.row('100')).counts.all).toBe(0)
+    await h.enable('100', 'all')
+    thread.count = 7
+    await h.check()
+    expect((await h.row('100')).counts.all).toBe(0) // Re-enabled: the first check only sets the baseline.
+  })
+
+  it('drops a late result when the kind was turned off and on again while its page was being read', async () => {
+    const h = await harness()
+    const thread = h.thread('100', { count: 1 })
+    await h.enable('100', 'all')
+    await h.check()
+    thread.count = 4
+    h.remote.override = async () => {
+      await h.service.setRule({ threadId: '100', kind: 'all', enabled: false })
+      await h.service.setRule({ threadId: '100', kind: 'all', enabled: true })
+      return undefined
     }
-    expect(s.db.reminderOverview().lastRound).toMatchObject({ state: 'finished', threadsTotal: 2, threadsDone: 2, threadsFailed: 0, newEvents: 304 })
-    expect(s.notifications).toHaveLength(1)
-    expect(s.notifications[0]?.body).toBe('2 个串有 304 条新提醒')
+    await h.check()
+    expect((await h.row('100')).counts.all).toBe(0)
+    expect(h.notifications).toEqual([])
+    h.remote.override = undefined
+    thread.count = 6
+    await h.check()
+    expect((await h.row('100')).counts.all).toBe(0) // Still a fresh baseline: the late page set none.
+    thread.count = 7
+    await h.check()
+    expect((await h.row('100')).counts.all).toBe(1)
   })
 
-  it('re-verifies an unchanged checkpoint, falls back to page 1 on a changed sequence, and excludes replies above the frozen target', async () => {
-    const s = fixture()
-    s.db.saveThreadPage(page('100', 1, [post('101')], 57), t0)
-    await s.enable()
-    proof(s.db)
-    let variant: 'initial' | 'unchanged' | 'shifted' = 'initial'
-    let shiftedTailReads = 0
-    s.setRead(async (threadId, mode, number) => {
-      const values = number === 1 ? [post('101'), post('200')] : number === 2 ? variant === 'shifted' ? [post('250'), post('260')] : [post('201')]
-        : number === 3 ? [post('300'), ...(variant === 'shifted' && ++shiftedTailReads > 1 ? [post('999')] : [])] : []
-      return page(threadId, number, values, 57, mode)
-    })
-    await s.run()
-    const before = s.requests.length
-    variant = 'unchanged'
-    s.next()
-    await s.run()
-    expect(s.requests.slice(before).map((request) => request.page)).not.toContain(1)
-    variant = 'shifted'
-    const shiftedAt = s.requests.length
-    s.next()
-    await s.run()
-    expect(s.requests.slice(shiftedAt).map((request) => request.page)).toContain(1)
-    expect(s.db.getReminderCoverage('100', 'all').issues).toContain('shifted')
-    expect(s.db.reminderOverview().threads[0]?.events.map((event) => event.postId)).not.toContain('999')
+  it('lists counted threads by latest increase, then the rest by latest enable; the bell counts counted threads', async () => {
+    const h = await harness()
+    const threads = Object.fromEntries(['100', '200', '300', '400'].map((id) => [id, h.thread(id, { count: 1 })]))
+    await h.enable('300', 'all')
+    await h.enable('100', 'all')
+    await h.enable('200', 'all')
+    await h.check()
+    await h.enable('400', 'all')
+    threads['200']!.count = 2
+    await h.check()
+    threads['100']!.count = 2
+    await h.check()
+    let overview = await h.overview()
+    expect(overview.threads.map((row) => row.threadId)).toEqual(['100', '200', '400', '300'])
+    expect(overview.badge).toBe(2)
+    await h.service.clear({ threadId: '100' })
+    overview = await h.overview()
+    expect(overview.threads.map((row) => row.threadId)).toEqual(['200', '400', '100', '300'])
+    expect(overview.badge).toBe(1)
+    expect([formatReminderCount(99), formatReminderCount(100)]).toEqual(['99', '99+'])
+  })
+})
+
+describe('checks and notifications', () => {
+  it('stops the whole check at a rate limit and marks every unfinished thread', async () => {
+    const h = await harness()
+    h.thread('100', { count: 1 })
+    h.thread('200', { count: 1 })
+    await h.enable('100', 'all')
+    await h.enable('200', 'all')
+    await h.check()
+    h.remote.override = () => ({ body: JSON.stringify('验证码错误') })
+    expect(await h.check()).toEqual(['thread:100:1'])
+    for (const id of ['100', '200']) expect(await h.row(id)).toMatchObject({ issues: ['rate-limited'], lastError: { kind: 'rate-limited' } })
   })
 
-  it('isolates one thread failure, stops the whole round on rate-limit and preserves checkpoints on cancel', async () => {
-    const s = fixture()
-    await s.enable('all', '100')
-    await s.enable('all', '200')
-    proof(s.db)
-    s.setRead(async (threadId, mode, number) => {
-      if (threadId === '100') throw new ForumReadError({ kind: 'not-found', detail: 'business' })
-      return page(threadId, number, number === 1 ? [post('300')] : [], 1, mode)
-    })
-    await s.run()
-    expect(s.db.reminderOverview().lastRound).toMatchObject({ state: 'finished', threadsDone: 1, threadsFailed: 1 })
-    expect(s.notifications[0]?.body).toContain('部分串检查失败，数量不是全部新增')
-    s.next()
-    s.setRead(async () => { throw new ForumReadError({ kind: 'rate-limited', detail: 'http-status', httpStatus: 429 }) })
-    const before = s.requests.length
-    await s.run()
-    expect(s.requests.length - before).toBe(1)
-    expect(s.db.reminderOverview().lastRound).toMatchObject({ state: 'interrupted', stopReason: 'rate-limited' })
-    s.next()
+  it('still notifies the counts a check already saved when quitting interrupts it', async () => {
+    const h = await harness()
+    const a = h.thread('100', { count: 1 })
+    h.thread('200', { count: 1 })
+    await h.enable('100', 'all')
+    await h.enable('200', 'all')
+    await h.check()
+    a.count = 2
     const entered = Promise.withResolvers<void>()
-    s.setRead(async (_threadId, _mode, _number, signal) => {
+    h.remote.override = async (entry) => {
+      if (entry.id !== '200') return undefined
       entered.resolve()
-      const { promise, reject } = Promise.withResolvers<ThreadPage>()
-      signal.addEventListener('abort', () => reject(new ReadCancelledError()), { once: true })
-      return promise
-    })
-    expect((await s.service.check()).accepted).toBe(true)
+      await Promise.withResolvers<never>().promise // Never answers: only the quit ends this read.
+    }
+    await h.begin()
     await entered.promise
-    const checkpoint = s.db.getReminderCoverage('200', 'all').checkpoint
-    await s.service.cancel()
-    expect(s.db.reminderOverview().lastRound).toMatchObject({ state: 'cancelled', stopReason: 'user' })
-    expect(s.db.getReminderCoverage('200', 'all').checkpoint).toEqual(checkpoint)
+    await h.service.stop('quit')
+    expect((await h.row('100')).counts.all).toBe(1)
+    expect(h.notifications).toEqual(['1 个串有新提醒'])
   })
 
-  it('persists confirmed events and an interrupted round before quit resolves', async () => {
-    const s = fixture()
-    s.db.saveThreadPage(page('100', 1, [post('101')], 152), t0)
-    await s.enable()
-    proof(s.db)
+  it('sends one notification per check with new counts, and a failed notification changes nothing else', async () => {
+    const h = await harness()
+    const a = h.thread('100', { count: 1 })
+    const b = h.thread('200', { count: 1 })
+    await h.enable('100', 'all')
+    await h.enable('200', 'all')
+    await h.check()
+    a.count = 2
+    b.count = 3
+    await h.check()
+    expect(h.notifications).toEqual(['2 个串有新提醒'])
+    h.notifier.show = () => { throw new Error('desktop failure') }
+    a.count = 3
+    await h.check()
+    expect(h.notifications).toHaveLength(2)
+    expect((await h.row('100')).counts.all).toBe(2)
+    expect((await h.overview()).checker).toMatchObject({ running: false, lastCheckedAt: expect.any(String) })
+  })
+
+  it('shares one single-flight and a monotonic 60-second cooldown across triggers, without queueing', async () => {
+    const h = await harness()
+    h.thread('100', { count: 1 })
+    await h.enable('100', 'all')
     const entered = Promise.withResolvers<void>()
-    s.setRead(async (threadId, mode, number, signal) => {
-      if (number === 4) {
-        entered.resolve()
-        const { promise, reject } = Promise.withResolvers<ThreadPage>()
-        signal.addEventListener('abort', () => reject(new ReadCancelledError()), { once: true })
-        return promise
-      }
-      return page(threadId, number, number <= 8 ? [post(String(200 + number))] : [], 152, mode)
-    })
-    expect((await s.service.check()).accepted).toBe(true)
+    const release = Promise.withResolvers<void>()
+    h.remote.override = async () => { entered.resolve(); await release.promise; return undefined }
+    expect((await h.service.request()).accepted).toBe(true)
     await entered.promise
-    await s.service.stop('quit')
-    expect(s.db.reminderOverview().lastRound).toMatchObject({ state: 'interrupted', stopReason: 'quit' })
-    expect(s.db.getReminderCoverage('100', 'all')).toMatchObject({ state: 'incomplete', checkpoint: { page: 3, complete: false } })
-    expect(s.db.reminderOverview().threads[0]?.eventCount).toBeGreaterThan(0)
-    expect(s.notifications).toHaveLength(1)
-    expect(s.notifications[0]?.body).toContain('本轮检查未完成，仅含已确认的命中')
+    expect(await h.service.check()).toEqual({ accepted: false, reason: 'running', retryAfterMs: 0 })
+    expect((await h.overview()).checker.running).toBe(true)
+    release.resolve()
+    await h.service.whenIdle()
+    expect(await h.service.check()).toMatchObject({ accepted: false, reason: 'cooldown' })
+    h.remote.override = undefined
+    expect(await h.check()).toEqual(['thread:100:1'])
   })
 
-  it('keeps unproven boundaries out of events and reports uncertainty separately', async () => {
-    const s = fixture()
-    await s.enable('all')
-    await s.enable('po')
-    await s.run()
-    const group = s.db.reminderOverview().threads[0]!
-    // The first check observed the thread's end after the start (baseline), but one reply cannot be
-    // proven newer than the start: coverage is uncertain, not "waiting for a baseline".
-    expect(group).toMatchObject({ state: 'uncertain', eventCount: 0, uncertainCount: 1 })
-    expect(group.issues).toContain('boundary-uncertain')
-    expect(s.notifications).toEqual([])
+  it('keeps reminders readable when a newer app version owns the database, while refusing writes', async () => {
+    const h = await harness()
+    await h.enable('100', 'all')
+    h.db.close()
+    databases.splice(databases.indexOf(h.db), 1)
+    const raw = new Database(h.path)
+    raw.pragma(`user_version = ${Number(raw.pragma('user_version', { simple: true })) + 1}`)
+    raw.close()
+    const newer = openReadingDatabase(h.path)
+    databases.push(newer)
+    expect(newer.status.state).toBe('read-only')
+    expect(newer.getReminderRules(['100'])[0]?.rules.all.enabled).toBe(true)
+    expect(newer.reminderOverview().threads.map((row) => row.threadId)).toEqual(['100'])
+    expect(() => newer.setReminderRule('100', 'po', true, t0)).toThrow()
   })
 })
 
 describe('system notification adapter', () => {
-  it('handles unsupported systems without creating notifications and lets show failures reach the attempt recorder', () => {
+  it('creates nothing where notifications are unsupported and lets a show failure reach the caller', () => {
     const unsupported = createReminderNotifier({ isSupported: () => false,
       create() { throw new Error('must not create') }, async openList() { throw new Error('must not open') } })
-    expect(unsupported.show({ title: '汐岛提醒', body: '1 个串有 1 条新提醒' }, () => { throw new Error('must not settle') })).toBe(false)
+    expect(unsupported.show({ title: '汐岛提醒', body: '1 个串有新提醒' })).toBe(false)
     const broken = createReminderNotifier({ isSupported: () => true,
       create: () => ({ on() {}, show() { throw new Error('desktop failure') } }), async openList() {} })
-    expect(() => broken.show({ title: '汐岛提醒', body: '1 个串有 1 条新提醒' }, () => {})).toThrow('desktop failure')
+    expect(() => broken.show({ title: '汐岛提醒', body: '1 个串有新提醒' })).toThrow('desktop failure')
   })
 
-  it('reports only the system show/failed signal, once, and opens the list only on click', async () => {
+  it('opens the reminders list only on click', async () => {
     const listeners = new Map<string, () => void>()
     let opens = 0
-    const settled: string[] = []
     const notifier = createReminderNotifier({ isSupported: () => true,
       create: () => ({ on(event, listener) { listeners.set(event, listener) }, show() {} }),
       async openList() { opens++ } })
-    expect(notifier.show({ title: '汐岛提醒', body: '1 个串有 1 条新提醒' }, (state) => settled.push(state))).toBe(true)
-    expect(settled).toEqual([])
-    listeners.get('show')?.()
-    listeners.get('failed')?.()
-    expect(settled).toEqual(['shown'])
+    expect(notifier.show({ title: '汐岛提醒', body: '1 个串有新提醒' })).toBe(true)
     expect(opens).toBe(0)
     listeners.get('click')?.()
     await Promise.resolve()
     expect(opens).toBe(1)
-  })
-})
-
-/** Lets queued storage writes started by a notification signal settle. */
-function nextTask(): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>()
-  setTimeout(resolve, 0)
-  return promise
-}
-
-describe('review regressions', () => {
-  it('records a notification as failed when the system reports failure after show() returned, and shown only on the show signal', async () => {
-    const s = fixture()
-    await s.enable('all')
-    proof(s.db)
-    s.setRead(async (threadId, mode, number) => page(threadId, number, number === 1 ? [post('101'), post('200')] : [], 2, mode))
-    let signal: ((state: 'shown' | 'failed') => void) | undefined
-    s.setNotify((_message, settle) => { signal = settle; return true })
-    await s.run()
-    expect(s.db.reminderOverview().lastNotification?.state).toBe('registered')
-    signal?.('failed')
-    await nextTask()
-    expect(s.db.reminderOverview().lastNotification?.state).toBe('failed')
-    signal?.('shown')
-    await nextTask()
-    expect(s.db.reminderOverview().lastNotification?.state).toBe('failed')
-    expect(s.db.reminderOverview().threads[0]?.eventCount).toBe(1)
-  })
-
-  it('continues from the saved probe position even when ReplyCount now estimates farther', async () => {
-    const s = fixture()
-    s.db.saveThreadPage(page('100', 1, [post('101')], 1900), t0)
-    await s.enable()
-    s.setRead(async (threadId, mode, number) => page(threadId, number, [post(String(1000 + number))], 1900, mode))
-    await s.run()
-    expect(s.db.getReminderCoverage('100', 'all').probe).toEqual({ page: 103, direction: 'forward' })
-    const fetched = s.requests.length
-    s.setRead(async (threadId, mode, number) => page(threadId, number, [post(String(1000 + number))], 5700, mode))
-    s.db.saveThreadPage(page('100', 1, [post('101')], 5700), t2)
-    s.next()
-    await s.run()
-    expect(s.requests.slice(fetched).map((request) => request.page)).toEqual([103, 104, 105])
-  })
-
-  it('keeps reminders readable when a newer app version owns the database, while refusing writes', async () => {
-    const s = fixture()
-    await s.enable('all')
-    s.db.close()
-    databases.splice(databases.indexOf(s.db), 1)
-    const raw = new Database(s.path)
-    raw.pragma(`user_version = ${Number(raw.pragma('user_version', { simple: true })) + 1}`)
-    raw.close()
-    const newer = openReadingDatabase(s.path)
-    databases.push(newer)
-    expect(newer.status.state).toBe('read-only')
-    expect(newer.getReminderRules(['100'])[0]?.rules.all.enabled).toBe(true)
-    expect(newer.reminderOverview().threads.map((group) => group.threadId)).toEqual(['100'])
-    expect(() => newer.setReminderRule('100', 'po', true, later)).toThrow()
   })
 })

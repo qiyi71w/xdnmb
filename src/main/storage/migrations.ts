@@ -540,6 +540,53 @@ export const MIGRATIONS: readonly Migration[] = [
         ALTER TABLE reminder_coverage RENAME COLUMN quote_own_revision TO quote_cookie_revision;
         UPDATE reminder_coverage SET quote_cookie_revision = '[]' WHERE quote_cookie_revision IS NOT NULL;`)
     }
+  },
+  {
+    // Reminders compare forum reply counts with a per-thread baseline instead of proving coverage
+    // from page 1. Rules keep their enabled state and generation (the start becomes the latest enable
+    // time); the start/watermark proof, coverage, rounds, events, notification records and end
+    // observations are dropped, not converted. The first check after this rebuilds every baseline.
+    version: 16,
+    up(db) {
+      db.exec(`CREATE TABLE reminder_rules_v16 (
+          thread_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('all', 'po', 'quote')),
+          enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+          generation INTEGER NOT NULL,
+          enabled_at TEXT NOT NULL,
+          closed_by TEXT CHECK (closed_by IN ('user', 'unsubscribe', 'sync-delete')),
+          changed_at TEXT NOT NULL,
+          PRIMARY KEY (thread_id, kind)
+        );
+        INSERT INTO reminder_rules_v16 SELECT thread_id, kind, enabled, generation, started_at, closed_by, changed_at FROM reminder_rules;
+        DROP TABLE reminder_rules;
+        ALTER TABLE reminder_rules_v16 RENAME TO reminder_rules;
+        DROP TABLE reminder_events;
+        DROP TABLE reminder_notifications;
+        DROP TABLE reminder_rounds;
+        DROP TABLE reminder_coverage;
+        DROP TABLE end_observations;
+        -- One row per enabled kind once a check has seen it. baseline: the last reply count of the
+        -- kind's mode (quote: replies whose quotes are checked); NULL until the first check sets it.
+        CREATE TABLE reminder_state (
+          thread_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('all', 'po', 'quote')),
+          baseline INTEGER CHECK (baseline IS NULL OR baseline >= 0),
+          checked_post_id TEXT,
+          count INTEGER NOT NULL DEFAULT 0 CHECK (count >= 0),
+          first_page INTEGER CHECK (first_page IS NULL OR first_page >= 1),
+          increased_at TEXT,
+          unverified INTEGER NOT NULL DEFAULT 0 CHECK (unverified >= 0),
+          issues_json TEXT NOT NULL DEFAULT '[]',
+          last_error_json TEXT,
+          checked_at TEXT,
+          PRIMARY KEY (thread_id, kind)
+        );
+        CREATE TABLE reminder_checker (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          last_checked_at TEXT
+        );`)
+    }
   }
 ]
 

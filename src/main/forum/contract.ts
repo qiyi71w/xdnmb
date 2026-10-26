@@ -40,8 +40,11 @@ export interface ForumClient {
   getDirectory(signal: AbortSignal): Promise<BoardDirectory>
   /** showf (forum) or timeline list page. */
   getFeedPage(feed: FeedRef, page: number, signal: AbortSignal): Promise<FeedPage>
-  /** One thread page: `all` reads `thread`, `po` reads the PO-only `po` pages (own page numbering). */
-  getThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal): Promise<ThreadPage>
+  /**
+   * One thread page: `all` reads `thread`, `po` reads the PO-only `po` pages (own page numbering).
+   * `anonymous` sends this read without the browse cookie.
+   */
+  getThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal, options?: { anonymous?: boolean }): Promise<ThreadPage>
   /**
    * One quoted post (`ref`). The response carries no owning thread or page; a missing post is the
    * forum's business error `该串不存在`, classified `not-found`.

@@ -34,7 +34,6 @@ import { LifecycleHost } from '../features/lifecycle/LifecycleHost'
 import { useIdentities } from '../features/identity/useIdentities'
 import { SubscriptionsContext, useSubscriptions } from '../features/subscriptions/useSubscriptions'
 import { RemindersContext, useReminderOverview } from '../features/reminders/useReminders'
-import { overviewHasCoverageProblem } from '../features/reminders/reminderText'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { QuoteCard } from '../features/quote/QuoteCard'
 import { QuoteActiveContext, QuoteControllerContext } from '../features/quote/QuoteContext'
@@ -119,6 +118,23 @@ function readerShown(tab: Tab, entry: TabEntry, singlePane: boolean): boolean {
 }
 
 /**
+ * The thread the tab's current entry shows: a whole-page thread, or the one beside its split list
+ * (also while the single-pane fallback shows the list instead).
+ */
+function shownThread(tab: Tab): ThreadOpen | null {
+  const entry = currentEntry(tab)
+  return readerShown(tab, entry, false) ? entryThread(entry) : null
+}
+
+/**
+ * The user opened the thread, or switched to a tab showing it: its reminder counts go to 0. Fire
+ * and forget: a failure leaves the counts for the next open; reading data is untouched.
+ */
+function clearThreadReminders(threadId: ThreadId) {
+  window.xidao.reminders.clear({ threadId }).catch(() => undefined)
+}
+
+/**
  * Post targets whose editors the tab shows now, reader first: the shown thread's replies, then
  * new threads of the shown forum list (hidden while the single pane shows the thread).
  */
@@ -165,10 +181,8 @@ export function App() {
   const pendingAttempts = usePendingAttempts(editors.publicationRevision)
   const reminders = useReminderOverview()
   const { overview: reminderOverview, reload: reloadReminders } = reminders
-  const reminderBadge = useMemo(
-    () => (reminderOverview === null ? null : { coverageProblem: overviewHasCoverageProblem(reminderOverview) }),
-    [reminderOverview]
-  )
+  const reminderThreads = reminderOverview?.badge ?? null
+  const reminderBadge = useMemo(() => (reminderThreads === null ? null : { threads: reminderThreads }), [reminderThreads])
   /** The app's coverage: every modal dialog (`Modal`) and the settings page cover it while open. */
   const coverage = useAppCoverage()
   const [draftsOpen, setDraftsOpen] = useState(false)
@@ -274,6 +288,24 @@ export function App() {
     gap: LAYOUT_DEFAULTS.gap + scrollbarWidth
   })
   const navOverlay = layout.nav === 'overlay'
+
+  // ---------- Reminders: opening a thread clears its counts ----------
+  // Every user step that shows a thread changes what the active tab shows (tab, entry, thread):
+  // opening from a list or beside it, links, quote jumps, back / forward, switching tabs. The first
+  // state seen is the startup's (a restored workspace, including its active tab): it is not an
+  // open. A tab opened in the background shows nothing until it becomes active. Re-renders, focus
+  // and later count growth change nothing here, so a displayed thread is not cleared again.
+  const shown = current === null ? null : shownThread(current)
+  const shownThreadId = shown?.threadId ?? null
+  const shownKey = current === null || shown === null ? null : `${current.id}:${currentEntry(current).key}:${shown.threadId}`
+  const tabsReady = tabs !== null
+  const lastShown = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (!tabsReady) return
+    const before = lastShown.current
+    lastShown.current = shownKey
+    if (before !== undefined && shownKey !== null && shownKey !== before && shownThreadId !== null) clearThreadReminders(shownThreadId)
+  }, [tabsReady, shownKey, shownThreadId])
 
   // ---------- Navigation overlay ----------
   const navTriggerRef = useRef<HTMLButtonElement>(null)
@@ -577,6 +609,9 @@ export function App() {
       if (tab === undefined) return
       const entry = currentEntry(tab)
       if (!(entry.kind === 'list' && tab.split)) leave(tab)
+      // Choosing the thread already beside the list keeps the shown entry (nothing for the shell to
+      // notice), yet it is an open: its reminder counts go to 0 like any other.
+      if (shownThread(tab)?.threadId === threadId) clearThreadReminders(threadId)
       const thread: ThreadOpen = { threadId, head, target: null, snapshot: null, unlocatedPostId: null }
       dispatch({ type: 'select-thread', tabId, thread })
     },
@@ -586,10 +621,10 @@ export function App() {
   const showPane = useCallback((tabId: number, pane: 'list' | 'reader') => dispatch({ type: 'show-pane', tabId, pane }), [])
 
   /**
-   * A list item resolved to an explicit target (a located reminder event) while list entry
+   * A list item opened at an explicit target (a reminder's first new page) while list entry
    * `entryKey` was current. Split shows it beside the list (no back step), otherwise a new step.
-   * The same thread already beside the list is pointed at in place when the target is visible;
-   * otherwise it opens again as a new step (the list keeps its memory) so the target applies.
+   * The same thread already beside the list opens again as a new step (the list keeps its memory)
+   * so the target applies.
    */
   const openListTarget = useCallback(
     (tabId: number, entryKey: number, thread: ThreadOpen): boolean => {
@@ -599,9 +634,6 @@ export function App() {
       const entry = currentEntry(tab)
       if (entry.key !== entryKey || entry.kind !== 'list') return false
       if (tab.split && entry.thread?.threadId === thread.threadId) {
-        const readerVisible = !stateRef.current.singlePane || entry.pane === 'reader'
-        const reader = registry.readers.get(entry.key)?.current
-        if (readerVisible && thread.target !== null && reader?.showInPlace(thread.threadId, thread.target) === true) return true
         leave(tab)
         const memory = registry.listMemory.get(entry.key)
         if (memory !== undefined) registry.listMemory.set(state.nextKey, memory)

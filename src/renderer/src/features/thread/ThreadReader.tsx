@@ -425,8 +425,9 @@ export function ThreadReader({
     },
     refresh: thread.refresh,
     showInPlace: (targetThread, target) => {
-      if (targetThread !== threadId || target.mode !== mode || !isVisible(target.postId)) return false
-      highlight(target.postId)
+      const { postId } = target
+      if (postId === null || targetThread !== threadId || target.mode !== mode || !isVisible(postId)) return false
+      highlight(postId)
       return true
     },
     shown: () => ({ threadId, mode, title: state.head === null ? null : meaningfulTitle(state.head.title) })

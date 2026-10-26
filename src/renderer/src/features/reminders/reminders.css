@@ -1,33 +1,4 @@
-/* ---------- 提醒 control: button + small panel of three checkboxes ---------- */
-
-.reminder-menu {
-  position: relative;
-  display: inline-flex;
-  max-width: 100%;
-}
-
-.reminder-trigger.is-on {
-  border-color: transparent;
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-  font-weight: 600;
-}
-
-.reminder-trigger.is-on .icon {
-  color: var(--accent-ink);
-}
-
-.reminder-trigger.is-warning,
-.reminder-trigger.is-warning .icon {
-  color: var(--warn-ink);
-}
-
-/* In list rows the label may wrap instead of widening the action column. */
-.reminder-trigger.btn-small {
-  max-width: 11em;
-  white-space: normal;
-  text-align: start;
-}
+/* ---------- 提醒 panel of a thread (串工具栏 更多 › 提醒): three checkboxes ---------- */
 
 .reminder-panel {
   position: absolute;
@@ -122,349 +93,85 @@
   font-weight: 600;
 }
 
-/* ---------- 提醒 list ---------- */
+/* ---------- 提醒 page: the thread lists' row, with the counts at the end of its meta ---------- */
 
-.reminder-total {
-  flex: none;
-  display: grid;
-  justify-items: end;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--ink-2);
+/* Title row: title, 上次检查, 手动检查. When the column is too narrow, the tools wrap below the
+   title as one group, never squeezing it. */
+.reminder-pane .list-title-row {
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
 
-.reminder-total-note {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--text-xs);
-  font-weight: 500;
-  color: var(--warn-ink);
+.reminder-pane .list-title {
+  flex: 1 0 auto;
 }
 
-.reminder-checker {
-  display: grid;
-  gap: 6px;
-  margin: 10px 10px 4px;
-  padding: 0 4px;
-  font-size: var(--text-sm);
-}
-
-.reminder-checker-row {
+.reminder-header-tools {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 12px;
+  justify-content: flex-end;
+  gap: 4px 10px;
+  margin-left: auto;
 }
 
-.reminder-checker-status {
-  flex: 1 1 12em;
-  min-width: 0;
-}
-
-.reminder-checker-status .loading {
-  padding: 0;
-}
-
-.reminder-checker-line {
+.reminder-last-checked {
+  font-size: var(--text-xs);
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
 }
 
-.reminder-checker-message {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  overflow-wrap: anywhere;
+/* A quiet text control, same weight as the header's icon buttons (as 订阅's 同步与合并). */
+.reminder-check {
+  flex: none;
+  min-height: 30px;
   color: var(--ink-2);
 }
 
-.reminder-checker-message .icon {
-  flex: none;
-  margin-top: 2px;
+.reminder-check:hover:not([aria-disabled='true']) {
+  color: var(--ink);
 }
 
-.reminder-checker-message.is-warn {
-  color: var(--warn-ink);
+/* Running or cooling down: looks unavailable but keeps focus; the reason is its tooltip. */
+.reminder-check[aria-disabled='true'] {
+  color: var(--ink-3);
+  cursor: default;
 }
 
-.reminder-checker-message.is-error {
-  color: var(--danger-ink);
+.reminder-check[aria-disabled='true']:hover {
+  background: transparent;
+}
+
+:root[data-density='compact'] .reminder-check {
+  min-height: 26px;
+}
+
+.list-header .reminder-check-message {
+  margin: 6px 0 0;
 }
 
 .reminder-empty-action {
   margin-top: 12px;
 }
 
-.reminder-groups {
-  display: grid;
-  gap: 8px;
-  padding: 6px 8px 0;
-}
-
-.reminder-group {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-m);
-  background: var(--paper);
-}
-
-.reminder-group.is-selected {
-  border-color: transparent;
-  box-shadow: inset 0 0 0 2px var(--selected);
-}
-
-.reminder-group-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.reminder-group-text {
-  flex: 1;
-  min-width: 0;
-}
-
-.reminder-group-title {
-  margin: 0;
-  font-size: var(--text-md);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.reminder-group-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 10px;
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.reminder-group-line {
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-}
-
-.reminder-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.reminder-chip {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0 6px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-  font-size: var(--text-xs);
-  font-weight: 600;
-}
-
-.reminder-chip-start {
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-}
-
-.reminder-state {
-  display: grid;
-  gap: 2px;
-  font-size: var(--text-xs);
-  color: var(--ink-2);
-}
-
-.reminder-state-name {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 8px;
-}
-
-.reminder-state-name .loading {
-  padding: 0;
-  font-size: var(--text-xs);
-}
-
-.reminder-state-detail {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.reminder-state.is-warning,
-.reminder-state.is-warning .tag {
-  color: var(--warn-ink);
-}
-
-.reminder-state.is-warning .tag {
-  background: var(--warn-bg);
-}
-
-.reminder-state.is-error,
-.reminder-state.is-error .tag {
-  color: var(--danger-ink);
-}
-
-.reminder-state.is-error .tag {
-  background: var(--danger-bg);
-}
-
-.reminder-issues {
-  display: grid;
-  gap: 1px;
-}
-
-.reminder-issues li {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  color: var(--warn-ink);
-}
-
-.reminder-issues .icon,
-.reminder-uncertain .icon {
-  flex: none;
-  margin-top: 2px;
-}
-
+/* 全串:3 PO:2 引用:1 — what is new in the thread: ink and weight over the quiet meta, not color. */
 .reminder-counts {
-  display: grid;
-  gap: 2px;
-  font-size: var(--text-sm);
-  color: var(--ink-2);
+  color: var(--ink);
+  font-weight: 600;
+  word-spacing: 0.15em;
 }
 
-.reminder-uncertain {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  font-size: var(--text-xs);
-  color: var(--warn-ink);
-}
-
-.reminder-events {
-  display: grid;
-  gap: 1px;
-  margin: 0 -6px;
-}
-
-.reminder-event {
-  display: grid;
-  gap: 3px;
-  width: 100%;
-  min-width: 0;
-  padding: 8px 6px;
-  border: 0;
-  border-radius: var(--radius-s);
-  background: transparent;
-  text-align: start;
-  cursor: pointer;
-}
-
-.reminder-event:hover {
+/* The row whose context menu is open keeps the hover layer while the pointer is on the menu. */
+.reminder-row.is-menu-open > .thread-row:not(.is-selected) {
   background: var(--hover);
 }
 
-.reminder-event:focus-visible {
-  outline-offset: -2px;
+/* 清除提醒 that did not apply: one line under the row, aligned with its text. */
+.reminder-row > .notice-inline {
+  margin: 0;
+  padding: 0 12px 10px;
 }
 
-.reminder-event-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
-  font-size: var(--text-xs);
-}
-
-.reminder-event-kind {
-  color: var(--accent-ink);
-  font-weight: 600;
-}
-
-.reminder-event-time {
-  margin-inline-start: auto;
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.reminder-event-excerpt {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
-  font-size: var(--text-sm);
-  line-height: 1.55;
-  color: var(--ink-2);
-  overflow-wrap: anywhere;
-}
-
-.reminder-event-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 10px;
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.reminder-open {
-  padding: 2px 6px 8px;
-}
-
-.reminder-open-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-  padding: 6px 8px;
-  border-radius: var(--radius-s);
-  background: var(--info-bg);
-  font-size: var(--text-xs);
-  color: var(--ink-2);
-}
-
-.reminder-open-row.is-error {
-  background: var(--danger-bg);
-  color: var(--danger-ink);
-}
-
-.reminder-open-row .loading {
-  padding: 0;
-  font-size: var(--text-xs);
-}
-
-.reminder-open-text {
-  flex: 1 1 14em;
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.reminder-open-text .icon {
-  flex: none;
-  margin-top: 2px;
-}
-
-/* Compact density: list and row padding only; text sizes stay. */
-:root[data-density='compact'] .reminder-groups {
-  gap: 4px;
-  padding: 4px 6px 0;
-}
-
-:root[data-density='compact'] .reminder-group {
-  gap: 4px;
-  padding: 6px 10px;
-}
-
-:root[data-density='compact'] .reminder-open-row {
-  padding: 4px 8px;
+:root[data-density='compact'] .reminder-row > .notice-inline {
+  padding: 0 10px 6px;
 }

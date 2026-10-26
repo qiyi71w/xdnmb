@@ -8,9 +8,9 @@ export type ReaderPosition =
   | { kind: 'top' }
   /** Restore a remembered anchor (snapshot or saved position); `anchor.page` is loaded. */
   | { kind: 'anchor'; anchor: ReadingAnchor }
-  /** Put an explicit post (quote, search or reminder target) at the reading line; `page` is loaded. */
+  /** Put an explicit post (quote or search target) at the reading line; `page` is loaded. */
   | { kind: 'post'; postId: PostId; page: number }
-  /** Top of a page (页码 jump). */
+  /** Top of a page (页码 jump, or the page of a reminder's first new reply). */
   | { kind: 'page'; page: number }
   /** Last loaded post (末尾). */
   | { kind: 'last' }
@@ -63,7 +63,8 @@ export async function readResumePage(
  */
 export function decideStart(open: ThreadOpen, state: ThreadReadingState | null, generation: number): ReaderStart {
   if (open.target !== null) {
-    return { mode: open.target.mode, position: { kind: 'post', postId: open.target.postId, page: open.target.page } }
+    const { postId, page, mode } = open.target
+    return { mode, position: postId === null ? { kind: 'page', page } : { kind: 'post', postId, page } }
   }
   if (open.snapshot !== null && open.snapshot.generation === generation) {
     return { mode: open.snapshot.mode, position: { kind: 'anchor', anchor: open.snapshot.anchor } }

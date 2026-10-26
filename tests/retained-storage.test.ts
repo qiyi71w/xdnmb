@@ -120,7 +120,8 @@ describe('retained content storage', () => {
     }
     db.recordVisit('100', t0)
     db.recordVisit('200', t0)
-    raw(path).prepare('INSERT INTO end_observations VALUES (?, ?, ?)').run('100', t1, '1001')
+    db.setReminderRule('100', 'all', true, t0)
+    expect(db.updateReminderState({ threadId: '100', kind: 'all', generation: 1, at: t1, baseline: 3, add: 2, firstPage: 1 })).toBe(true)
     expect(db.clearHistory('100', false)).toEqual([])
     expect(db.getReadingState('100').positions.all).not.toBeNull()
     expect(db.listHistory().map((entry) => entry.threadId)).toEqual(['200'])
@@ -133,7 +134,7 @@ describe('retained content storage', () => {
     expect(db.clearHistory(null, true)).toEqual(['200'])
     expect(db.getReadingState('200').positions.all).toBeNull()
     expect(db.getReadingState('300').positions.all).not.toBeNull()
-    expect(raw(path).prepare('SELECT count(*) AS n FROM end_observations').get()).toEqual({ n: 1 })
+    expect(db.reminderOverview().threads[0]).toMatchObject({ threadId: '100', counts: { all: 2 } })
   })
 
   it('counts UTF-8 payload once and keeps the quota independent from reading settings', () => {
