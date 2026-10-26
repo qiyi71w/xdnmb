@@ -12,6 +12,15 @@ export function failureText(failure: LoadFailure): string {
 }
 
 /**
+ * The user opened the thread, switched to a tab showing it, or jumped to a quote inside it: its
+ * reminder counts go to 0. Fire and forget: a failure leaves the counts for the next open; reading
+ * data is untouched.
+ */
+export function clearThreadReminders(threadId: ThreadId): void {
+  window.xidao.reminders.clear({ threadId }).catch(() => undefined)
+}
+
+/**
  * Local reminder data kept current by `reminders.onChanged`: one read at a time, and changes that
  * arrive while it runs coalesce into a single follow-up read. No timers and no polling; reading
  * never starts a check. A new `key` (another set of threads) starts over and drops older results.

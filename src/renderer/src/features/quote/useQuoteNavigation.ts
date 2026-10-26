@@ -5,6 +5,7 @@ import type { AppSettings } from '../../../../shared/settings'
 import { isEditableTarget } from '../../app/shortcuts'
 import { openLayer } from '../../lib/layers'
 import type { ContentRegistry } from '../tabs/contentRegistry'
+import { clearThreadReminders } from '../reminders/useReminders'
 import { backgroundTabEntry, currentEntry, entryThread, type Tab, type TabEntry, type TabsAction, type TabsState, type ThreadOpen, type ThreadSnapshot } from '../tabs/tabsState'
 import { readResumePage } from '../thread/readingStart'
 import { findQuoteElement, quoteHostId, quoteKey, type QuoteController, type QuoteRefInfo } from './QuoteContext'
@@ -206,9 +207,11 @@ export function useQuoteNavigation(options: Options) {
         focusTrigger(card.source)
         return
       }
-      // Already on screen in the same thread and mode: no new history step, just point at it.
+      // Already on screen in the same thread and mode: no new history step, just point at it. The
+      // jump is still an explicit open of that thread, so its reminder counts go to 0.
       const reader = opts.current.registry.readers.get(shown.entry.key)?.current
       if (reader !== undefined && reader.showInPlace(result.threadId, target)) {
+        clearThreadReminders(result.threadId)
         apply({ type: 'close', cardId })
         return
       }

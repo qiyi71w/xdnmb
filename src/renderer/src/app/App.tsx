@@ -33,7 +33,7 @@ import { LaunchNotice } from '../features/lifecycle/LaunchNotice'
 import { LifecycleHost } from '../features/lifecycle/LifecycleHost'
 import { useIdentities } from '../features/identity/useIdentities'
 import { SubscriptionsContext, useSubscriptions } from '../features/subscriptions/useSubscriptions'
-import { RemindersContext, useReminderOverview } from '../features/reminders/useReminders'
+import { clearThreadReminders, RemindersContext, useReminderOverview } from '../features/reminders/useReminders'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { QuoteCard } from '../features/quote/QuoteCard'
 import { QuoteActiveContext, QuoteControllerContext } from '../features/quote/QuoteContext'
@@ -124,14 +124,6 @@ function readerShown(tab: Tab, entry: TabEntry, singlePane: boolean): boolean {
 function shownThread(tab: Tab): ThreadOpen | null {
   const entry = currentEntry(tab)
   return readerShown(tab, entry, false) ? entryThread(entry) : null
-}
-
-/**
- * The user opened the thread, or switched to a tab showing it: its reminder counts go to 0. Fire
- * and forget: a failure leaves the counts for the next open; reading data is untouched.
- */
-function clearThreadReminders(threadId: ThreadId) {
-  window.xidao.reminders.clear({ threadId }).catch(() => undefined)
 }
 
 /**
