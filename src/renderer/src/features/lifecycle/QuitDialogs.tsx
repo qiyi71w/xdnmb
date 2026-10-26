@@ -144,7 +144,7 @@ export function WorkspaceSaveFailedDialog({
 
 /** The result each listed send should have recorded. */
 function resultText(attempt: PublicationAttempt): string {
-  if (attempt.state === 'unknown') return '结果待确认'
+  if (attempt.state === 'unknown') return '结果不明，下次启动时确认'
   return ATTEMPT_STATE_LABEL[attempt.state]
 }
 

@@ -451,7 +451,6 @@ export const IpcChannel = {
   submitPublication: 'publication:submit',
   resolvePoPrompt: 'publication:resolve-prompt',
   listPublications: 'publication:list',
-  resolvePendingPublication: 'publication:resolve-pending',
   getPublication: 'publication:get',
   getPoWarning: 'publication:get-po-warning',
   setPoWarning: 'publication:set-po-warning',

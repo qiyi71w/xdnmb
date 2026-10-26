@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { PostTarget } from '../../src/shared/drafts'
 import type { IdentityOverview } from '../../src/shared/identity'
-import { parsePostIdInput, recordCookie, recordPlace } from '../../src/renderer/src/features/publication/sentRecords'
+import { recordCookie, recordPlace } from '../../src/renderer/src/features/publication/sentRecords'
 
 const record = (target: PostTarget, postId: string | null, threadId: string | null) => ({
   payload: { draftId: null, target, credentialId: '1', fields: { content: 'x', title: '', name: '', email: '', watermark: false }, attachmentId: null },
@@ -14,8 +14,8 @@ describe('where a sent record opens', () => {
     expect(recordPlace(record({ kind: 'reply', threadId: '100' }, '105', '100'))).toEqual({ kind: 'post', threadId: '100', postId: '105' })
   })
 
-  it('opens the thread of a reply confirmed without a number, without locating', () => {
-    expect(recordPlace(record({ kind: 'reply', threadId: '100' }, null, '100'))).toEqual({ kind: 'thread', threadId: '100' })
+  it('opens the thread of a reply sent without its number confirmed, without locating', () => {
+    expect(recordPlace(record({ kind: 'reply', threadId: '100' }, null, null))).toEqual({ kind: 'thread', threadId: '100' })
   })
 
   it('opens a new thread with its number as that thread', () => {
@@ -24,16 +24,6 @@ describe('where a sent record opens', () => {
 
   it('opens the forum list of a new thread without a number, guessing no thread', () => {
     expect(recordPlace(record({ kind: 'thread', forumId: '4' }, null, null))).toEqual({ kind: 'forum', forumId: '4' })
-  })
-})
-
-describe('the number typed for 已发出', () => {
-  it('accepts digits or nothing and rejects anything else', () => {
-    expect(parsePostIdInput(' 50000001 ')).toEqual({ ok: true, postId: '50000001' })
-    expect(parsePostIdInput('  ')).toEqual({ ok: true, postId: null })
-    expect(parsePostIdInput('No.123')).toEqual({ ok: false })
-    expect(parsePostIdInput('12a')).toEqual({ ok: false })
-    expect(parsePostIdInput('1'.repeat(21))).toEqual({ ok: false })
   })
 })
 

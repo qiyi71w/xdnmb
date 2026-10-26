@@ -139,31 +139,6 @@
   margin: 0;
 }
 
-/* An unresolved send (结果待确认 / ID 未确认): what happened and that nothing is resent. */
-.editor-attempt-card {
-  flex-basis: 100%;
-  display: grid;
-  gap: 2px;
-  padding: 8px 10px;
-  border-radius: var(--radius-m);
-  background: var(--warn-bg);
-  color: var(--warn-ink);
-  font-size: var(--text-sm);
-  line-height: 1.5;
-}
-
-.editor-attempt-title {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-weight: 650;
-}
-
-.editor-attempt-card .editor-note {
-  color: inherit;
-  font-size: var(--text-xs);
-}
-
 .editor-actions {
   display: flex;
   flex-wrap: wrap;

@@ -21,7 +21,7 @@ import type { PoPrompt, PublicationAttempt, PublicationProblem } from '../../../
  * - `prompt`: the PO identity question holds the frozen payload.
  * - `uncertain`: that request failed inside the app; whether it left a durable attempt is being
  *   (or must be) checked by its `requestId`. Never sent again as a new request.
- * - `attempt`: a durable attempt that is `sending`, `unknown` or `unconfirmed`.
+ * - `attempt`: a durable attempt that is `sending`, or `unknown` while its read-only check runs.
  */
 export type EditorPublication =
   | { phase: 'submitting'; requestId: string }
@@ -121,7 +121,7 @@ export type EditorsAction =
   | { type: 'publish-resolving'; editorId: EditorId; resolving: boolean }
   | { type: 'publish-uncertain'; editorId: EditorId; requestId: string; checking: boolean }
   /**
-   * A durable attempt of this editor that is still unresolved. Its frozen payload's identity is
+   * A durable attempt of this editor that is still unsettled. Its frozen payload's identity is
    * the editor's identity from now on (a PO switch changed it).
    */
   | { type: 'publish-attempt'; editorId: EditorId; attempt: PublicationAttempt; readFailed: boolean }
@@ -129,12 +129,7 @@ export type EditorsAction =
   | { type: 'publish-released'; editorId: EditorId; notice: SendNotice | null }
   /** Explicit failure: unlocks and continues the automatically saved draft when there is one. */
   | { type: 'publish-failed'; editorId: EditorId; problem: PublicationProblem | null; draft: SavedDraft | null }
-  /** The user answered 没发出 for this editor's attempt: unlocks and continues the draft it went to. */
-  | { type: 'publish-withdrawn'; editorId: EditorId; draft: SavedDraft | null }
-  /**
-   * Removes a locked editor whose content now lives in its durable attempt: sent and confirmed,
-   * or ended by the user while the result is unknown / the ID unconfirmed.
-   */
+  /** Removes a locked editor whose send was sent: its content now lives in its durable attempt. */
   | { type: 'publish-ended'; editorId: EditorId }
 
 function update(state: EditorsState, editorId: EditorId, change: (editor: Editor) => Editor): EditorsState {
@@ -346,14 +341,11 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
     case 'publish-released':
       return update(state, action.editorId, locked((editor) => ({ ...editor, publication: null, sendNotice: action.notice })))
     case 'publish-failed':
-    case 'publish-withdrawn':
       return update(
         state,
         action.editorId,
         locked((editor) => {
-          const notice: SendNotice = action.type === 'publish-failed'
-            ? { kind: 'failed', problem: action.problem, saved: action.draft !== null }
-            : { kind: 'not-sent' }
+          const notice: SendNotice = { kind: 'failed', problem: action.problem, saved: action.draft !== null }
           const draft = action.draft
           if (draft === null) return { ...editor, publication: null, sendNotice: notice }
           return { ...editor, ...fromDraft(draft), identityUnknown: false, draft, publication: null, sendNotice: notice }

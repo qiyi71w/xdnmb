@@ -172,7 +172,6 @@ const api: XidaoApi = {
     submit: (input) => ipcRenderer.invoke(IpcChannel.submitPublication, input),
     resolvePrompt: (input) => ipcRenderer.invoke(IpcChannel.resolvePoPrompt, input),
     listAttempts: () => ipcRenderer.invoke(IpcChannel.listPublications),
-    resolvePending: (input) => ipcRenderer.invoke(IpcChannel.resolvePendingPublication, input),
     getAttempt: (input) => ipcRenderer.invoke(IpcChannel.getPublication, input),
     getPoWarning: () => ipcRenderer.invoke(IpcChannel.getPoWarning),
     setPoWarning: (input) => ipcRenderer.invoke(IpcChannel.setPoWarning, input)

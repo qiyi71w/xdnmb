@@ -6,9 +6,8 @@ import { isSendShortcut, saveAriaShortcut, sendAriaShortcut, sendShortcutLabel, 
 import { Icon, Spinner } from '../../components/Icon'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { usePopover } from '../../lib/usePopover'
-import { formatRecordTime } from '../../lib/time'
 import { formatBytes } from '../image/imageView'
-import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, ATTEMPT_STATE_LABEL, PROBLEM_TEXT } from '../publication/publicationText'
+import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, PROBLEM_TEXT, unverifiedText } from '../publication/publicationText'
 import type { IdentitiesState } from '../identity/useIdentities'
 import { ROLE_INFO } from '../identity/identityText'
 import { ATTACH_FAILURE_TEXT, editorStateText, forumLabel, SAVE_FAILURE_TEXT, targetText } from './editorText'
@@ -64,7 +63,7 @@ export function EditorPanel({
   displayed: boolean
   focusBar: RefObject<boolean>
 }) {
-  const { store, platform, openAttempts, showTarget } = useEditorWorkspace()
+  const { store, platform, showTarget } = useEditorWorkspace()
   const { focusRequest, requestFocus } = store
   const ids = useId()
   const panelRef = useRef<HTMLDivElement>(null)
@@ -101,8 +100,6 @@ export function EditorPanel({
   const publication = editor.publication
   /** A send holds this editor: its content, target and identity are fixed. */
   const locked = publication !== null
-  const attemptState = publication?.phase === 'attempt' ? publication.attempt.state : null
-  const ended = attemptState === 'unknown' || attemptState === 'unconfirmed'
 
   // Focus the text once a requested panel is on screen (opened, continued, retargeted).
   const key = focusKey(tabId, editor.target)
@@ -123,7 +120,7 @@ export function EditorPanel({
     if (body !== null) body.scrollTop = body.scrollHeight
   }, [displayed, editor.caret])
 
-  // The panel going away with focus inside (sent and confirmed, ended) hands focus to the bar.
+  // The panel going away with focus inside (sent) hands focus to the bar.
   useLayoutEffect(() => {
     const panel = panelRef.current
     return () => {
@@ -336,17 +333,7 @@ export function EditorPanel({
 
   const actions = (
     <div className="editor-actions">
-      {ended ? (
-        <>
-          <button type="button" className={textButton} onClick={() => openAttempts(editor.target.kind)}>
-            <Icon name="history" />
-            查看发送记录
-          </button>
-          <button type="button" className={textButton} onClick={() => store.endPublication(editorId)}>
-            结束编辑
-          </button>
-        </>
-      ) : publication?.phase === 'uncertain' ? (
+      {publication?.phase === 'uncertain' ? (
         <button
           type="button"
           className="btn btn-primary"
@@ -550,7 +537,7 @@ export function EditorPanel({
   )
 }
 
-/** The send part of the editor's status line: progress, the unresolved state, or the last result. */
+/** The send part of the editor's status line: its progress (sending, or being checked), or the last result. */
 function SendStatus({ editor }: { editor: Editor }) {
   const publication = editor.publication
   if (publication === null) {
@@ -560,7 +547,9 @@ function SendStatus({ editor }: { editor: Editor }) {
       notice.kind === 'refused'
         ? `没有发送：${PROBLEM_TEXT[notice.reason]}`
         : notice.kind === 'failed'
-          ? `发送失败${notice.problem === null ? '' : `：${ATTEMPT_PROBLEM_TEXT[notice.problem]}`}${notice.saved ? '，已保存为草稿' : '，草稿未能自动保存'}`
+          ? notice.problem === 'unverified' && notice.saved
+            ? unverifiedText(editor.target.kind)
+            : `发送失败${notice.problem === null ? '' : `：${ATTEMPT_PROBLEM_TEXT[notice.problem]}`}${notice.saved ? '，已保存为草稿' : '，草稿未能自动保存'}`
           : '这次发送没有发出，可以再次发送'
     return (
       <p className="notice-inline is-warning editor-send-notice">
@@ -584,30 +573,17 @@ function SendStatus({ editor }: { editor: Editor }) {
       )
     case 'attempt': {
       const state = publication.attempt.state
-      if (state === 'sending') {
-        return (
-          <>
-            <span className="editor-note">{ATTEMPT_STATE_DETAIL.sending}</span>
-            {publication.readFailed && (
-              <p className="notice-inline is-warning editor-send-notice">
-                <Icon name="alert" size={14} />
-                暂时读不到发送状态，正在重新读取
-              </p>
-            )}
-          </>
-        )
-      }
-      if (state !== 'unknown' && state !== 'unconfirmed') return null
+      if (state !== 'sending' && state !== 'unknown') return null
       return (
-        <div className="editor-attempt-card">
-          <p className="editor-attempt-title">
-            <Icon name="alert" size={14} />
-            {ATTEMPT_STATE_LABEL[state]}
-            {publication.attempt.problem !== null && `：${ATTEMPT_PROBLEM_TEXT[publication.attempt.problem]}`}
-          </p>
-          <p>{ATTEMPT_STATE_DETAIL[state]}</p>
-          <p className="editor-note">开始于 {formatRecordTime(publication.attempt.createdAt)}</p>
-        </div>
+        <>
+          <span className="editor-note">{ATTEMPT_STATE_DETAIL[state]}</span>
+          {publication.readFailed && (
+            <p className="notice-inline is-warning editor-send-notice">
+              <Icon name="alert" size={14} />
+              暂时读不到发送状态，正在重新读取
+            </p>
+          )}
+        </>
       )
     }
   }

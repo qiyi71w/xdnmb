@@ -1,19 +1,18 @@
-import type { PublicationProblem, PublicationState, ResolvePendingResult } from '../../../../shared/publication'
+import type { PublicationProblem, PublicationState } from '../../../../shared/publication'
 import type { SentKind } from './sentRecords'
 
 export const ATTEMPT_STATE_LABEL: Record<PublicationState, string> = {
   sending: '正在发送',
   confirmed: '已发送',
   failed: '发送失败',
-  unknown: '发送结果待确认',
-  unconfirmed: '已发送，ID 未确认'
+  unknown: '正在确认是否已发出',
+  unconfirmed: '已发送，串号未确认'
 }
 
-/** One sentence for an unresolved attempt; nothing is ever re-sent. */
-export const ATTEMPT_STATE_DETAIL: Record<'sending' | 'unknown' | 'unconfirmed', string> = {
+/** One sentence for a send still in progress; nothing is ever re-sent. */
+export const ATTEMPT_STATE_DETAIL: Record<'sending' | 'unknown', string> = {
   sending: '内容、目标和饼干已固定',
-  unknown: '可能已经发出，请到目标处核对',
-  unconfirmed: '论坛表示已发送，但未能确认这条发言的编号'
+  unknown: '发送后连接中断，正在确认是否已发出…'
 }
 
 /**
@@ -32,7 +31,8 @@ export const PROBLEM_TEXT: Record<PublicationProblem, string> = {
   'rate-limited': '论坛限制了发言频率，已停止',
   captcha: '论坛要求验证码，已停止',
   network: '网络连接失败',
-  response: '论坛的响应无法识别'
+  response: '论坛的响应无法识别',
+  unverified: '发送后连接中断，没能确认是否已发出'
 }
 
 /**
@@ -44,25 +44,12 @@ export const ATTEMPT_PROBLEM_TEXT: Record<PublicationProblem, string> = {
   storage: '发送结果没能保存，这次发言可能已经发出'
 }
 
-/** A 待核对 attempt's state, named in words in 历史 (colour only reinforces it). */
-export const PENDING_MARK: Record<'sending' | 'unknown' | 'unconfirmed', string> = {
-  sending: '正在发送',
-  unknown: '结果待确认',
-  unconfirmed: '串号未确认'
-}
-
-/** Why 已发出／没发出 changed nothing; `not-pending` is answered by reading the list again. */
-export function resolveFailureText(reason: Extract<ResolvePendingResult, { ok: false }>['reason'] | 'internal', kind: SentKind): string {
-  switch (reason) {
-    case 'post-id':
-      return kind === 'thread' ? '这个串号已属于另一条发送记录' : '这个串号已属于另一条发送记录，或是所回复的串本身'
-    case 'busy':
-      return '这次发送还没结束，结束后再选择'
-    case 'not-pending':
-      return '这条发送已不在待核对中，列表已重新读取'
-    case 'storage':
-      return '本地存储不可用，没有改动'
-    case 'internal':
-      return '应用内部请求失败，请重新读取列表后再试'
-  }
+/**
+ * A send whose connection broke after the request reached the forum, and that the read-only check
+ * could not find: it may have gone out all the same. A new thread is looked for in its forum (版面),
+ * a reply in its thread (串).
+ */
+export function unverifiedText(kind: SentKind): string {
+  const place = kind === 'thread' ? '版面' : '串'
+  return `可能已经发出：发送后连接中断，汐岛没在${place}里找到这条，内容已存为草稿。重发前先到${place}里看一眼。`
 }

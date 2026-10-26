@@ -8,7 +8,6 @@ import { Icon } from '../../components/Icon'
 import { FailureNotice, IdentitySettingsAction, SourceNotice } from '../../components/Notices'
 import { formatRecordTime } from '../../lib/time'
 import { useSettings } from '../../lib/settingsContext'
-import { pendingTotal, type PendingAttempts } from '../publication/usePendingAttempts'
 import type { ListRef } from '../tabs/tabsState'
 import type { DirectoryState } from './useDirectory'
 import { boardGroups, FEATURES, hiddenBoardGroups, visibleBoards, type FeatureId } from './navStore'
@@ -38,7 +37,6 @@ export interface FeatureHost {
   /** The feature the active tab shows (订阅的串, 提醒, 搜索, 历史, 离线 pages), if any. */
   current: FeatureId | null
   reminderBadge: ReminderBadge | null
-  pendingAttempts: PendingAttempts
   searchShortcut: string
 }
 
@@ -60,29 +58,19 @@ export function featureInfo(id: FeatureId) {
   return FEATURES.find((feature) => feature.id === id) ?? FEATURES[0]!
 }
 
-/** Badge of a feature: threads with new reminders, or sends 待核对 (of 新串 and 回复 together). */
-function featureBadge(id: FeatureId, host: FeatureHost): { text: string; spoken: string; tone: 'count' | 'warning' } | null {
-  if (id === 'reminders') {
-    const threads = host.reminderBadge?.threads ?? 0
-    if (threads <= 0) return null
-    return { text: formatReminderCount(threads), spoken: `${threads} 个串有新提醒`, tone: 'count' }
-  }
-  if (id !== 'history') return null
-  const count = pendingTotal(host.pendingAttempts)
-  if (count === null || count <= 0) return null
-  return { text: count > 99 ? '99+' : String(count), spoken: `${count} 项发送待核对`, tone: 'warning' }
+/** Badge of a feature: threads with new reminders. */
+function featureBadge(id: FeatureId, host: FeatureHost): { text: string; spoken: string } | null {
+  if (id !== 'reminders') return null
+  const threads = host.reminderBadge?.threads ?? 0
+  if (threads <= 0) return null
+  return { text: formatReminderCount(threads), spoken: `${threads} 个串有新提醒` }
 }
 
-function featureMarked(id: FeatureId, host: FeatureHost): boolean {
-  return id === 'history' && host.pendingAttempts.failed
-}
-
-/** Accessible name: the feature's name, then what its badge or marker says. */
+/** Accessible name: the feature's name, then what its badge says. */
 export function featureLabel(id: FeatureId, host: FeatureHost): string {
   const badge = featureBadge(id, host)
-  const marked = featureMarked(id, host)
   const label = featureInfo(id).label
-  return `${label}${badge === null ? '' : `，${badge.spoken}`}${marked ? '，发送记录读取失败' : ''}`
+  return `${label}${badge === null ? '' : `，${badge.spoken}`}`
 }
 
 /** Tooltip: the name, with the shortcut of 搜索. */
@@ -96,13 +84,13 @@ export function featureIsDialog(id: FeatureId): boolean {
   return id === 'drafts'
 }
 
-/** Small count / warning dot for icon-only feature buttons. */
+/** Small count for icon-only feature buttons. */
 export function FeatureDot({ id, host }: { id: FeatureId; host: FeatureHost }) {
   const badge = featureBadge(id, host)
-  if (badge === null && !featureMarked(id, host)) return null
+  if (badge === null) return null
   return (
-    <span className={badge?.tone === 'count' ? 'shell-dot is-count' : 'shell-dot is-warning'} aria-hidden="true">
-      {badge?.text ?? ''}
+    <span className="shell-dot is-count" aria-hidden="true">
+      {badge.text}
     </span>
   )
 }

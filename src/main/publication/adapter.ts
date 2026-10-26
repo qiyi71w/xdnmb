@@ -17,6 +17,10 @@ const ID = /^[1-9]\d{0,19}$/
 const MEDIA: Record<string, string> = { png: 'image/png', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }
 
 interface Response { status: number; text: string }
+/** The request never reached the forum: nothing was sent, so the send failed for certain. */
+class NotSent extends Error {
+  constructor(readonly problem: PublicationProblem) { super(problem) }
+}
 
 /** Bounded, streamed response decoding; never follows a redirect or includes response text in errors. */
 function receive(response: IncomingMessage, done: (result: Response) => void, fail: () => void): void {
@@ -76,7 +80,8 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 // The forum content parser omits trailing rendered line breaks; compare the same representation.
-function comparableText(text: string): string { return text.replace(/\r\n?/g, '\n').replace(/\n+$/, '') }
+// Shared by every check that a forum post carries a send's text.
+export function comparableText(text: string): string { return text.replace(/\r\n?/g, '\n').replace(/\n+$/, '') }
 function bodyMatches(value: Record<string, unknown>, input: DraftSaveInput): boolean {
   if (typeof value.content !== 'string') return false
   if (comparableText(parseContent(value.content).plainText) !== comparableText(input.fields.content)) return false
@@ -108,10 +113,10 @@ export function createPublicationAdapter(options: {
       const url = new URL(path, origin)
       if (url.origin !== origin.origin) throw new Error('Invalid publication target')
       const boundary = `xidao-${randomUUID()}`
-      const file = fields !== null && attachment !== null ? await open(attachment.path, 'r') : null
+      const file = fields !== null && attachment !== null ? await open(attachment.path, 'r').catch(() => { throw new NotSent('attachment') }) : null
       try {
-        const stat = file === null ? null : await file.stat()
-        if (stat !== null && !stat.isFile()) throw new Error('Unavailable attachment')
+        const stat = file === null ? null : await file.stat().catch(() => { throw new NotSent('attachment') })
+        if (stat !== null && !stat.isFile()) throw new NotSent('attachment')
         const prefix = fields === null ? '' : Object.entries(fields).map(([name, value]) =>
           `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`).join('') +
           (file === null ? '' : `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="image.${attachment!.format}"\r\nContent-Type: ${MEDIA[attachment!.format]}\r\n\r\n`)
@@ -121,12 +126,14 @@ export function createPublicationAdapter(options: {
           let req: ClientRequest
           let response: IncomingMessage | undefined
           let stream: ReturnType<NonNullable<typeof file>['createReadStream']> | undefined
+          // No request byte leaves before the connection (and TLS handshake) is established.
+          let connected = false
           const fail = () => {
             if (settled) return
             settled = true
             clearTimeout(timer)
             stream?.destroy(); req?.destroy(); response?.destroy()
-            reject(new Error('Publication transport failed'))
+            reject(connected ? new Error('Publication transport failed') : new NotSent('network'))
           }
           const timer = setTimeout(fail, fields === null ? options.readTimeoutMs ?? 20_000 : options.publishTimeoutMs ?? PUBLISH_DEADLINE_MS)
           const send = url.protocol === 'https:' ? httpsRequest : httpRequest
@@ -149,6 +156,10 @@ export function createPublicationAdapter(options: {
               settled = true; clearTimeout(timer); stream?.destroy(); resolve(result)
             }, fail)
           })
+          req.on('socket', socket => {
+            if (req.reusedSocket) connected = true
+            else socket.once(url.protocol === 'https:' ? 'secureConnect' : 'connect', () => { connected = true })
+          })
           req.on('error', fail)
           if (fields === null) { req.end(); return }
           req.write(prefix)
@@ -170,7 +181,7 @@ export function createPublicationAdapter(options: {
     }
     let result: 'success' | PublicationProblem
     try { result = outcome(await request(payload.target.kind === 'thread' ? '/Home/Forum/doPostThread.html' : '/Home/Forum/doReplyThread.html', fields)) }
-    catch { return { state: 'unknown', problem: 'network' } }
+    catch (error) { return error instanceof NotSent ? { state: 'failed', problem: error.problem } : { state: 'unknown', problem: 'network' } }
     if (result !== 'success') return { state: ['rejected', 'rate-limited', 'captcha'].includes(result) ? 'failed' : 'unknown', problem: result }
     onAccepted?.()
     try {

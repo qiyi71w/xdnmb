@@ -598,10 +598,12 @@ export const MIGRATIONS: readonly Migration[] = [
     }
   },
   {
-    // A confirmed attempt records who confirmed it: the read-back check, or the user ending a 待核对
-    // attempt (已发出), who may give no post number. Each attempt also keeps the sending cookie's
-    // 饼干 ID; existing attempts take the ID their (never reused) credential has now, if any. SQLite
-    // cannot relax a CHECK in place, so the table is rebuilt; every row, ID and the ID counter are kept.
+    // Each attempt keeps the sending cookie's 饼干 ID (existing attempts take the ID their never
+    // reused credential has now, if any), and a send whose result was lost and could not be found
+    // fails as `unverified`. Only `sending` / `unknown` attempts lock their source draft now: an
+    // `unconfirmed` one was sent, so, as for a send recorded so from now on, its source draft goes
+    // and it no longer holds its image. SQLite cannot change a CHECK in place, so the table is
+    // rebuilt; every row, ID and the ID counter are kept.
     version: 18,
     up(db) {
       const sequence = db.prepare<[], { seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'publication_attempts'").get()
@@ -617,7 +619,7 @@ export const MIGRATIONS: readonly Migration[] = [
           state TEXT NOT NULL CHECK (state IN ('sending', 'confirmed', 'failed', 'unknown', 'unconfirmed')),
           problem TEXT CHECK (problem IS NULL OR problem IN (
             'storage', 'identity', 'attachment', 'target', 'empty', 'busy', 'interval',
-            'rejected', 'rate-limited', 'captcha', 'network', 'response'
+            'rejected', 'rate-limited', 'captcha', 'network', 'response', 'unverified'
           )),
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
@@ -625,25 +627,24 @@ export const MIGRATIONS: readonly Migration[] = [
           thread_id TEXT,
           saved_draft_id INTEGER,
           launch_notice INTEGER NOT NULL DEFAULT 0 CHECK (launch_notice IN (0, 1)),
-          confirmed_by TEXT CHECK (confirmed_by IN ('check', 'user')),
           cookie_id TEXT,
-          CHECK ((state = 'confirmed') = (confirmed_by IS NOT NULL)),
-          CHECK (state != 'confirmed' OR confirmed_by = 'user' OR (post_id IS NOT NULL AND thread_id IS NOT NULL))
+          CHECK (state != 'confirmed' OR (post_id IS NOT NULL AND thread_id IS NOT NULL))
         );
         INSERT INTO publication_attempts_v18 (
           id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem,
-          created_at, updated_at, post_id, thread_id, saved_draft_id, launch_notice, confirmed_by, cookie_id
+          created_at, updated_at, post_id, thread_id, saved_draft_id, launch_notice, cookie_id
         ) SELECT id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem,
           created_at, updated_at, post_id, thread_id, saved_draft_id, launch_notice,
-          CASE WHEN state = 'confirmed' THEN 'check' END,
           (SELECT cookie_id FROM credentials WHERE credentials.id = publication_attempts.credential_id)
         FROM publication_attempts;
         DROP TABLE publication_attempts;
         ALTER TABLE publication_attempts_v18 RENAME TO publication_attempts;
         CREATE UNIQUE INDEX publication_locked_draft ON publication_attempts(draft_id)
-          WHERE draft_id IS NOT NULL AND state IN ('sending', 'unknown', 'unconfirmed');
+          WHERE draft_id IS NOT NULL AND state IN ('sending', 'unknown');
         CREATE INDEX publication_attachment_id ON publication_attempts(attachment_id);
-        CREATE INDEX publication_identity_forum ON publication_attempts(credential_id, forum_id, created_at);`)
+        CREATE INDEX publication_identity_forum ON publication_attempts(credential_id, forum_id, created_at);
+        DELETE FROM drafts WHERE id IN (SELECT draft_id FROM publication_attempts WHERE state = 'unconfirmed' AND draft_id IS NOT NULL);
+        UPDATE publication_attempts SET attachment_id = NULL WHERE state = 'unconfirmed';`)
       if (sequence !== undefined) {
         db.prepare("DELETE FROM sqlite_sequence WHERE name = 'publication_attempts'").run()
         db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('publication_attempts', ?)").run(sequence.seq)

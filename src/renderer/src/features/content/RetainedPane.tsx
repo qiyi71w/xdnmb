@@ -13,7 +13,6 @@ import { RowThumbnail } from '../image/RowThumbnail'
 import { useImageScope } from '../image/useImageLoad'
 import { SentPage, useSentAttempts } from '../publication/SentPage'
 import type { SentKind } from '../publication/sentRecords'
-import type { PendingAttempts } from '../publication/usePendingAttempts'
 import { ListFilterBar, UncertainTag } from '../search/FilterFields'
 import { contentFilterCount, filterList } from '../search/listFilters'
 import { useThreadMetadata } from '../search/useThreadMetadata'
@@ -37,10 +36,8 @@ const VIEWS: readonly { view: HistoryView; label: string; kind: SentKind | null 
 ]
 
 export interface HistoryPageHost {
-  /** The page to show in tab `tabId` (查看发送记录 and the rail's 历史); each `seq` applies once. */
+  /** The page to show in tab `tabId` (the rail's 历史); each `seq` applies once. */
   request: { tabId: number; view: HistoryView; seq: number } | null
-  /** 待核对 sends, badged on 新串 and 回复 by kind. */
-  pendingAttempts: PendingAttempts
   /**
    * Opens a place as a new step of the tab whose current entry is `entryKey` (后退 comes back to
    * 历史); false when no tab shows that entry now.
@@ -100,8 +97,6 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
     if (registry !== null) rememberHistory(registry.listMemory, props.entryKey, { view })
   }, [registry, props.entryKey, view])
 
-  const counts = host.pendingAttempts.counts
-
   return (
     <section className="list-pane history-page" aria-labelledby={headingId}>
       <header className="list-header history-page-header">
@@ -109,26 +104,11 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
           <span className="list-name">{PAGE.title}</span>
         </h2>
         <div className="segmented history-view-switch" role="group" aria-label="历史分页" data-view={view}>
-          {VIEWS.map((item) => {
-            const pending = item.kind === null || counts === null ? 0 : counts[item.kind]
-            return (
-              <button
-                key={item.view}
-                type="button"
-                className="segmented-item"
-                aria-pressed={view === item.view}
-                aria-label={pending > 0 ? `${item.label}，${pending} 项待核对` : undefined}
-                onClick={() => show(item.view)}
-              >
-                {item.label}
-                {pending > 0 && (
-                  <span className="history-view-badge" aria-hidden="true">
-                    {pending > 99 ? '99+' : pending}
-                  </span>
-                )}
-              </button>
-            )
-          })}
+          {VIEWS.map((item) => (
+            <button key={item.view} type="button" className="segmented-item" aria-pressed={view === item.view} onClick={() => show(item.view)}>
+              {item.label}
+            </button>
+          ))}
         </div>
       </header>
       <div className="history-page-view" hidden={view !== 'browsing'}>

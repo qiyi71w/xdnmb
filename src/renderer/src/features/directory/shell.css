@@ -129,7 +129,7 @@
   fill: currentColor;
 }
 
-/* Count / warning dot on icon-only feature buttons (rail, 全部功能 grid). */
+/* Count dot on icon-only feature buttons (rail, 全部功能 grid). */
 .shell-dot {
   position: absolute;
   top: 1px;
@@ -143,21 +143,6 @@
   line-height: 16px;
   text-align: center;
   font-variant-numeric: tabular-nums;
-}
-
-.shell-dot:empty {
-  min-width: 9px;
-  width: 9px;
-  height: 9px;
-  padding: 0;
-  top: 4px;
-  right: 3px;
-}
-
-.shell-dot.is-warning {
-  background: var(--warn-bg);
-  color: var(--warn-ink);
-  box-shadow: 0 0 0 1px var(--warn-ink);
 }
 
 /* News, not a problem: figures on a solid accent fill (on-accent, as the primary button). */

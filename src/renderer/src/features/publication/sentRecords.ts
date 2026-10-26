@@ -7,12 +7,11 @@ import type { PublicationAttempt } from '../../../../shared/publication'
 export type SentKind = PostTarget['kind']
 
 /**
- * Where a sent record (a confirmed attempt) opens:
+ * Where a sent record opens:
  * - `post`: a reply with its own number, located in its thread the way a quote jump is;
- * - `thread`: the thread itself, opened as usual (a new thread with its number, or a reply the user
- *   confirmed without one);
- * - `forum`: the forum list of a new thread the user confirmed without its number. No thread is
- *   guessed.
+ * - `thread`: the thread itself, opened as usual (a new thread with its number, or a reply sent
+ *   without its number confirmed);
+ * - `forum`: the forum list of a new thread sent without its number confirmed. No thread is guessed.
  */
 export type RecordPlace =
   | { kind: 'post'; threadId: ThreadId; postId: PostId }
@@ -27,13 +26,6 @@ export function recordPlace(attempt: Pick<PublicationAttempt, 'payload' | 'postI
   }
   const threadId = attempt.threadId ?? attempt.postId
   return threadId === null ? { kind: 'forum', forumId: target.forumId } : { kind: 'thread', threadId }
-}
-
-/** A number typed for 已发出: digits only, or nothing (`null`). */
-export function parsePostIdInput(text: string): { ok: true; postId: PostId | null } | { ok: false } {
-  const value = text.trim()
-  if (value === '') return { ok: true, postId: null }
-  return /^\d{1,20}$/.test(value) ? { ok: true, postId: value } : { ok: false }
 }
 
 /**

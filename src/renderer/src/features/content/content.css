@@ -264,22 +264,6 @@
   box-shadow: none;
 }
 
-/* 待核对 sends of that page: the label-size count used by the rail's badges. */
-.history-view-badge {
-  display: inline-grid;
-  place-items: center;
-  min-width: 16px;
-  height: 16px;
-  margin-left: 4px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .history-view-switch::before {
     transition: none;

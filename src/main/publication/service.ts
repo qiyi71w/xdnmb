@@ -1,13 +1,20 @@
 import { randomUUID } from 'node:crypto'
 import { lstat } from 'node:fs/promises'
+import { setTimeout as sleep } from 'node:timers/promises'
 import type { DraftSaveInput } from '../../shared/drafts'
-import type { PublicationApi, PublicationAttempt, PublicationProblem, SubmitInput, SubmitResult, PoPrompt } from '../../shared/publication'
+import { isUnsettled, type PublicationApi, type PublicationAttempt, type PublicationProblem, type SubmitInput, type SubmitResult, type PoPrompt } from '../../shared/publication'
 import type { AppStore } from '../storage/contract'
 import type { DraftService } from '../drafts/service'
 import type { ManagedImageFiles } from '../images/files'
 import type { SecretProtector } from '../identity/protection'
 import { ForumReadError, type ForumClient } from '../forum/contract'
 import { PUBLISH_DEADLINE_MS, type PublicationAdapter, type PublicationFinish, type PublishReport } from './contract'
+import { findSentPost, type CheckOutcome } from './check'
+
+/** Wait after a send ends `unknown` / `unconfirmed` before its one check: the forum shows new posts late. */
+const CHECK_AFTER_SEND_MS = 10_000
+/** Pause after a check that read the forum, before the next one starts. */
+const CHECK_GAP_MS = 1_000
 
 /** A send whose intent is recorded and whose request has not produced a recorded result yet. */
 export interface InFlightPublication {
@@ -58,6 +65,8 @@ export function createPublicationService(deps: {
   now?: () => Date
   /** Publish limit of one send from its intent; the adapter's POST limit. */
   deadlineMs?: number
+  /** The one automatic check per send; tests shorten it or switch it off (`null`). */
+  checks?: { afterSendMs?: number | null; onRecover?: boolean; gapMs?: number }
 }): PublicationService {
   const { store, drafts, files, protector, adapter } = deps
   const now = deps.now ?? (() => new Date())
@@ -78,6 +87,18 @@ export function createPublicationService(deps: {
    * `unknown` fallback the store always accepts, so only a storage failure keeps one here).
    */
   const unstored = new Map<string, { attempt: PublicationAttempt; writes: PublicationFinish[] }>()
+  const afterSendMs = deps.checks?.afterSendMs === undefined ? CHECK_AFTER_SEND_MS : deps.checks.afterSendMs
+  const gapMs = deps.checks?.gapMs ?? CHECK_GAP_MS
+  /** Queued or running check per attempt; all checks run one after another. */
+  const queued = new Map<string, Promise<CheckRun>>()
+  let line: Promise<unknown> = Promise.resolve()
+
+  interface CheckRun {
+    /** The attempt as stored after the check; null when storage could not be read. */
+    attempt: PublicationAttempt | null
+    /** The forum was read. */
+    read: boolean
+  }
 
   interface Running extends InFlightPublication {
     /** The forum reported the POST a success; only the ID confirmation is left. */
@@ -96,8 +117,7 @@ export function createPublicationService(deps: {
     }
     const best = writes[0]!
     unstored.set(attempt.id, {
-      attempt: { ...attempt, state: best.state, problem: best.problem, postId: best.postId, threadId: best.threadId,
-        confirmedBy: best.state === 'confirmed' ? 'check' : null, updatedAt: best.at },
+      attempt: { ...attempt, state: best.state, problem: best.problem, postId: best.postId, threadId: best.threadId, updatedAt: best.at },
       writes
     })
     return null
@@ -109,6 +129,63 @@ export function createPublicationService(deps: {
     if (ciphertext === null) throw new Refusal('identity')
     try { return await protector.decrypt(ciphertext) }
     catch { throw new Refusal('identity') }
+  }
+
+  /**
+   * The one read-only check (never sends) of a send whose result was lost (`unknown`) or whose post
+   * could not be named (`unconfirmed`). A single matching post confirms it. Anything else — no
+   * match, several, a failed or throttled read, no 饼干 ID or no usable cookie — fails an unknown
+   * send as `unverified` (its content goes to a draft) and leaves an unconfirmed one as sent.
+   */
+  async function check(attemptId: string): Promise<CheckRun> {
+    let attempt: PublicationAttempt | null
+    try { attempt = await store.getPublication(attemptId) } catch { return { attempt: null, read: false } }
+    // A running send (or one whose result waits for storage) has its own outcome coming.
+    if (attempt === null || (attempt.state !== 'unknown' && attempt.state !== 'unconfirmed') || running.has(attemptId) || unstored.has(attemptId)) {
+      return { attempt, read: false }
+    }
+    let found: Extract<CheckOutcome, { kind: 'found' }> | null = null
+    let read = false
+    try {
+      if (attempt.cookieId === null) throw new Refusal('identity')
+      const userhash = await secret(attempt.payload.credentialId)
+      const claimed = new Set((await store.listPublications()).flatMap(other =>
+        other.id !== attemptId && other.state === 'confirmed' && other.postId !== null ? [other.postId] : []))
+      read = true
+      const outcome = await findSentPost(attempt, deps.clientFor(userhash), claimed, new AbortController().signal)
+      if (outcome.kind === 'found') found = outcome
+    } catch { /* Not found, as far as this one check can tell. */ }
+    const at = now().toISOString()
+    try {
+      const stored = found !== null
+        ? await store.finishPublication({ id: attemptId, state: 'confirmed', problem: null, postId: found.postId, threadId: found.threadId, at, launchNotice: false })
+        : attempt.state === 'unknown' ? await store.failUnverifiedPublication({ id: attemptId, at }) : attempt
+      if (!isUnsettled(stored)) for (const [editorId, held] of editorAttempts) if (held.id === attemptId) editorAttempts.delete(editorId)
+      return { attempt: stored, read }
+    } catch {
+      // Storage refused: it stays as it was and is checked again at the next start.
+      return { attempt, read }
+    }
+  }
+
+  function enqueue(attemptId: string): Promise<CheckRun> {
+    const existing = queued.get(attemptId)
+    if (existing) return existing
+    const work = line.then(async () => {
+      const result = await check(attemptId)
+      if (result.read && gapMs > 0) await sleep(gapMs, undefined, { ref: false })
+      return result
+    })
+    queued.set(attemptId, work)
+    line = work.catch(() => undefined)
+    void work.finally(() => queued.delete(attemptId)).catch(() => undefined)
+    return work
+  }
+
+  /** The one automatic check after a send ended `unknown` / `unconfirmed`. */
+  function scheduleCheck(attemptId: string) {
+    if (afterSendMs === null) return
+    setTimeout(() => void enqueue(attemptId), afterSendMs).unref?.()
   }
 
   async function validate(payload: DraftSaveInput, userhash: string) {
@@ -189,13 +266,16 @@ export function createPublicationService(deps: {
       // Durable intent survives even if recording the result fails. Never expose a retryable failure.
       const result: PublicationAttempt = stored ?? { ...attempt, state: 'unknown', problem: 'storage', updatedAt: at }
       editorAttempts.set(attempt.editorId, result)
-      if (result.state === 'confirmed' || result.state === 'failed') editorAttempts.delete(attempt.editorId)
+      if (!isUnsettled(result)) editorAttempts.delete(attempt.editorId)
+      if (stored?.state === 'unknown' || stored?.state === 'unconfirmed') scheduleCheck(attempt.id)
       return result
     } catch {
       const result: PublicationAttempt = { ...attempt, state: 'unknown', problem: 'network', updatedAt: now().toISOString() }
       editorAttempts.set(attempt.editorId, result)
       // If even this cannot be stored, the intent stays sending (recovered as unknown) and is listed as unstored.
-      return await persist(attempt, [{ id: attempt.id, state: 'unknown', problem: 'network', postId: null, threadId: null, at: result.updatedAt, launchNotice: unattended }])
+      const stored = await persist(attempt, [{ id: attempt.id, state: 'unknown', problem: 'network', postId: null, threadId: null, at: result.updatedAt, launchNotice: unattended }])
+      if (stored?.state === 'unknown') scheduleCheck(attempt.id)
+      return stored
     } finally {
       running.delete(attempt.id)
       busy.delete(validated.userhash)
@@ -248,6 +328,11 @@ export function createPublicationService(deps: {
       if (store.status.state !== 'ready') return
       await store.recoverPublications(now().toISOString())
       recovered = true
+      if (deps.checks?.onRecover === false) return
+      // The one check of every send an earlier run left without a result, one after another.
+      void (async () => {
+        for (const attempt of await store.listPublications()) if (attempt.state === 'unknown') await enqueue(attempt.id)
+      })().catch(() => undefined)
     },
     inFlight() {
       return [...running.values()].map(({ attempt, deadline, done }) => ({ attempt, deadline, done }))
@@ -267,7 +352,17 @@ export function createPublicationService(deps: {
     },
     async retryUnstored() {
       // Whoever retries now decides about the launch notice: a window showing them, or finishing without one.
-      for (const { attempt, writes } of [...unstored.values()]) await persist(attempt, writes.map(write => ({ ...write, launchNotice: unattended })))
+      for (const { attempt, writes } of [...unstored.values()]) {
+        const stored = await persist(attempt, writes.map(write => ({ ...write, launchNotice: unattended })))
+        if (stored === null) continue
+        for (const [editorId, held] of editorAttempts) {
+          if (held.id !== stored.id) continue
+          if (isUnsettled(stored)) editorAttempts.set(editorId, stored)
+          else editorAttempts.delete(editorId)
+        }
+        // Stored at last: its one check was waiting for this.
+        if (stored.state === 'unknown' || stored.state === 'unconfirmed') scheduleCheck(stored.id)
+      }
       return unstored.size === 0
     },
     releasePrompts() {
@@ -312,19 +407,6 @@ export function createPublicationService(deps: {
         if (store.status.state === 'unavailable') throw new Error('storage')
         const attempts = await store.listPublications()
         return { ok: true, attempts: attempts.map(attempt => [...editorAttempts.values()].find(value => value.id === attempt.id) ?? attempt) }
-      } catch { return { ok: false, reason: 'storage' } }
-    },
-    async resolvePending({ attemptId, choice, postId }) {
-      // A running send has no result yet: only its own outcome (or abandon) may end it.
-      if (running.has(attemptId)) return { ok: false, reason: 'busy' }
-      try {
-        if (!recovered || store.status.state !== 'ready') return { ok: false, reason: 'storage' }
-        const result = await store.resolvePublication({ id: attemptId, choice, postId, at: now().toISOString() })
-        if (!result.ok) return result
-        // The user's answer supersedes a result this process could not store, and unlocks the editor.
-        unstored.delete(attemptId)
-        for (const [editorId, held] of editorAttempts) if (held.id === attemptId) editorAttempts.delete(editorId)
-        return result
       } catch { return { ok: false, reason: 'storage' } }
     },
     async getAttempt({ attemptId }) {

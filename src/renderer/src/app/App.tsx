@@ -3,6 +3,7 @@ import type { AppPlatform, StorageStatus } from '../../../shared/api'
 import { sameTarget, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
 import type { FeedRef, Post, ThreadId } from '../../../shared/forum'
 import type { WorkspaceLoadResult } from '../../../shared/lifecycle'
+import { isUnsettled } from '../../../shared/publication'
 import { DEFAULT_SETTINGS, LIST_WIDTH_LIMITS, type AppSettings } from '../../../shared/settings'
 import { Icon } from '../components/Icon'
 import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/directory/feeds'
@@ -28,7 +29,6 @@ import { UnsavedEditorsDialog } from '../features/editor/UnsavedEditorsDialog'
 import { focusKey, useEditorsStore } from '../features/editor/useEditorsStore'
 import { EditorWorkspaceContext, type EditorWorkspace } from '../features/editor/workspace'
 import { PoPromptDialog } from '../features/publication/PoPromptDialog'
-import { usePendingAttempts } from '../features/publication/usePendingAttempts'
 import { LaunchNotice } from '../features/lifecycle/LaunchNotice'
 import { LifecycleHost } from '../features/lifecycle/LifecycleHost'
 import { useIdentities } from '../features/identity/useIdentities'
@@ -171,7 +171,6 @@ export function App() {
   const { current: currentEditors, dispatch: dispatchEditors, requestFocus, save: saveEditor, resolvePrompt } = editors
   const subscriptions = useSubscriptions()
   const { refreshOverview: refreshSubscriptions, refreshOperations: refreshSubscriptionJournal } = subscriptions
-  const pendingAttempts = usePendingAttempts(editors.publicationRevision)
   const reminders = useReminderOverview()
   const { overview: reminderOverview, reload: reloadReminders } = reminders
   const reminderThreads = reminderOverview?.badge ?? null
@@ -346,7 +345,7 @@ export function App() {
 
   /**
    * Reopens the drafts the workspace's tabs were continuing. A draft that no longer exists, or that
-   * an unresolved send holds (or when that cannot be read), stays in the library; nothing is sent.
+   * a send still in progress holds (or when that cannot be read), stays in the library; nothing is sent.
    */
   const reopenDrafts = useCallback(
     async (workspace: Workspace, alive: () => boolean) => {
@@ -354,13 +353,7 @@ export function App() {
       const [drafts, attempts] = await Promise.allSettled([window.xidao.drafts.list(), window.xidao.publication.listAttempts()])
       if (!alive()) return
       if (drafts.status !== 'fulfilled' || !drafts.value.ok || attempts.status !== 'fulfilled' || !attempts.value.ok) return
-      const locked = new Set(
-        attempts.value.attempts.flatMap((attempt) =>
-          (attempt.state === 'sending' || attempt.state === 'unknown' || attempt.state === 'unconfirmed') && attempt.draftId !== null
-            ? [attempt.draftId]
-            : []
-        )
-      )
+      const locked = new Set(attempts.value.attempts.flatMap((attempt) => (isUnsettled(attempt) && attempt.draftId !== null ? [attempt.draftId] : [])))
       const byId = new Map(drafts.value.drafts.map((draft) => [draft.id, draft]))
       // A tab closed meanwhile takes its drafts' editors with it.
       const tabIds = new Set((stateRef.current.tabs ?? workspace.tabs).tabs.map((tab) => tab.id))
@@ -791,23 +784,6 @@ export function App() {
   )
 
   /**
-   * Every 查看发送记录 opens the 历史 page of that kind of send (新串 or 回复); the active tab's open
-   * editors fold away first (content kept).
-   */
-  const openAttempts = useCallback(
-    (kind: PostTarget['kind']) => {
-      closeNav(false)
-      setDraftsOpen(false)
-      const tabId = stateRef.current.tabs?.activeId
-      for (const editor of currentEditors().editors) {
-        if (tabId !== undefined && editor.tabIds.includes(tabId) && editor.expanded) dispatchEditors({ type: 'set-expanded', editorId: editor.id, expanded: false })
-      }
-      openHistoryView(kind === 'thread' ? 'threads' : 'replies')
-    },
-    [closeNav, currentEditors, dispatchEditors, openHistoryView]
-  )
-
-  /**
    * A sent record of 历史 opens as a new step of the tab still showing that 历史 entry, so 后退
    * returns to it: a thread at a target beside the list when split (the list keeps its memory),
    * otherwise as a page; a forum list as a new list step.
@@ -1089,8 +1065,8 @@ export function App() {
   } as CSSProperties
 
   const editorWorkspace = useMemo<EditorWorkspace>(
-    () => ({ store: editors, identities, platform, directory: dirData, forumName, retarget, showTarget, openAttempts }),
-    [editors, identities, platform, dirData, forumName, retarget, showTarget, openAttempts]
+    () => ({ store: editors, identities, platform, directory: dirData, forumName, retarget, showTarget }),
+    [editors, identities, platform, dirData, forumName, retarget, showTarget]
   )
 
   const tabTitle = useCallback(
@@ -1102,8 +1078,8 @@ export function App() {
   )
 
   const historyHost = useMemo<HistoryPageHost>(
-    () => ({ request: historyRequest, pendingAttempts, openStep: openFromHistory, openInTab: openEntryInTab }),
-    [historyRequest, pendingAttempts, openFromHistory, openEntryInTab]
+    () => ({ request: historyRequest, openStep: openFromHistory, openInTab: openEntryInTab }),
+    [historyRequest, openFromHistory, openEntryInTab]
   )
 
   /** Where focus goes when a notice it was in goes away: the active tab. */
@@ -1131,10 +1107,9 @@ export function App() {
       open: openFeature,
       current: settingsShown ? null : searchCurrent ? 'search' : selectedFeed !== null && isLocalList(selectedFeed) ? selectedFeed.kind : null,
       reminderBadge,
-      pendingAttempts,
       searchShortcut: shortcutLabel('search-local', platform)
     }),
-    [openFeature, settingsShown, searchCurrent, selectedFeed, reminderBadge, pendingAttempts, platform]
+    [openFeature, settingsShown, searchCurrent, selectedFeed, reminderBadge, platform]
   )
 
   /**
@@ -1232,7 +1207,7 @@ export function App() {
         <div className="app" ref={appRef}>
           <StorageBanner storage={storage} />
           <LaunchNotice
-            onOpenAttempts={openAttempts}
+            onOpenDrafts={openDrafts}
             fallbackFocus={() => document.getElementById(`tab-${stateRef.current.tabs?.activeId}`)}
           />
           <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
@@ -1362,7 +1337,6 @@ export function App() {
             <DraftLibraryDialog
               tabTitle={tabTitle}
               onContinue={continueDraft}
-              onOpenAttempts={openAttempts}
               onClose={closeDrafts}
               fallbackFocus={() =>
                 navOverlay ? navTriggerRef.current : (inlineNavRef.current?.querySelector<HTMLElement>('[data-boards-trigger]') ?? null)

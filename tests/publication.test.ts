@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import { EMPTY_FIELDS, type DraftSaveInput } from '../src/shared/drafts'
-import { isPending, type PublicationAttempt, type SubmitResult } from '../src/shared/publication'
+import { isUnsettled, type PublicationAttempt, type SubmitResult } from '../src/shared/publication'
 import type { Post } from '../src/shared/forum'
 import type { AppStore } from '../src/main/storage/contract'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
@@ -28,13 +28,27 @@ function asyncStore(db: ReadingDatabase): AppStore {
   } }) as unknown as AppStore
 }
 
+/** Forum `now` text (Beijing time) of an instant. */
+function forumNow(at: number): string {
+  const t = new Date(at + 8 * 3_600_000).toISOString()
+  return `${t.slice(0, 10)}(一)${t.slice(11, 19)}`
+}
+const COOKIE_IDS: Record<string, string> = { 'cookie-A': 'IdA', 'cookie-B': 'IdB' }
+
 async function forum() {
   const seen: Array<{ path: string; cookie: string; body: string }> = []
-  let mode: 'success' | 'reject' | 'drop' | 'unrelated' | 'empty' | 'hold' | 'hold-lookup' | 'preflight-rate' | 'stale' = 'success'
+  let mode: 'success' | 'reject' | 'drop' | 'unrelated' | 'empty' | 'hold' | 'hold-lookup' | 'preflight-rate' | 'stale' | 'read-rate' = 'success'
   let release: (() => void) | null = null
   let last: Record<string, string> | null = null
   let number = 700
   const posts = new Map<string, Record<string, string>>()
+  /** Posts the lists and thread pages do not show yet (as a lagging forum cache would). */
+  let lagging = false
+  /** Thread pages report this many replies fewer than they have (a count that lags behind). */
+  let countLag = 0
+  const unseen = new Set<string>()
+  const listed = () => [...posts.values()].filter(post => !unseen.has(post.id!))
+  const page = (path: string) => Number(new URL(path, 'http://local').searchParams.get('page') ?? '1')
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = []
     for await (const chunk of req) chunks.push(Buffer.from(chunk))
@@ -46,8 +60,10 @@ async function forum() {
       const fields: Record<string, string> = {}
       for (const match of body.matchAll(/name="(\w+)"\r\n\r\n([\s\S]*?)\r\n--/g)) fields[match[1]!] = match[2]!
       const id = String(++number)
-      last = { id, resto: fields.resto ?? '0', fid: fields.fid ?? '1', content: fields.content!.replace(/\r\n?/g, '\n').replace(/\n/g, '<br />\n'), title: fields.title!, name: fields.name!, email: fields.email!, img: body.includes('name="image"') ? 'test/image' : '', ext: '.png' }
+      const author = COOKIE_IDS[/userhash=([^;]+)/.exec(req.headers.cookie ?? '')?.[1] ?? ''] ?? ''
+      last = { id, resto: fields.resto ?? '0', fid: fields.fid ?? '1', content: fields.content!.replace(/\r\n?/g, '\n').replace(/\n/g, '<br />\n'), title: fields.title!, name: fields.name!, email: fields.email!, img: body.includes('name="image"') ? 'test/image' : '', ext: body.includes('name="image"') ? '.png' : '', user_hash: author, now: forumNow(Date.now()) }
       posts.set(id, last)
+      if (lagging) unseen.add(id)
       if (mode === 'stale') last = posts.get('701')!
       if (mode === 'drop') { req.socket.destroy(); return }
       const respond = () => {
@@ -62,11 +78,18 @@ async function forum() {
       else if (mode === 'empty') send(null)
       else if (mode === 'unrelated') send({ ...last, content: '别人的内容' })
       else send(last)
-    } else if (path.startsWith('/api/getForumList')) send(mode === 'preflight-rate' ? '请求太频繁' : [{ id: '1', name: '测试', forums: [{ id: '1', name: '测试版', msg: '', interval: 0 }] }])
+    } else if (mode === 'read-rate' && (path.startsWith('/api/thread') || path.startsWith('/api/showf'))) send('请求太频繁')
+    else if (path.startsWith('/api/getForumList')) send(mode === 'preflight-rate' ? '请求太频繁' : [{ id: '1', name: '测试', forums: [{ id: '1', name: '测试版', msg: '', interval: 0 }] }])
     else if (path.startsWith('/api/getTimelineList')) send([])
     else if (path.startsWith('/api/thread')) {
       const id = new URL(path, 'http://local').searchParams.get('id')!
-      send({ ...(posts.get(id) ?? { id, fid: '1', content: '主帖', title: '', name: '', img: '' }), Replies: [], ReplyCount: 0 })
+      const replies = listed().filter(post => post.resto === id)
+      const n = page(path)
+      send({ ...(posts.get(id) ?? { id, fid: '1', content: '主帖', title: '', name: '', img: '', ext: '', user_hash: 'Po', now: forumNow(0) }),
+        Replies: replies.slice((n - 1) * 19, n * 19), ReplyCount: replies.length - countLag })
+    } else if (path.startsWith('/api/showf')) {
+      const threads = listed().filter(post => post.resto === '0').reverse()
+      send(page(path) === 1 ? threads.map(thread => ({ ...thread, Replies: [], ReplyCount: 0 })) : [])
     } else if (path.startsWith('/api/ref')) send(posts.get(new URL(path, 'http://local').searchParams.get('id')!) ?? null)
     else { res.statusCode = 404; res.end() }
   })
@@ -74,10 +97,21 @@ async function forum() {
   cleanups.push(() => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()) }))
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('listen failed')
-  return { origin: `http://127.0.0.1:${address.port}`, seen, setMode(value: typeof mode) { mode = value }, release() { release?.() } }
+  return { origin: `http://127.0.0.1:${address.port}`, seen, setMode(value: typeof mode) { mode = value }, release() { release?.() },
+    /** Changes a stored post as the forum would then show it. */
+    edit(id: string, patch: Record<string, string>) { posts.set(id, { ...posts.get(id)!, ...patch }) },
+    /** Adds a post someone else made. */
+    add(post: Record<string, string>) { const id = String(++number); posts.set(id, { id, resto: '0', fid: '1', content: '', title: '', name: '', email: '', img: '', ext: '', user_hash: '', now: forumNow(Date.now()), ...post }); return id },
+    posts: () => [...posts.values()],
+    /** New posts stay out of reads until `catchUp`. */
+    lag() { lagging = true },
+    catchUp() { lagging = false; unseen.clear() },
+    lagCount(by: number) { countLag = by } }
 }
 
-async function setup() {
+type Checks = { afterSendMs?: number | null; onRecover?: boolean; gapMs?: number }
+/** Automatic checks stay off unless a test is about them. */
+async function setup(checks: Checks = { afterSendMs: null, onRecover: false }) {
   const remote = await forum()
   const dir = mkdtempSync(join(tmpdir(), 'xidao-publication-'))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
@@ -92,17 +126,17 @@ async function setup() {
   const a = db.insertCredential({ name: 'A', cookieId: 'IdA', source: 'raw', importedAt: '2026-01-01', ciphertext: Buffer.from('cookie-A') }).id
   const b = db.insertCredential({ name: 'B', cookieId: 'IdB', source: 'raw', importedAt: '2026-01-01', ciphertext: Buffer.from('cookie-B') }).id
   const files = await openManagedImageFiles(join(dir, 'draft-images'))
-  const start = async (store: AppStore = asyncStore(db)) => {
+  const start = async (store: AppStore = asyncStore(db), active: Checks = checks) => {
     const drafts = createDraftService({ store, files })
     const service = createPublicationService({ store, drafts, files, protector,
       clientFor: userhash => createForumClient({ transport: createForumTransport({ allowedOrigins: [remote.origin], credentialOrigins: [remote.origin] }), baseUrl: remote.origin, browseIdentity: async () => userhash }),
-      adapter: createPublicationAdapter({ origin: remote.origin, apiOrigin: remote.origin, publishTimeoutMs: 1500 }), deadlineMs: 1500 })
+      adapter: createPublicationAdapter({ origin: remote.origin, apiOrigin: remote.origin, publishTimeoutMs: 1500 }), deadlineMs: 1500, checks: { gapMs: 0, ...active } })
     await service.recover(); await drafts.recover()
     return { service, drafts }
   }
   let current = await start()
   return { remote, dir, files, a, b, get db() { return db }, get service() { return current.service }, get drafts() { return current.drafts }, start,
-    async restart() { db.close(); db = openReadingDatabase(join(dir, 'db.sqlite')); current = await start() } }
+    async restart(active?: Checks) { db.close(); db = openReadingDatabase(join(dir, 'db.sqlite')); current = await start(asyncStore(db), active) } }
 }
 function payload(credentialId: string, content = '测试正文'): DraftSaveInput {
   return { draftId: null, target: { kind: 'thread', forumId: '1' }, credentialId, fields: { ...EMPTY_FIELDS, content, title: '测试标题' }, attachmentId: null }
@@ -217,13 +251,15 @@ it('saves an explicit rejection exactly once and sends again only on a new delib
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(2)
 })
 
-it.each(['empty', 'unrelated'] as const)('does not claim a %s latest-post response or retry a successful submission', async mode => {
+it.each(['empty', 'unrelated'] as const)('records a send the forum reported successful as sent even when a %s latest post leaves its number unknown', async mode => {
   const s = await setup()
   s.remote.setMode(mode)
-  const input = { requestId: randomUUID(), editorId: 'editor-1', payload: payload(s.a) }
-  const sent = attempt(await s.service.submit(input))
+  const source = await s.drafts.save(payload(s.a))
+  if (!source.ok) throw new Error('save failed')
+  const sent = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: { ...payload(s.a), draftId: source.draft.id } }))
   expect(await finished(s.service, sent.id)).toMatchObject({ state: 'unconfirmed', postId: null })
-  expect(attempt(await s.service.submit({ ...input, requestId: randomUUID() })).id).toBe(sent.id)
+  // Sent: its source draft is gone and nothing locks the editor or sends it again.
+  expect(s.db.listDrafts()).toEqual([])
   await s.restart()
   expect(s.db.listPublications()[0]!.state).toBe('unconfirmed')
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
@@ -493,55 +529,8 @@ it('leaves a launch notice for a send the last run left unfinished', async () =>
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
 })
 
-it('ends each kind of 待核对 attempt only by the user’s answer, locally, and keeps that answer across a restart', async () => {
-  const s = await setup()
-  // 结果未知: the POST connection dropped (a new thread).
-  s.remote.setMode('drop')
-  const lost = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'lost', payload: payload(s.a, '断开的新串') }))
-  expect(await finished(s.service, lost.id)).toMatchObject({ state: 'unknown' })
-  // 串号未确认: accepted, but the latest post could not be shown to be this reply (sent from a saved draft).
-  s.remote.setMode('empty')
-  const reply = { ...payload(s.b, '没确认的回复'), target: { kind: 'reply' as const, threadId: '500' } }
-  const source = await s.drafts.save(reply)
-  if (!source.ok) throw new Error('save failed')
-  const unconfirmed = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'reply', payload: { ...reply, draftId: source.draft.id } }))
-  expect(await finished(s.service, unconfirmed.id)).toMatchObject({ state: 'unconfirmed' })
-  // 发送中: still running now, then left by this run.
-  s.remote.setMode('hold')
-  const left = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'left', payload: { ...payload(s.a, '上次没结束'), target: { kind: 'reply', threadId: '600' } } }))
-  await expect.poll(() => s.remote.seen.filter(r => r.path.startsWith('/Home/')).length).toBe(3)
-  expect(await s.service.resolvePending({ attemptId: left.id, choice: 'not-sent', postId: null })).toEqual({ ok: false, reason: 'busy' })
-  await s.restart()
-  expect(s.db.listPublications().filter(isPending).map(item => item.id).sort()).toEqual([lost.id, unconfirmed.id, left.id].sort())
-  const requests = s.remote.seen.length
-
-  // The reply's own thread, or a number another sent record already holds, is not this reply.
-  expect(await s.service.resolvePending({ attemptId: unconfirmed.id, choice: 'sent', postId: '500' })).toEqual({ ok: false, reason: 'post-id' })
-  expect(await s.service.resolvePending({ attemptId: unconfirmed.id, choice: 'sent', postId: '9001' })).toMatchObject({
-    ok: true, attempt: { state: 'confirmed', confirmedBy: 'user', postId: '9001', threadId: '500' }
-  })
-  // Its source draft goes away as for a checked confirmation.
-  expect(s.db.listDrafts()).toEqual([])
-  expect(await s.service.resolvePending({ attemptId: lost.id, choice: 'sent', postId: '9001' })).toEqual({ ok: false, reason: 'post-id' })
-  // Without a number a new thread has nothing to open but its forum.
-  expect(await s.service.resolvePending({ attemptId: lost.id, choice: 'sent', postId: null })).toMatchObject({
-    ok: true, attempt: { state: 'confirmed', confirmedBy: 'user', postId: null, threadId: null }
-  })
-  expect(await s.service.resolvePending({ attemptId: left.id, choice: 'not-sent', postId: null })).toMatchObject({ ok: true, attempt: { state: 'failed' } })
-  expect(await s.service.resolvePending({ attemptId: lost.id, choice: 'not-sent', postId: null })).toEqual({ ok: false, reason: 'not-pending' })
-  expect(await s.service.resolvePending({ attemptId: '999', choice: 'sent', postId: null })).toEqual({ ok: false, reason: 'not-pending' })
-
-  await s.restart()
-  expect(s.db.listPublications().filter(isPending)).toEqual([])
-  expect(s.db.getPublication(unconfirmed.id)).toMatchObject({ state: 'confirmed', confirmedBy: 'user', postId: '9001', threadId: '500' })
-  expect(s.db.getPublication(lost.id)).toMatchObject({ state: 'confirmed', confirmedBy: 'user', postId: null })
-  expect(s.db.listDrafts().map(draft => draft.fields.content)).toEqual(['上次没结束'])
-  expect(s.db.listLaunchNotices()).toEqual([])
-  expect(s.remote.seen).toHaveLength(requests)
-})
-
-it('moves a 没发出 attempt into its draft with the image kept and unlocks the editor for a new send', async () => {
-  const s = await setup()
+it('fails an unknown send the check cannot find as possibly sent, keeps its image in its draft and frees the editor', async () => {
+  const s = await setup({ afterSendMs: 0, onRecover: false })
   const image = Buffer.alloc(64)
   Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]).copy(image)
   image.write('IHDR', 12); image.writeUInt32BE(2, 16); image.writeUInt32BE(1, 20)
@@ -552,23 +541,21 @@ it('moves a 没发出 attempt into its draft with the image kept and unlocks the
   const saved = await s.drafts.save(data)
   if (!saved.ok) throw new Error('save failed')
   data.draftId = saved.draft.id
+  // The forum took the POST, but does not show it yet when the check reads.
+  s.remote.lag()
   s.remote.setMode('drop')
   const lost = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: data }))
-  expect(await finished(s.service, lost.id)).toMatchObject({ state: 'unknown' })
-  expect(attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: data })).id).toBe(lost.id)
-
-  expect(await s.service.resolvePending({ attemptId: lost.id, choice: 'not-sent', postId: null })).toMatchObject({
-    ok: true, attempt: { state: 'failed', savedDraftId: data.draftId }
-  })
-  const drafts = s.db.listDrafts()
-  expect(drafts).toMatchObject([{ id: data.draftId, fields: { content: '测试正文' }, attachment: { id: data.attachmentId } }])
+  await expect.poll(() => s.db.getPublication(lost.id)?.state).toBe('failed')
+  expect(s.db.getPublication(lost.id)).toMatchObject({ problem: 'unverified', savedDraftId: data.draftId })
+  expect(s.db.listDrafts()).toMatchObject([{ id: data.draftId, fields: { content: '测试正文' }, attachment: { id: data.attachmentId } }])
   expect(existsSync(s.files.pathOf(s.db.getDraftAttachment(data.attachmentId)!.fileName)!)).toBe(true)
-  expect(await s.drafts.save({ ...data, fields: { ...data.fields, content: '改过再发' } })).toMatchObject({ ok: true })
 
+  s.remote.catchUp()
   s.remote.setMode('success')
   const again = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: { ...data, fields: { ...data.fields, content: '改过再发' } } }))
   expect(again.id).not.toBe(lost.id)
-  expect(await finished(s.service, again.id)).toMatchObject({ state: 'confirmed', confirmedBy: 'check' })
+  expect(await finished(s.service, again.id)).toMatchObject({ state: 'confirmed' })
+  expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(2)
 })
 
 it('keeps the 饼干 ID a send was made with after that cookie’s ID changes or the cookie is removed', async () => {
@@ -580,4 +567,159 @@ it('keeps the 饼干 ID a send was made with after that cookie’s ID changes or
   s.db.deleteCredential(s.a)
   await s.restart()
   expect(s.db.getPublication(sent.id)).toMatchObject({ cookieId: 'IdA' })
+})
+
+/** A send whose POST reached the forum but whose connection then dropped: 结果不明 (checks off). */
+async function lose(s: Awaited<ReturnType<typeof setup>>, data: DraftSaveInput, editorId = randomUUID()) {
+  s.remote.setMode('drop')
+  const lost = attempt(await s.service.submit({ requestId: randomUUID(), editorId, payload: data }))
+  expect(await finished(s.service, lost.id)).toMatchObject({ state: 'unknown' })
+  s.remote.setMode('success')
+  return lost
+}
+function postOf(s: Awaited<ReturnType<typeof setup>>, content: string): string {
+  return s.remote.posts().filter(post => post.content === content).at(-1)!.id!
+}
+const posts = (s: Awaited<ReturnType<typeof setup>>) => s.remote.seen.filter(r => r.path.startsWith('/Home/')).length
+/** Restarts with the startup check on and waits until it has ended this send's unknown result. */
+async function checkedAtStart(s: Awaited<ReturnType<typeof setup>>, id: string) {
+  await s.restart({ afterSendMs: null, onRecover: true })
+  await expect.poll(() => s.db.getPublication(id)?.state).not.toBe('unknown')
+  return s.db.getPublication(id)!
+}
+
+it('fails a send whose connection was never established: nothing reached the forum', async () => {
+  const closed = createServer()
+  await new Promise<void>(resolve => closed.listen(0, '127.0.0.1', resolve))
+  const address = closed.address()
+  if (!address || typeof address === 'string') throw new Error('listen failed')
+  await new Promise<void>(resolve => closed.close(() => resolve()))
+  const origin = `http://127.0.0.1:${address.port}`
+  const adapter = createPublicationAdapter({ origin, apiOrigin: origin, publishTimeoutMs: 1000 })
+  expect(await adapter.publish({ payload: payload('1'), userhash: 'cookie-A', attachment: null })).toEqual({ state: 'failed', problem: 'network' })
+  // An attachment that cannot be read is not sent either.
+  expect(await adapter.publish({ payload: payload('1'), userhash: 'cookie-A', attachment: { path: join(tmpdir(), `missing-${randomUUID()}.png`), format: 'png' } }))
+    .toEqual({ state: 'failed', problem: 'attachment' })
+})
+
+it('confirms a lost new thread and a lost reply by reading the forum after the send, without sending again', async () => {
+  const s = await setup({ afterSendMs: 0, onRecover: false })
+  const source = await s.drafts.save(payload(s.a, '断开的新串'))
+  if (!source.ok) throw new Error('save failed')
+  // The POST's connection drops after the forum took it: only the check can confirm it.
+  s.remote.setMode('drop')
+  const thread = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'thread', payload: { ...payload(s.a, '断开的新串'), draftId: source.draft.id } }))
+  const reply = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'reply', payload: { ...payload(s.b, '断开的回复\n第二行'), target: { kind: 'reply', threadId: '500' } } }))
+  const read = async (id: string) => { const result = await s.service.getAttempt({ attemptId: id }); return result.ok ? result.attempt : null }
+  await expect.poll(async () => (await read(thread.id))?.state).toBe('confirmed')
+  await expect.poll(async () => (await read(reply.id))?.state).toBe('confirmed')
+  const threadId = postOf(s, '断开的新串')
+  expect(await read(thread.id)).toMatchObject({ postId: threadId, threadId })
+  expect(await read(reply.id)).toMatchObject({ postId: postOf(s, '断开的回复<br />\n第二行'), threadId: '500' })
+  // As for any confirmed send: its source draft goes, and nothing is left in progress.
+  expect(s.db.listDrafts()).toEqual([])
+  expect(s.db.listPublications().filter(isUnsettled)).toEqual([])
+  expect(posts(s)).toBe(2)
+})
+
+it('names the post of a send whose number was unconfirmed when the later check finds it, and leaves it sent when not', async () => {
+  const s = await setup({ afterSendMs: 0, onRecover: false })
+  s.remote.setMode('empty')
+  const found = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'found', payload: payload(s.a, '没拿到串号') }))
+  await expect.poll(() => s.db.getPublication(found.id)?.state).toBe('confirmed')
+  expect(s.db.getPublication(found.id)).toMatchObject({ postId: postOf(s, '没拿到串号') })
+
+  s.remote.lag()
+  const hidden = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'hidden', payload: payload(s.b, '论坛还没显示') }))
+  await expect.poll(() => s.remote.seen.filter(r => r.path.startsWith('/api/showf')).length).toBe(4)
+  expect(s.db.getPublication(hidden.id)).toMatchObject({ state: 'unconfirmed', postId: null })
+  expect(posts(s)).toBe(2)
+})
+
+it.each([
+  ['another cookie’s 饼干 ID', { user_hash: 'IdB' }],
+  ['other text', { content: '别的内容' }],
+  ['another title', { title: '别的标题' }],
+  ['an image the send did not have', { img: 'test/other', ext: '.jpg' }],
+  ['a time before the send', { now: forumNow(Date.now() - 10 * 60_000) }]
+])('fails a lost send as unverified when the only candidate post has %s', async (_case, patch) => {
+  const s = await setup()
+  const lost = await lose(s, payload(s.a, '断开的新串'))
+  s.remote.edit(postOf(s, '断开的新串'), patch)
+  expect(await checkedAtStart(s, lost.id)).toMatchObject({ state: 'failed', problem: 'unverified', savedDraftId: expect.any(String) })
+  expect(posts(s)).toBe(1)
+})
+
+it('never takes a post another send already holds, and does not choose between two equal candidates', async () => {
+  const s = await setup()
+  const first = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'first', payload: payload(s.a, '同样的内容') }))
+  expect(await finished(s.service, first.id)).toMatchObject({ state: 'confirmed' })
+  const lost = await lose(s, payload(s.a, '同样的内容'))
+  // The earlier post is the first send's; only the later one can be this send's.
+  expect(await checkedAtStart(s, lost.id)).toMatchObject({ state: 'confirmed', postId: postOf(s, '同样的内容') })
+  const again = await lose(s, payload(s.b, '又一条'))
+  s.remote.add({ content: '又一条', title: '测试标题', user_hash: 'IdB' })
+  expect(await checkedAtStart(s, again.id)).toMatchObject({ state: 'failed', problem: 'unverified' })
+})
+
+it('fails without reading the forum a lost send whose 饼干 ID was not known', async () => {
+  const s = await setup()
+  // A cookie imported before 饼干 IDs were kept.
+  const unknownId = s.db.insertCredential({ name: 'C', cookieId: 'IdC', source: 'raw', importedAt: '2026-01-01', ciphertext: Buffer.from('cookie-C') }).id
+  const raw = new Database(join(s.dir, 'db.sqlite'))
+  try { raw.prepare('UPDATE credentials SET cookie_id = NULL WHERE id = ?').run(unknownId) } finally { raw.close() }
+  const anonymous = await lose(s, payload(unknownId, '不知道饼干 ID'))
+  const reads = s.remote.seen.length
+  expect(await checkedAtStart(s, anonymous.id)).toMatchObject({ state: 'failed', problem: 'unverified' })
+  expect(s.remote.seen).toHaveLength(reads)
+})
+
+it('checks sends an earlier run left without a result once at start; a throttled read fails them with their launch notice kept', async () => {
+  const s = await setup()
+  const left = await lose(s, payload(s.a, '上次断开'))
+  expect(await checkedAtStart(s, left.id)).toMatchObject({ state: 'confirmed', postId: postOf(s, '上次断开') })
+
+  s.remote.setMode('hold')
+  const unfinished = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'unfinished', payload: payload(s.b, '退出时还在发') }))
+  await expect.poll(() => posts(s)).toBe(2)
+  s.remote.setMode('read-rate')
+  // Left `sending`: recovered as unknown with a launch notice, then checked.
+  expect(await checkedAtStart(s, unfinished.id)).toMatchObject({ state: 'failed', problem: 'unverified' })
+  expect(s.db.listLaunchNotices()).toMatchObject([{ id: unfinished.id, state: 'failed', problem: 'unverified' }])
+  expect(posts(s)).toBe(2)
+})
+
+it('reads at most three trailing pages of a reply’s thread, counting a page the reply count does not show yet', async () => {
+  const s = await setup()
+  for (let i = 0; i < 75; i++) s.remote.add({ resto: '500', content: `别人的回复${i}`, user_hash: 'Other' })
+  const lost = await lose(s, { ...payload(s.a, '最后一条'), target: { kind: 'reply', threadId: '500' } })
+  // 76 replies, counted as 75: page 4 looks last and full, page 5 holds the lost reply.
+  s.remote.lagCount(1)
+  const before = s.remote.seen.length
+  expect(await checkedAtStart(s, lost.id)).toMatchObject({ state: 'confirmed', postId: postOf(s, '最后一条') })
+  const pages = s.remote.seen.slice(before).filter(r => r.path.startsWith('/api/thread')).map(r => Number(new URL(r.path, 'http://local').searchParams.get('page') ?? '1'))
+  expect(pages.filter(page => page !== 1)).toEqual([4, 5, 3])
+})
+
+it('checks a lost send once its result could be stored after all, without sending again', async () => {
+  const s = await setup({ afterSendMs: 0, onRecover: false })
+  let broken = true
+  const base = asyncStore(s.db)
+  const store = new Proxy(base, { get(target, key) {
+    const value = Reflect.get(target, key)
+    return key === 'finishPublication' ? (...args: unknown[]) => broken ? Promise.reject(new Error('controlled write failure')) : Reflect.apply(value, target, args) : value
+  } }) as AppStore
+  const { service } = await s.start(store, { afterSendMs: 0, onRecover: false })
+  s.remote.lag()
+  s.remote.setMode('drop')
+  const lost = attempt(await service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: payload(s.a, '先没存上') }))
+  await expect.poll(() => service.unstoredResults().map(item => item.id)).toEqual([lost.id])
+  broken = false
+  expect(await service.retryUnstored()).toBe(true)
+  // Stored as unknown, then the one check runs: the forum does not show it, so it goes to a draft.
+  await expect.poll(() => s.db.getPublication(lost.id)?.state).toBe('failed')
+  expect(s.db.getPublication(lost.id)).toMatchObject({ problem: 'unverified' })
+  const read = await service.getAttempt({ attemptId: lost.id })
+  expect(read.ok && read.attempt?.state).toBe('failed')
+  expect(posts(s)).toBe(1)
 })

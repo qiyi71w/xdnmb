@@ -31,7 +31,7 @@ type Predecessor = 'subscriptions-v5' | 'retained-v6' | typeof heads[number]
 const hasSubscriptions = (kind: Predecessor) => kind === 'subscriptions-v5' || kind === 'integrated-v7' || kind === 'reconciliation-v6' || kind === 'integrated-v8' || kind === 'reminders-v9'
 const hasDrafts = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'lifecycle-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
 const hasRetained = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
-/** Publication columns every version keeps; v18 adds `confirmed_by`, so snapshots taken before it compare these. */
+/** Publication columns every version keeps; v18 adds `cookie_id`, so snapshots taken before it compare these. */
 const publicationColumns = 'id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem, created_at, updated_at, post_id, thread_id, saved_draft_id, launch_notice'
 const keptColumns = (table: string) => table === 'publication_attempts' ? `SELECT ${publicationColumns} FROM publication_attempts` : `SELECT * FROM ${table}`
 
@@ -370,7 +370,7 @@ describe('schema v14: thread favourites and read state removed', () => {
     const raw = new Database(path, { readonly: true })
     try {
       const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
-      // Later versions add columns (credentials.cookie_id in v15, publication_attempts.confirmed_by in v18); compare the columns kept throughout.
+      // Later versions add columns (credentials.cookie_id in v15, publication_attempts.cookie_id in v18); compare the columns kept throughout.
       const query = (table: string) => table === 'credentials' ? 'SELECT id, name, source, imported_at, ciphertext, position FROM credentials' : keptColumns(table)
       const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(query(table)).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
       return { version: raw.pragma('user_version', { simple: true }), tables, rows }
@@ -603,7 +603,7 @@ describe('reminder scheduling upgrade', () => {
   })
 })
 
-describe('schema v18: a confirmed send records who confirmed it', () => {
+describe('schema v18: sends keep their 饼干 ID and may fail as unverified', () => {
   const payload = (content: string) => JSON.stringify({ draftId: null, target: { kind: 'reply', threadId: '500' }, credentialId: '7',
     fields: { content, title: '', name: '', email: '', watermark: false }, attachmentId: null })
 
@@ -626,24 +626,49 @@ describe('schema v18: a confirmed send records who confirmed it', () => {
     return path
   }
 
-  it('keeps every send and its ID, marks existing confirmations as checked, and lets the user confirm without a number', () => {
+  it('keeps every send and its ID, fills the 饼干 ID, and lets an unknown send fail as unverified into a draft', () => {
     const db = open(v17())
     expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
     const mine = (id: string) => ['101', '102', '103'].includes(id)
-    expect(db.listPublications().filter((item) => mine(item.id)).map(({ id, state, problem, postId, threadId, confirmedBy, cookieId, createdAt, updatedAt }) =>
-      ({ id, state, problem, postId, threadId, confirmedBy, cookieId, createdAt, updatedAt }))).toEqual([
-      { id: '103', state: 'failed', problem: 'rejected', postId: null, threadId: null, confirmedBy: null, cookieId: 'Old7', createdAt: at, updatedAt: later },
-      { id: '102', state: 'unknown', problem: 'network', postId: null, threadId: null, confirmedBy: null, cookieId: 'Old7', createdAt: at, updatedAt: later },
-      { id: '101', state: 'confirmed', problem: null, postId: '700', threadId: '500', confirmedBy: 'check', cookieId: 'Old7', createdAt: at, updatedAt: later }
+    expect(db.listPublications().filter((item) => mine(item.id)).map(({ id, state, problem, postId, threadId, cookieId, createdAt, updatedAt }) =>
+      ({ id, state, problem, postId, threadId, cookieId, createdAt, updatedAt }))).toEqual([
+      { id: '103', state: 'failed', problem: 'rejected', postId: null, threadId: null, cookieId: 'Old7', createdAt: at, updatedAt: later },
+      { id: '102', state: 'unknown', problem: 'network', postId: null, threadId: null, cookieId: 'Old7', createdAt: at, updatedAt: later },
+      { id: '101', state: 'confirmed', problem: null, postId: '700', threadId: '500', cookieId: 'Old7', createdAt: at, updatedAt: later }
     ])
     expect(db.listLaunchNotices().map((item) => item.id).filter(mine)).toEqual(['102'])
-    expect(db.resolvePublication({ id: '102', choice: 'sent', postId: null, at: later })).toMatchObject({
-      ok: true, attempt: { state: 'confirmed', confirmedBy: 'user', postId: null, threadId: '500' }
-    })
+    expect(db.failUnverifiedPublication({ id: '102', at: later })).toMatchObject({ state: 'failed', problem: 'unverified', savedDraftId: expect.any(String) })
+    // Its launch notice stays: the next window still tells about it.
+    expect(db.listLaunchNotices().map((item) => item.id).filter(mine)).toEqual(['102'])
     // IDs are never reused: the counter survives the rebuild.
     const created = db.createPublication({ requestId: 'after-upgrade', editorId: 'editor', forumId: '4', at: later,
       payload: { draftId: null, target: { kind: 'thread', forumId: '4' }, credentialId: '7', fields: { content: '新', title: '', name: '', email: '', watermark: false }, attachmentId: null } })
     expect(created.id).toBe('141')
+  })
+
+  it('treats a v17 send left unconfirmed as sent: its source draft goes and its image is no longer held', () => {
+    const path = v17()
+    const raw = new Database(path)
+    try {
+      const image = Number(raw.prepare(`INSERT INTO draft_attachments(file_name, format, bytes, width, height, original_name, created_at)
+        VALUES ('kept.png', 'png', 64, 2, 1, 'kept.png', ?)`).run(at).lastInsertRowid)
+      const draft = Number(raw.prepare(`INSERT INTO drafts(target_kind, target_id, credential_id, content, title, name, email, watermark, attachment_id, version, created_at, saved_at)
+        VALUES ('reply', '500', 7, '已发出未确认', '', '', '', 0, ?, 1, ?, ?)`).run(image, at, at).lastInsertRowid)
+      const unknownDraft = Number(raw.prepare(`INSERT INTO drafts(target_kind, target_id, credential_id, content, title, name, email, watermark, attachment_id, version, created_at, saved_at)
+        VALUES ('reply', '500', 7, '结果不明', '', '', '', 0, NULL, 1, ?, ?)`).run(at, at).lastInsertRowid)
+      const insert = raw.prepare(`INSERT INTO publication_attempts(id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem,
+        created_at, updated_at) VALUES (?, ?, 'editor', ?, ?, 7, '4', ?, ?, ?, ?, ?)`)
+      insert.run(150, 'sent-unnamed', draft, payload('已发出未确认'), image, 'unconfirmed', null, at, later)
+      insert.run(151, 'still-unknown', unknownDraft, payload('结果不明'), null, 'unknown', 'network', at, later)
+    } finally { raw.close() }
+    const db = open(path)
+    expect(db.getPublication('150')).toMatchObject({ state: 'unconfirmed', payload: { fields: { content: '已发出未确认' } } })
+    // Sent: not a draft to send again (an unknown send keeps its draft), and it no longer holds its image.
+    expect(db.listDrafts().map((draft) => draft.fields.content).sort()).toEqual(['未发送草稿', '结果不明'].sort())
+    const check = new Database(path, { readonly: true })
+    try {
+      expect(check.prepare('SELECT attachment_id FROM publication_attempts WHERE id = 150').get()).toEqual({ attachment_id: null })
+    } finally { check.close() }
   })
 
   it('rolls back an interrupted rebuild without changing the v17 file', () => {
@@ -656,6 +681,6 @@ describe('schema v18: a confirmed send records who confirmed it', () => {
     expect(db.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
     db.close()
     expect(readFileSync(path)).toEqual(original)
-    expect(open(path).getPublication('101')).toMatchObject({ state: 'confirmed', confirmedBy: 'check', postId: '700' })
+    expect(open(path).getPublication('101')).toMatchObject({ state: 'confirmed', postId: '700' })
   })
 })

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { DraftId, PostTarget, SavedDraft } from '../../../../shared/drafts'
+import type { DraftId, SavedDraft } from '../../../../shared/drafts'
+import { isUnsettled } from '../../../../shared/publication'
 import { Icon } from '../../components/Icon'
 import { Modal, ModalHeader } from '../../components/Modal'
 import { formatRecordTime } from '../../lib/time'
@@ -10,26 +11,23 @@ import './drafts.css'
 
 type ListState = { status: 'loading' } | { status: 'failed' } | { status: 'ready'; drafts: SavedDraft[] }
 
-/** Drafts that unresolved attempts hold (no edit, save or delete); `null`: could not be read. */
+/** Drafts that sends still in progress hold (no edit, save or delete); `null`: could not be read. */
 type Locks = ReadonlySet<DraftId> | null
 
 /**
  * 草稿 library: every saved draft, most recently saved first; several may share a target.
  * 继续 hands the draft to the shell (focus its editor, or open it in a new tab); 删除 removes the
  * record after confirmation and is unavailable while the draft is being edited. A draft whose send
- * is still sending or unresolved is locked: it can only be looked up in 历史 (the page of its kind).
+ * is still sending or being checked is locked until that send is sent or failed.
  */
 export function DraftLibraryDialog({
   tabTitle,
   onContinue,
-  onOpenAttempts,
   onClose,
   fallbackFocus
 }: {
   tabTitle: (tabId: number) => string
   onContinue: (draft: SavedDraft) => void
-  /** 查看发送记录 of a locked draft: 历史 on the page of its target's kind. */
-  onOpenAttempts: (kind: PostTarget['kind']) => void
   onClose: () => void
   fallbackFocus?: () => HTMLElement | null
 }) {
@@ -49,9 +47,7 @@ export function DraftLibraryDialog({
     const [drafts, attempts] = await Promise.allSettled([window.xidao.drafts.list(), window.xidao.publication.listAttempts()])
     if (!alive.current) return
     if (attempts.status === 'fulfilled' && attempts.value.ok) {
-      const held = attempts.value.attempts.filter(
-        (attempt) => attempt.state === 'sending' || attempt.state === 'unknown' || attempt.state === 'unconfirmed'
-      )
+      const held = attempts.value.attempts.filter(isUnsettled)
       setLocks(new Set(held.flatMap((attempt) => (attempt.draftId === null ? [] : [attempt.draftId]))))
     } else setLocks(null)
     if (drafts.status === 'fulfilled' && drafts.value.ok) setList({ status: 'ready', drafts: drafts.value.drafts })
@@ -192,7 +188,7 @@ export function DraftLibraryDialog({
                     {locked && (
                       <p className="draft-locked" id={`${rowId}-locked`}>
                         <Icon name="alert" size={13} />
-                        发送结果待核对，已锁定
+                        正在发送或确认是否已发出，已锁定
                       </p>
                     )}
                     {deleteFailed?.draftId === draft.id && (
@@ -221,17 +217,7 @@ export function DraftLibraryDialog({
                     </div>
                   ) : (
                     <div className="draft-actions">
-                      {locked && editing === null ? (
-                        <button
-                          type="button"
-                          className="btn btn-small"
-                          aria-describedby={`${rowId}-locked`}
-                          onClick={() => onOpenAttempts(draft.target.kind)}
-                        >
-                          <Icon name="history" size={14} />
-                          查看发送记录
-                        </button>
-                      ) : (
+                      {locked && editing === null ? null : (
                         <button
                           type="button"
                           className="btn btn-small"

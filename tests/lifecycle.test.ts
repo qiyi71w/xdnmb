@@ -18,7 +18,7 @@ function sendAttempt(id: string, state: PublicationState, createdAt: string): Pu
     id, requestId: `request-${id}`, editorId: `editor-${id}`, draftId: null, state, problem: state === 'confirmed' ? null : 'network',
     payload: { draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: '1',
       fields: { content: '正文', title: '', name: '', email: '', watermark: false }, attachmentId: null },
-    createdAt, updatedAt: createdAt, postId: null, threadId: null, confirmedBy: state === 'confirmed' ? 'check' : null, cookieId: null, savedDraftId: null
+    createdAt, updatedAt: createdAt, postId: null, threadId: null, cookieId: null, savedDraftId: null
   }
 }
 

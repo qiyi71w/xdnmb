@@ -436,7 +436,7 @@ describe('window lifecycle storage', () => {
     expect(db.status).toEqual({ state: 'ready', schemaVersion: SUPPORTED_VERSION })
     // A cookie without a known 饼干 ID leaves the send's ID unknown; nothing confirmed it.
     expect(db.listPublications()).toMatchObject([{ requestId: 'request-1', editorId: 'editor-1', payload, state: 'sending',
-      problem: null, postId: null, threadId: null, confirmedBy: null, cookieId: null, createdAt: fetchedAt }])
+      problem: null, postId: null, threadId: null, cookieId: null, createdAt: fetchedAt }])
     expect(db.listLaunchNotices()).toEqual([])
     expect(db.loadWorkspace()).toBeNull()
     db.saveWorkspace('{"first":true}', later)

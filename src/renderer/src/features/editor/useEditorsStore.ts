@@ -1,7 +1,7 @@
 import { reportContent } from '../../../../shared/report'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { targetKey, type AttachmentId, type EditorId, type PostTarget, type SavedDraft } from '../../../../shared/drafts'
-import type { PublicationAttempt, SubmitResult } from '../../../../shared/publication'
+import { isSent, isUnsettled, type PublicationAttempt, type SubmitResult } from '../../../../shared/publication'
 import {
   attachmentHolds,
   editorsReducer,
@@ -26,7 +26,7 @@ export function focusKey(tabId: number, target: PostTarget): string {
   return `${tabId}|${targetKey(target)}`
 }
 
-/** A confirmed send of a tab's editor for a target, shown beside that target's entry. */
+/** A sent send of a tab's editor for a target, with its post known, shown beside that target's entry. */
 export interface PublishedNote {
   postId: string
   threadId: string
@@ -35,12 +35,11 @@ export interface PublishedNote {
 
 export type PromptChoice = 'switch' | 'current' | 'cancel'
 
-/** How often a `sending` attempt's local record is read again. Reading never sends anything. */
+/**
+ * How often an editor's attempt is read again while it is `sending`, or `unknown` with its
+ * read-only check still to come. Reading never sends anything.
+ */
 const POLL_MS = 1000
-
-function unresolved(attempt: PublicationAttempt): boolean {
-  return attempt.state === 'sending' || attempt.state === 'unknown' || attempt.state === 'unconfirmed'
-}
 
 /** The editor with the draft its latest save produced, even if the reducer has not re-rendered yet. */
 function withLastSaved(editor: Editor, lastSaved: ReadonlyMap<EditorId, SavedDraft>): Editor {
@@ -75,15 +74,7 @@ export interface EditorsStore {
   resolvePrompt: (editorId: EditorId, choice: PromptChoice, suppress: boolean) => Promise<void>
   /** Looks up again, by its request ID, whether an uncertain request left an attempt. */
   recheck: (editorId: EditorId) => Promise<void>
-  /** Ends a locked editor whose attempt is `unknown` / `unconfirmed`; the attempt keeps its content. */
-  endPublication: (editorId: EditorId) => void
-  /**
-   * A 待核对 attempt was ended by the user (已发出 / 没发出) outside its editor: an editor still
-   * showing it closes (sent) or continues the draft its content went to (not sent). Always counts as
-   * a publication change, so 发送记录 and its badges read again.
-   */
-  adoptResolved: (attempt: PublicationAttempt) => Promise<void>
-  /** Confirmed sends by `focusKey`, until a new editor opens there or the tab closes. */
+  /** Sent sends with their post known, by `focusKey`, until a new editor opens there or the tab closes. */
   published: ReadonlyMap<string, PublishedNote>
   clearPublished: (key: string) => void
   /** Grows whenever a send created or changed an attempt, saved a draft or ended an editor. */
@@ -241,11 +232,11 @@ export function useEditorsStore(): EditorsStore {
   const applyAttempt = useCallback(
     async (editorId: EditorId, attempt: PublicationAttempt, draft?: SavedDraft | null) => {
       bump()
-      if (unresolved(attempt)) {
+      if (isUnsettled(attempt)) {
         rawDispatch({ type: 'publish-attempt', editorId, attempt, readFailed: false })
         return
       }
-      if (attempt.state === 'confirmed') {
+      if (isSent(attempt)) {
         const editor = find(editorId)
         const postId = attempt.postId
         if (editor !== undefined && postId !== null) {
@@ -384,54 +375,14 @@ export function useEditorsStore(): EditorsStore {
     [find, lookup]
   )
 
-  const endPublication = useCallback(
-    (editorId: EditorId) => {
-      const publication = find(editorId)?.publication
-      if (publication?.phase !== 'attempt' || publication.attempt.state === 'sending') return
-      rawDispatch({ type: 'publish-ended', editorId })
-      bump()
-    },
-    [find, bump]
-  )
-
-  const adoptResolved = useCallback(
-    async (attempt: PublicationAttempt) => {
-      bump()
-      const holders = stateRef.current.editors.filter(
-        (editor) => editor.publication?.phase === 'attempt' && editor.publication.attempt.id === attempt.id
-      )
-      if (holders.length === 0) return
-      if (attempt.state === 'confirmed') {
-        for (const editor of holders) rawDispatch({ type: 'publish-ended', editorId: editor.id })
-        return
-      }
-      if (attempt.state !== 'failed') return
-      let saved: SavedDraft | null = null
-      try {
-        const read = await window.xidao.publication.getAttempt({ attemptId: attempt.id })
-        if (read.ok) saved = read.draft
-      } catch {
-        saved = null
-      }
-      for (const editor of holders) {
-        const now = find(editor.id)?.publication
-        if (now?.phase !== 'attempt' || now.attempt.id !== attempt.id) continue
-        if (saved !== null) lastSaved.current.set(editor.id, saved)
-        rawDispatch({ type: 'publish-withdrawn', editorId: editor.id, draft: saved })
-      }
-    },
-    [bump, find]
-  )
-
-  // While any editor's attempt is sending, read its local record until it has a result. Runs for
-  // hidden editors too; an editor that went away leaves its attempt to 发送记录.
-  const sendingKey = state.editors
-    .flatMap((editor) =>
-      editor.publication?.phase === 'attempt' && editor.publication.attempt.state === 'sending' ? [editor.publication.attempt.id] : []
-    )
+  // While any editor's attempt is sending, or its result is unknown and being checked, read its local
+  // record until that settles: sent ends the editor, failed continues its saved draft. Runs for
+  // hidden editors too; an editor that went away leaves its attempt to 发送记录 and 草稿.
+  const watchedKey = state.editors
+    .flatMap((editor) => (editor.publication?.phase === 'attempt' && isUnsettled(editor.publication.attempt) ? [editor.publication.attempt.id] : []))
     .join('|')
   useEffect(() => {
-    if (sendingKey === '') return
+    if (watchedKey === '') return
     let alive = true
     let reading = false
     const tick = async () => {
@@ -439,7 +390,7 @@ export function useEditorsStore(): EditorsStore {
       reading = true
       for (const editor of stateRef.current.editors) {
         const publication = editor.publication
-        if (publication?.phase !== 'attempt' || publication.attempt.state !== 'sending') continue
+        if (publication?.phase !== 'attempt' || !isUnsettled(publication.attempt)) continue
         let attempt: PublicationAttempt | null = null
         let draft: SavedDraft | null = null
         try {
@@ -468,7 +419,7 @@ export function useEditorsStore(): EditorsStore {
       alive = false
       window.clearInterval(timer)
     }
-  }, [sendingKey, find, applyAttempt])
+  }, [watchedKey, find, applyAttempt])
 
   const current = useCallback(() => stateRef.current, [])
 
@@ -483,8 +434,6 @@ export function useEditorsStore(): EditorsStore {
       send,
       resolvePrompt,
       recheck,
-      endPublication,
-      adoptResolved,
       published,
       clearPublished,
       publicationRevision,
@@ -501,8 +450,6 @@ export function useEditorsStore(): EditorsStore {
       send,
       resolvePrompt,
       recheck,
-      endPublication,
-      adoptResolved,
       published,
       clearPublished,
       publicationRevision,

@@ -784,14 +784,6 @@ export function registerIpc({
     return publication.resolvePrompt({ token: viewId(input.token), choice: input.choice as 'switch' | 'current' | 'cancel', suppress: input.suppress })
   })
   handle(IpcChannel.listPublications, async () => publication.listAttempts())
-  handle(IpcChannel.resolvePendingPublication, async (_event, raw) => {
-    const input = searchRecord(raw, ['attemptId', 'choice', 'postId'])
-    if (input.choice !== 'sent' && input.choice !== 'not-sent') throw new InvalidRequestError()
-    // A post number is optional and only answers 已发出.
-    if (input.postId !== null && input.choice !== 'sent') throw new InvalidRequestError()
-    const postId = input.postId === null ? null : forumId(input.postId)
-    return publication.resolvePending({ attemptId: localId(input.attemptId), choice: input.choice, postId })
-  })
   handle(IpcChannel.getPublication, async (_event, raw) => publication.getAttempt({ attemptId: localId(record(raw).attemptId) }))
   handle(IpcChannel.getPoWarning, async () => publication.getPoWarning())
   handle(IpcChannel.setPoWarning, async (_event, raw) => {
