@@ -118,12 +118,9 @@
   outline-offset: 2px;
 }
 
-/* Revealed: a faint wash marks what was hidden. It keeps focus after a keyboard reveal (so focus
-   does not fall to the page) but draws no ring for it. */
-.spoiler.is-revealed {
-  background: var(--hover);
-}
-
+/* Revealed: the words sit on the post's own surface (no tint, so no new text/surface contrast
+   pair). It keeps focus after a keyboard reveal (so focus does not fall to the page) but draws no
+   ring for it. */
 .spoiler.is-revealed:focus {
   outline: none;
 }

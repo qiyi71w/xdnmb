@@ -25,15 +25,28 @@ describe('spoiler segments', () => {
     expect(display('<b>[h]x[/h]</b>')).toEqual([{ type: 'emphasis', style: 'bold', children: [spoiler(text('x'))] }])
   })
 
+  it('pairs markers on different formatting levels, splitting the formatting at the mask edges', () => {
+    // The forum wraps a quote line in green text; the segment opened there closes on a later line.
+    expect(display('<font color="#789922">&gt;&gt;No.1 [h]秘密</font><br />内容[/h]后')).toEqual([
+      { type: 'greentext', children: [{ type: 'quoteRef', postId: '1', raw: '>>No.1' }, text(' ')] },
+      spoiler({ type: 'greentext', children: [text('秘密')] }, { type: 'lineBreak' }, text('内容')),
+      text('后')
+    ])
+    expect(display('<b>a[h]b</b>c[/h]')).toEqual([
+      { type: 'emphasis', style: 'bold', children: [text('a')] },
+      spoiler({ type: 'emphasis', style: 'bold', children: [text('b')] }, text('c'))
+    ])
+  })
+
   it('pairs each opening marker with the next closing one, keeping inner openers as text', () => {
     expect(display('[h]a[h]b[/h]c[/h]')).toEqual([spoiler(text('a[h]b')), text('c[/h]')])
   })
 
-  it('shows unpaired, cross-level and empty markers as their original text', () => {
+  it('shows unpaired and empty markers as their original text', () => {
     expect(display('a[h]b')).toEqual([text('a[h]b')])
     expect(display('a[/h]b')).toEqual([text('a[/h]b')])
     expect(display('[/h]x[h]')).toEqual([text('[/h]x[h]')])
-    expect(display('[h]<b>x[/h]</b>')).toEqual([text('[h]'), { type: 'emphasis', style: 'bold', children: [text('x[/h]')] }])
+    expect(display('<b>[h]x</b>')).toEqual([{ type: 'emphasis', style: 'bold', children: [text('[h]x')] }])
     expect(display('[h][/h] [h] [/h] [h]<br>[/h]')).toEqual([
       text('[h][/h] [h] [/h] [h]'), { type: 'lineBreak' }, text('[/h]')
     ])
