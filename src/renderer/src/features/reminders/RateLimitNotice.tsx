@@ -58,9 +58,7 @@ export function RateLimitNotice({ fallbackFocus }: { fallbackFocus: () => HTMLEl
     <BottomNotice
       open={open}
       detail={current?.failure != null ? `没有记下：${failureText(current.failure)}` : null}
-      actionLabel="知道了"
-      actionBusy={current?.pending === true}
-      onAction={() => void dismiss()}
+      actions={[{ label: '知道了', busy: current?.pending === true, onAction: () => void dismiss() }]}
       fallbackFocus={fallbackFocus}
     >
       {RATE_LIMIT_TEXT}

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react'
 import type { AppPlatform, StorageStatus } from '../../../shared/api'
-import { sameTarget, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
+import { sameTarget, targetText, type EditorId, type PostTarget, type SavedDraft } from '../../../shared/drafts'
 import type { FeedRef, Post, ThreadId } from '../../../shared/forum'
 import type { WorkspaceLoadResult } from '../../../shared/lifecycle'
+import type { SendFailureNotice } from '../../../shared/publication'
 import { DEFAULT_SETTINGS, LIST_WIDTH_LIMITS, type AppSettings } from '../../../shared/settings'
 import { Icon } from '../components/Icon'
 import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/directory/feeds'
@@ -23,7 +24,6 @@ import { useDirectory } from '../features/directory/useDirectory'
 import { HistoryPageContext, type HistoryPageHost, type HistoryView } from '../features/content/RetainedPane'
 import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
 import { editorFor, editorForDraft, isUnsaved, unsavedInTab } from '../features/editor/editorsState'
-import { targetText } from '../features/editor/editorText'
 import { UnsavedEditorsDialog } from '../features/editor/UnsavedEditorsDialog'
 import { focusKey, useEditorsStore } from '../features/editor/useEditorsStore'
 import { EditorWorkspaceContext, type EditorWorkspace } from '../features/editor/workspace'
@@ -35,6 +35,8 @@ import { useIdentities } from '../features/identity/useIdentities'
 import { SubscriptionsContext, useSubscriptions } from '../features/subscriptions/useSubscriptions'
 import { clearThreadReminders, RemindersContext, useReminderOverview } from '../features/reminders/useReminders'
 import { RateLimitNotice } from '../features/reminders/RateLimitNotice'
+import { SendFailureNotices } from '../features/publication/SendFailureNotices'
+import { BottomNoticeStack } from '../components/BottomNotice'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { QuoteCard } from '../features/quote/QuoteCard'
 import { QuoteActiveContext, QuoteControllerContext } from '../features/quote/QuoteContext'
@@ -835,6 +837,33 @@ export function App() {
     [whenRestored, openRemindersList]
   )
 
+  /**
+   * 打开草稿 of a failed send (in-app notice or system notification): the editor already continuing
+   * its draft is shown and focused, else the draft is continued as from the library. Resolves to
+   * why it could not be opened, or null.
+   */
+  const openFailedDraft = useCallback(
+    async (notice: SendFailureNotice): Promise<string | null> => {
+      await whenRestored()
+      closeNav(false)
+      const editing = editorForDraft(currentEditors(), notice.draftId)?.draft ?? null
+      if (editing !== null) {
+        continueDraft(editing)
+        return null
+      }
+      try {
+        const result = await window.xidao.publication.getAttempt({ attemptId: notice.attemptId })
+        if (!result.ok) return '读取草稿失败：本地存储不可用'
+        if (result.draft === null) return '这份自动保存的草稿已不存在（可能已删除或已发出）'
+        continueDraft(result.draft)
+        return null
+      } catch {
+        return '读取草稿失败：应用内部请求失败'
+      }
+    },
+    [whenRestored, closeNav, currentEditors, continueDraft]
+  )
+
   /** A real quit closes every layer that would compete with its questions. */
   const closeForQuit = useCallback(() => {
     closeBoardPanel('dismiss')
@@ -1296,7 +1325,10 @@ export function App() {
               </div>
 
               {/* Bottom centre of the content column, beside the inline rail and under the overlay one. */}
-              <RateLimitNotice fallbackFocus={activeTabFocus} />
+              <BottomNoticeStack>
+                <RateLimitNotice fallbackFocus={activeTabFocus} />
+                <SendFailureNotices forumName={forumName} openDraft={openFailedDraft} fallbackFocus={activeTabFocus} />
+              </BottomNoticeStack>
 
               {navOverlay && navPopover.open && (
                 <>

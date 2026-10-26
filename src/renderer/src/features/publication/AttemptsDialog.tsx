@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import type { PostTarget, SavedDraft } from '../../../../shared/drafts'
-import type { PublicationAttempt } from '../../../../shared/publication'
+import { targetText, type PostTarget, type SavedDraft } from '../../../../shared/drafts'
+import { ATTEMPT_PROBLEM_TEXT, type PublicationAttempt } from '../../../../shared/publication'
 import { Icon } from '../../components/Icon'
 import { formatLocalTime } from '../../lib/format'
-import { credentialLine, excerpt, targetText } from '../editor/editorText'
+import { credentialLine, excerpt } from '../editor/editorText'
 import { useEditorWorkspace } from '../editor/workspace'
-import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, ATTEMPT_STATE_LABEL } from './publicationText'
+import { ATTEMPT_STATE_DETAIL, ATTEMPT_STATE_LABEL } from './publicationText'
 import './publication.css'
 
 type ListState = { status: 'loading' } | { status: 'failed' } | { status: 'ready'; attempts: PublicationAttempt[] }

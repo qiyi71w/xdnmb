@@ -30,6 +30,8 @@ import createStorageWorker from './storage/worker?nodeWorker'
 import { createSubscriptionService } from './subscriptions/service'
 import { createPublicationAdapter } from './publication/adapter'
 import { createPublicationService } from './publication/service'
+import { createFailureNotifier } from './publication/failureNotifier'
+import { PUBLICATION_FAILURE_CHANNEL, PUBLICATION_OPEN_DRAFT_CHANNEL } from '../shared/publication'
 import trayIconPath from '../../resources/tray-icon.png?asset'
 import { REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
 import { createReminderService } from './reminders/service'
@@ -301,13 +303,32 @@ async function start(): Promise<void> {
 
   const draftFiles = await openManagedImageFiles(join(app.getPath('userData'), 'draft-images'))
   const drafts = createDraftService({ store: openedStore, files: draftFiles })
+  const failures = createFailureNotifier({
+    foreground: () => mainWindow !== null && mainWindow.isVisible() && !mainWindow.isMinimized() && mainWindow.isFocused(),
+    showInApp(notice) {
+      if (mainWindow === null || mainWindow.webContents.isDestroyed()) return false
+      mainWindow.webContents.send(PUBLICATION_FAILURE_CHANNEL, notice)
+      return true
+    },
+    isSupported: () => Notification.isSupported(),
+    create: (message) => new Notification(message),
+    async forumName(forumId) {
+      const directory = await openedStore.loadDirectory()
+      return directory?.value.groups.flatMap((group) => group.forums).find((forum) => forum.id === forumId)?.name ?? null
+    },
+    async openDraft(notice) {
+      await lifecycle?.revealWithoutTrigger()
+      mainWindow?.webContents.send(PUBLICATION_OPEN_DRAFT_CHANNEL, notice)
+    }
+  })
   const publication = createPublicationService({
     store: openedStore, drafts, files: draftFiles, protector: createSafeStorageProtector(),
     clientFor: (userhash) => createForumClient({
       transport: createForumTransport({ allowedOrigins: [FORUM_API_ORIGIN], credentialOrigins: [FORUM_API_ORIGIN] }),
       baseUrl: FORUM_API_ORIGIN, browseIdentity: async () => userhash
     }),
-    adapter: createPublicationAdapter()
+    adapter: createPublicationAdapter(),
+    onRecorded: (attempt) => { void failures.recorded(attempt).catch(() => console.error('[publication] failure notice unavailable')) }
   })
   await publication.recover().catch(() => console.error('[publication] recovery failed'))
   // No editor exists yet: copies no saved draft references, and leftover files, are removed.
@@ -349,6 +370,10 @@ async function start(): Promise<void> {
       ipc?.cancelAllFor(contents)
       if (mainWindow === window) mainWindow = null
     })
+    // Failures whose system notification did not show are owed an in-app notice once the window is shown.
+    window.on('show', () => failures.windowShown())
+    window.on('restore', () => failures.windowShown())
+    window.on('focus', () => failures.windowShown())
   }
   const host: MainWindowHost = {
     state: () => (mainWindow === null ? 'none' : mainWindow.isVisible() ? 'shown' : 'hidden'),

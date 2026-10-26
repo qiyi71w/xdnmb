@@ -3,13 +3,12 @@
 // store's semantics: closing only collapses, content stays.
 
 import { useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
-import { targetKey, type EditorId, type PostTarget } from '../../../../shared/drafts'
+import { targetKey, targetText, type EditorId, type PostTarget } from '../../../../shared/drafts'
 import { Icon } from '../../components/Icon'
 import { useCover } from '../../lib/appCovered'
 import { openLayer, type Layer } from '../../lib/layers'
 import { rememberComposeOpener, returnComposeFocus } from '../directory/navStore'
 import { EditorPanel, useComposeOpen } from './EditorPanel'
-import { targetText } from './editorText'
 import { editorFor, type Editor } from './editorsState'
 import { focusKey } from './useEditorsStore'
 import { useEditorWorkspace } from './workspace'

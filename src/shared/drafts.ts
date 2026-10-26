@@ -118,3 +118,12 @@ export function targetKey(target: PostTarget): string {
 export function sameTarget(a: PostTarget, b: PostTarget): boolean {
   return targetKey(a) === targetKey(b)
 }
+
+export function forumLabel(forumId: string, forumName: (forumId: string | null) => string | null): string {
+  return forumName(forumId) ?? `版面 ${forumId}`
+}
+
+/** “回复 No.X” / “在「X」发新串”. */
+export function targetText(target: PostTarget, forumName: (forumId: string | null) => string | null): string {
+  return target.kind === 'reply' ? `回复 No.${target.threadId}` : `在「${forumLabel(target.forumId, forumName)}」发新串`
+}

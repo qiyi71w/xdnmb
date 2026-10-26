@@ -6,13 +6,14 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import { EMPTY_FIELDS, type DraftSaveInput } from '../src/shared/drafts'
-import type { PublicationAttempt, SubmitResult } from '../src/shared/publication'
+import type { PublicationAttempt, SendFailureNotice, SubmitResult } from '../src/shared/publication'
 import type { Post } from '../src/shared/forum'
 import type { AppStore } from '../src/main/storage/contract'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { createDraftService } from '../src/main/drafts/service'
 import { openManagedImageFiles } from '../src/main/images/files'
 import { createPublicationService } from '../src/main/publication/service'
+import { createFailureNotifier } from '../src/main/publication/failureNotifier'
 import { createPublicationAdapter } from '../src/main/publication/adapter'
 import { createForumClient } from '../src/main/forum/client'
 import { createForumTransport } from '../src/main/forum/transport'
@@ -77,7 +78,7 @@ async function forum() {
   return { origin: `http://127.0.0.1:${address.port}`, seen, setMode(value: typeof mode) { mode = value }, release() { release?.() } }
 }
 
-async function setup() {
+async function setup(options: { onRecorded?: (attempt: PublicationAttempt) => void } = {}) {
   const remote = await forum()
   const dir = mkdtempSync(join(tmpdir(), 'xidao-publication-'))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
@@ -96,7 +97,8 @@ async function setup() {
     const drafts = createDraftService({ store, files })
     const service = createPublicationService({ store, drafts, files, protector,
       clientFor: userhash => createForumClient({ transport: createForumTransport({ allowedOrigins: [remote.origin], credentialOrigins: [remote.origin] }), baseUrl: remote.origin, browseIdentity: async () => userhash }),
-      adapter: createPublicationAdapter({ origin: remote.origin, apiOrigin: remote.origin, publishTimeoutMs: 1500 }), deadlineMs: 1500 })
+      adapter: createPublicationAdapter({ origin: remote.origin, apiOrigin: remote.origin, publishTimeoutMs: 1500 }), deadlineMs: 1500,
+      onRecorded: options.onRecorded })
     await service.recover(); await drafts.recover()
     return { service, drafts }
   }
@@ -215,6 +217,48 @@ it('saves an explicit rejection exactly once and sends again only on a new delib
   expect(await finished(s.service, retry.id)).toMatchObject({ state: 'confirmed' })
   expect(s.db.listDrafts()).toEqual([])
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(2)
+})
+
+it('notifies only explicit failures with their saved draft, never refusals, unknown results or a quit without a window', async () => {
+  const inApp: SendFailureNotice[] = []
+  const system: Array<{ title: string; body: string }> = []
+  let front = true
+  const failures = createFailureNotifier({
+    foreground: () => front,
+    showInApp: notice => { inApp.push(notice); return true },
+    isSupported: () => true,
+    create: message => { system.push(message); return { on() {}, show() {} } },
+    forumName: async id => (id === '1' ? '测试版' : null),
+    async openDraft() {}
+  })
+  const recorded: Array<Promise<void>> = []
+  const s = await setup({ onRecorded: value => { recorded.push(failures.recorded(value)) } })
+  const send = async (editorId: string, content = `正文 ${editorId}`) =>
+    finished(s.service, attempt(await s.service.submit({ requestId: randomUUID(), editorId, payload: payload(s.a, content) })).id)
+
+  s.remote.setMode('reject')
+  const rejected = await send('front')
+  await Promise.all(recorded)
+  expect(inApp).toEqual([{ attemptId: rejected.id, draftId: rejected.savedDraftId, problem: 'rate-limited', target: { kind: 'thread', forumId: '1' } }])
+  expect(s.db.listDrafts().map(draft => draft.id)).toEqual([rejected.savedDraftId])
+
+  front = false
+  const behind = await send('behind', '不能出现在通知里')
+  await Promise.all(recorded)
+  expect(system).toEqual([{ title: '发送失败：论坛限制了发言频率，已停止', body: '在「测试版」发新串，内容已存为草稿' }])
+  expect(JSON.stringify(system)).not.toMatch(/不能出现|cookie-A/)
+  expect(behind.savedDraftId).not.toBeNull()
+
+  // Not sent at all (local check), result unknown, and failure reached while finishing a quit: no notice.
+  expect(await s.service.submit({ requestId: randomUUID(), editorId: 'empty', payload: payload(s.a, '  ') })).toEqual({ kind: 'refused', reason: 'empty' })
+  s.remote.setMode('drop')
+  expect(await send('unknown')).toMatchObject({ state: 'unknown' })
+  s.remote.setMode('reject')
+  s.service.setUnattended(true)
+  expect(await send('quitting')).toMatchObject({ state: 'failed' })
+  await Promise.all(recorded)
+  expect(inApp).toHaveLength(1)
+  expect(system).toHaveLength(1)
 })
 
 it.each(['empty', 'unrelated'] as const)('does not claim a %s latest-post response or retry a successful submission', async mode => {
