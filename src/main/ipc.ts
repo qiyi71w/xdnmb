@@ -383,11 +383,8 @@ export function registerIpc({
     if (reason !== 'unsubscribe' && reason !== 'sync-delete') throw new InvalidRequestError()
     return reminders.closeForThreads({ threadIds: threadIds(input.threadIds), reason })
   })
-  handle(IpcChannel.listRetained, async (_event, raw) => {
-    const kind = record(raw).kind
-    if (kind !== 'history' && kind !== 'offline') throw new InvalidRequestError()
-    return content.list({ kind })
-  })
+  handle(IpcChannel.listHistory, async () => content.listHistory())
+  handle(IpcChannel.listOffline, async () => content.listOffline())
   handle(IpcChannel.clearHistory, async (_event, raw) => {
     const input = record(raw)
     return content.clearHistory({ threadId: input.threadId === null ? null : forumId(input.threadId), clearReading: boolean(input.clearReading) })

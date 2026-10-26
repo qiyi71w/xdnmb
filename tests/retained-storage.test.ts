@@ -68,18 +68,37 @@ describe('retained content storage', () => {
   it('returns only locally retained head metadata for list rows and keeps missing heads unknown', () => {
     const { db } = fixture()
     db.recordVisit('200', t0)
-    expect(db.listRetained('history')[0]).toMatchObject({ threadId: '200', head: null, excerpt: null })
+    expect(db.listHistory()[0]).toMatchObject({ threadId: '200', head: null, excerpt: null })
     const head: Post = { ...post('100', true, '保留正文'), userHash: 'AdminID', name: '名字',
       createdAt: '2026-10-24 08:00', isAdmin: true, isSage: true, forumId: '4' }
     db.saveThreadPage({ ...page(), head }, t0)
     db.recordVisit('100', t1)
-    expect(db.listRetained('history')[0]).toMatchObject({
+    expect(db.listHistory()[0]).toMatchObject({
       threadId: '100', excerpt: '保留正文', head: { forumId: '4', createdAt: '2026-10-24 08:00',
         userHash: 'AdminID', name: '名字', title: '标题100', isAdmin: true, isSage: true,
         image: { path: '2026-10-24/shared', ext: '.jpg' } }
     })
     clear(db)
-    expect(db.listRetained('history')[0]).toMatchObject({ threadId: '100', title: '标题100', head: null, excerpt: null })
+    expect(db.listHistory()[0]).toMatchObject({ threadId: '100', title: '标题100', head: null, excerpt: null })
+  })
+
+  it('lists offline copies by first save from local content only, and updating a copy keeps its place', () => {
+    const { db } = fixture()
+    db.beginOfflineCopy('100', false, t0)
+    db.saveOfflinePage({ ...page('100'), replyCount: 7 }, t0)
+    db.updateOfflineCopy('100', { state: 'stopped', failedPage: null, error: null, imageFailures: [] }, t0)
+    // Started but no page saved yet: nothing about the thread is held, so it stays unknown.
+    db.beginOfflineCopy('200', false, t1)
+    expect(db.listOffline().map((entry) => entry.threadId)).toEqual(['200', '100'])
+
+    db.beginOfflineCopy('100', false, t2)
+    db.saveOfflinePage({ ...page('100'), replyCount: 9 }, t2)
+    clear(db)
+    const entries = db.listOffline()
+    expect(entries.map((entry) => entry.threadId)).toEqual(['200', '100'])
+    expect(entries[1]).toMatchObject({ head: post('100'), title: '标题100', replyCount: 9,
+      copy: { createdAt: t0, updatedAt: t2, state: 'saving', pages: [1] } })
+    expect(entries[0]).toMatchObject({ head: null, title: null, replyCount: null, copy: { createdAt: t1, pages: [] } })
   })
 
   it('retains entry titles and reminder observation evidence after clearing all cache', () => {
@@ -88,7 +107,7 @@ describe('retained content storage', () => {
     db.recordVisit('100', t1)
     clear(db)
     expect(db.loadThreadPage('100', 'all', 1)).toBeNull()
-    expect(db.listRetained('history')[0]?.title).toBe('标题100')
+    expect(db.listHistory()[0]?.title).toBe('标题100')
     expect(db.getThreadCoverage('100', 'all').pages).toEqual([])
     expect(raw(path).prepare('SELECT count(*) AS n FROM reading_observations').get()).toEqual({ n: 1 })
   })
@@ -104,7 +123,7 @@ describe('retained content storage', () => {
     raw(path).prepare('INSERT INTO end_observations VALUES (?, ?, ?)').run('100', t1, '1001')
     expect(db.clearHistory('100', false)).toEqual([])
     expect(db.getReadingState('100').positions.all).not.toBeNull()
-    expect(db.listRetained('history').map((entry) => entry.threadId)).toEqual(['200'])
+    expect(db.listHistory().map((entry) => entry.threadId)).toEqual(['200'])
     db.recordVisit('100', t1)
     expect(db.clearHistory('100', true)).toEqual(['100'])
     expect(db.getReadingState('100').positions.all).toBeNull()
@@ -329,7 +348,7 @@ describe('retained content storage', () => {
     const upgraded = openReadingDatabase(path)
     connections.push(upgraded)
     expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((migration) => migration.version)) })
-    expect(upgraded.listRetained('history').map((entry) => entry.threadId)).toEqual(['100'])
+    expect(upgraded.listHistory().map((entry) => entry.threadId)).toEqual(['100'])
   })
 
   it('reports unavailable and newer-schema content operations explicitly rather than empty success', () => {
@@ -340,7 +359,8 @@ describe('retained content storage', () => {
     const absent = openReadingDatabase(join(folder, 'missing', 'reading.sqlite'))
     connections.push(newer, absent)
     for (const store of [newer, absent]) {
-      expect(() => store.listRetained('history')).toThrow(StorageWriteRefusedError)
+      expect(() => store.listHistory()).toThrow(StorageWriteRefusedError)
+      expect(() => store.listOffline()).toThrow(StorageWriteRefusedError)
       expect(() => store.getContentUsage()).toThrow(StorageWriteRefusedError)
       expect(() => store.beginOfflineCopy('100', true, t0)).toThrow(StorageWriteRefusedError)
       expect(() => store.evictContentBatch(true)).toThrow(StorageWriteRefusedError)

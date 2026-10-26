@@ -1,16 +1,14 @@
 // 历史 and 离线 as list pages of a tab, like 订阅 and 提醒. Choosing a row opens the thread the way
 // the thread lists do (beside the list when split, else a new step). 历史 switches between
-// 浏览记录 and 发送记录.
+// 浏览记录 and 发送记录; 离线 is its own pane (OfflinePane).
 
 import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ForumId, ThreadId } from '../../../../shared/forum'
-import type { ContentFilters } from '../../../../shared/search'
+import type { ForumId, Post, ThreadId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
 import { formatLocalTime, meaningfulName, meaningfulTitle } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ListFilterBar, UncertainTag } from '../search/FilterFields'
 import { contentFilterCount, filterList } from '../search/listFilters'
-import { NO_CONTENT_FILTERS } from '../search/searchState'
 import { useThreadMetadata } from '../search/useThreadMetadata'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import { AttemptsBody, type AttemptsBodyProps } from '../publication/AttemptsDialog'
@@ -19,15 +17,12 @@ import { RowThumbnail } from '../image/RowThumbnail'
 import { useImageScope } from '../image/useImageLoad'
 import { useThreadTabMenu } from '../tabs/ThreadTabMenu'
 import { contentFailureText, retainedHeading } from './contentText'
+import { OfflinePane } from './OfflinePane'
 import { createReadingResets } from './readingResets'
-import { HistoryConfirm, useRetainedList } from './retainedList'
-import { OfflineSummary } from './ThreadRetention'
+import { HistoryConfirm, useRetainedFilters, useRetainedList, useRetainedScroll } from './retainedList'
 import './content.css'
 
-const PAGES = {
-  history: { title: '历史', at: '最近访问', empty: '还没有浏览记录' },
-  offline: { title: '离线', at: '最近更新', empty: '还没有离线副本' }
-} as const
+const PAGE = { title: '历史', at: '最近访问', empty: '还没有浏览记录' } as const
 
 export type HistoryView = 'browsing' | 'attempts'
 export interface HistoryPageHost extends AttemptsBodyProps {
@@ -44,12 +39,14 @@ interface RetainedPaneProps {
   forumNames: ReadonlyMap<ForumId, string>
   /** The thread shown beside the list (split), highlighted. */
   selectedThreadId: ThreadId | null
-  onOpenThread: (threadId: ThreadId) => void
+  /** `head`: the main post when the list holds it, shown until page 1 arrives. */
+  onOpenThread: (threadId: ThreadId, head: Post | null) => void
 }
 
 export function RetainedPane(props: RetainedPaneProps) {
   const host = useContext(HistoryPageContext)
-  if (props.kind !== 'history' || host === null) return <RetainedListPane {...props} />
+  if (props.kind === 'offline') return <OfflinePane entryKey={props.entryKey} forumNames={props.forumNames} selectedThreadId={props.selectedThreadId} onOpenThread={props.onOpenThread} />
+  if (host === null) return <RetainedListPane {...props} />
   return <HistoryPage {...props} host={host} />
 }
 
@@ -108,57 +105,25 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
   )
 }
 
-function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpenThread, showHeading = true, displayed = true, refreshOverride }: RetainedPaneProps & {
+/** 浏览记录: visited threads, most recent first, with their deletion. */
+function RetainedListPane({ entryKey, forumNames, selectedThreadId, onOpenThread, showHeading = true, displayed = true, refreshOverride }: RetainedPaneProps & {
   showHeading?: boolean
   displayed?: boolean
   refreshOverride?: () => void
 }) {
-  const page = PAGES[kind]
   const headingId = useId()
   const registry = useContext(ContentRegistryContext)
   // Outside the shell (no registry) nothing else clears reading data: a private store never resets.
   const [ownResets] = useState(createReadingResets)
-  const [ownFilters] = useState(() => new Map<'history' | 'offline', ContentFilters>())
-  const filterMemory = registry?.retainedFilters ?? ownFilters
   const { list, entries, load, confirming, setConfirming, busy, failure, done, listRef, bodyRef, confirmRef, ask, clearHistory } =
-    useRetainedList(kind, registry?.readingResets ?? ownResets)
+    useRetainedList(registry?.readingResets ?? ownResets)
   const images = useImageScope(bodyRef)
   const inTab = useThreadTabMenu()
-  useRegisterContent('lists', entryKey, { refresh: refreshOverride ?? (() => void load(kind)) })
-
-  // ---------- Scroll memory (runtime and restored after a quit) ----------
-  const [initialScroll] = useState(() => {
-    const memory = registry?.listMemory.get(entryKey)
-    if (memory?.kind === 'retained') return memory.scrollTop
-    return registry?.savedLists.get(entryKey)?.scrollTop ?? 0
-  })
-  const scrollTop = useRef(initialScroll)
-  const placed = useRef(false)
-  const ready = list.status === 'ready'
-  useLayoutEffect(() => {
-    const scroller = bodyRef.current
-    if (!ready || !displayed || placed.current || scroller === null) return
-    placed.current = true
-    scroller.scrollTop = scrollTop.current
-    registry?.savedLists.delete(entryKey)
-  }, [ready, displayed, registry, entryKey, bodyRef])
-  useLayoutEffect(() => {
-    registry?.listMemory.set(entryKey, { kind: 'retained', scrollTop: scrollTop.current })
-  })
-  const onScroll = () => {
-    const scroller = bodyRef.current
-    if (scroller === null || scroller.clientHeight === 0 || !placed.current) return
-    scrollTop.current = scroller.scrollTop
-    registry?.listMemory.set(entryKey, { kind: 'retained', scrollTop: scrollTop.current })
-  }
+  useRegisterContent('lists', entryKey, { refresh: refreshOverride ?? (() => void load()) })
+  const onScroll = useRetainedScroll(entryKey, bodyRef, list.status === 'ready', displayed)
 
   // ---------- Filters ----------
-  const [, setFilterVersion] = useState(0)
-  const listFilters = filterMemory.get(kind) ?? NO_CONTENT_FILTERS
-  const changeFilters = (next: ContentFilters) => {
-    filterMemory.set(kind, next)
-    setFilterVersion((version) => version + 1)
-  }
+  const [listFilters, changeFilters] = useRetainedFilters('history')
   const filtering = contentFilterCount(listFilters) > 0
   const entryIds = useMemo(() => entries.map((entry) => entry.threadId), [entries])
   const metadata = useThreadMetadata(entryIds, filtering)
@@ -181,9 +146,9 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
         <header className="list-header">
           <div className="list-title-row">
             {showHeading && <h2 className="list-title" id={headingId}>
-              <span className="list-name">{page.title}</span>
+              <span className="list-name">{PAGE.title}</span>
             </h2>}
-            {kind === 'history' && entries.length > 0 && !confirmingAll && (
+            {entries.length > 0 && !confirmingAll && (
               <button type="button" className="btn btn-small btn-danger" disabled={busy} onClick={(event) => ask(null, event.currentTarget)}>
                 <Icon name="trash" size={14} />
                 清空历史…
@@ -215,9 +180,9 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
             <div className="notice notice-error is-compact" role="alert">
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">
-                {page.title}读取失败：{contentFailureText(list.refused)}
+                {PAGE.title}读取失败：{contentFailureText(list.refused)}
               </p>
-              <button type="button" className="btn btn-small" onClick={() => void load(kind)}>
+              <button type="button" className="btn btn-small" onClick={() => void load()}>
                 重试
               </button>
             </div>
@@ -226,13 +191,13 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
 
         {list.status === 'ready' && entries.length === 0 && (
           <div className="list-empty" role="status">
-            <p className="list-empty-title">{page.empty}</p>
+            <p className="list-empty-title">{PAGE.empty}</p>
           </div>
         )}
 
         {entries.length > 0 && (
           <ListFilterBar
-            key={kind}
+            key="history"
             filters={listFilters}
             onChange={changeFilters}
             forums={forumNames}
@@ -240,12 +205,12 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
             total={entries.length}
             result={filtered}
             metadata={filtering ? metadata : null}
-            coverage={`本机的${page.title}列表`}
+            coverage={`本机的${PAGE.title}列表`}
           />
         )}
         {filtering && entries.length > 0 && filtered.shown.length === 0 && (
           <p className="list-filters-empty" role="status">
-            {page.title}中没有符合筛选的串。
+            {PAGE.title}中没有符合筛选的串。
           </p>
         )}
 
@@ -253,7 +218,7 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
           <ul
             className="thread-list"
             ref={listRef}
-            aria-label={filtering ? `${page.title}（已筛选）` : page.title}
+            aria-label={filtering ? `${PAGE.title}（已筛选）` : PAGE.title}
             onKeyDown={roving.onKeyDown}
           >
             {filtered.shown.map(({ item: entry, uncertain }) => {
@@ -268,7 +233,6 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
               const rowConfirming = confirming !== null && confirming.threadId === entry.threadId
               const rowFailure = failure !== null && failure.threadId === entry.threadId && !rowConfirming ? failure.text : null
               const itemProps = roving.itemProps(entry.threadId)
-              const offline = kind === 'offline' ? entry.offline : null
               return (
                 <li key={entry.threadId} className={selected ? 'retained-row is-selected' : 'retained-row'} data-retained-row="">
                   <button
@@ -276,7 +240,7 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
                     className="retained-open"
                     aria-current={selected ? 'true' : undefined}
                     onClick={(event) => {
-                      if (!inTab.openFromClick(event, entry.threadId)) onOpenThread(entry.threadId)
+                      if (!inTab.openFromClick(event, entry.threadId)) onOpenThread(entry.threadId, null)
                     }}
                     {...inTab.rowProps(entry.threadId)}
                     {...itemProps}
@@ -295,8 +259,8 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
                       <span className="visually-hidden" id={`${rowId}-title`}>{heading.text}</span>
                       <span className="row-meta">
                         <span>No.{entry.threadId}</span>
-                        <span>{page.at} {formatLocalTime(entry.at)}</span>
-                        {kind === 'history' && entry.offline !== null && (
+                        <span>{PAGE.at} {formatLocalTime(entry.at)}</span>
+                        {entry.offline !== null && (
                           <span className="retained-tag"><Icon name="download" size={13} />有离线副本</span>
                         )}
                         {hasImage && <span className="visually-hidden">附图</span>}
@@ -305,7 +269,7 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
                     </span>
                     {hasImage && <RowThumbnail postId={entry.threadId} scope={images} />}
                   </button>
-                  {kind === 'history' && !rowConfirming && (
+                  {!rowConfirming && (
                     <button
                       type="button"
                       className="icon-btn retained-row-action"
@@ -319,9 +283,8 @@ function RetainedListPane({ entryKey, kind, forumNames, selectedThreadId, onOpen
                       <Icon name="trash" size={16} />
                     </button>
                   )}
-                  {(offline !== null || rowFailure !== null || rowConfirming) && (
+                  {(rowFailure !== null || rowConfirming) && (
                     <div className="retained-row-below">
-                      {offline !== null && <OfflineSummary copy={offline} compact />}
                       {rowFailure !== null && (
                         <p className="notice-inline is-warning" role="alert">
                           <Icon name="alert" size={14} />

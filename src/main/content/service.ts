@@ -156,7 +156,8 @@ export function createContentService(deps: {
   }
 
   return {
-    list: ({ kind }) => result(async () => (await store.listRetained(kind)).map((entry) => ({ ...entry, offline: visibleCopy(entry.offline) }))),
+    listHistory: () => result(async () => (await store.listHistory()).map((entry) => ({ ...entry, offline: visibleCopy(entry.offline) }))),
+    listOffline: () => result(async () => (await store.listOffline()).map((entry) => ({ ...entry, copy: visibleCopy(entry.copy)! }))),
     clearHistory: ({ threadId, clearReading }) => result(() => store.clearHistory(threadId, clearReading)),
     usage: () => result(usage),
     setCacheLimit: ({ bytes }) => result(async () => {

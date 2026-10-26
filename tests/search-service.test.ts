@@ -173,7 +173,7 @@ describe('owned search service over real SQLite and controlled HTTP', () => {
     expect(final).toMatchObject({ state: 'stopped', pages: [1, 2, 3], failedPage: null,
       coverage: { endCandidatePage: 3, gaps: [], obtainedReplyCount: 2 } })
     expect(db.getOfflineCopy('100')).toBeNull()
-    expect(db.listRetained('history')).toEqual([])
+    expect(db.listHistory()).toEqual([])
     expect(await api.start({ operationId: 'after', query: 'searchable', scope: { kind: 'thread', threadId: '100', mode: 'all' }, filters }))
       .toMatchObject({ ok: true, value: { hits: [{ postId: '100' }, { postId: '101' }, { postId: '102' }] } })
   })

@@ -167,7 +167,7 @@ export function TabView({
           kind={feed.kind}
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}
-          onOpenThread={(threadId) => onSelectThread(tab.id, threadId, null)}
+          onOpenThread={(threadId, head) => onSelectThread(tab.id, threadId, head)}
         />
       )
     } else if (feed.kind === 'reminders') {

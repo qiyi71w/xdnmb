@@ -9,6 +9,7 @@ import {
   attempt,
   contentFailureText,
   describeImageError,
+  offlineAttention,
   offlineErrorText,
   offlineImagesText,
   offlineStateText,
@@ -16,7 +17,18 @@ import {
 } from './contentText'
 import './content.css'
 
-const POLL_MS = 1000
+export const POLL_MS = 1000
+
+/**
+ * Fired with the copy (`CustomEvent<OfflineCopy>`) after a save was started or cancelled here (the
+ * 离线副本 dialog, a 离线 row's 更新离线副本), so lists showing the copy pick up its new state
+ * without reading everything again.
+ */
+export const OFFLINE_COPY_EVENT = 'xidao:offline-copy'
+
+export function announceOfflineCopy(copy: OfflineCopy | null) {
+  if (copy !== null) window.dispatchEvent(new CustomEvent<OfflineCopy>(OFFLINE_COPY_EVENT, { detail: copy }))
+}
 
 type CopyState = { status: 'loading' } | { status: 'failed'; refused: Refused } | { status: 'ready'; copy: OfflineCopy | null }
 
@@ -91,7 +103,7 @@ export function useOfflineEntry(threadId: ThreadId) {
           ? '离线保存'
           : copy.state === 'saving'
             ? `离线保存中 · ${copy.pages.length} 页`
-            : copy.state === 'stopped' && copy.error === null && copy.imageFailures.length === 0
+            : offlineAttention(copy) === null
               ? '已离线'
               : '离线未完整'
   const warn = offline.state.status === 'failed' || (copy !== null && copy.state !== 'saving' && label === '离线未完整')
@@ -128,8 +140,10 @@ export function OfflineDialog({
     setFailure(null)
     const result = await attempt(() => window.xidao.content.saveOffline({ threadId, includeImages }))
     setBusy(null)
-    if (result?.ok === true) setState({ status: 'ready', copy: result.value })
-    else setFailure(`${copy === null ? '保存' : '更新'}没有开始：${contentFailureText(result?.ok === false ? result : null)}`)
+    if (result?.ok === true) {
+      setState({ status: 'ready', copy: result.value })
+      announceOfflineCopy(result.value)
+    } else setFailure(`${copy === null ? '保存' : '更新'}没有开始：${contentFailureText(result?.ok === false ? result : null)}`)
   }
 
   const cancel = async () => {
@@ -138,8 +152,10 @@ export function OfflineDialog({
     setFailure(null)
     const result = await attempt(() => window.xidao.content.cancelOffline({ threadId }))
     setBusy(null)
-    if (result?.ok === true) setState({ status: 'ready', copy: result.value })
-    else setFailure(`取消未完成：${contentFailureText(result?.ok === false ? result : null)}，保存可能仍在进行`)
+    if (result?.ok === true) {
+      setState({ status: 'ready', copy: result.value })
+      announceOfflineCopy(result.value)
+    } else setFailure(`取消未完成：${contentFailureText(result?.ok === false ? result : null)}，保存可能仍在进行`)
   }
 
   return (
@@ -211,14 +227,34 @@ export function OfflineDialog({
   )
 }
 
+/**
+ * The same 离线副本 dialog for a thread whose page is not open (离线 page rows), with a copy handle
+ * of its own. `onClose` gets the copy as last read, so the opener can show it.
+ */
+export function OfflineDetailsDialog({
+  threadId,
+  title,
+  onClose,
+  fallbackFocus
+}: {
+  threadId: ThreadId
+  title: string
+  onClose: (copy: OfflineCopy | null) => void
+  fallbackFocus?: () => HTMLElement | null
+}) {
+  const offline = useOfflineCopy(threadId)
+  const last = offline.state.status === 'ready' ? offline.state.copy : null
+  return <OfflineDialog threadId={threadId} title={title} offline={offline} onClose={() => onClose(last)} fallbackFocus={fallbackFocus} />
+}
+
 /** What the copy holds, when, and exactly what failed. Never phrased as a complete snapshot. */
-export function OfflineSummary({ copy, compact = false }: { copy: OfflineCopy; compact?: boolean }) {
+function OfflineSummary({ copy }: { copy: OfflineCopy }) {
   const error = offlineErrorText(copy)
   const pages = formatPageList(copy.pages)
   const stateWarning = copy.state === 'cancelled' || copy.state === 'interrupted' || error !== null
   return (
-    <div className={compact ? 'offline-summary is-compact' : 'offline-summary'}>
-      <p className={stateWarning ? 'offline-state is-warning' : 'offline-state'} role={compact ? undefined : 'status'}>
+    <div className="offline-summary">
+      <p className={stateWarning ? 'offline-state is-warning' : 'offline-state'} role="status">
         {copy.state === 'saving' ? <Loading live={false}>{offlineStateText(copy)}…</Loading> : offlineStateText(copy)}
       </p>
       <dl className="offline-facts">
@@ -253,7 +289,7 @@ export function OfflineSummary({ copy, compact = false }: { copy: OfflineCopy; c
           {error}
         </p>
       )}
-      {!compact && copy.imageFailures.length > 0 && (
+      {copy.imageFailures.length > 0 && (
         <div className="offline-failures">
           <p className="field-label">未保存的原图</p>
           <ul aria-label={`未保存的原图，共 ${copy.imageFailures.length} 张`}>

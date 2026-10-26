@@ -1,5 +1,4 @@
 import { createContext, useContext, useEffect, useRef } from 'react'
-import type { RetainedList } from '../../../../shared/content'
 import type { ReadingMode, ThreadId } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import { createReadingResets, type ReadingResets } from '../content/readingResets'
@@ -8,6 +7,9 @@ import { OnlineSearchSessions } from '../search/onlineSearchSession'
 import type { SubscriptionListState } from '../subscriptions/subscriptionListState'
 import type { TabsState, ThreadSnapshot, ThreadTarget } from './tabsState'
 import { MAX_LIST_PAGES, type WorkspaceList } from './workspaceSnapshot'
+
+/** The two lists of this app's retained content: 历史 (浏览记录) and 离线. */
+export type RetainedPage = 'history' | 'offline'
 
 /** What the shell can ask of the reader mounted for a history entry. */
 export interface ReaderHandle {
@@ -86,7 +88,7 @@ export interface ContentRegistry {
   listMemory: Map<number, ListMemory>
   readingResets: ReadingResets
   savedLists: Map<number, WorkspaceList>
-  retainedFilters: Map<RetainedList, ContentFilters>
+  retainedFilters: Map<RetainedPage, ContentFilters>
   onlineSearches: OnlineSearchSessions
 }
 

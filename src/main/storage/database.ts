@@ -271,10 +271,15 @@ class SqliteReadingDatabase implements ReadingDatabase {
 
   private readonly content = new RetainedContentDatabase(
     () => this.writable(),
-    (page, at) => this.saveThreadPage(page, at)
+    (page, at) => this.saveThreadPage(page, at),
+    (postId) => {
+      const row = this.writable().prepare<[string], PostRow>('SELECT * FROM posts WHERE id = ?').get(postId)
+      return row ? postFromRow(row) : null
+    }
   )
 
-  listRetained: ReadingDatabase['listRetained'] = (kind) => this.content.listRetained(kind)
+  listHistory: ReadingDatabase['listHistory'] = () => this.content.listHistory()
+  listOffline: ReadingDatabase['listOffline'] = () => this.content.listOffline()
   clearHistory: ReadingDatabase['clearHistory'] = (threadId, clearReading) => this.content.clearHistory(threadId, clearReading)
   getContentUsage: ReadingDatabase['getContentUsage'] = () => this.content.getContentUsage()
   setCacheLimit: ReadingDatabase['setCacheLimit'] = (bytes) => this.content.setCacheLimit(bytes)

@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { statSync } from 'node:fs'
-import { DEFAULT_CACHE_LIMIT, type ContentUsage, type OfflineCopy, type RetainedEntry, type RetainedList } from '../../shared/content'
-import type { ThreadId, ThreadPage } from '../../shared/forum'
+import { DEFAULT_CACHE_LIMIT, type ContentUsage, type OfflineCopy, type OfflineEntry, type RetainedEntry } from '../../shared/content'
+import type { Post, ThreadId, ThreadPage } from '../../shared/forum'
 
 export function contentTick(db: Database.Database): number {
   const row = db.prepare<[], { tick: number }>('UPDATE content_clock SET tick = tick + 1 WHERE singleton = 1 RETURNING tick').get()
@@ -24,13 +24,13 @@ interface CopyRow {
 export class RetainedContentDatabase {
   constructor(
     private readonly database: () => Database.Database,
-    private readonly savePage: (page: ThreadPage, at: string) => unknown
+    private readonly savePage: (page: ThreadPage, at: string) => unknown,
+    /** The stored post, without marking it used; null when not held. */
+    private readonly peekPost: (postId: string) => Post | null
   ) {}
 
-  listRetained(kind: RetainedList): RetainedEntry[] {
+  listHistory(): RetainedEntry[] {
     const db = this.database()
-    const query = kind === 'history' ? 'SELECT thread_id, last_visited_at AS at FROM thread_visits'
-      : 'SELECT thread_id, updated_at AS at FROM offline_copies'
     // Read only the retained head fields needed by list rows; never fetch missing content.
     return db.transaction(() => db.prepare<[], {
       thread_id: string; at: string; title: string | null; excerpt: string | null
@@ -38,11 +38,11 @@ export class RetainedContentDatabase {
       name: string | null; head_title: string | null; is_admin: number | null; is_sage: number | null
       image_path: string | null; image_ext: string | null
     }>(`
-      SELECT e.*, t.title, substr(p.plain_text, 1, 400) AS excerpt,
+      SELECT e.thread_id, e.last_visited_at AS at, t.title, substr(p.plain_text, 1, 400) AS excerpt,
         p.id AS head_id, p.forum_id, p.created_at, p.user_hash, p.name, p.title AS head_title,
         p.is_admin, p.is_sage, p.image_path, p.image_ext
-      FROM (${query}) e LEFT JOIN retained_titles t USING(thread_id) LEFT JOIN posts p ON p.id = e.thread_id
-      ORDER BY e.at DESC, e.thread_id
+      FROM thread_visits e LEFT JOIN retained_titles t USING(thread_id) LEFT JOIN posts p ON p.id = e.thread_id
+      ORDER BY e.last_visited_at DESC, e.thread_id
     `).all().map((row) => ({ threadId: row.thread_id, at: row.at, title: row.title ?? null,
       excerpt: row.excerpt === null || row.excerpt.trim() === '' ? null : row.excerpt,
       head: row.head_id === null ? null : {
@@ -52,6 +52,20 @@ export class RetainedContentDatabase {
         image: row.image_path !== null && row.image_ext !== null ? { path: row.image_path, ext: row.image_ext } : null
       },
       offline: this.getOfflineCopy(row.thread_id) })))()
+  }
+
+  /** Ordered by first save, so updating a copy never moves it. Fields come from this machine only. */
+  listOffline(): OfflineEntry[] {
+    const db = this.database()
+    return db.transaction(() => db.prepare<[], { thread_id: string; title: string | null; reply_count: number | null }>(`
+      SELECT c.thread_id, t.title, (
+        SELECT reply_count FROM offline_pages o WHERE o.thread_id = c.thread_id AND reply_count IS NOT NULL
+        ORDER BY julianday(o.fetched_at) DESC, o.page DESC LIMIT 1
+      ) AS reply_count
+      FROM offline_copies c LEFT JOIN retained_titles t USING(thread_id)
+      ORDER BY julianday(c.created_at) DESC, c.thread_id
+    `).all().map((row) => ({ threadId: row.thread_id, head: this.peekPost(row.thread_id), title: row.title ?? null,
+      replyCount: row.reply_count, copy: this.getOfflineCopy(row.thread_id)! })))()
   }
 
   /** Returns the threads whose reading positions were cleared: the deleted visit scope, or none when `clearReading` is false. */

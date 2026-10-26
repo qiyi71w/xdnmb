@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react'
-import type { RetainedEntry, RetainedList } from '../../../../shared/content'
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import type { RetainedEntry } from '../../../../shared/content'
 import type { ThreadId } from '../../../../shared/forum'
+import type { ContentFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
+import { NO_CONTENT_FILTERS } from '../search/searchState'
+import { ContentRegistryContext, type RetainedPage } from '../tabs/contentRegistry'
 import { attempt, contentFailureText, type Refused } from './contentText'
 import type { ReadingResets } from './readingResets'
 
@@ -16,13 +19,13 @@ export type RetainedListState =
 export type Confirming = { threadId: ThreadId | null; clearReading: boolean }
 
 /**
- * One 历史／离线 list as stored, read again whenever `kind` changes, with history deletion.
+ * The 浏览记录 list as stored, read on mount, with history deletion.
  * Focus: a confirmation takes it, leaving one returns it to the control that asked; after a row
  * disappears it goes to the first enabled button of the row now at that position in `listRef`
  * (rows carry `data-retained-row`), else of `bodyRef`. History deletion removes visit records only
  * unless the reader's progress is explicitly included.
  */
-export function useRetainedList(kind: RetainedList, resets: ReadingResets) {
+export function useRetainedList(resets: ReadingResets) {
   const [list, setList] = useState<RetainedListState>({ status: 'loading' })
   const [confirming, setConfirming] = useState<Confirming | null>(null)
   const [busy, setBusy] = useState(false)
@@ -34,10 +37,10 @@ export function useRetainedList(kind: RetainedList, resets: ReadingResets) {
   const bodyRef = useRef<HTMLDivElement>(null)
   const focusAfterRemove = useRef<number | null>(null)
 
-  const load = useCallback(async (which: RetainedList) => {
+  const load = useCallback(async () => {
     const at = ++seq.current
     setList({ status: 'loading' })
-    const result = await attempt(() => window.xidao.content.list({ kind: which }))
+    const result = await attempt(() => window.xidao.content.listHistory())
     if (!alive.current || at !== seq.current) return
     setList(result?.ok === true ? { status: 'ready', entries: result.value } : { status: 'failed', refused: result?.ok === false ? result : null })
   }, [])
@@ -53,8 +56,8 @@ export function useRetainedList(kind: RetainedList, resets: ReadingResets) {
     setConfirming(null)
     setFailure(null)
     setDone(null)
-    void load(kind)
-  }, [kind, load])
+    void load()
+  }, [load])
 
   // Confirmation takes focus; leaving it returns focus to the control that asked.
   const confirmRef = useRef<HTMLButtonElement>(null)
@@ -206,4 +209,49 @@ export function HistoryConfirm({
       </div>
     </div>
   )
+}
+
+/**
+ * Scroll memory of a 历史／离线 list in `bodyRef` (runtime, and restored after a quit): placed once
+ * the list is first ready while displayed, recorded on every scroll while shown. Returns the
+ * scroller's `onScroll`.
+ */
+export function useRetainedScroll(entryKey: number, bodyRef: RefObject<HTMLDivElement | null>, ready: boolean, displayed: boolean) {
+  const registry = useContext(ContentRegistryContext)
+  const [initialScroll] = useState(() => {
+    const memory = registry?.listMemory.get(entryKey)
+    if (memory?.kind === 'retained') return memory.scrollTop
+    return registry?.savedLists.get(entryKey)?.scrollTop ?? 0
+  })
+  const scrollTop = useRef(initialScroll)
+  const placed = useRef(false)
+  useLayoutEffect(() => {
+    const scroller = bodyRef.current
+    if (!ready || !displayed || placed.current || scroller === null) return
+    placed.current = true
+    scroller.scrollTop = scrollTop.current
+    registry?.savedLists.delete(entryKey)
+  }, [ready, displayed, registry, entryKey, bodyRef])
+  useLayoutEffect(() => {
+    registry?.listMemory.set(entryKey, { kind: 'retained', scrollTop: scrollTop.current })
+  })
+  return () => {
+    const scroller = bodyRef.current
+    if (scroller === null || scroller.clientHeight === 0 || !placed.current) return
+    scrollTop.current = scroller.scrollTop
+    registry?.listMemory.set(entryKey, { kind: 'retained', scrollTop: scrollTop.current })
+  }
+}
+
+/** Filters of a 历史／离线 list: kept per page while the app runs (outside the shell, per pane). */
+export function useRetainedFilters(page: RetainedPage): [ContentFilters, (next: ContentFilters) => void] {
+  const registry = useContext(ContentRegistryContext)
+  const [ownFilters] = useState(() => new Map<RetainedPage, ContentFilters>())
+  const memory = registry?.retainedFilters ?? ownFilters
+  const [, setVersion] = useState(0)
+  const change = (next: ContentFilters) => {
+    memory.set(page, next)
+    setVersion((version) => version + 1)
+  }
+  return [memory.get(page) ?? NO_CONTENT_FILTERS, change]
 }

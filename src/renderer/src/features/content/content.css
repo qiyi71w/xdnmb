@@ -104,13 +104,6 @@
   box-shadow: inset 0 0 0 1px var(--line-soft);
 }
 
-.offline-summary.is-compact {
-  gap: 6px;
-  padding: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
 .offline-state {
   font-weight: 650;
 }
@@ -145,11 +138,6 @@
   margin: 0;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
-}
-
-.is-compact .offline-facts {
-  grid-template-columns: repeat(auto-fill, minmax(11em, 1fr));
-  font-size: var(--text-xs);
 }
 
 .offline-summary .notice-inline {
@@ -401,6 +389,95 @@
 
 :root[data-density='compact'] .retained-row-below {
   padding: 0 10px 6px;
+}
+
+/* ---------- 离线 page: the thread lists' row, with the copy's status at the end of its meta ---------- */
+
+/* Byline and time wrap onto two lines instead of drawing over each other when the row is narrow. */
+.offline-row .row-byline {
+  flex-wrap: wrap;
+}
+
+/* `.row-author` is `flex: 1` (basis 0), which never wraps: size it by its content here. */
+.offline-row .row-author {
+  flex-basis: auto;
+}
+
+/* The row whose context menu is open keeps the hover layer while the pointer is on the menu. */
+.offline-row.is-menu-open > .thread-row:not(.is-selected) {
+  background: var(--hover);
+}
+
+/* An update that did not start: one line under the row, aligned with its text. */
+.offline-row > .notice-inline {
+  margin: 0;
+  padding: 0 12px 10px;
+}
+
+:root[data-density='compact'] .offline-row > .notice-inline {
+  padding: 0 10px 6px;
+}
+
+/* A copy that is saving or needs attention: one small icon, kept whole when the meta wraps. Its
+   reason is the icon's accessible name (so part of the row's) and shows as a tip, above the meta
+   and within the text column, on hover or keyboard focus of the row. */
+.row-meta:has(> .row-status) {
+  position: relative;
+}
+
+.row-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--ink-2);
+}
+
+.row-status.is-warning {
+  color: var(--warn-ink);
+}
+
+.row-status-icon {
+  display: inline-grid;
+  place-items: center;
+}
+
+.row-status-tip {
+  position: absolute;
+  z-index: 3;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: max-content;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: var(--radius-m);
+  background: var(--ink);
+  color: var(--paper);
+  font: 400 var(--text-xs) / 1.4 var(--font-ui);
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.12s var(--ease-out),
+    visibility 0s linear 0.12s;
+}
+
+.row-status:hover > .row-status-tip,
+.thread-row:focus-visible .row-status-tip {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 0.12s var(--ease-out) 0.45s,
+    visibility 0s linear 0.45s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-status-tip,
+  .row-status:hover > .row-status-tip,
+  .thread-row:focus-visible .row-status-tip {
+    transition: none;
+  }
 }
 
 /* ---------- 存储与缓存 ---------- */

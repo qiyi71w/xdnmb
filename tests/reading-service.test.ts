@@ -365,7 +365,7 @@ describe('quote preview', () => {
     const after = db.getReadingState('700')
     expect(after.positions).toEqual(before.positions)
     expect(after.mode).toBe(before.mode)
-    expect(db.listRetained('history')).toEqual([])
+    expect(db.listHistory()).toEqual([])
   })
 })
 

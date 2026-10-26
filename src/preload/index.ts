@@ -54,7 +54,8 @@ const api: XidaoApi = {
     threadMetadata: (input) => ipcRenderer.invoke(IpcChannel.searchThreadMetadata, input)
   },
   content: {
-    list: (input) => ipcRenderer.invoke(IpcChannel.listRetained, input),
+    listHistory: () => ipcRenderer.invoke(IpcChannel.listHistory),
+    listOffline: () => ipcRenderer.invoke(IpcChannel.listOffline),
     clearHistory: (input) => ipcRenderer.invoke(IpcChannel.clearHistory, input),
     usage: () => ipcRenderer.invoke(IpcChannel.contentUsage),
     setCacheLimit: (input) => ipcRenderer.invoke(IpcChannel.setCacheLimit, input),

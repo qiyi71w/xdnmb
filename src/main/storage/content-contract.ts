@@ -1,8 +1,9 @@
-import type { ContentUsage, OfflineCopy, RetainedEntry, RetainedList } from '../../shared/content'
+import type { ContentUsage, OfflineCopy, OfflineEntry, RetainedEntry } from '../../shared/content'
 import type { ThreadId, ThreadPage } from '../../shared/forum'
 
 export interface ContentStore {
-  listRetained(kind: RetainedList): Promise<RetainedEntry[]>
+  listHistory(): Promise<RetainedEntry[]>
+  listOffline(): Promise<OfflineEntry[]>
   /** Threads whose reading positions the same transaction cleared; empty when `clearReading` is false. */
   clearHistory(threadId: ThreadId | null, clearReading: boolean): Promise<ThreadId[]>
   getContentUsage(): Promise<ContentUsage>

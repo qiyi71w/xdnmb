@@ -25,7 +25,8 @@ afterEach(async () => {
 })
 function contentStore(db: ReadingDatabase): ContentStore {
   return {
-    listRetained: async (...a) => db.listRetained(...a),
+    listHistory: async () => db.listHistory(),
+    listOffline: async () => db.listOffline(),
     clearHistory: async (...a) => db.clearHistory(...a),
     getContentUsage: async () => db.getContentUsage(),
     setCacheLimit: async (...a) => db.setCacheLimit(...a),
@@ -258,7 +259,7 @@ describe('retained content operations', () => {
     })
     await service.saveOffline({ threadId: '100', includeImages: false })
     expect(await finished(service, '100')).toMatchObject({ state: 'interrupted', error: 'storage' })
-    expect(await service.list({ kind: 'offline' })).toMatchObject({ ok: true, value: [{ offline: { state: 'interrupted', error: 'storage' } }] })
+    expect(await service.listOffline()).toMatchObject({ ok: true, value: [{ copy: { state: 'interrupted', error: 'storage' } }] })
     expect(db.loadThreadPage('100', 'all', 1)?.value.head.id).toBe('100')
   })
 })

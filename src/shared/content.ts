@@ -3,7 +3,6 @@ import type { Post, PostId, ThreadId } from './forum'
 import type { ImageError } from './images'
 
 export const DEFAULT_CACHE_LIMIT = 2_000_000_000
-export type RetainedList = 'history' | 'offline'
 export type ContentResult<T> = { ok: true; value: T } | { ok: false; reason: 'storage' | 'busy' }
 export interface OfflineImageFailure { postId: PostId; error: ImageError }
 /** Coverage is an observation, never a complete or consistent server snapshot. */
@@ -22,6 +21,7 @@ export interface OfflineCopy {
   failedPage: number | null
   error: ReadError | 'storage' | 'page-limit' | null
 }
+/** One 浏览记录 row: the thread's retained head fields at its last visit. */
 export interface RetainedEntry {
   threadId: ThreadId
   title: string | null
@@ -29,8 +29,20 @@ export interface RetainedEntry {
   excerpt: string | null
   /** Cached head metadata only; null after eviction or before the head was fetched. */
   head: Pick<Post, 'forumId' | 'createdAt' | 'userHash' | 'name' | 'title' | 'isAdmin' | 'isSage' | 'image'> | null
+  /** Last visit. */
   at: string
   offline: OfflineCopy | null
+}
+/** One 离线 row: the thread as held on this machine, and its copy. Nothing is fetched to fill it. */
+export interface OfflineEntry {
+  threadId: ThreadId
+  /** Main post as held locally; null when it was never saved or cached. Unprovided fields stay unknown. */
+  head: Post | null
+  /** Last title seen for the thread; kept when its head is not held. */
+  title: string | null
+  /** Reply count reported by the copy's most recently saved page that had one; null when none did. */
+  replyCount: number | null
+  copy: OfflineCopy
 }
 export interface ContentUsage {
   limitBytes: number
@@ -48,7 +60,10 @@ export interface ContentUsage {
   protectedOverLimit: boolean
 }
 export interface ContentApi {
-  list(input: { kind: RetainedList }): Promise<ContentResult<RetainedEntry[]>>
+  /** 浏览记录, most recently visited first. */
+  listHistory(): Promise<ContentResult<RetainedEntry[]>>
+  /** Offline copies, most recently first saved first; updating a copy keeps its place. */
+  listOffline(): Promise<ContentResult<OfflineEntry[]>>
   /** Value: threads whose reading positions were cleared; empty when `clearReading` is false. */
   clearHistory(input: { threadId: ThreadId | null; clearReading: boolean }): Promise<ContentResult<ThreadId[]>>
   usage(): Promise<ContentResult<ContentUsage>>

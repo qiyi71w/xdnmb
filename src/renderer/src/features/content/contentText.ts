@@ -123,6 +123,23 @@ export function offlineImagesText(copy: OfflineCopy): string {
   return `${counts}；最近一次仅保存文字`
 }
 
+/** What needs attention about a copy, or null for a normal one (stopped with no error and no failed originals). */
+export interface OfflineAttention {
+  kind: 'saving' | 'warning'
+  /** One line built from the state, error and originals texts above. */
+  text: string
+}
+
+export function offlineAttention(copy: OfflineCopy): OfflineAttention | null {
+  if (copy.state === 'saving') return { kind: 'saving', text: offlineStateText(copy) }
+  const error = offlineErrorText(copy)
+  const images = copy.imageFailures.length > 0 ? offlineImagesText(copy) : null
+  // A stopped copy without an error says only what went wrong with its originals.
+  const state = copy.state === 'stopped' && error === null ? null : offlineStateText(copy)
+  if (state === null && images === null) return null
+  return { kind: 'warning', text: [state, error, images].filter((part) => part !== null).join('；') }
+}
+
 export interface RetainedHeading {
   text: string
   /** `number`: the heading is `No.<id>`, so the row's meta leaves the number out (it appears once). */
@@ -130,7 +147,7 @@ export interface RetainedHeading {
 }
 
 /**
- * How a 历史／离线 row names its thread: the title, else the first line of the head post held
+ * How a 浏览记录 row names its thread: the title, else the first line of the head post held
  * locally (`excerpt`, shown on one line), else the number.
  */
 export function retainedHeading(entry: RetainedEntry): RetainedHeading {

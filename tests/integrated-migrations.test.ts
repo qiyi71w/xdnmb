@@ -241,7 +241,7 @@ describe('combined predecessor migration', () => {
     expect(db.findPostThread('101')).toEqual({ threadId: '100', isHead: false, preferredMode: 'po', pages: { all: 1, po: null } })
     expect(db.getReadingState('100')).toMatchObject({ mode: 'po',
       positions: { all: { anchor: { postId: '101', offsetRatio: 0.4, viewportOffset: 12 } } } })
-    expect(db.listRetained('history')[0]).toMatchObject({ threadId: '100', at: later })
+    expect(db.listHistory()[0]).toMatchObject({ threadId: '100', at: later })
     if (hasSubscriptions(kind)) {
       expect(db.loadSubscriptionConfiguration()).toEqual({ source: 'web', context })
       expect(db.loadSubscriptionAppCiphertext('historical-app')).toEqual(ciphertext)
@@ -386,7 +386,7 @@ describe('schema v14: thread favourites and read state removed', () => {
     expect(after.rows).toEqual(before.rows)
     expect(before.rows.reading_observations?.length).toBeGreaterThan(0)
     expect(db.getReadingState('100')).toMatchObject({ mode: 'po', positions: { all: { anchor: { postId: '101', offsetRatio: 0.4 } }, po: null } })
-    expect(db.listRetained('history').map((entry) => entry.threadId)).toEqual(['100'])
+    expect(db.listHistory().map((entry) => entry.threadId)).toEqual(['100'])
     expect(db.reminderOverview().threads[0]).toMatchObject({ threadId: '100', eventCount: 1 })
     expect(db.listBlocks()).toEqual([{ kind: 'cookie', value: 'blocked-id', createdAt: at }])
     expect(db.listDrafts()[0]?.fields.content).toBe('未发送草稿')
