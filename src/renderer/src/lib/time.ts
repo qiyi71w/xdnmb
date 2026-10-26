@@ -7,7 +7,8 @@
  * records are ISO UTC. Anything unparsable (including date-only forum text) is shown as is.
  *
  * Display only: reminder boundaries, publication checks and search date filters keep using the
- * forum's server calendar and must not depend on this module.
+ * forum's server calendar and must not depend on this module. `parseForumTime` also serves list
+ * layout decisions that compare forum times (the pinned-thread rule).
  */
 
 /** Test seams; production callers omit both (system time zone, current time). */
@@ -61,10 +62,10 @@ function display(date: Date, context: TimeContext): string {
 const FORUM_TIME = /^(\d{4})-(\d{2})-(\d{2})(?:\([^()]*\)| )(\d{2}):(\d{2}):(\d{2})$/
 const FORUM_OFFSET_HOURS = 8
 
-/** Forum `YYYY-MM-DD(星期)HH:MM:SS` or `YYYY-MM-DD HH:MM:SS` (UTC+8) in local time; the original text when unparsable. */
-export function formatForumTime(text: string, context: TimeContext = {}): string {
+/** Forum `YYYY-MM-DD(星期)HH:MM:SS` or `YYYY-MM-DD HH:MM:SS` (UTC+8) as an instant; `null` when unparsable. */
+export function parseForumTime(text: string): Date | null {
   const match = FORUM_TIME.exec(text)
-  if (match === null) return text
+  if (match === null) return null
   const [year, month, day, hour, minute, second] = match.slice(1).map(Number) as [number, number, number, number, number, number]
   const utc = new Date(Date.UTC(year, month - 1, day, hour - FORUM_OFFSET_HOURS, minute, second))
   // Reject impossible fields (2026-02-31, 25:00:00) instead of letting Date roll them over.
@@ -76,7 +77,13 @@ export function formatForumTime(text: string, context: TimeContext = {}): string
     back.getUTCHours() === hour &&
     back.getUTCMinutes() === minute &&
     back.getUTCSeconds() === second
-  return valid ? display(utc, context) : text
+  return valid ? utc : null
+}
+
+/** Forum `YYYY-MM-DD(星期)HH:MM:SS` or `YYYY-MM-DD HH:MM:SS` (UTC+8) in local time; the original text when unparsable. */
+export function formatForumTime(text: string, context: TimeContext = {}): string {
+  const date = parseForumTime(text)
+  return date === null ? text : display(date, context)
 }
 
 /** Local record (ISO timestamp) in local time; the original text when unparsable. */

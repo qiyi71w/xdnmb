@@ -18,6 +18,7 @@ import { QuoteEntryContext } from '../quote/QuoteContext'
 import { QuoteRef } from '../quote/QuoteRef'
 import type { FeedPageRecord } from './feedState'
 import { ThreadRow } from './ThreadRow'
+import { isPinnedThread } from './pinned'
 import { useFeed } from './useFeed'
 import './feed.css'
 import { ListHostContext } from '../directory/navStore'
@@ -173,6 +174,15 @@ export function FeedPane({
   const uncertainById = useMemo(() => new Map(filtered.shown.map(({ item, uncertain }) => [item.head.id, uncertain])), [filtered])
   const ids = useMemo(() => filtered.shown.map(({ item }) => item.head.id), [filtered])
   const roving = useRovingFocus(ids, selectedThreadId)
+  // The 置顶串 is judged on page 1's threads as the forum ordered them, before blocks and filters
+  // hide any. Page 1 always starts the list (a replace); its end is the next page's start.
+  const pinnedId = useMemo(() => {
+    const first = state.pages.find((record) => record.startIndex === 0)
+    if (first === undefined) return null
+    const end = Math.min(state.threads.length, ...state.pages.map((record) => record.startIndex).filter((start) => start > 0))
+    const pageThreads = state.threads.slice(0, end)
+    return isPinnedThread(first.page, pageThreads) ? (pageThreads[0]?.head.id ?? null) : null
+  }, [state.pages, state.threads])
 
   const isTimeline = info.ref.kind === 'timeline'
   const kindLabel = isTimeline ? '时间线' : '版面'
@@ -298,6 +308,7 @@ export function FeedPane({
                         forumName={isTimeline && thread.head.forumId !== null ? (forumNames.get(thread.head.forumId) ?? null) : null}
                         selected={thread.head.id === selectedThreadId}
                         uncertain={uncertain}
+                        pinned={thread.head.id === pinnedId}
                         images={images}
                         onOpen={() => onOpenThread(thread)}
                         itemProps={roving.itemProps(thread.head.id)}

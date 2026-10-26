@@ -297,6 +297,23 @@
   color: var(--ink-2);
 }
 
+/* 置顶串: at most three excerpt lines, the third fading out instead of an ellipsis, and a thumbnail
+   at three quarters of the usual size. The fade is a mask on the text, so it holds over any row
+   background; its stops are absolute, so a one- or two-line excerpt is never faded. */
+.thread-row.is-pinned {
+  --row-thumb: 48px;
+}
+
+:root[data-density='compact'] .thread-row.is-pinned {
+  --row-thumb: 36px;
+}
+
+.thread-row.is-pinned .row-excerpt.content-excerpt {
+  display: block;
+  max-height: 3lh;
+  mask-image: linear-gradient(to bottom, #000 2.2lh, transparent 3lh);
+}
+
 /* Head post thumbnail: fixed box, cropped to fill; a placeholder while loading or after a failure. */
 .row-thumb {
   position: relative;
