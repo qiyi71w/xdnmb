@@ -3,6 +3,7 @@ import type { ThreadId, ThreadSummary } from '../../../../shared/forum'
 import { Content } from '../../components/Content'
 import { Icon } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
+import { formatForumTime } from '../../lib/time'
 import type { ImageScope } from '../image/imageView'
 import { RowThumbnail } from '../image/RowThumbnail'
 import { UncertainTag } from '../search/FilterFields'
@@ -80,7 +81,7 @@ export function ThreadRow({
                 {head.userHash !== null && <span className={head.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{head.userHash}</span>}
                 {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
               </span>
-              {head.createdAt !== null && <span className="row-time">{head.createdAt}</span>}
+              {head.createdAt !== null && <span className="row-time">{formatForumTime(head.createdAt)}</span>}
             </span>
           )}
           {title !== null && <span className="row-title">{title}</span>}

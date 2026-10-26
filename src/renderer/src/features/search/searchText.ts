@@ -1,7 +1,8 @@
 import type { ReadError } from '../../../../shared/api'
 import type { ReadingMode, ThreadCoverage } from '../../../../shared/forum'
 import type { SearchFetch, SearchHit } from '../../../../shared/search'
-import { describeReadError, formatLocalTime, formatPageList } from '../../lib/format'
+import { describeReadError, formatPageList } from '../../lib/format'
+import { formatRecordTime } from '../../lib/time'
 import type { SearchFailure } from './searchState'
 
 export const MODE_TEXT: Record<ReadingMode, string> = { all: '全部回复', po: '只看 PO' }
@@ -22,7 +23,7 @@ const LOCATION_SOURCE: Record<NonNullable<SearchHit['location']>['source'], stri
 export function locationText(location: SearchHit['location']): string {
   if (location === null) return '没有记录所在页'
   const mode = location.mode === 'po' ? '只看 PO ' : ''
-  return `${mode}第 ${location.page} 页 · ${formatLocalTime(location.fetchedAt)} 取得 · 来自${LOCATION_SOURCE[location.source]}`
+  return `${mode}第 ${location.page} 页 · ${formatRecordTime(location.fetchedAt)} 取得 · 来自${LOCATION_SOURCE[location.source]}`
 }
 
 export function imageText(hasImage: boolean | null): string {

@@ -14,7 +14,7 @@ import {
 } from '../../../../shared/identity'
 import { Icon } from '../../components/Icon'
 import { FailureNotice } from '../../components/Notices'
-import { formatLocalTime } from '../../lib/format'
+import { formatForumTime, formatRecordTime } from '../../lib/time'
 import {
   MISSING_SELECTION_TEXT,
   ROLE_INFO,
@@ -583,7 +583,7 @@ function CredentialItem({
             <p className="credential-meta">
               <span className="credential-cookie-id">{cookieIdLabel(credential.cookieId)}</span>
               {' · '}
-              {SOURCE_LABEL[credential.source]} · 导入于 {formatLocalTime(credential.importedAt)}
+              {SOURCE_LABEL[credential.source]} · 导入于 {formatRecordTime(credential.importedAt)}
             </p>
           </div>
           <div className="credential-actions">
@@ -1107,7 +1107,7 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
         <>
           {loggedIn && (
             <p className="settings-group-text">
-              {overview.expiresAt === null ? '已登录' : `已登录，有效至 ${formatLocalTime(overview.expiresAt)}`}
+              {overview.expiresAt === null ? '已登录' : `已登录，有效至 ${formatRecordTime(overview.expiresAt)}`}
             </p>
           )}
           {!overview.available && (
@@ -1172,8 +1172,8 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
                           <span className="account-cookie-id">{cookie.publicId}</span>
                           <span className="account-cookie-meta">
                             <span>ID {cookie.id}</span>
-                            {cookie.validUntil !== null && <span>有效时间 {cookie.validUntil}</span>}
-                            {cookie.claimedAt !== null && <span>领取时间 {cookie.claimedAt}</span>}
+                            {cookie.validUntil !== null && <span>有效时间 {formatForumTime(cookie.validUntil)}</span>}
+                            {cookie.claimedAt !== null && <span>领取时间 {formatForumTime(cookie.claimedAt)}</span>}
                           </span>
                           {outcome !== undefined && (
                             <span className={outcome.tone === 'error' ? 'account-cookie-outcome is-error' : 'account-cookie-outcome'}>
@@ -1284,7 +1284,7 @@ function RoleSelect({
         {credentials.map((item) => (
           <option key={item.id} value={item.id}>
             {(nameCounts.get(item.name) ?? 0) > 1
-              ? `${item.name}（${SOURCE_LABEL[item.source]}，${formatLocalTime(item.importedAt)}）`
+              ? `${item.name}（${SOURCE_LABEL[item.source]}，${formatRecordTime(item.importedAt)}）`
               : item.name}
           </option>
         ))}

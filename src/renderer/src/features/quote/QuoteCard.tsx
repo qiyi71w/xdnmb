@@ -4,6 +4,7 @@ import { Content } from '../../components/Content'
 import { Icon } from '../../components/Icon'
 import { Loading, SourceNotice } from '../../components/Notices'
 import { describeReadError, meaningfulName } from '../../lib/format'
+import { formatForumTime } from '../../lib/time'
 import { canLocate } from './quoteState'
 import { QuoteEntryContext } from './QuoteContext'
 import { QuoteRef } from './QuoteRef'
@@ -153,7 +154,7 @@ export function QuoteCard({
         <div className="quote-card-meta">
           {post.userHash !== null && <span className={post.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{post.userHash}</span>}
           {name !== null && <span className="post-name">{name}</span>}
-          {post.createdAt !== null && <span>{post.createdAt}</span>}
+          {post.createdAt !== null && <span>{formatForumTime(post.createdAt)}</span>}
           {post.image !== null && (
             <span className="tag tag-image">
               <Icon name="image" size={12} />

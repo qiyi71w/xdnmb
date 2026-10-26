@@ -5,6 +5,7 @@ import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { Loading } from '../../components/Notices'
 import { meaningfulTitle } from '../../lib/format'
+import { formatForumTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { FilterFields, UncertainTag } from './FilterFields'
 import { contentFilterCount } from './listFilters'
@@ -532,7 +533,7 @@ function HitRow({
         <span className="search-hit-post">
           <span className="search-hit-kind">{isHead ? '主帖' : '回复'}</span>
           <span className="search-hit-no">No.{hit.postId}</span>
-          {hit.createdAt !== null && <span className="search-hit-time">{hit.createdAt}</span>}
+          {hit.createdAt !== null && <span className="search-hit-time">{formatForumTime(hit.createdAt)}</span>}
         </span>
         {title !== null && (
           <span className="search-hit-title">

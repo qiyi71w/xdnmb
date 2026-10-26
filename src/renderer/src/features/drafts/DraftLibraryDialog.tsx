@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { DraftId, SavedDraft } from '../../../../shared/drafts'
 import { Icon } from '../../components/Icon'
 import { Modal, ModalHeader } from '../../components/Modal'
-import { formatLocalTime } from '../../lib/format'
+import { formatRecordTime } from '../../lib/time'
 import { editorForDraft } from '../editor/editorsState'
 import { credentialLine, excerpt, targetText } from '../editor/editorText'
 import { useEditorWorkspace } from '../editor/workspace'
@@ -181,7 +181,7 @@ export function DraftLibraryDialog({
                           有图
                         </span>
                       )}
-                      <span>保存于 {formatLocalTime(draft.savedAt)}</span>
+                      <span>保存于 {formatRecordTime(draft.savedAt)}</span>
                     </p>
                     {editing !== null && (
                       <p className="draft-editing" id={`${rowId}-editing`}>

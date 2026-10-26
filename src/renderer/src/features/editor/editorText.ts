@@ -1,6 +1,6 @@
 import type { AttachFailure, DraftAttachment, PostFields, PostTarget } from '../../../../shared/drafts'
 import type { CredentialId, IdentityOverview } from '../../../../shared/identity'
-import { formatLocalTime } from '../../lib/format'
+import { formatRecordTime } from '../../lib/time'
 import { ATTEMPT_STATE_LABEL } from '../publication/publicationText'
 import { isUnsaved, type Editor } from './editorsState'
 import type { SaveFailure } from './useEditorsStore'
@@ -52,7 +52,7 @@ export function editorStateText(editor: Editor): string {
     }
   }
   if (editor.draft === null) return '未保存'
-  return isUnsaved(editor) ? '草稿·有未保存修改' : `草稿·已保存 ${formatLocalTime(editor.draft.savedAt)}`
+  return isUnsaved(editor) ? '草稿·有未保存修改' : `草稿·已保存 ${formatRecordTime(editor.draft.savedAt)}`
 }
 
 export const SAVE_FAILURE_TEXT: Record<SaveFailure, string> = {

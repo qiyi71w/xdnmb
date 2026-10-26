@@ -10,7 +10,7 @@ import type {
   SubscriptionPreview
 } from '../../../../shared/subscriptions'
 import { Icon, Spinner } from '../../components/Icon'
-import { formatLocalTime } from '../../lib/format'
+import { formatRecordTime } from '../../lib/time'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { ReconcileButton, UnsettledLine, WriteStatus } from './SubscriptionActivity'
 import {
@@ -381,7 +381,7 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
           {MODE_NAME[preview.mode]}预览
         </h3>
         <p className="sub-recon-meta">
-          {formatLocalTime(preview.createdAt)} 读取 · 配置代次 {preview.context.generation}
+          {formatRecordTime(preview.createdAt)} 读取 · 配置代次 {preview.context.generation}
         </p>
       </div>
 
@@ -810,8 +810,8 @@ function PlanHistory() {
                   <span className={HISTORY_TAG[plan.state]}>{PLAN_STATE_TEXT[plan.state]}</span>
                 </div>
                 <p className="sub-journal-meta">
-                  {formatLocalTime(plan.createdAt)} 开始
-                  {plan.finishedAt !== null && ` · ${formatLocalTime(plan.finishedAt)} 结束`} · 配置代次 {plan.preview.context.generation}
+                  {formatRecordTime(plan.createdAt)} 开始
+                  {plan.finishedAt !== null && ` · ${formatRecordTime(plan.finishedAt)} 结束`} · 配置代次 {plan.preview.context.generation}
                 </p>
                 <PlanSummary plan={plan} />
                 {plan.items.length > 0 && (

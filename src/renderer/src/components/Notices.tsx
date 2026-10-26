@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { ReadError } from '../../../shared/api'
-import { describeFailure, describeReadError, formatLocalTime, identityErrorOf, serverMessageOf } from '../lib/format'
+import { describeFailure, describeReadError, identityErrorOf, serverMessageOf } from '../lib/format'
+import { formatRecordTime } from '../lib/time'
 import type { Failure, Source } from '../lib/operations'
 import { useSettingsOpener } from '../lib/settingsOpener'
 import { Icon, Spinner } from './Icon'
@@ -79,7 +80,7 @@ export function SourceNotice({ source, subject }: { source: Source; subject?: st
       </p>
     )
   }
-  const time = formatLocalTime(source.fetchedAt)
+  const time = formatRecordTime(source.fetchedAt)
   const error = source.networkError
   return (
     <div className="notice notice-cached" role="status">

@@ -6,7 +6,7 @@ import { isSendShortcut, saveAriaShortcut, sendAriaShortcut, sendShortcutLabel, 
 import { Icon, Spinner } from '../../components/Icon'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { usePopover } from '../../lib/usePopover'
-import { formatLocalTime } from '../../lib/format'
+import { formatRecordTime } from '../../lib/time'
 import { formatBytes } from '../image/imageView'
 import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, ATTEMPT_STATE_LABEL, PROBLEM_TEXT } from '../publication/publicationText'
 import type { IdentitiesState } from '../identity/useIdentities'
@@ -606,7 +606,7 @@ function SendStatus({ editor }: { editor: Editor }) {
             {publication.attempt.problem !== null && `：${ATTEMPT_PROBLEM_TEXT[publication.attempt.problem]}`}
           </p>
           <p>{ATTEMPT_STATE_DETAIL[state]}</p>
-          <p className="editor-note">开始于 {formatLocalTime(publication.attempt.createdAt)}</p>
+          <p className="editor-note">开始于 {formatRecordTime(publication.attempt.createdAt)}</p>
         </div>
       )
     }

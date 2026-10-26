@@ -4,7 +4,8 @@ import type { ThreadId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
 import { Modal, ModalHeader } from '../../components/Modal'
 import { Loading } from '../../components/Notices'
-import { formatLocalTime, formatPageList } from '../../lib/format'
+import { formatPageList } from '../../lib/format'
+import { formatRecordTime } from '../../lib/time'
 import {
   attempt,
   contentFailureText,
@@ -329,11 +330,11 @@ function OfflineSummary({ copy }: { copy: OfflineCopy }) {
       <dl className="offline-facts">
         <div>
           <dt>首次保存</dt>
-          <dd>{formatLocalTime(copy.createdAt)}</dd>
+          <dd>{formatRecordTime(copy.createdAt)}</dd>
         </div>
         <div>
           <dt>最近更新</dt>
-          <dd>{formatLocalTime(copy.updatedAt)}</dd>
+          <dd>{formatRecordTime(copy.updatedAt)}</dd>
         </div>
         <div>
           <dt>已保存页</dt>

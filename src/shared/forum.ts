@@ -42,7 +42,7 @@ export interface PostImage {
 export interface Post {
   id: PostId
   forumId: ForumId | null
-  /** Server `now` text as provided; timezone and precision are unverified. */
+  /** Server `now` text as provided (`YYYY-MM-DD(星期)HH:MM:SS`, Beijing time without a zone marker). */
   createdAt: string | null
   /** Public 饼干标识 (not a credential). */
   userHash: string | null

@@ -7,7 +7,8 @@ import {
   type ReminderRule,
   type ReminderThreadRow
 } from '../../../../shared/reminders'
-import { describeReadError, formatClockTime } from '../../lib/format'
+import { describeReadError } from '../../lib/format'
+import { formatClockTime } from '../../lib/time'
 
 export const KIND_NAME: Record<ReminderKind, string> = {
   all: '全串更新',

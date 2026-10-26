@@ -9,7 +9,8 @@ import type {
   SubscriptionPlanItem,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
-import { describeReadError, formatLocalTime, formatPageList, meaningfulTitle } from '../../lib/format'
+import { describeReadError, formatPageList, meaningfulTitle } from '../../lib/format'
+import { formatRecordTime } from '../../lib/time'
 
 // Fixed copy only. Nothing here ever includes a UUID, a userhash or any other secret: the
 // renderer only knows local references, names and generations.
@@ -140,7 +141,7 @@ export function coverageText(observation: SubscriptionObservation): string {
   if (pages.length === 0) return '还没有取得任何一页'
   const parts = [`已读取第 ${formatPageList(pages.map((page) => page.page))} 页`]
   const last = pages.at(-1)
-  if (last !== undefined) parts.push(`${formatLocalTime(last.fetchedAt)} 获取`)
+  if (last !== undefined) parts.push(`${formatRecordTime(last.fetchedAt)} 获取`)
   const end = pages.find((page) => page.endCandidate)
   if (end !== undefined) parts.push(`第 ${end.page} 页为空（结束候选）`)
   else if (observation.nextPage !== null) parts.push(`第 ${observation.nextPage} 页起未读取`)

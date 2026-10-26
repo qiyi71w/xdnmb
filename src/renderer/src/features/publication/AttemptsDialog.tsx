@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { PostTarget, SavedDraft } from '../../../../shared/drafts'
 import type { PublicationAttempt } from '../../../../shared/publication'
 import { Icon } from '../../components/Icon'
-import { formatLocalTime } from '../../lib/format'
+import { formatRecordTime } from '../../lib/time'
 import { credentialLine, excerpt, targetText } from '../editor/editorText'
 import { useEditorWorkspace } from '../editor/workspace'
 import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, ATTEMPT_STATE_LABEL } from './publicationText'
@@ -122,7 +122,7 @@ export function AttemptsBody({ tabTitle, onContinue, onOpenTarget, refreshRevisi
             <Icon name={state === 'confirmed' ? 'check' : state === 'sending' ? 'send' : 'alert'} size={13} />
             {ATTEMPT_STATE_LABEL[state]}
           </span>
-          <span className="attempt-time">{formatLocalTime(attempt.createdAt)}</span>
+          <span className="attempt-time">{formatRecordTime(attempt.createdAt)}</span>
         </div>
         <p className="attempt-target" id={`${rowId}-target`}>
           {target}

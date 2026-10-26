@@ -5,7 +5,8 @@
 import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ForumId, Post, ThreadId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
-import { formatLocalTime, meaningfulName, meaningfulTitle } from '../../lib/format'
+import { meaningfulName, meaningfulTitle } from '../../lib/format'
+import { formatForumTime, formatRecordTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ListFilterBar, UncertainTag } from '../search/FilterFields'
 import { contentFilterCount, filterList } from '../search/listFilters'
@@ -251,7 +252,7 @@ function RetainedListPane({ entryKey, forumNames, selectedThreadId, onOpenThread
                           {head.userHash !== null && <span className={head.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{head.userHash}</span>}
                           {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
                         </span>
-                        {head.createdAt !== null && <span className="row-time">{head.createdAt}</span>}
+                        {head.createdAt !== null && <span className="row-time">{formatForumTime(head.createdAt)}</span>}
                       </span>}
                       {title !== null && <span className="row-title">{title}</span>}
                       {name !== null && <span className="row-name">{name}</span>}
@@ -259,7 +260,7 @@ function RetainedListPane({ entryKey, forumNames, selectedThreadId, onOpenThread
                       <span className="visually-hidden" id={`${rowId}-title`}>{heading.text}</span>
                       <span className="row-meta">
                         <span>No.{entry.threadId}</span>
-                        <span>{PAGE.at} {formatLocalTime(entry.at)}</span>
+                        <span>{PAGE.at} {formatRecordTime(entry.at)}</span>
                         {entry.offline !== null && (
                           <span className="retained-tag"><Icon name="download" size={13} />有离线副本</span>
                         )}

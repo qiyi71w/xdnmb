@@ -6,7 +6,7 @@ import type { BoardDirectory } from '../../../../shared/forum'
 import { formatReminderCount } from '../../../../shared/reminders'
 import { Icon } from '../../components/Icon'
 import { FailureNotice, IdentitySettingsAction, SourceNotice } from '../../components/Notices'
-import { formatLocalTime } from '../../lib/format'
+import { formatRecordTime } from '../../lib/time'
 import { useSettings } from '../../lib/settingsContext'
 import type { PendingAttempts } from '../publication/usePendingAttempts'
 import type { ListRef } from '../tabs/tabsState'
@@ -158,7 +158,7 @@ export function DirectoryStatus({ state, onRetry }: { state: DirectoryState; onR
     body = (
       <>
         <p className="nav-foot-text" role="status">
-          目录未更新，显示 {formatLocalTime(source.fetchedAt)} 的缓存
+          目录未更新，显示 {formatRecordTime(source.fetchedAt)} 的缓存
         </p>
         <span className="nav-foot-actions">
           <button type="button" className="btn btn-small" onClick={onRetry}>

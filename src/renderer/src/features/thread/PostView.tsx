@@ -2,6 +2,7 @@ import { useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import type { Post } from '../../../../shared/forum'
 import { Content } from '../../components/Content'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
+import { formatForumTime } from '../../lib/time'
 import type { ImageView } from '../image/imageView'
 import { PostThumbnail } from '../image/PostThumbnail'
 import { QuoteRef } from '../quote/QuoteRef'
@@ -76,7 +77,7 @@ export function PostView({
           {post.userHash !== null && <span className={post.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{post.userHash}</span>}
           {isPo && <span className="tag tag-po">PO</span>}
           {post.isSage === true && <span className="tag tag-sage">SAGE</span>}
-          {post.createdAt !== null && <span className="post-time">{post.createdAt}</span>}
+          {post.createdAt !== null && <span className="post-time">{formatForumTime(post.createdAt)}</span>}
           <span className="post-no">No.{post.id}</span>
         </div>
         {isHead ? (

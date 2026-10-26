@@ -4,7 +4,8 @@ import type { BoardDirectory, ForumId, Post, PostId, ThreadId } from '../../../.
 import { MAX_SEARCH_QUERY_LENGTH, type ForumLinkTarget, type SearchError, type SearchHit } from '../../../../shared/online-search'
 import { Icon } from '../../components/Icon'
 import { Loading } from '../../components/Notices'
-import { describeReadError, formatLocalTime } from '../../lib/format'
+import { describeReadError } from '../../lib/format'
+import { formatRecordTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import { useAppCovered } from '../../lib/appCovered'
@@ -512,7 +513,7 @@ export function OnlineSearchPane({
             <h3 className="online-search-results-head" ref={headingRef} tabIndex={-1}>
               <span className="online-search-results-query">「{results.query}」</span>
               <span className="online-search-results-meta">
-                第 {shownPage.pageNumber} 页 · {hits.length} 条 · {formatLocalTime(shownPage.fetchedAt)} 取得
+                第 {shownPage.pageNumber} 页 · {hits.length} 条 · {formatRecordTime(shownPage.fetchedAt)} 取得
               </span>
             </h3>
 
@@ -700,7 +701,7 @@ function HitRow({
             {target === null && <Icon name="external" size={12} />}
             {targetLabel(target)}
           </span>
-          {hit.date !== null && <span className="online-search-hit-date">{formatLocalTime(hit.date)}</span>}
+          {hit.date !== null && <span className="online-search-hit-date">{formatRecordTime(hit.date)}</span>}
         </span>
         <span className={hit.title === null ? 'online-search-hit-title is-missing' : 'online-search-hit-title'}>{hit.title ?? '（服务未提供标题）'}</span>
         {hit.description !== null && <span className="online-search-hit-snippet">{hit.description}</span>}
