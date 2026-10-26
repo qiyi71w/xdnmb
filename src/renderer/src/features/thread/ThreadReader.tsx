@@ -27,7 +27,7 @@ import { isPostBlocked } from '../../../../shared/blocks'
 import { useBlocks } from './useBlocks'
 import { usePostActions } from './usePostActions'
 import { JumpPillButton, useJumpPills } from './JumpPills'
-import type { JumpPill, PillEnds } from './jumpPills'
+import type { JumpPill, PillEnds } from './jumpPillModel'
 
 const MODE_NAMES: Record<ReadingMode, string> = { all: '全部回复', po: '只看 PO' }
 /** How long a quote target stays marked after the jump. */
