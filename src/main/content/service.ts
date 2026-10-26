@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises'
 import { setImmediate as yieldToLoop } from 'node:timers/promises'
-import type { ContentApi, ContentResult, ContentUsage, OfflineCopy, OfflineImageFailure } from '../../shared/content'
+import type { ContentApi, ContentResult, ContentUsage, OfflineCopy, OfflineDeletion, OfflineImageFailure } from '../../shared/content'
 import type { ThreadId } from '../../shared/forum'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
 import type { ManagedImageFiles } from '../images/files'
@@ -9,7 +9,7 @@ import type { RequestScheduler } from '../reading/scheduler'
 import type { ReadingStore } from '../storage/contract'
 import type { ContentStore } from '../storage/content-contract'
 
-export interface ContentService extends Omit<ContentApi, 'holdReader' | 'releaseReader'> {
+export interface ContentService extends Omit<ContentApi, 'holdReader' | 'releaseReader' | 'onOfflineChanged'> {
   holdReader(owner: string, input: { viewId: string; threadId: ThreadId }): Promise<void>
   releaseReader(owner: string, input: { viewId: string }): Promise<void>
   releaseOwner(owner: string): Promise<void>
@@ -23,8 +23,8 @@ export interface ContentService extends Omit<ContentApi, 'holdReader' | 'release
 
 interface SaveTask {
   controller: AbortController
-  done: Promise<void>
-  finish: () => void
+  done: Promise<boolean>
+  finish: (cleaned: boolean) => void
 }
 
 export function createContentService(deps: {
@@ -39,6 +39,7 @@ export function createContentService(deps: {
   const { store, client, scheduler, images, files } = deps
   const now = () => (deps.now?.() ?? new Date()).toISOString()
   const tasks = new Map<ThreadId, SaveTask>()
+  const deletions = new Map<ThreadId, Promise<void>>()
   const unsavedFailures = new Map<ThreadId, Pick<OfflineCopy, 'state' | 'failedPage' | 'error' | 'imageFailures'>>()
   const visibleCopy = (copy: OfflineCopy | null): OfflineCopy | null => copy === null ? null : { ...copy, ...unsavedFailures.get(copy.threadId) }
   let closing = false
@@ -118,8 +119,8 @@ export function createContentService(deps: {
           if (ids.length === 0) break
           for (const postId of ids) {
             if (signal.aborted) throw new ReadCancelledError()
-            const loaded = await images.load(owner, { viewId, postId, kind: 'original', refresh: false }, signal)
-            if (loaded.status === 'cancelled') throw new ReadCancelledError()
+            const loaded = await images.load(owner, { viewId, postId, kind: 'original', refresh: false, waitForCleanup: true }, signal)
+            if (signal.aborted || loaded.status === 'cancelled') throw new ReadCancelledError()
             if (loaded.status === 'ready') await store.holdOfflineImage(threadId, postId)
             else imageFailures.push({ postId, error: loaded.error })
             await store.updateOfflineCopy(threadId, { state: 'saving', failedPage, error, imageFailures }, now())
@@ -149,9 +150,16 @@ export function createContentService(deps: {
       await store.updateOfflineCopy(threadId, { state, failedPage, error, imageFailures }, now()).catch(() => {
         unsavedFailures.set(threadId, { state: 'interrupted', failedPage, error: 'storage', imageFailures })
       })
-      await images.releaseOwner(owner)
-      tasks.delete(threadId)
-      task.finish()
+      let cleaned = true
+      try {
+        await images.releaseOwner(owner)
+      } catch {
+        cleaned = false
+        unsavedFailures.set(threadId, { state: 'interrupted', failedPage, error: 'storage', imageFailures })
+      } finally {
+        tasks.delete(threadId)
+        task.finish(cleaned)
+      }
     }
   }
 
@@ -168,8 +176,8 @@ export function createContentService(deps: {
     clearCache: () => result(async () => { await enforce(true); return usage() }),
     offlineStatus: ({ threadId }) => result(async () => visibleCopy(await store.getOfflineCopy(threadId))),
     async saveOffline({ threadId, includeImages }) {
-      if (closing || tasks.has(threadId)) return { ok: false, reason: 'busy' }
-      const completion = Promise.withResolvers<void>()
+      if (closing || tasks.has(threadId) || deletions.has(threadId)) return { ok: false, reason: 'busy' }
+      const completion = Promise.withResolvers<boolean>()
       const task: SaveTask = { controller: new AbortController(), done: completion.promise, finish: completion.resolve }
       tasks.set(threadId, task)
       try {
@@ -179,15 +187,44 @@ export function createContentService(deps: {
         return { ok: true, value: initial }
       } catch {
         tasks.delete(threadId)
-        task.finish()
+        task.finish(true)
         return { ok: false, reason: 'storage' }
       }
     },
     async cancelOffline({ threadId }) {
+      if (deletions.has(threadId)) return { ok: false, reason: 'busy' }
       const task = tasks.get(threadId)
       task?.controller.abort()
-      await task?.done
+      if (task && !await task.done) return { ok: false, reason: 'storage' }
       return result(async () => visibleCopy(await store.getOfflineCopy(threadId)))
+    },
+    async deleteOffline({ threadId }): Promise<ContentResult<OfflineDeletion>> {
+      if (closing || deletions.has(threadId)) return { ok: false, reason: 'busy' }
+      const completion = Promise.withResolvers<void>()
+      deletions.set(threadId, completion.promise)
+      try {
+        const task = tasks.get(threadId)
+        task?.controller.abort()
+        if (task) {
+          if (!await task.done) return { ok: false, reason: 'storage' }
+        } else {
+          // Also clears any transient owner left by an earlier failed cancellation.
+          await images.releaseOwner(`offline-${threadId}`)
+        }
+        await store.deleteOfflineCopy(threadId)
+        unsavedFailures.delete(threadId)
+        try {
+          await enforce(false)
+          return { ok: true, value: { cacheCleanup: closing ? 'failed' : 'complete' } }
+        } catch {
+          return { ok: true, value: { cacheCleanup: 'failed' } }
+        }
+      } catch {
+        return { ok: false, reason: 'storage' }
+      } finally {
+        deletions.delete(threadId)
+        completion.resolve()
+      }
     },
     holdReader: (owner, { viewId, threadId }) => store.holdContentReader(`${owner}:${viewId}:`, threadId),
     async releaseReader(owner, { viewId }) {
@@ -205,6 +242,7 @@ export function createContentService(deps: {
       closing = true
       for (const task of tasks.values()) task.controller.abort()
       await Promise.all([...tasks.values()].map((task) => task.done))
+      await Promise.all(deletions.values())
       await maintenance?.catch(() => undefined)
     }
   }

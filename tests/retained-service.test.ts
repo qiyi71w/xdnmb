@@ -2,12 +2,12 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setImmediate as yieldToLoop } from 'node:timers/promises'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createContentService, type ContentService } from '../src/main/content/service'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../src/main/forum/contract'
 import { openManagedImageFiles } from '../src/main/images/files'
 import { createImageService } from '../src/main/images/service'
-import { ImageFetchError } from '../src/main/images/transport'
+import { ImageFetchError, type ImageDownloader } from '../src/main/images/transport'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import type { ContentStore } from '../src/main/storage/content-contract'
@@ -34,6 +34,7 @@ function contentStore(db: ReadingDatabase): ContentStore {
     holdContentReader: async (...a) => db.holdContentReader(...a),
     releaseContentReaders: async (...a) => db.releaseContentReaders(...a),
     getOfflineCopy: async (...a) => db.getOfflineCopy(...a),
+    deleteOfflineCopy: async (...a) => db.deleteOfflineCopy(...a),
     beginOfflineCopy: async (...a) => db.beginOfflineCopy(...a),
     saveOfflinePage: async (...a) => db.saveOfflinePage(...a),
     updateOfflineCopy: async (...a) => db.updateOfflineCopy(...a),
@@ -51,19 +52,19 @@ function page(threadId: string, number: number, replies: Post[]): ThreadPage {
   return { threadId, mode: 'all', page: number, head: post(threadId), replies, replyCount: null, skippedItems: 0, endCandidate: replies.length === 0 }
 }
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
-async function setup(read: ForumClient['getThreadPage'], overrides: Partial<ContentStore> = {}) {
+async function setup(read: ForumClient['getThreadPage'], overrides: Partial<ContentStore> = {}, download?: ImageDownloader) {
   const dir = mkdtempSync(join(tmpdir(), 'xidao-retained-service-'))
   const databasePath = join(dir, 'xidao.sqlite')
   const db = openReadingDatabase(databasePath)
   const store = { ...asStore(db), ...contentStore(db), ...overrides }
   const files = await openManagedImageFiles(join(dir, 'images'))
   const downloads: string[] = []
-  const images = createImageService({ store, files, origin: 'https://image.example', download: async (url, destination) => {
+  const images = createImageService({ store, files, origin: 'https://image.example', download: download ?? (async (url, destination) => {
     downloads.push(url.pathname)
     if (url.pathname.includes('broken')) throw new ImageFetchError({ reason: 'html' })
     writeFileSync(destination, png)
     return { bytes: png.length }
-  } })
+  }) })
   const client: ForumClient = {
     getThreadPage: read,
     getDirectory: async () => { throw new Error('not used') },
@@ -84,6 +85,239 @@ async function finished(service: ContentService, threadId: string): Promise<Offl
 }
 
 describe('retained content operations', () => {
+  it('drains late pages and terminal writes before deleting, excluding competing operations', async () => {
+    const reached = Promise.withResolvers<void>()
+    const latePage = Promise.withResolvers<ThreadPage>()
+    const terminal = Promise.withResolvers<void>()
+    const releaseTerminal = Promise.withResolvers<void>()
+    let actual: ContentStore
+    const { service, db } = await setup(async (id, _mode, n) => {
+      if (n === 1) return page(id, n, [post('101')])
+      reached.resolve()
+      return latePage.promise
+    }, {
+      updateOfflineCopy: async (...args) => {
+        if (args[1].state === 'cancelled') {
+          terminal.resolve()
+          await releaseTerminal.promise
+        }
+        return actual.updateOfflineCopy(...args)
+      }
+    })
+    actual = contentStore(db)
+    await service.saveOffline({ threadId: '100', includeImages: false })
+    await reached.promise
+    const deletion = service.deleteOffline({ threadId: '100' })
+    expect(await service.saveOffline({ threadId: '100', includeImages: false })).toEqual({ ok: false, reason: 'busy' })
+    expect(await service.deleteOffline({ threadId: '100' })).toEqual({ ok: false, reason: 'busy' })
+    latePage.resolve(page('100', 2, [post('102')]))
+    await terminal.promise
+    expect(db.getOfflineCopy('100')?.pages).toEqual([1])
+    expect(await service.saveOffline({ threadId: '100', includeImages: false })).toEqual({ ok: false, reason: 'busy' })
+    releaseTerminal.resolve()
+    expect(await deletion).toEqual({ ok: true, value: { cacheCleanup: 'complete' } })
+    expect(await service.offlineStatus({ threadId: '100' })).toEqual({ ok: true, value: null })
+    expect(db.loadThreadPage('100', 'all', 1)?.value.replies.map((item) => item.id)).toEqual(['101'])
+    expect(db.loadThreadPage('100', 'all', 2)).toBeNull()
+    expect(db.loadPost('102')).toBeNull()
+  })
+
+  it('waits for an original and prevents its late result from restoring offline protection', async () => {
+    const reached = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const { service, db, images, files } = await setup(async (id, _mode, n) => page(id, n, n === 1 ? [post('101', true)] : []))
+    const load = images.load.bind(images)
+    vi.spyOn(images, 'load').mockImplementation(async (...args) => {
+      const result = await load(...args)
+      reached.resolve()
+      await release.promise
+      return result
+    })
+    await service.saveOffline({ threadId: '100', includeImages: true })
+    await reached.promise
+    const url = 'https://image.example/image/2026-10-24/shared.png'
+    const resource = db.findImageResource('original', url, null)!
+    const file = files.pathOf(resource.fileName)!
+    expect(existsSync(file)).toBe(true)
+    db.setCacheLimit(0)
+    const deletion = service.deleteOffline({ threadId: '100' })
+    expect(await service.saveOffline({ threadId: '100', includeImages: true })).toEqual({ ok: false, reason: 'busy' })
+    release.resolve()
+    expect(await deletion).toEqual({ ok: true, value: { cacheCleanup: 'complete' } })
+    expect(db.getOfflineCopy('100')).toBeNull()
+    expect(db.findImageResource('original', url, null)).toBeNull()
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it.each(['download', 'commit'] as const)('drains the real image %s before deleting and reopening save admission', async (phase) => {
+    const reached = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const { service, db, files } = await setup(
+      async (id, _mode, n) => page(id, n, n === 1 ? [post('101', true)] : []),
+      {},
+      async (_url, destination) => {
+        writeFileSync(destination, png)
+        if (phase === 'download') {
+          reached.resolve()
+          await release.promise
+        }
+        return { bytes: png.length }
+      }
+    )
+    if (phase === 'commit') {
+      const commit = files.commit.bind(files)
+      vi.spyOn(files, 'commit').mockImplementation(async (...args) => {
+        reached.resolve()
+        await release.promise
+        return commit(...args)
+      })
+    }
+    await service.saveOffline({ threadId: '100', includeImages: true })
+    await reached.promise
+    db.setCacheLimit(0)
+    let deleted = false
+    const deletion = service.deleteOffline({ threadId: '100' }).then((result) => { deleted = true; return result })
+    try {
+      for (let i = 0; i < 10; i++) await yieldToLoop()
+      expect(deleted).toBe(false)
+      expect(await service.saveOffline({ threadId: '100', includeImages: true })).toEqual({ ok: false, reason: 'busy' })
+    } finally {
+      release.resolve()
+      await deletion
+    }
+    expect(await deletion).toEqual({ ok: true, value: { cacheCleanup: 'complete' } })
+    expect(db.getOfflineCopy('100')).toBeNull()
+    expect(db.findImageResource('original', 'https://image.example/image/2026-10-24/shared.png', null)).toBeNull()
+  })
+
+  it('keeps a shared reader download and its holder while draining the offline waiter', async () => {
+    const reached = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const { service, db, images } = await setup(
+      async (id, _mode, n) => page(id, n, n === 1 ? [post('101', true)] : []),
+      {},
+      async (_url, destination, _limit, signal) => {
+        reached.resolve()
+        await release.promise
+        expect(signal.aborted).toBe(false)
+        writeFileSync(destination, png)
+        return { bytes: png.length }
+      }
+    )
+    await service.saveOffline({ threadId: '100', includeImages: true })
+    await reached.promise
+    const reader = images.load('reader', { viewId: 'view', postId: '101', kind: 'original', refresh: false }, new AbortController().signal)
+    for (let i = 0; i < 10; i++) await yieldToLoop()
+    db.setCacheLimit(0)
+    const deletion = service.deleteOffline({ threadId: '100' })
+    release.resolve()
+    expect(await reader).toMatchObject({ status: 'ready' })
+    expect(await deletion).toEqual({ ok: true, value: { cacheCleanup: 'complete' } })
+    const url = 'https://image.example/image/2026-10-24/shared.png'
+    expect(db.getOfflineCopy('100')).toBeNull()
+    expect(db.findImageResource('original', url, null)).not.toBeNull()
+    await images.releaseOwner('reader')
+    await service.enforceQuota()
+    expect(db.findImageResource('original', url, null)).toBeNull()
+  })
+
+  it('surfaces actual image-holder storage failure before deleting and retries the release', async () => {
+    const reached = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const { service, db, store } = await setup(async (id, _mode, n) => page(id, n, n === 1 ? [post('101', true)] : []))
+    const releaseHolders = store.releaseImageHolders.bind(store)
+    let fail = true
+    vi.spyOn(store, 'releaseImageHolders').mockImplementation(async (kind, prefix) => {
+      if (!fail || !prefix.startsWith('offline-100:')) return releaseHolders(kind, prefix)
+      if (prefix === 'offline-100:') {
+        reached.resolve()
+        await release.promise
+      }
+      throw new Error('reading holder release failed')
+    })
+    await service.saveOffline({ threadId: '100', includeImages: true })
+    await reached.promise
+    const deletion = service.deleteOffline({ threadId: '100' })
+    release.resolve()
+    expect(await deletion).toEqual({ ok: false, reason: 'storage' })
+    expect(db.getOfflineCopy('100')?.savedImages).toBe(1)
+    fail = false
+    db.setCacheLimit(0)
+    expect(await service.deleteOffline({ threadId: '100' })).toEqual({ ok: true, value: { cacheCleanup: 'complete' } })
+    expect(db.getOfflineCopy('100')).toBeNull()
+    expect(db.findImageResource('original', 'https://image.example/image/2026-10-24/shared.png', null)).toBeNull()
+  })
+
+  it('reports failed task cleanup without hanging or deleting, and allows an explicit retry', async () => {
+    const reached = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const { service, db, images } = await setup(async (id, _mode, n) => page(id, n, []))
+    vi.spyOn(images, 'releaseOwner').mockImplementationOnce(async () => {
+      reached.resolve()
+      await release.promise
+      throw new Error('holder release failed')
+    })
+    await service.saveOffline({ threadId: '100', includeImages: false })
+    await reached.promise
+    const deletion = service.deleteOffline({ threadId: '100' })
+    release.resolve()
+    expect(await deletion).toEqual({ ok: false, reason: 'storage' })
+    expect(db.getOfflineCopy('100')?.pages).toEqual([1])
+    expect(await service.deleteOffline({ threadId: '100' })).toEqual({ ok: true, value: { cacheCleanup: 'complete' } })
+    expect(db.getOfflineCopy('100')).toBeNull()
+  })
+
+  it('distinguishes refused deletion from committed deletion with failed quota cleanup', async () => {
+    let deleteFails = true
+    let actual: ContentStore
+    const { service, db } = await setup(async (id, _mode, n) => page(id, n, []), {
+      deleteOfflineCopy: async (id) => {
+        if (deleteFails) throw new Error('delete unavailable')
+        await actual.deleteOfflineCopy(id)
+      },
+      evictContentBatch: async () => { throw new Error('quota unavailable') }
+    })
+    actual = contentStore(db)
+    await service.saveOffline({ threadId: '100', includeImages: false })
+    await finished(service, '100')
+    expect(await service.deleteOffline({ threadId: '100' })).toEqual({ ok: false, reason: 'storage' })
+    expect(db.getOfflineCopy('100')?.pages).toEqual([1])
+    deleteFails = false
+    expect(await service.deleteOffline({ threadId: '100' })).toEqual({ ok: true, value: { cacheCleanup: 'failed' } })
+    expect(await service.offlineStatus({ threadId: '100' })).toEqual({ ok: true, value: null })
+    expect(db.loadThreadPage('100', 'all', 1)?.value.head.id).toBe('100')
+  })
+
+  it('drains admitted deletion at quit and accepts a fresh save after reopening', async () => {
+    const reached = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    let actual: ContentStore
+    const { service, db } = await setup(async (id, _mode, n) => page(id, n, []), {
+      deleteOfflineCopy: async (id) => {
+        reached.resolve()
+        await release.promise
+        await actual.deleteOfflineCopy(id)
+      }
+    })
+    actual = contentStore(db)
+    db.beginOfflineCopy('100', false, '2000-01-01T00:00:00Z')
+    const deletion = service.deleteOffline({ threadId: '100' })
+    await reached.promise
+    let stopped = false
+    const stopping = service.stop().then(() => { stopped = true })
+    await yieldToLoop()
+    expect(stopped).toBe(false)
+    release.resolve()
+    expect(await deletion).toEqual({ ok: true, value: { cacheCleanup: 'failed' } })
+    await stopping
+    expect(db.getOfflineCopy('100')).toBeNull()
+    service.resume()
+    expect((await service.saveOffline({ threadId: '100', includeImages: false })).ok).toBe(true)
+    const saved = await finished(service, '100')
+    expect(saved.pages).toEqual([1])
+    expect(saved.createdAt).not.toBe('2000-01-01T00:00:00Z')
+  })
+
   it('drains background saves at quit and accepts new work when the window is reopened', async () => {
     const reached = Promise.withResolvers<void>()
     const requests: string[] = []

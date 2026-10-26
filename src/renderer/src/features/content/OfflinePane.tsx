@@ -1,8 +1,9 @@
 // 离线 as a list page of a tab: the thread lists' row for every offline copy, most recently first
 // saved first. A copy that is saving or needs attention shows one small icon at the end of the
 // meta line; the copy's facts live in 离线详情… (the 离线副本 dialog of the thread's 更多 menu).
+// 删除离线副本… (row menu, or that dialog) confirms first; a deleted row's neighbour takes focus.
 
-import { useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import type { OfflineEntry } from '../../../../shared/content'
 import type { ForumId, Post, ThreadId } from '../../../../shared/forum'
 import { contextMenuPoint, isContextMenuKey, type ContextMenuPoint } from '../../components/ContextMenu'
@@ -17,8 +18,10 @@ import { useThreadMetadata } from '../search/useThreadMetadata'
 import { useRegisterContent } from '../tabs/contentRegistry'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 import { contentFailureText, offlineAttention, type OfflineAttention } from './contentText'
+import { OfflineDeleteConfirm } from './OfflineDeleteConfirm'
 import { useOfflineList } from './offlineList'
 import { OfflineRowMenu } from './OfflineRowMenu'
+import { useOfflineDeletions } from './offlineSync'
 import { useRetainedFilters, useRetainedScroll } from './retainedList'
 import { OfflineDetailsDialog } from './ThreadRetention'
 import '../feed/feed.css'
@@ -57,11 +60,17 @@ export function OfflinePane({
   onOpenThread: (threadId: ThreadId, head: Post | null) => void
 }) {
   const headingId = useId()
-  const { list, entries, load, patch, update, starting, startFailures, pollFailures } = useOfflineList()
+  const { list, entries, load, remove, update, starting, startFailures, pollFailures } = useOfflineList()
+  const { isDeleting } = useOfflineDeletions()
   const bodyRef = useRef<HTMLDivElement>(null)
   const images = useImageScope(bodyRef)
   const openInTab = useOpenThreadInTab()
-  useRegisterContent('lists', entryKey, { refresh: () => void load() })
+  useRegisterContent('lists', entryKey, {
+    refresh: () => {
+      setDone(null)
+      void load()
+    }
+  })
   const onScroll = useRetainedScroll(entryKey, bodyRef, list.status === 'ready', true)
 
   // ---------- Filters ----------
@@ -104,6 +113,30 @@ export function OfflinePane({
   const menuLabel =
     menuEntry === undefined ? '' : (meaningfulTitle(menuEntry.head === null ? menuEntry.title : menuEntry.head.title) ?? `No.${menuEntry.threadId}`)
 
+  // ---------- 删除离线副本 ----------
+  // The confirmation is kept apart from the rows and the 离线副本 dialog: storage's change notice
+  // usually removes the row before the deletion's own answer arrives.
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const listRef = useRef<HTMLUListElement>(null)
+  /** The copy being confirmed: its label, whether it was saving, where its row was shown and that row. */
+  const [deleteAsk, setDeleteAsk] = useState<{ threadId: ThreadId; label: string; saving: boolean; index: number; row: HTMLElement | null } | null>(null)
+  /** What the last deletion here did, until the next one or a reload. */
+  const [done, setDone] = useState<{ label: string; cacheCleanup: 'complete' | 'failed' } | null>(null)
+  /** After a deletion: focus the row now at this position, else the heading. */
+  const [focusAfter, setFocusAfter] = useState<{ index: number; seq: number } | null>(null)
+  useLayoutEffect(() => {
+    if (focusAfter === null) return
+    const rows = listRef.current?.querySelectorAll<HTMLElement>('[data-roving-item]') ?? []
+    ;(rows[Math.min(focusAfter.index, rows.length - 1)] ?? headingRef.current)?.focus()
+  }, [focusAfter])
+
+  const askDelete = (threadId: ThreadId, label: string, saving: boolean, row: HTMLElement | null) => {
+    if (isDeleting(threadId)) return
+    setDone(null)
+    setDeleteAsk({ threadId, label, saving, index: Math.max(shownIds.indexOf(threadId), 0), row })
+  }
+  const deleteEntry = deleteAsk === null ? undefined : entries.find((entry) => entry.threadId === deleteAsk.threadId)
+
   /** The row's status, with a failed progress read added while it is saving. */
   const attentionOf = (entry: OfflineEntry): OfflineAttention | null => {
     const attention = offlineAttention(entry.copy)
@@ -117,13 +150,19 @@ export function OfflinePane({
       <div className="list-scroll" ref={bodyRef} onScroll={onScroll} tabIndex={-1} data-pane-focus="">
         <header className="list-header">
           <div className="list-title-row">
-            <h2 className="list-title" id={headingId}>
+            <h2 className="list-title" id={headingId} ref={headingRef} tabIndex={-1}>
               <span className="list-name">{TITLE}</span>
             </h2>
           </div>
         </header>
 
         <div className="list-status">
+          {done !== null && (
+            <p className={done.cacheCleanup === 'complete' ? 'notice-inline' : 'notice-inline is-warning'} role="status">
+              <Icon name={done.cacheCleanup === 'complete' ? 'check' : 'alert'} size={14} />
+              已删除「{done.label}」的离线副本{done.cacheCleanup === 'failed' && '；普通缓存额度检查失败'}
+            </p>
+          )}
           {list.status === 'failed' && (
             <div className="notice notice-error is-compact" role="alert">
               <Icon name="alert" className="notice-icon" />
@@ -162,12 +201,12 @@ export function OfflinePane({
         )}
 
         {filtered.shown.length > 0 && (
-          <ul className="thread-list" aria-label={filtering ? `${TITLE}（已筛选）` : TITLE} onKeyDown={roving.onKeyDown}>
+          <ul className="thread-list" ref={listRef} aria-label={filtering ? `${TITLE}（已筛选）` : TITLE} onKeyDown={roving.onKeyDown}>
             {filtered.shown.map(({ item: entry, uncertain }) => {
               const attention = attentionOf(entry)
               const startFailure = startFailures.get(entry.threadId)
-              // 在新标签页打开, 更新离线副本 and 离线详情… live in the row's context menu (right-click,
-              // ContextMenu, Shift+F10); middle-click or Ctrl/Cmd+click opens a new tab, as in 订阅.
+              // 在新标签页打开, 更新离线副本, 离线详情… and 删除离线副本… live in the row's context menu
+              // (right-click, ContextMenu, Shift+F10); middle-click or Ctrl/Cmd+click opens a new tab, as in 订阅.
               return (
                 <li
                   key={entry.threadId}
@@ -221,27 +260,53 @@ export function OfflinePane({
       </div>
       {rowMenu !== null && menuEntry !== undefined && (
         <OfflineRowMenu
-          key={rowMenu.threadId}
+          key={`menu:${rowMenu.threadId}`}
           point={rowMenu.point}
           threadId={rowMenu.threadId}
           head={menuEntry.head}
           label={menuLabel}
-          updateBlocked={menuEntry.copy.state === 'saving' ? '正在保存' : starting.has(menuEntry.threadId) ? '正在开始保存' : null}
+          updateBlocked={
+            isDeleting(menuEntry.threadId)
+              ? '正在删除'
+              : menuEntry.copy.state === 'saving'
+                ? '正在保存'
+                : starting.has(menuEntry.threadId)
+                  ? '正在开始保存'
+                  : null
+          }
+          deleting={isDeleting(menuEntry.threadId)}
           onUpdate={() => void update(menuEntry.threadId)}
           onDetails={() => setDetails({ threadId: menuEntry.threadId, label: menuLabel, row: rowMenu.row })}
+          onDelete={() => askDelete(menuEntry.threadId, menuLabel, menuEntry.copy.state === 'saving', rowMenu.row)}
           onClose={closeRowMenu}
         />
       )}
       {details !== null && (
         <OfflineDetailsDialog
-          key={details.threadId}
+          key={`details:${details.threadId}`}
           threadId={details.threadId}
           title={details.label}
-          onClose={(copy) => {
-            setDetails(null)
-            if (copy !== null) patch(copy)
-          }}
+          onClose={() => setDetails(null)}
+          onDelete={(saving) => askDelete(details.threadId, details.label, saving, details.row)}
           fallbackFocus={() => (details.row.isConnected ? details.row : null)}
+        />
+      )}
+      {deleteAsk !== null && (
+        <OfflineDeleteConfirm
+          key={`delete:${deleteAsk.threadId}`}
+          threadId={deleteAsk.threadId}
+          title={deleteAsk.label}
+          saving={deleteEntry === undefined ? deleteAsk.saving : deleteEntry.copy.state === 'saving'}
+          onCancel={() => setDeleteAsk(null)}
+          onDeleted={({ cacheCleanup }) => {
+            const ask = deleteAsk
+            setDeleteAsk((current) => (current?.threadId === ask.threadId ? null : current))
+            setDetails((current) => (current?.threadId === ask.threadId ? null : current))
+            remove(ask.threadId)
+            setDone({ label: ask.label, cacheCleanup })
+            setFocusAfter((current) => ({ index: ask.index, seq: (current?.seq ?? 0) + 1 }))
+          }}
+          fallbackFocus={() => (deleteAsk.row?.isConnected === true ? deleteAsk.row : headingRef.current)}
         />
       )}
     </section>

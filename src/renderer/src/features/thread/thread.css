@@ -429,13 +429,16 @@
   color: var(--warn-ink);
 }
 
-.subscribe-note {
+/* One-line results under the toolbar (subscription writes, offline copy deletion), dismissible. */
+.subscribe-note,
+.offline-delete-note {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
-.subscribe-note-close {
+.subscribe-note-close,
+.offline-delete-note-close {
   width: 24px;
   height: 24px;
 }

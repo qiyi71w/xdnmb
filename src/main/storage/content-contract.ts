@@ -13,6 +13,8 @@ export interface ContentStore {
   holdContentReader(holder: string, threadId: ThreadId): Promise<void>
   releaseContentReaders(prefix: string): Promise<void>
   getOfflineCopy(threadId: ThreadId): Promise<OfflineCopy | null>
+  /** Atomically release only this copy's retention; preserve cached content and other holders. */
+  deleteOfflineCopy(threadId: ThreadId): Promise<void>
   /** Keeps saved pages/posts/images on update. Resets only this attempt's errors and end candidate. */
   beginOfflineCopy(threadId: ThreadId, includeImages: boolean, at: string): Promise<OfflineCopy>
   /** Atomic page + union of offline post/page references. Never deletes old missing posts. */

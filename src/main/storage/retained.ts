@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3'
 import { statSync } from 'node:fs'
 import { DEFAULT_CACHE_LIMIT, type ContentUsage, type OfflineCopy, type OfflineEntry, type RetainedEntry } from '../../shared/content'
 import type { Post, ThreadId, ThreadPage } from '../../shared/forum'
+import { comparePostIds } from '../../shared/forum'
 
 export function contentTick(db: Database.Database): number {
   const row = db.prepare<[], { tick: number }>('UPDATE content_clock SET tick = tick + 1 WHERE singleton = 1 RETURNING tick').get()
@@ -154,6 +155,47 @@ export class RetainedContentDatabase {
       endCandidatePage: row.end_candidate_page, postCount: counts.posts, imageCount: counts.images, savedImages: saved.count,
       imageFailures: JSON.parse(row.image_failures_json) as OfflineCopy['imageFailures'], failedPage: row.failed_page,
       error: row.error_json === null ? null : JSON.parse(row.error_json) as OfflineCopy['error'] }
+  }
+
+  deleteOfflineCopy(threadId: ThreadId): void {
+    const db = this.database()
+    db.transaction(() => {
+      // Cache eviction can remove ordinary pages while the offline union remains readable.
+      // Promote that union before releasing its references, without treating deletion as use.
+      const pages = db.prepare<[string], { page: number; head_id: string; fetched_at: string; reply_count: number | null;
+        skipped_items: number; end_candidate: number }>('SELECT * FROM offline_pages WHERE thread_id = ?').all(threadId)
+      const cached = db.prepare<[string, number], { head_id: string; fetched_at: string; reply_ids_json: string;
+        reply_count: number | null; skipped_items: number; end_candidate: number; last_used: number }>(
+        "SELECT * FROM thread_pages WHERE thread_id = ? AND mode = 'all' AND page = ?")
+      const observed = db.prepare<[string, number], { fetched_at: string; reply_ids_json: string }>(
+        "SELECT fetched_at, reply_ids_json FROM reading_observations WHERE thread_id = ? AND mode = 'all' AND page = ?")
+      const replies = db.prepare<[string, number], { post_id: string }>('SELECT post_id FROM offline_page_posts WHERE thread_id = ? AND page = ?')
+      const lastUsed = db.prepare<[string], { used: number }>(`SELECT coalesce(max(last_used), 0) AS used FROM posts
+        WHERE id IN (SELECT post_id FROM post_threads WHERE thread_id = ?)`).get(threadId)!.used
+      const insert = db.prepare(`INSERT INTO thread_pages(thread_id, mode, page, head_id, fetched_at, reply_ids_json,
+        reply_count, skipped_items, end_candidate, last_used) VALUES (?, 'all', ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(thread_id, mode, page) DO UPDATE SET reply_ids_json = excluded.reply_ids_json,
+          skipped_items = excluded.skipped_items, end_candidate = excluded.end_candidate`)
+      for (const offline of pages) {
+        const row = cached.get(threadId, offline.page)
+        const source = row ?? offline
+        const currentIds = row ? JSON.parse(row.reply_ids_json) as string[] : []
+        const ids = [...new Set([...currentIds, ...replies.all(threadId, offline.page).map((reply) => reply.post_id)])].sort(comparePostIds)
+        const proof = row ?? observed.get(threadId, offline.page)
+        // Accumulated offline posts can span incompatible server snapshots. Keep them readable,
+        // but only keep coverage evidence when this is still the exact observed page.
+        const exact = proof !== undefined && proof.fetched_at === source.fetched_at
+          && JSON.stringify((JSON.parse(proof.reply_ids_json) as string[]).sort(comparePostIds)) === JSON.stringify(ids)
+        insert.run(threadId, offline.page, source.head_id, source.fetched_at, JSON.stringify(ids), source.reply_count,
+          exact ? source.skipped_items : Math.max(1, source.skipped_items), exact ? source.end_candidate : 0,
+          row?.last_used ?? lastUsed)
+      }
+      db.prepare('DELETE FROM offline_images WHERE thread_id = ?').run(threadId)
+      db.prepare("DELETE FROM image_holders WHERE holder_kind = 'offline' AND holder_id = ?").run(threadId)
+      db.prepare('DELETE FROM offline_page_posts WHERE thread_id = ?').run(threadId)
+      db.prepare('DELETE FROM offline_pages WHERE thread_id = ?').run(threadId)
+      db.prepare('DELETE FROM offline_copies WHERE thread_id = ?').run(threadId)
+    }).immediate()
   }
 
   beginOfflineCopy(threadId: ThreadId, includeImages: boolean, at: string): OfflineCopy {

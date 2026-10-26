@@ -386,6 +386,7 @@ export const IpcChannel = {
   saveOffline: 'content:save-offline',
   offlineStatus: 'content:offline-status',
   cancelOffline: 'content:cancel-offline',
+  deleteOffline: 'content:delete-offline',
   holdContentReader: 'content:hold-reader',
   releaseContentReader: 'content:release-reader',
   loadDirectory: 'reading:load-directory',

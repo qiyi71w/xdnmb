@@ -22,6 +22,7 @@ import {
 import type { HitLocate, RebuildState, SearchRun, SearchView, TabSearch } from './searchState'
 import { filtersSearchable, MAX_QUERY_LENGTH, type SearchCommands } from './useSearch'
 import { useThreadTabMenu, type ThreadTabMenu } from '../tabs/ThreadTabMenu'
+import { watchOfflinePresence, type CopyPresence, type OfflinePresence } from '../content/offlineSync'
 import './search.css'
 
 /**
@@ -187,6 +188,26 @@ export function SearchBody({
   const roving = useRovingFocus(hitIds, tab.lastHit?.view === view ? tab.lastHit.postId : null)
   const inTab = useThreadTabMenu()
 
+  // Results are a snapshot: hits kept as 离线副本 show whether that copy is still stored, read
+  // once per thread (and again after it changes) whenever results are shown or added.
+  const [, setPresenceChanges] = useState(0)
+  const presence = useRef<OfflinePresence | null>(null)
+  useEffect(() => {
+    const watcher = watchOfflinePresence(() => setPresenceChanges((count) => count + 1))
+    presence.current = watcher
+    return () => {
+      watcher.dispose()
+      presence.current = null
+    }
+  }, [])
+  const offlineThreads = useMemo(
+    () => [...new Set((run?.hits ?? []).flatMap((hit) => (hit.retention === 'offline' && hit.threadId !== null ? [hit.threadId] : [])))].join(','),
+    [run]
+  )
+  useEffect(() => {
+    presence.current?.track(offlineThreads === '' ? [] : offlineThreads.split(','))
+  }, [offlineThreads])
+
   const indexMissing = run?.failure === 'index-unavailable'
   const showRebuild = indexMissing || rebuild.status === 'running'
 
@@ -294,6 +315,7 @@ export function SearchBody({
               hit={hit}
               query={run.query}
               forumName={hit.forumId === null ? null : (forums.get(hit.forumId) ?? `版面 ${hit.forumId}`)}
+              offlinePresence={hit.retention === 'offline' && hit.threadId !== null ? presence.current?.get(hit.threadId) : undefined}
               locate={tab.locate !== null && tab.locate.view === view && tab.locate.postId === hit.postId ? tab.locate : null}
               itemProps={roving.itemProps(hit.postId)}
               inTab={inTab}
@@ -465,6 +487,7 @@ function HitRow({
   hit,
   query,
   forumName,
+  offlinePresence,
   locate,
   itemProps,
   inTab,
@@ -477,6 +500,8 @@ function HitRow({
   hit: SearchHit
   query: string
   forumName: string | null
+  /** Kept as 离线副本 when found: whether that copy is stored now; undefined until read. */
+  offlinePresence: CopyPresence | undefined
   locate: HitLocate | null
   itemProps: { 'data-roving-item': string; tabIndex: number; onFocus: () => void }
   inTab: ThreadTabMenu
@@ -523,7 +548,17 @@ function HitRow({
             {hit.threadId === null ? '所属串未知' : threadTitle !== null ? `${threadTitle} · No.${hit.threadId}` : `串 No.${hit.threadId}`}
           </span>
           <span>{imageText(hit.hasImage)}</span>
-          <span className={hit.retention === 'cache' ? 'tag' : 'tag tag-po'}>{RETENTION_TEXT[hit.retention]}</span>
+          {offlinePresence === 'deleted' ? (
+            <span className="tag" title="搜索之后这个串的离线副本已删除，重新搜索可查看现在的保存情况">
+              离线副本已删除
+            </span>
+          ) : offlinePresence === 'unknown' ? (
+            <span className="tag" title="未能读取这个串现在的离线副本状态">
+              离线副本待核对
+            </span>
+          ) : (
+            <span className={hit.retention === 'cache' ? 'tag' : 'tag tag-po'}>{RETENTION_TEXT[hit.retention]}</span>
+          )}
           <span className="search-hit-location">{locationText(hit.location)}</span>
           {hit.uncertainFilters && <UncertainTag />}
         </span>

@@ -170,6 +170,82 @@ describe('real SQLite retained search', () => {
     expect(db.loadPost('300')).toBeNull()
   })
 
+  it.each([false, true])('keeps deleted offline union hits as ordinary cache across rebuild and reopen, with prior cache eviction: %s', (evicted) => {
+    const { db, path } = fixture()
+    db.beginOfflineCopy('100', false, at)
+    const head = post('100', 'head needle')
+    db.saveOfflinePage(page(head, [post('101', 'old needle'), post('102', 'current needle')]), at)
+    db.saveOfflinePage(page(head, [post('102', 'current needle'), post('103', 'new needle')]), later)
+    if (evicted) clear(db)
+    expect(search(db, 'old needle')[0]).toMatchObject({ postId: '101', retention: 'offline' })
+    db.deleteOfflineCopy('100')
+    const hits = search(db, 'needle')
+    expect(hits.map((hit) => hit.postId)).toEqual(['100', '101', '102', '103'])
+    expect(hits.every((hit) => hit.retention === 'cache' && hit.location?.source === 'page')).toBe(true)
+    expect(db.getThreadCoverage('100', 'all')).toMatchObject({ endCandidatePage: null,
+      pages: [{ page: 1, replyIds: ['101', '102', '103'], skippedItems: 1, endCandidate: false }] })
+    expect(db.getContentUsage().protectedTextBytes).toBe(0)
+    expect(db.getContentUsage().cacheTextBytes).toBeGreaterThan(0)
+    db.close()
+    const reopened = openReadingDatabase(path)
+    try {
+      reopened.recoverContent()
+      rebuild(reopened)
+      expect(reopened.getOfflineCopy('100')).toBeNull()
+      expect(search(reopened, 'needle').map((hit) => [hit.postId, hit.retention, hit.location?.source])).toEqual([
+        ['100', 'cache', 'page'], ['101', 'cache', 'page'], ['102', 'cache', 'page'], ['103', 'cache', 'page']])
+      reopened.setCacheLimit(0)
+      expect(reopened.evictContentBatch(false).more).toBe(false)
+      expect(search(reopened, 'needle')).toEqual([])
+      rebuild(reopened)
+      expect(search(reopened, 'needle')).toEqual([])
+      expect(reopened.getThreadCoverage('100', 'all').pages).toEqual([])
+    } finally { reopened.close() }
+  })
+
+  it('keeps reader-protected deleted-copy hits as cache while independent offline and subscription sources remain protected', () => {
+    const { db } = fixture()
+    for (const id of ['100', '200']) {
+      db.beginOfflineCopy(id, false, at)
+      db.saveOfflinePage(page(post(id, `${id} needle`), []), at)
+    }
+    db.saveSubscriptionObservation(observation(post('300', 'journal needle')))
+    db.holdContentReader('window:search', '100')
+    db.deleteOfflineCopy('100')
+    db.setCacheLimit(0)
+    expect(db.evictContentBatch(false).more).toBe(false)
+    expect(search(db, 'needle').map((hit) => [hit.postId, hit.retention])).toEqual([
+      ['100', 'cache'], ['200', 'offline'], ['300', 'subscription']])
+    expect(db.getContentUsage().cacheTextBytes).toBe(0)
+    expect(db.getContentUsage().protectedTextBytes).toBeGreaterThan(0)
+    db.releaseContentReaders('window:')
+    db.evictContentBatch(false)
+    expect(search(db, 'needle').map((hit) => [hit.postId, hit.retention])).toEqual([
+      ['200', 'offline'], ['300', 'subscription']])
+    expect(db.getOfflineCopy('200')).not.toBeNull()
+    rebuild(db)
+    expect(search(db, 'needle').map((hit) => [hit.postId, hit.retention])).toEqual([
+      ['200', 'offline'], ['300', 'subscription']])
+  })
+
+  it('keeps offline search ownership on failed deletion and changes it only after the transaction commits', () => {
+    const { db, path } = fixture()
+    db.beginOfflineCopy('100', false, at)
+    db.saveOfflinePage(page(post('100', 'rollback needle'), []), at)
+    clear(db)
+    const before = search(db, 'needle')
+    const raw = new Database(path)
+    try {
+      raw.exec("CREATE TRIGGER fail_delete BEFORE DELETE ON offline_copies BEGIN SELECT RAISE(ABORT, 'injected'); END")
+      expect(() => db.deleteOfflineCopy('100')).toThrow()
+      expect(search(db, 'needle')).toEqual(before)
+      expect(before[0]).toMatchObject({ retention: 'offline', location: { source: 'offline' } })
+      raw.exec('DROP TRIGGER fail_delete')
+      db.deleteOfflineCopy('100')
+      expect(search(db, 'needle')[0]).toMatchObject({ postId: '100', retention: 'cache', location: { source: 'page' } })
+    } finally { raw.close() }
+  })
+
   it('replaces an observation projection while retaining its separately saved valid evidence', () => {
     const { db } = fixture()
     db.saveSubscriptionObservation(observation(post('100', 'old-retained')))

@@ -32,13 +32,15 @@ export interface ImageLoadInput {
   postId: PostId
   kind: ImageKind
   refresh: boolean
+  /** Background saves must finish file/storage work before releasing retention and enforcing quota. */
+  waitForCleanup?: boolean
 }
 
 export interface ImageService {
   /** `owner` scopes view IDs to one renderer (its WebContents ID). */
   load(owner: string, input: ImageLoadInput, signal: AbortSignal): Promise<ImageLoadOutcome>
   releaseView(owner: string, viewId: string): Promise<void>
-  /** The renderer navigated away or closed: none of its views holds images any more. */
+  /** Release all owner holders; persistence failures reject so background task cleanup can be retried. */
   releaseOwner(owner: string): Promise<void>
   /** `choosePath` asks the user where to save (null: dismissed). */
   saveOriginal(postId: PostId, choosePath: (suggestedName: string, format: ImageFormat) => Promise<string | null>): Promise<ImageSaveOutcome>
@@ -204,7 +206,7 @@ export function createImageService(options: {
    * Joins (or starts) the single download of `kind` + `url`; cancelling the last waiter aborts it.
    * An aborted download may still be cleaning up: a new load starts its own download instead.
    */
-  function joinFlight(key: string, kind: ImageKind, url: string, holder: string, signal: AbortSignal): Promise<ImageLoadOutcome> {
+  function joinFlight(key: string, kind: ImageKind, url: string, holder: string, signal: AbortSignal, waitForCleanup: boolean): Promise<ImageLoadOutcome> {
     let flight = flights.get(key)
     if (!flight || flight.controller.signal.aborted) {
       const created: Flight = { kind, holders: new Map(), waiters: 0, controller: new AbortController(), result: null as never }
@@ -229,7 +231,9 @@ export function createImageService(options: {
     const { promise, resolve } = Promise.withResolvers<ImageLoadOutcome>()
     const onAbort = (): void => {
       leave()
-      resolve({ status: 'cancelled' })
+      const cancelled = (): void => resolve({ status: 'cancelled' })
+      if (waitForCleanup) void current.result.then(cancelled, cancelled)
+      else cancelled()
     }
     if (signal.aborted) {
       onAbort()
@@ -293,7 +297,7 @@ export function createImageService(options: {
           }
         }
       }
-      return joinFlight(`${input.kind}|${url}`, input.kind, url, holder, signal)
+      return joinFlight(`${input.kind}|${url}`, input.kind, url, holder, signal, input.waitForCleanup === true)
     },
 
     async releaseView(owner, viewId) {
@@ -305,7 +309,7 @@ export function createImageService(options: {
     async releaseOwner(owner) {
       const prefix = `${owner}:`
       for (const holder of activeHolders) if (holder.startsWith(prefix)) activeHolders.delete(holder)
-      await store.releaseImageHolders('reading', prefix).catch(() => undefined)
+      await store.releaseImageHolders('reading', prefix)
     },
 
     async saveOriginal(postId, choosePath) {

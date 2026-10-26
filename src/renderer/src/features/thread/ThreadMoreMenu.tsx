@@ -1,12 +1,15 @@
 // 更多 of the one-row thread toolbar: 在新标签页打开, 开头 / 末尾 (also Ctrl/⌘+Home / End and the
 // corner buttons), 举报 (the head post), 提醒 and 离线保存; choosing 提醒 or 离线保存 opens its panel
-// (the 提醒 panel anchored to 更多, the 离线副本 dialog).
+// (the 提醒 panel anchored to 更多, the 离线副本 dialog). Deleting the copy from that dialog closes
+// it, puts focus back on 更多 and leaves the result under the toolbar (OfflineDeleteNote).
 
-import { useId, useRef, useState, type KeyboardEvent } from 'react'
+import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { ReadingMode, ThreadId } from '../../../../shared/forum'
 import type { ReminderKind, ReminderRule, ThreadReminders } from '../../../../shared/reminders'
 import { Icon } from '../../components/Icon'
 import { usePopover } from '../../lib/usePopover'
+import { OfflineDeleteConfirm } from '../content/OfflineDeleteConfirm'
+import { showDeletionNote } from '../content/offlineSync'
 import { OfflineDialog, useOfflineEntry } from '../content/ThreadRetention'
 import { ReminderPanel, reminderSummary, useReminderToggle } from '../reminders/ReminderMenu'
 import type { LoadFailure } from '../reminders/useReminders'
@@ -44,6 +47,13 @@ export function ThreadMoreMenu({
   const menu = usePopover(triggerRef, menuRef)
   const reminder = usePopover(triggerRef, reminderRef)
   const [offlineOpen, setOfflineOpen] = useState(false)
+  /** 删除离线副本？ is open. */
+  const [deleteAsk, setDeleteAsk] = useState(false)
+  /** After a deletion both dialogs are gone: focus goes back to 更多 once they have closed. */
+  const [focusTrigger, setFocusTrigger] = useState(0)
+  useLayoutEffect(() => {
+    if (focusTrigger > 0) triggerRef.current?.focus()
+  }, [focusTrigger])
   const menuId = useId()
   const reminderId = useId()
   const reminders = reminderSummary(rules, failure)
@@ -156,6 +166,22 @@ export function ThreadMoreMenu({
           title={label}
           offline={offline.offline}
           onClose={() => setOfflineOpen(false)}
+          onDelete={() => setDeleteAsk(true)}
+          fallbackFocus={() => triggerRef.current}
+        />
+      )}
+      {deleteAsk && (
+        <OfflineDeleteConfirm
+          threadId={threadId}
+          title={label}
+          saving={offline.saving}
+          onCancel={() => setDeleteAsk(false)}
+          onDeleted={({ cacheCleanup }) => {
+            setDeleteAsk(false)
+            setOfflineOpen(false)
+            showDeletionNote({ threadId, cacheCleanup })
+            setFocusTrigger((count) => count + 1)
+          }}
           fallbackFocus={() => triggerRef.current}
         />
       )}

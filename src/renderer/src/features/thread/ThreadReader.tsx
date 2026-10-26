@@ -20,6 +20,7 @@ import { useThread } from './useThread'
 import type { ComposeEntry } from '../editor/ComposePanel'
 import { usePopover } from '../../lib/usePopover'
 import { ThreadMoreMenu } from './ThreadMoreMenu'
+import { OfflineDeleteNote } from '../content/OfflineDeleteConfirm'
 import { useThreadRules } from '../reminders/useReminders'
 import { SubscribeButton, SubscribeNote } from './SubscribeButton'
 import { isPostBlocked } from '../../../../shared/blocks'
@@ -636,6 +637,7 @@ export function ThreadReader({
         )}
         {compose?.note}
         <SubscribeNote threadId={threadId} />
+        <OfflineDeleteNote threadId={threadId} />
       </div>
       {task === null && state.endProbe?.status === 'interrupted' && <IdentitySettingsAction error={state.endProbe.error} />}
       {locating && (
