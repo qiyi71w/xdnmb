@@ -1,0 +1,56 @@
+/* Sort handles (SortHandle.tsx): the ≡ button that drags its row; Alt+↑／Alt+↓ from the keyboard.
+   Same feel as the rail's drag: a dimmed row and an accent line where it goes. Nothing animates. */
+
+.icon-btn.sort-handle {
+  width: 24px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+:root[data-density='compact'] .icon-btn.sort-handle {
+  width: 24px;
+}
+
+.icon-btn.sort-handle[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.icon-btn.sort-handle[aria-disabled='true']:hover {
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.sort-list {
+  position: relative;
+}
+
+.sort-list.is-sorting,
+.sort-list.is-sorting *,
+.icon-btn.sort-handle.is-dragging {
+  cursor: grabbing;
+}
+
+.icon-btn.sort-handle.is-dragging {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.is-sort-dragging {
+  opacity: 0.45;
+}
+
+/* Where the dragged row goes. */
+.sort-list.has-drop::after {
+  content: '';
+  position: absolute;
+  top: var(--sort-drop);
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}

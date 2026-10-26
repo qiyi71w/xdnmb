@@ -685,17 +685,10 @@ div.shell-manage-summary {
   color: var(--warn-ink);
 }
 
-.shell-manage-actions .icon-btn[aria-disabled='true'] {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.shell-manage-actions .icon-btn[aria-disabled='true']:hover {
-  background: transparent;
-}
-
-.shell-flip svg {
-  transform: rotate(180deg);
+/* The sort handle leads the row; it brings its own room. */
+.shell-manage-row > .sort-handle {
+  margin-left: -6px;
+  margin-right: -2px;
 }
 
 /* ---------- Board picker (the board panel) ---------- */

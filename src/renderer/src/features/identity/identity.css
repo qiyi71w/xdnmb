@@ -245,48 +245,9 @@
   overflow-wrap: anywhere;
 }
 
-/* Order: a drag handle for the mouse, 上移／下移 for the keyboard. */
-.credential-handle {
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  margin: -2px 0 0 -4px;
-  border-radius: var(--radius-m);
-  color: var(--ink-3);
-  cursor: grab;
-}
-
-.credential-handle .icon {
-  transform: rotate(90deg);
-}
-
-.credential-handle:hover {
-  background: var(--hover);
-  color: var(--ink-2);
-}
-
-.credential-flip .icon {
-  transform: rotate(180deg);
-}
-
-.credential-actions .icon-btn[aria-disabled='true'] {
-  color: var(--ink-3);
-  opacity: 0.5;
-  cursor: default;
-}
-
-.credential-item.is-dragging {
-  opacity: 0.5;
-}
-
-.credential-item.is-drop-before {
-  box-shadow: inset 0 2px 0 var(--accent);
-}
-
-.credential-item.is-drop-after {
-  box-shadow: inset 0 -2px 0 var(--accent);
+/* The sort handle takes the key icon's place, lined up with the name. */
+.credential-main > .sort-handle {
+  margin: -5px 0 -5px -6px;
 }
 
 /* ---------- Import entries ---------- */

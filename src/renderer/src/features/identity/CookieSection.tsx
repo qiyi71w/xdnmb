@@ -1,6 +1,6 @@
 import {
-  useCallback, useEffect, useId, useLayoutEffect, useRef, useState,
-  type ComponentProps, type DragEvent, type FormEvent, type KeyboardEvent, type RefObject
+  useCallback, useEffect, useId, useRef, useState,
+  type FormEvent, type KeyboardEvent, type RefObject
 } from 'react'
 import type { AccountCookie, AccountFailure, AccountOverview } from '../../../../shared/account'
 import {
@@ -14,7 +14,9 @@ import {
 } from '../../../../shared/identity'
 import { Icon } from '../../components/Icon'
 import { FailureNotice } from '../../components/Notices'
+import { SortHandle, SortStatus, useSortableList, type SortableList } from '../../components/SortHandle'
 import { formatLocalTime } from '../../lib/format'
+import { moveItem } from '../../lib/reorder'
 import {
   MISSING_SELECTION_TEXT,
   ROLE_INFO,
@@ -162,44 +164,20 @@ function MessageLine({ id, message }: { id?: string; message: Message | null }) 
 
 /* ---------- Credential list ---------- */
 
-type MoveDirection = 'up' | 'down'
-
-/** Ordered list: drag a row's handle, or use 上移／下移 from the keyboard. The first one browses. */
+/** Ordered list, sorted by each row's handle (drag, or Alt+↑／Alt+↓). The first one browses. */
 function CredentialList({ overview, onChanged }: { overview: IdentityOverview; onChanged: () => Promise<void> }) {
   const headingId = useId()
   const headingRef = useRef<HTMLHeadingElement>(null)
-  const listRef = useRef<HTMLUListElement>(null)
   const [message, setMessage] = useState<Message | null>(null)
   /** The order being saved: shown at once, replaced by the stored order when the save ends. */
   const [pendingOrder, setPendingOrder] = useState<CredentialId[] | null>(null)
-  const [dragId, setDragId] = useState<CredentialId | null>(null)
-  const [dropAt, setDropAt] = useState<{ id: CredentialId; after: boolean } | null>(null)
-  /** A move button moved its row: focus stays on it (or its twin when it became unavailable). */
-  const focusAfterMove = useRef<{ id: CredentialId; direction: MoveDirection } | null>(null)
 
   const credentials =
     pendingOrder === null
       ? overview.credentials
       : pendingOrder.flatMap((id) => overview.credentials.filter((item) => item.id === id))
-  const movable = overview.writable && pendingOrder === null && credentials.length > 1
-
-  // While saving the moved row keeps the pressed button; once saved, its twin takes over when the
-  // pressed one no longer applies (moved to the top or bottom).
-  useLayoutEffect(() => {
-    const wanted = focusAfterMove.current
-    const list = listRef.current
-    if (wanted === null || list === null) return
-    const button = (direction: MoveDirection) =>
-      list.querySelector<HTMLButtonElement>(`[data-credential="${wanted.id}"] [data-move="${direction}"]`)
-    const same = button(wanted.direction)
-    if (pendingOrder !== null) {
-      if (same !== null && document.activeElement !== same) same.focus()
-      return
-    }
-    focusAfterMove.current = null
-    const target = same !== null && same.getAttribute('aria-disabled') !== 'true' ? same : button(wanted.direction === 'up' ? 'down' : 'up')
-    target?.focus()
-  })
+  /** Handles are shown (writable, several items); moves wait while a save runs. */
+  const sortable = overview.writable && credentials.length > 1
 
   const save = async (ids: CredentialId[], moved: CredentialSummary) => {
     if (pendingOrder !== null) return
@@ -219,45 +197,11 @@ function CredentialList({ overview, onChanged }: { overview: IdentityOverview; o
     }
   }
 
-  const move = (credential: CredentialSummary, direction: MoveDirection) => {
-    const ids = credentials.map((item) => item.id)
-    const from = ids.indexOf(credential.id)
-    const to = direction === 'up' ? from - 1 : from + 1
-    if (!movable || from < 0 || to < 0 || to >= ids.length) return
-    ids.splice(from, 1)
-    ids.splice(to, 0, credential.id)
-    focusAfterMove.current = { id: credential.id, direction }
-    void save(ids, credential)
-  }
-
-  const drop = () => {
-    const dragged = credentials.find((item) => item.id === dragId)
-    const at = dropAt
-    setDragId(null)
-    setDropAt(null)
-    if (dragged === undefined || at === null || at.id === dragged.id) return
-    const ids = credentials.map((item) => item.id).filter((id) => id !== dragged.id)
-    const index = ids.indexOf(at.id)
-    if (index < 0) return
-    ids.splice(at.after ? index + 1 : index, 0, dragged.id)
-    if (ids.every((id, position) => id === credentials[position]?.id)) return
-    void save(ids, dragged)
-  }
-
-  const dragProps = (credential: CredentialSummary) => ({
-    onDragOver: (event: DragEvent<HTMLLIElement>) => {
-      if (dragId === null) return
-      event.preventDefault()
-      event.dataTransfer.dropEffect = 'move'
-      const box = event.currentTarget.getBoundingClientRect()
-      const after = event.clientY > box.top + box.height / 2
-      if (dropAt?.id !== credential.id || dropAt.after !== after) setDropAt({ id: credential.id, after })
-    },
-    onDrop: (event: DragEvent<HTMLLIElement>) => {
-      if (dragId === null) return
-      event.preventDefault()
-      drop()
-    }
+  const ids = credentials.map((item) => item.id)
+  const sort = useSortableList(ids, (from, to) => {
+    const order = moveItem(ids, from, to)
+    const moved = credentials[from]
+    if (sortable && order !== null && moved !== undefined) void save(order, moved)
   })
 
   return (
@@ -268,7 +212,13 @@ function CredentialList({ overview, onChanged }: { overview: IdentityOverview; o
       {credentials.length === 0 ? (
         <p className="settings-empty">还没有导入饼干</p>
       ) : (
-        <ul className="credential-list" aria-labelledby={headingId} ref={listRef} aria-busy={pendingOrder !== null ? true : undefined}>
+        <ul
+          className={`credential-list ${sort.listClassName}`}
+          style={sort.listStyle}
+          aria-labelledby={headingId}
+          ref={sort.listRef}
+          aria-busy={pendingOrder !== null ? true : undefined}
+        >
           {credentials.map((credential, index) => (
             <CredentialItem
               key={credential.id}
@@ -276,16 +226,8 @@ function CredentialList({ overview, onChanged }: { overview: IdentityOverview; o
               index={index}
               count={credentials.length}
               overview={overview}
-              movable={movable}
-              dragging={dragId === credential.id}
-              dropMark={dropAt !== null && dropAt.id === credential.id && dragId !== credential.id ? (dropAt.after ? 'after' : 'before') : null}
-              dragProps={dragProps(credential)}
-              onDragStart={() => setDragId(credential.id)}
-              onDragEnd={() => {
-                setDragId(null)
-                setDropAt(null)
-              }}
-              onMove={(direction) => move(credential, direction)}
+              sort={sortable ? sort : null}
+              sortPending={pendingOrder !== null}
               onChanged={onChanged}
               onAnnounce={setMessage}
               listHeading={headingRef}
@@ -293,6 +235,7 @@ function CredentialList({ overview, onChanged }: { overview: IdentityOverview; o
           ))}
         </ul>
       )}
+      <SortStatus sort={sort} />
       <MessageLine message={message} />
     </div>
   )
@@ -318,13 +261,8 @@ function CredentialItem({
   index,
   count,
   overview,
-  movable,
-  dragging,
-  dropMark,
-  dragProps,
-  onDragStart,
-  onDragEnd,
-  onMove,
+  sort,
+  sortPending,
   onChanged,
   onAnnounce,
   listHeading
@@ -333,14 +271,10 @@ function CredentialItem({
   index: number
   count: number
   overview: IdentityOverview
-  /** Order changes are possible now (writable, several items, no save running). */
-  movable: boolean
-  dragging: boolean
-  dropMark: 'before' | 'after' | null
-  dragProps: Pick<ComponentProps<'li'>, 'onDragOver' | 'onDrop'>
-  onDragStart: () => void
-  onDragEnd: () => void
-  onMove: (direction: MoveDirection) => void
+  /** The list this item sorts in; `null` when the order cannot change (read-only, a single item). */
+  sort: SortableList | null
+  /** An order save is running: the handle stays focusable but does not move. */
+  sortPending: boolean
   onChanged: () => Promise<void>
   onAnnounce: (message: Message) => void
   listHeading: RefObject<HTMLHeadingElement | null>
@@ -349,7 +283,6 @@ function CredentialItem({
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
-  const itemRef = useRef<HTMLLIElement>(null)
   const renameButton = useRef<HTMLButtonElement>(null)
   const cookieIdButton = useRef<HTMLButtonElement>(null)
   const removeButton = useRef<HTMLButtonElement>(null)
@@ -505,12 +438,11 @@ function CredentialItem({
     if (!pending) leave(openerOf(mode))
   }
 
-  const itemClass = ['credential-item', dragging ? 'is-dragging' : null, dropMark === null ? null : `is-drop-${dropMark}`]
-    .filter(Boolean)
-    .join(' ')
-
   return (
-    <li ref={itemRef} className={itemClass} data-credential={credential.id} {...dragProps}>
+    <li
+      className={sort?.dragging === credential.id ? 'credential-item is-sort-dragging' : 'credential-item'}
+      data-sort-key={sort === null ? undefined : credential.id}
+    >
       {mode === 'rename' || mode === 'cookie-id' ? (
         <form className="credential-rename" onSubmit={saveEdit} onKeyDown={onEditorKeyDown}>
           <label className="field-label" htmlFor={nameId}>
@@ -545,23 +477,8 @@ function CredentialItem({
         </form>
       ) : (
         <div className="credential-main">
-          {movable && mode === 'view' ? (
-            // Mouse only; the keyboard uses 上移／下移.
-            <span
-              className="credential-handle"
-              draggable
-              aria-hidden="true"
-              title="拖动调整顺序"
-              onDragStart={(event) => {
-                event.dataTransfer.effectAllowed = 'move'
-                event.dataTransfer.setData('text/plain', '')
-                if (itemRef.current !== null) event.dataTransfer.setDragImage(itemRef.current, 16, 16)
-                onDragStart()
-              }}
-              onDragEnd={onDragEnd}
-            >
-              <Icon name="more" size={16} />
-            </span>
+          {sort !== null && mode === 'view' ? (
+            <SortHandle sort={sort} itemKey={credential.id} label={credential.name} disabled={sortPending} />
           ) : (
             <Icon name="key" className="credential-icon" />
           )}
@@ -587,32 +504,6 @@ function CredentialItem({
             </p>
           </div>
           <div className="credential-actions">
-            {count > 1 && (
-              <>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  data-move="up"
-                  aria-label={`上移「${credential.name}」`}
-                  title="上移"
-                  aria-disabled={!movable || index === 0 ? true : undefined}
-                  onClick={() => movable && index > 0 && onMove('up')}
-                >
-                  <Icon name="arrowUp" />
-                </button>
-                <button
-                  type="button"
-                  className="icon-btn credential-flip"
-                  data-move="down"
-                  aria-label={`下移「${credential.name}」`}
-                  title="下移"
-                  aria-disabled={!movable || index === count - 1 ? true : undefined}
-                  onClick={() => movable && index < count - 1 && onMove('down')}
-                >
-                  <Icon name="arrowUp" />
-                </button>
-              </>
-            )}
             <button
               type="button"
               ref={renameButton}
