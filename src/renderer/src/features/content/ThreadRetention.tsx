@@ -15,20 +15,10 @@ import {
   offlineStateText,
   type Refused
 } from './contentText'
+import { announceOfflineCopy, isDeletingOffline, offlineGeneration, subscribeOffline, useOfflineDeletions } from './offlineSync'
 import './content.css'
 
 export const POLL_MS = 1000
-
-/**
- * Fired with the copy (`CustomEvent<OfflineCopy>`) after a save was started or cancelled here (the
- * 离线副本 dialog, a 离线 row's 更新离线副本), so lists showing the copy pick up its new state
- * without reading everything again.
- */
-export const OFFLINE_COPY_EVENT = 'xidao:offline-copy'
-
-export function announceOfflineCopy(copy: OfflineCopy | null) {
-  if (copy !== null) window.dispatchEvent(new CustomEvent<OfflineCopy>(OFFLINE_COPY_EVENT, { detail: copy }))
-}
 
 type CopyState = { status: 'loading' } | { status: 'failed'; refused: Refused } | { status: 'ready'; copy: OfflineCopy | null }
 
@@ -43,6 +33,9 @@ export interface OfflineCopyHandle {
 /**
  * Offline copy of a thread as storage records it. Progress is persisted by the main process; it is
  * polled only while the copy is `saving`. A copy found `interrupted` stays so until updated.
+ * Copies saved or cancelled elsewhere in this window are shown as announced; after a deletion
+ * (here, another view, or the main process's notice) the copy is read again, and any read that
+ * started before that is dropped, so a late result never brings back a deleted copy.
  */
 function useOfflineCopy(threadId: ThreadId): OfflineCopyHandle {
   const [state, setState] = useState<CopyState>({ status: 'loading' })
@@ -51,10 +44,15 @@ function useOfflineCopy(threadId: ThreadId): OfflineCopyHandle {
   const [reads, setReads] = useState(0)
   const alive = useRef(true)
   const known = useRef(false)
+  /** Newest read or shown copy; an older read's result is dropped. */
+  const seq = useRef(0)
 
   const load = useCallback(async () => {
+    const at = ++seq.current
+    const generation = offlineGeneration(threadId)
     const result = await attempt(() => window.xidao.content.offlineStatus({ threadId }))
-    if (!alive.current) return
+    // A deletion started or storage changed meanwhile: its own read follows.
+    if (!alive.current || at !== seq.current || generation !== offlineGeneration(threadId)) return
     setReads((count) => count + 1)
     if (result?.ok === true) {
       known.current = true
@@ -75,6 +73,24 @@ function useOfflineCopy(threadId: ThreadId): OfflineCopyHandle {
     }
   }, [load])
 
+  const show = useCallback((copy: OfflineCopy | null) => {
+    seq.current += 1
+    known.current = true
+    setPollFailure(null)
+    setState({ status: 'ready', copy })
+    setReads((count) => count + 1)
+  }, [])
+
+  useEffect(
+    () =>
+      subscribeOffline((change) => {
+        if (change.kind === 'stale') {
+          if (change.threadId === threadId) void load()
+        } else if (change.copy.threadId === threadId) show(change.copy)
+      }),
+    [threadId, load, show]
+  )
+
   const saving = state.status === 'ready' && state.copy?.state === 'saving'
   useEffect(() => {
     if (!saving) return
@@ -82,10 +98,13 @@ function useOfflineCopy(threadId: ThreadId): OfflineCopyHandle {
     return () => window.clearTimeout(timer)
   }, [saving, reads, load])
 
-  const update = useCallback((next: CopyState) => {
-    if (next.status === 'ready') known.current = true
-    setState(next)
-  }, [])
+  const update = useCallback(
+    (next: CopyState) => {
+      if (next.status === 'ready') show(next.copy)
+      else setState(next)
+    },
+    [show]
+  )
 
   return { state, setState: update, pollFailure, reload: load }
 }
@@ -110,17 +129,23 @@ export function useOfflineEntry(threadId: ThreadId) {
   return { offline, label, warn, saving: copy?.state === 'saving' }
 }
 
+/**
+ * 离线副本: the copy's facts, save / update / cancel, and 删除离线副本… (`onDelete` asks its owner to
+ * confirm). Results of a save or cancel that a deletion overtook are dropped; the copy is read again.
+ */
 export function OfflineDialog({
   threadId,
   title,
   offline,
   onClose,
+  onDelete,
   fallbackFocus
 }: {
   threadId: ThreadId
   title: string
   offline: OfflineCopyHandle
   onClose: () => void
+  onDelete: () => void
   /** Where focus goes on close when the control that had it at opening is gone. */
   fallbackFocus?: () => HTMLElement | null
 }) {
@@ -133,29 +158,35 @@ export function OfflineDialog({
   const [busy, setBusy] = useState<'save' | 'cancel' | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const saving = copy?.state === 'saving'
+  const { isDeleting } = useOfflineDeletions()
+  const deleting = isDeleting(threadId)
 
   const save = async () => {
-    if (busy !== null) return
+    if (busy !== null || isDeletingOffline(threadId)) return
     setBusy('save')
     setFailure(null)
+    const generation = offlineGeneration(threadId)
     const result = await attempt(() => window.xidao.content.saveOffline({ threadId, includeImages }))
     setBusy(null)
-    if (result?.ok === true) {
+    if (result?.ok !== true) setFailure(`${copy === null ? '保存' : '更新'}没有开始：${contentFailureText(result?.ok === false ? result : null)}`)
+    else if (generation === offlineGeneration(threadId)) {
       setState({ status: 'ready', copy: result.value })
       announceOfflineCopy(result.value)
-    } else setFailure(`${copy === null ? '保存' : '更新'}没有开始：${contentFailureText(result?.ok === false ? result : null)}`)
+    }
   }
 
   const cancel = async () => {
-    if (busy !== null) return
+    if (busy !== null || isDeletingOffline(threadId)) return
     setBusy('cancel')
     setFailure(null)
+    const generation = offlineGeneration(threadId)
     const result = await attempt(() => window.xidao.content.cancelOffline({ threadId }))
     setBusy(null)
-    if (result?.ok === true) {
+    if (result?.ok !== true) setFailure(`取消未完成：${contentFailureText(result?.ok === false ? result : null)}，保存可能仍在进行`)
+    else if (generation === offlineGeneration(threadId)) {
       setState({ status: 'ready', copy: result.value })
-      announceOfflineCopy(result.value)
-    } else setFailure(`取消未完成：${contentFailureText(result?.ok === false ? result : null)}，保存可能仍在进行`)
+      if (result.value !== null) announceOfflineCopy(result.value)
+    }
   }
 
   return (
@@ -207,16 +238,43 @@ export function OfflineDialog({
             {failure}
           </p>
         )}
+        {deleting && <Loading live={false}>正在删除离线副本…</Loading>}
       </div>
       {state.status === 'ready' && (
         <div className="modal-actions">
+          {copy !== null && (
+            <button
+              type="button"
+              className="btn btn-danger offline-delete-entry"
+              aria-haspopup="dialog"
+              aria-disabled={deleting || undefined}
+              onClick={() => {
+                if (!isDeletingOffline(threadId)) onDelete()
+              }}
+            >
+              <Icon name="trash" />
+              删除离线副本…
+            </button>
+          )}
           {saving ? (
-            <button type="button" className="btn" aria-busy={busy === 'cancel' || undefined} onClick={() => void cancel()}>
+            <button
+              type="button"
+              className="btn"
+              aria-disabled={deleting || undefined}
+              aria-busy={busy === 'cancel' || undefined}
+              onClick={() => void cancel()}
+            >
               <Icon name="close" />
               {busy === 'cancel' ? '正在取消…' : '取消保存'}
             </button>
           ) : (
-            <button type="button" className="btn btn-primary" aria-busy={busy === 'save' || undefined} onClick={() => void save()}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              aria-disabled={deleting || undefined}
+              aria-busy={busy === 'save' || undefined}
+              onClick={() => void save()}
+            >
               <Icon name="download" />
               {busy === 'save' ? '正在开始…' : copy === null ? '开始保存' : '更新离线副本'}
             </button>
@@ -229,22 +287,33 @@ export function OfflineDialog({
 
 /**
  * The same 离线副本 dialog for a thread whose page is not open (离线 page rows), with a copy handle
- * of its own. `onClose` gets the copy as last read, so the opener can show it.
+ * of its own.
  */
 export function OfflineDetailsDialog({
   threadId,
   title,
   onClose,
+  onDelete,
   fallbackFocus
 }: {
   threadId: ThreadId
   title: string
-  onClose: (copy: OfflineCopy | null) => void
+  onClose: () => void
+  onDelete: (saving: boolean) => void
   fallbackFocus?: () => HTMLElement | null
 }) {
   const offline = useOfflineCopy(threadId)
-  const last = offline.state.status === 'ready' ? offline.state.copy : null
-  return <OfflineDialog threadId={threadId} title={title} offline={offline} onClose={() => onClose(last)} fallbackFocus={fallbackFocus} />
+  const saving = offline.state.status === 'ready' && offline.state.copy?.state === 'saving'
+  return (
+    <OfflineDialog
+      threadId={threadId}
+      title={title}
+      offline={offline}
+      onClose={onClose}
+      onDelete={() => onDelete(saving)}
+      fallbackFocus={fallbackFocus}
+    />
+  )
 }
 
 /** What the copy holds, when, and exactly what failed. Never phrased as a complete snapshot. */

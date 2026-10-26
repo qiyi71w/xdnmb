@@ -194,6 +194,7 @@ export async function openReadingStore(options: {
     holdContentReader: (holder, threadId) => request('holdContentReader', holder, threadId),
     releaseContentReaders: (prefix) => request('releaseContentReaders', prefix),
     getOfflineCopy: (threadId) => request('getOfflineCopy', threadId),
+    deleteOfflineCopy: (threadId) => request('deleteOfflineCopy', threadId),
     beginOfflineCopy: (threadId, images, at) => request('beginOfflineCopy', threadId, images, at),
     saveOfflinePage: (page, at) => request('saveOfflinePage', page, at),
     updateOfflineCopy: (threadId, patch, at) => request('updateOfflineCopy', threadId, patch, at),

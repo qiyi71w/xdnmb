@@ -66,6 +66,7 @@ export function asStore(db: ReadingDatabase): AppStore {
     holdContentReader: async (...args) => db.holdContentReader(...args),
     releaseContentReaders: async (...args) => db.releaseContentReaders(...args),
     getOfflineCopy: async (...args) => db.getOfflineCopy(...args),
+    deleteOfflineCopy: async (...args) => db.deleteOfflineCopy(...args),
     beginOfflineCopy: async (...args) => db.beginOfflineCopy(...args),
     saveOfflinePage: async (...args) => db.saveOfflinePage(...args),
     updateOfflineCopy: async (...args) => db.updateOfflineCopy(...args),

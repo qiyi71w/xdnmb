@@ -79,6 +79,23 @@
   gap: 14px;
 }
 
+/* 删除离线副本… sits apart from save / update, at the start of the action row. */
+.offline-delete-entry {
+  margin-inline-end: auto;
+}
+
+.offline-delete-dialog {
+  width: min(440px, calc(100vw - 32px));
+}
+
+.offline-delete-body {
+  gap: 10px;
+}
+
+.offline-delete-body > p {
+  margin: 0;
+}
+
 .offline-thread {
   display: flex;
   flex-wrap: wrap;

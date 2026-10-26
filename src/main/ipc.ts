@@ -8,6 +8,7 @@ import {
 } from '../shared/drafts'
 import type { ReadingAnchor } from '../shared/reading'
 import type { ContentService } from './content/service'
+import { OFFLINE_CHANGED_CHANNEL } from '../shared/content'
 import { MAX_WORKSPACE_LENGTH } from '../shared/lifecycle'
 import type { DraftService } from './drafts/service'
 import type { IdentityService } from './identity/service'
@@ -408,6 +409,16 @@ export function registerIpc({
   })
   handle(IpcChannel.offlineStatus, async (_event, raw) => content.offlineStatus({ threadId: forumId(record(raw).threadId) }))
   handle(IpcChannel.cancelOffline, async (_event, raw) => content.cancelOffline({ threadId: forumId(record(raw).threadId) }))
+  handle(IpcChannel.deleteOffline, async (_event, raw) => {
+    const threadId = forumId(record(raw).threadId)
+    const result = await content.deleteOffline({ threadId })
+    if (result.ok) {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.webContents.isDestroyed()) window.webContents.send(OFFLINE_CHANGED_CHANNEL, threadId)
+      }
+    }
+    return result
+  })
   handle(IpcChannel.holdContentReader, async (event, raw) => {
     const input = record(raw)
     await content.holdReader(String(event.sender.id), { viewId: viewId(input.viewId), threadId: forumId(input.threadId) })
@@ -826,7 +837,7 @@ export function registerIpc({
       publication.releasePrompts()
       search.releaseOwner(String(sender.id))
       onlineSearch.closeAll(owner(sender))
-      void images.releaseOwner(String(sender.id))
+      void images.releaseOwner(String(sender.id)).catch(() => undefined)
       void drafts.releaseOwner(String(sender.id))
       void content.releaseOwner(String(sender.id)).catch(() => undefined)
     },

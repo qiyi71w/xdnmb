@@ -1,11 +1,12 @@
 import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react'
-import type { RetainedEntry } from '../../../../shared/content'
+import type { OfflineCopy, RetainedEntry } from '../../../../shared/content'
 import type { ThreadId } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
 import { NO_CONTENT_FILTERS } from '../search/searchState'
 import { ContentRegistryContext, type RetainedPage } from '../tabs/contentRegistry'
 import { attempt, contentFailureText, type Refused } from './contentText'
+import { offlineEpoch, offlineGeneration, subscribeOffline } from './offlineSync'
 import type { ReadingResets } from './readingResets'
 
 const READING = '阅读进度'
@@ -23,7 +24,8 @@ export type Confirming = { threadId: ThreadId | null; clearReading: boolean }
  * Focus: a confirmation takes it, leaving one returns it to the control that asked; after a row
  * disappears it goes to the first enabled button of the row now at that position in `listRef`
  * (rows carry `data-retained-row`), else of `bodyRef`. History deletion removes visit records only
- * unless the reader's progress is explicitly included.
+ * unless the reader's progress is explicitly included. A row's 有离线副本 follows copies saved,
+ * cancelled or deleted meanwhile; a read overtaken by such a change is dropped.
  */
 export function useRetainedList(resets: ReadingResets) {
   const [list, setList] = useState<RetainedListState>({ status: 'loading' })
@@ -33,15 +35,19 @@ export function useRetainedList(resets: ReadingResets) {
   const [done, setDone] = useState<string | null>(null)
   const alive = useRef(true)
   const seq = useRef(0)
+  /** Newest offline read of each thread after it went stale. */
+  const offlineSeq = useRef(new Map<ThreadId, number>())
   const listRef = useRef<HTMLUListElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const focusAfterRemove = useRef<number | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<void> => {
     const at = ++seq.current
+    const epoch = offlineEpoch()
     setList({ status: 'loading' })
     const result = await attempt(() => window.xidao.content.listHistory())
     if (!alive.current || at !== seq.current) return
+    if (epoch !== offlineEpoch()) return load()
     setList(result?.ok === true ? { status: 'ready', entries: result.value } : { status: 'failed', refused: result?.ok === false ? result : null })
   }, [])
 
@@ -58,6 +64,30 @@ export function useRetainedList(resets: ReadingResets) {
     setDone(null)
     void load()
   }, [load])
+
+  useEffect(() => {
+    const showOffline = (threadId: ThreadId, offline: OfflineCopy | null) =>
+      setList((current) =>
+        current.status !== 'ready' || !current.entries.some((entry) => entry.threadId === threadId)
+          ? current
+          : { status: 'ready', entries: current.entries.map((entry) => (entry.threadId === threadId ? { ...entry, offline } : entry)) }
+      )
+    return subscribeOffline((change) => {
+      if (change.kind === 'copy') {
+        showOffline(change.copy.threadId, change.copy)
+        return
+      }
+      const { threadId } = change
+      const at = (offlineSeq.current.get(threadId) ?? 0) + 1
+      offlineSeq.current.set(threadId, at)
+      const generation = offlineGeneration(threadId)
+      void attempt(() => window.xidao.content.offlineStatus({ threadId })).then((read) => {
+        if (!alive.current || offlineSeq.current.get(threadId) !== at || generation !== offlineGeneration(threadId)) return
+        // Unknown: the next read of the list (refresh, or opening the page again) says.
+        if (read?.ok === true) showOffline(threadId, read.value)
+      })
+    })
+  }, [])
 
   // Confirmation takes focus; leaving it returns focus to the control that asked.
   const confirmRef = useRef<HTMLButtonElement>(null)

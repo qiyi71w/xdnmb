@@ -92,6 +92,7 @@ port.on('message', (request: StorageRequest) => {
       case 'holdContentReader': value = db.holdContentReader(...request.args); break
       case 'releaseContentReaders': value = db.releaseContentReaders(...request.args); break
       case 'getOfflineCopy': value = db.getOfflineCopy(...request.args); break
+      case 'deleteOfflineCopy': value = db.deleteOfflineCopy(...request.args); break
       case 'beginOfflineCopy': value = db.beginOfflineCopy(...request.args); break
       case 'saveOfflinePage': value = db.saveOfflinePage(...request.args); break
       case 'updateOfflineCopy': value = db.updateOfflineCopy(...request.args); break

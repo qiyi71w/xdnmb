@@ -5,6 +5,9 @@ import type { ImageError } from './images'
 export const DEFAULT_CACHE_LIMIT = 2_000_000_000
 export type ContentResult<T> = { ok: true; value: T } | { ok: false; reason: 'storage' | 'busy' }
 export interface OfflineImageFailure { postId: PostId; error: ImageError }
+/** Deletion is committed even when the following cache maintenance fails. */
+export interface OfflineDeletion { cacheCleanup: 'complete' | 'failed' }
+export const OFFLINE_CHANGED_CHANNEL = 'content:offline-changed'
 /** Coverage is an observation, never a complete or consistent server snapshot. */
 export interface OfflineCopy {
   threadId: ThreadId
@@ -73,6 +76,9 @@ export interface ContentApi {
   saveOffline(input: { threadId: ThreadId; includeImages: boolean }): Promise<ContentResult<OfflineCopy>>
   offlineStatus(input: { threadId: ThreadId }): Promise<ContentResult<OfflineCopy | null>>
   cancelOffline(input: { threadId: ThreadId }): Promise<ContentResult<OfflineCopy | null>>
+  deleteOffline(input: { threadId: ThreadId }): Promise<ContentResult<OfflineDeletion>>
+  /** Main-process invalidation after a copy is deleted; reread to avoid stale snapshots. */
+  onOfflineChanged(listener: (threadId: ThreadId) => void): () => void
   /** Hold before fetching a mounted reader; release on unmount. No download. */
   holdReader(input: { viewId: string; threadId: ThreadId }): Promise<void>
   releaseReader(input: { viewId: string }): Promise<void>

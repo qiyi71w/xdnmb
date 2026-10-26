@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { OfflineCopy, OfflineEntry } from '../../../../shared/content'
 import type { ThreadId } from '../../../../shared/forum'
 import { attempt, contentFailureText, type Refused } from './contentText'
-import { announceOfflineCopy, OFFLINE_COPY_EVENT, POLL_MS } from './ThreadRetention'
+import { announceOfflineCopy, isDeletingOffline, offlineEpoch, offlineGeneration, subscribeOffline } from './offlineSync'
+import { POLL_MS } from './ThreadRetention'
 
 export type OfflineListState =
   | { status: 'loading' }
@@ -23,6 +24,9 @@ function without<V>(map: ReadonlyMap<ThreadId, V>, threadId: ThreadId): Readonly
  * started or cancelled elsewhere in this window is patched likewise, and a copy not listed yet makes
  * the list read again quietly. `update` starts the same save as the 离线副本 dialog's update
  * (originals included); why it did not start is kept per row until the next attempt or reload.
+ * After a deletion (any view, or the main process's notice) the thread is read again and its row
+ * follows what storage holds; reads and updates started before it are dropped, so a late result
+ * never brings a deleted row back, and a copy saved again later is listed as usual.
  */
 export function useOfflineList() {
   const [list, setList] = useState<OfflineListState>({ status: 'loading' })
@@ -35,15 +39,21 @@ export function useOfflineList() {
   const [polls, setPolls] = useState(0)
   const alive = useRef(true)
   const seq = useRef(0)
+  /** Newest read of each thread after it went stale. */
+  const threadSeq = useRef(new Map<ThreadId, number>())
   const startingNow = useRef(new Set<ThreadId>())
   const listNow = useRef(list)
   useLayoutEffect(() => {
     listNow.current = list
   })
 
-  /** A quiet read replaces the rows only when it succeeds and never shows loading. */
-  const load = useCallback(async (quiet = false) => {
+  /**
+   * A quiet read replaces the rows only when it succeeds and never shows loading. A read that a
+   * change of any copy overtook is read again in the same way.
+   */
+  const load = useCallback(async (quiet = false): Promise<void> => {
     const at = ++seq.current
+    const epoch = offlineEpoch()
     if (!quiet) {
       setList({ status: 'loading' })
       setStartFailures(new Map())
@@ -51,6 +61,7 @@ export function useOfflineList() {
     }
     const result = await attempt(() => window.xidao.content.listOffline())
     if (!alive.current || at !== seq.current) return
+    if (epoch !== offlineEpoch()) return load(quiet)
     if (result?.ok === true) setList({ status: 'ready', entries: result.value })
     else if (!quiet) setList({ status: 'failed', refused: result?.ok === false ? result : null })
   }, [])
@@ -72,17 +83,50 @@ export function useOfflineList() {
     )
   }, [])
 
-  useEffect(() => {
-    const onCopy = (event: Event) => {
-      const copy = (event as CustomEvent<OfflineCopy>).detail
+  /** Takes the thread's row out (its copy is no longer stored); nothing else changes. */
+  const remove = useCallback((threadId: ThreadId) => {
+    setList((current) =>
+      current.status !== 'ready' || !current.entries.some((entry) => entry.threadId === threadId)
+        ? current
+        : { status: 'ready', entries: current.entries.filter((entry) => entry.threadId !== threadId) }
+    )
+    setStartFailures((current) => without(current, threadId))
+    setPollFailures((current) => without(current, threadId))
+  }, [])
+
+  /** The thread went stale: its row follows what storage now holds for it. */
+  const reconcile = useCallback(
+    async (threadId: ThreadId) => {
       const current = listNow.current
+      // A list being read (or failed) reads every copy anyway; `load` drops an overtaken read.
       if (current.status !== 'ready') return
-      if (current.entries.some((entry) => entry.threadId === copy.threadId)) patch(copy)
+      const at = (threadSeq.current.get(threadId) ?? 0) + 1
+      threadSeq.current.set(threadId, at)
+      const generation = offlineGeneration(threadId)
+      const read = await attempt(() => window.xidao.content.offlineStatus({ threadId }))
+      if (!alive.current || threadSeq.current.get(threadId) !== at || generation !== offlineGeneration(threadId)) return
+      if (read?.ok !== true) return void load(true)
+      if (read.value === null) remove(threadId)
+      else if (listNow.current.status === 'ready' && listNow.current.entries.some((entry) => entry.threadId === threadId)) patch(read.value)
       else void load(true)
-    }
-    window.addEventListener(OFFLINE_COPY_EVENT, onCopy)
-    return () => window.removeEventListener(OFFLINE_COPY_EVENT, onCopy)
-  }, [patch, load])
+    },
+    [load, patch, remove]
+  )
+
+  useEffect(
+    () =>
+      subscribeOffline((change) => {
+        if (change.kind === 'stale') {
+          void reconcile(change.threadId)
+          return
+        }
+        const current = listNow.current
+        if (current.status !== 'ready') return
+        if (current.entries.some((entry) => entry.threadId === change.copy.threadId)) patch(change.copy)
+        else void load(true)
+      }),
+    [patch, load, reconcile]
+  )
 
   const savingKey =
     list.status === 'ready'
@@ -96,12 +140,16 @@ export function useOfflineList() {
     const at = seq.current
     let stale = false
     const timer = window.setTimeout(async () => {
-      const ids = savingKey.split(',')
+      // A copy being deleted is read again once the deletion ends.
+      const ids = savingKey.split(',').filter((threadId) => !isDeletingOffline(threadId))
+      const generations = ids.map((threadId) => offlineGeneration(threadId))
       const reads = await Promise.all(ids.map((threadId) => attempt(() => window.xidao.content.offlineStatus({ threadId }))))
       if (stale || !alive.current || at !== seq.current) return
       const copies = new Map<ThreadId, OfflineCopy | null>()
       const failures = new Map<ThreadId, string>()
       ids.forEach((threadId, index) => {
+        // Overtaken by a deletion or change: that thread's own read follows.
+        if (generations[index] !== offlineGeneration(threadId)) return
         const read = reads[index]
         if (read?.ok === true) copies.set(threadId, read.value)
         else failures.set(threadId, `进度读取失败：${contentFailureText(read?.ok === false ? read : null)}，稍后自动再试`)
@@ -138,20 +186,21 @@ export function useOfflineList() {
 
   const update = useCallback(
     async (threadId: ThreadId) => {
-      if (startingNow.current.has(threadId)) return
+      if (startingNow.current.has(threadId) || isDeletingOffline(threadId)) return
       startingNow.current.add(threadId)
       setStarting(new Set(startingNow.current))
       setStartFailures((current) => without(current, threadId))
+      const generation = offlineGeneration(threadId)
       const result = await attempt(() => window.xidao.content.saveOffline({ threadId, includeImages: true }))
       startingNow.current.delete(threadId)
       if (!alive.current) return
       setStarting(new Set(startingNow.current))
-      if (result?.ok === true) {
-        patch(result.value)
-        announceOfflineCopy(result.value)
-      } else {
+      if (result?.ok !== true) {
         const text = `更新没有开始：${contentFailureText(result?.ok === false ? result : null)}`
         setStartFailures((current) => new Map(current).set(threadId, text))
+      } else if (generation === offlineGeneration(threadId)) {
+        patch(result.value)
+        announceOfflineCopy(result.value)
       }
     },
     [patch]
@@ -161,7 +210,7 @@ export function useOfflineList() {
     list,
     entries: list.status === 'ready' ? list.entries : [],
     load,
-    patch,
+    remove,
     update,
     starting,
     startFailures,

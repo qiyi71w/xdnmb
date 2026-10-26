@@ -287,6 +287,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
   holdContentReader: ReadingDatabase['holdContentReader'] = (holder, threadId) => this.content.holdContentReader(holder, threadId)
   releaseContentReaders: ReadingDatabase['releaseContentReaders'] = (prefix) => this.content.releaseContentReaders(prefix)
   getOfflineCopy: ReadingDatabase['getOfflineCopy'] = (threadId) => this.content.getOfflineCopy(threadId)
+  deleteOfflineCopy: ReadingDatabase['deleteOfflineCopy'] = (threadId) => this.content.deleteOfflineCopy(threadId)
   beginOfflineCopy: ReadingDatabase['beginOfflineCopy'] = (threadId, images, at) => this.content.beginOfflineCopy(threadId, images, at)
   saveOfflinePage: ReadingDatabase['saveOfflinePage'] = (page, at) => this.content.saveOfflinePage(page, at)
   updateOfflineCopy: ReadingDatabase['updateOfflineCopy'] = (threadId, patch, at) => this.content.updateOfflineCopy(threadId, patch, at)

@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IpcChannel, LIFECYCLE_REQUEST_CHANNEL, type XidaoApi } from '../shared/api'
 import type { LifecycleRequest } from '../shared/lifecycle'
 import { REMINDERS_CHANGED_CHANNEL, REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
+import { OFFLINE_CHANGED_CHANNEL } from '../shared/content'
+import type { ThreadId } from '../shared/forum'
 
 // A notification can create a window before React has mounted its listener. Keep the intent in
 // preload, not an arbitrary timeout, until a subscriber can open the in-app list.
@@ -65,6 +67,12 @@ const api: XidaoApi = {
     saveOffline: (input) => ipcRenderer.invoke(IpcChannel.saveOffline, input),
     offlineStatus: (input) => ipcRenderer.invoke(IpcChannel.offlineStatus, input),
     cancelOffline: (input) => ipcRenderer.invoke(IpcChannel.cancelOffline, input),
+    deleteOffline: (input) => ipcRenderer.invoke(IpcChannel.deleteOffline, input),
+    onOfflineChanged(listener) {
+      const receive = (_event: IpcRendererEvent, threadId: ThreadId) => listener(threadId)
+      ipcRenderer.on(OFFLINE_CHANGED_CHANNEL, receive)
+      return () => { ipcRenderer.removeListener(OFFLINE_CHANGED_CHANNEL, receive) }
+    },
     holdReader: (input) => ipcRenderer.invoke(IpcChannel.holdContentReader, input),
     releaseReader: (input) => ipcRenderer.invoke(IpcChannel.releaseContentReader, input)
   },
