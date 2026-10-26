@@ -111,7 +111,7 @@ async function harness(options: { cookieIds?: string[] } = {}) {
   let wall = Date.parse(t0)
   const notifications: string[] = []
   const notifier = { show: (_body: string): boolean => true }
-  const service = createReminderService({ store: asStore(db), client, scheduler: createRequestScheduler(),
+  const service = createReminderService({ store: asStore(db), client, scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }),
     notifier: { show(message) { notifications.push(message.body); return notifier.show(message.body) } },
     now: () => new Date(wall).toISOString(), monotonicNow: () => monotonic })
   async function overview(): Promise<ReminderOverview> {

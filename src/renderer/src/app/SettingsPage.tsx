@@ -10,6 +10,7 @@ import {
   DensityMotionSection,
   PublicationSection,
   ReadingSection,
+  ReminderSection,
   SettingsStatusNotices,
   TabsSection,
   ThemeSection,
@@ -54,6 +55,7 @@ const CATEGORIES: readonly { id: string; title: string; sections: readonly { id:
       { id: 'features', title: '功能显示' },
       { id: 'boards', title: '版块管理' },
       { id: 'tabs', title: '标签' },
+      { id: 'reminders', title: '提醒' },
       { id: 'blocks', title: '屏蔽' }
     ]
   },
@@ -400,6 +402,8 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
       return <BoardManageSection directory={directory} />
     case 'tabs':
       return <TabsSection settings={settings} write={write} />
+    case 'reminders':
+      return <ReminderSection settings={settings} write={write} />
     case 'blocks':
       return <BlocksSection />
     case 'cookies':

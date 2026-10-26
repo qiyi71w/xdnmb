@@ -5,7 +5,7 @@ import {
   REMINDER_KINDS, type CoverageIssue, type ReminderCloseReason, type ReminderKind, type ReminderRule,
   type ReminderThreadRow, type ThreadReminders
 } from '../../shared/reminders'
-import type { QuoteSource, ReminderKindState, ReminderStoredOverview, ReminderUpdate, RuleSnapshot } from '../reminders/contract'
+import type { QuoteSource, ReminderBackoff, ReminderKindState, ReminderStoredOverview, ReminderUpdate, RuleSnapshot } from '../reminders/contract'
 
 interface RuleRow {
   thread_id: string; kind: ReminderKind; enabled: number; generation: number; enabled_at: string
@@ -83,7 +83,11 @@ export class ReminderDatabase {
   }
 
   snapshots(): RuleSnapshot[] {
-    return this.readable().prepare<[], RuleRow>('SELECT * FROM reminder_rules WHERE enabled = 1 ORDER BY thread_id, kind').all()
+    return this.readable().prepare<[], RuleRow>(`SELECT r.* FROM reminder_rules r JOIN (
+      SELECT r.thread_id, CASE WHEN count(s.checked_at) < count(*) THEN NULL ELSE min(julianday(s.checked_at)) END AS checked
+      FROM reminder_rules r LEFT JOIN reminder_state s USING(thread_id, kind)
+      WHERE r.enabled = 1 GROUP BY r.thread_id
+    ) t USING(thread_id) WHERE r.enabled = 1 ORDER BY t.checked, r.thread_id, r.kind`).all()
       .map((row) => ({ threadId: row.thread_id, kind: row.kind, generation: row.generation }))
   }
 
@@ -140,7 +144,20 @@ export class ReminderDatabase {
   }
 
   finishCheck(at: string): void {
-    this.database().prepare('INSERT INTO reminder_checker VALUES (1, ?) ON CONFLICT(singleton) DO UPDATE SET last_checked_at = excluded.last_checked_at').run(at)
+    this.database().prepare('INSERT INTO reminder_checker (singleton, last_checked_at) VALUES (1, ?) ON CONFLICT(singleton) DO UPDATE SET last_checked_at = excluded.last_checked_at').run(at)
+  }
+
+  loadBackoff(): ReminderBackoff {
+    const row = this.readable().prepare<[], { backoff_minutes: number; episode_id: string | null; notified: number; dismissed: number }>(
+      'SELECT backoff_minutes, episode_id, notified, dismissed FROM reminder_checker WHERE singleton = 1').get()
+    return { minutes: row?.backoff_minutes ?? 0, episodeId: row?.episode_id ?? null, notified: row?.notified === 1, dismissed: row?.dismissed === 1 }
+  }
+
+  saveBackoff(value: ReminderBackoff): void {
+    this.database().prepare(`INSERT INTO reminder_checker (singleton, backoff_minutes, episode_id, notified, dismissed)
+      VALUES (1, ?, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET backoff_minutes = excluded.backoff_minutes,
+      episode_id = excluded.episode_id, notified = excluded.notified, dismissed = excluded.dismissed`)
+      .run(value.minutes, value.episodeId, Number(value.notified), Number(value.dismissed))
   }
 
   overview(): ReminderStoredOverview {

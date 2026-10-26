@@ -312,6 +312,8 @@ class SqliteReadingDatabase implements ReadingDatabase {
   updateReminderState: ReadingDatabase['updateReminderState'] = (value) => this.reminders.update(value)
   clearReminderCounts: ReadingDatabase['clearReminderCounts'] = (id) => this.reminders.clearCounts(id)
   finishReminderCheck: ReadingDatabase['finishReminderCheck'] = (at) => this.reminders.finishCheck(at)
+  loadReminderBackoff: ReadingDatabase['loadReminderBackoff'] = () => this.reminders.loadBackoff()
+  saveReminderBackoff: ReadingDatabase['saveReminderBackoff'] = (value) => this.reminders.saveBackoff(value)
   reminderOverview: ReadingDatabase['reminderOverview'] = () => this.reminders.overview()
   private readonly search = new SearchDatabase(() => this.writable(), (id, mode) => this.getThreadCoverage(id, mode))
   searchBoundary: ReadingDatabase['searchBoundary'] = () => this.search.boundary()

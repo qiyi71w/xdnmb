@@ -4,7 +4,7 @@ import type {
 } from '../../shared/forum'
 import { pageCapFor } from '../../shared/threadPages'
 import { ForumReadError } from './contract'
-import type { ForumClient, ForumTransport } from './contract'
+import type { ForumClient, ForumRequestRunner, ForumTransport } from './contract'
 import { parseContent } from './content'
 
 const idKeys: Readonly<Record<string, true>> = { id: true, fid: true, resto: true }
@@ -67,9 +67,9 @@ function shapeError(): ForumReadError {
 
 function businessError(message: string): ForumReadError {
   let kind: ReadErrorKind = 'unknown-structure'
-  if (/不存在/.test(message)) kind = 'not-found'
+  if (/验证码|频繁|太快|限制/.test(message)) kind = 'rate-limited'
+  else if (/不存在/.test(message)) kind = 'not-found'
   else if (/饼干|权限|登入|登录|无权/.test(message)) kind = 'permission'
-  else if (/验证码|频繁|太快|限制/.test(message)) kind = 'rate-limited'
   return new ForumReadError({ kind, detail: 'business', serverMessage: message.slice(0, 200) })
 }
 
@@ -104,7 +104,7 @@ export function createForumClient(options: {
   }
 
   /** `page` is omitted only by reads that address a single post (`ref`). */
-  async function read(path: string, signal: AbortSignal, params?: { id: string; page?: number }, anonymous = false): Promise<unknown> {
+  async function read(path: string, signal: AbortSignal, params?: { id: string; page?: number }, anonymous = false, requestRunner?: ForumRequestRunner): Promise<unknown> {
     const url = new URL(path, baseUrl)
     if (params) {
       if (typeof params.id !== 'string' || !idPattern.test(params.id) ||
@@ -115,7 +115,8 @@ export function createForumClient(options: {
       if (params.page !== undefined) url.searchParams.set('page', String(params.page))
     }
     const userhash = !anonymous && options.browseIdentity ? await options.browseIdentity() : null
-    const response = await options.transport.get(url, signal, userhash === null ? undefined : { userhash })
+    const get = (requestSignal: AbortSignal) => options.transport.get(url, requestSignal, userhash === null ? undefined : { userhash })
+    const response = await (requestRunner ? requestRunner(signal, get) : get(signal))
     if (response.text.trimStart().startsWith('<') || response.mediaType === 'text/html') {
       throw new ForumReadError({
         kind: /验证码|captcha|challenge/i.test(response.text) ? 'rate-limited' : 'unknown-structure',
@@ -140,10 +141,10 @@ export function createForumClient(options: {
   }
 
   return {
-    async getDirectory(signal): Promise<BoardDirectory> {
-      const forumList = await read('/api/getForumList', signal)
+    async getDirectory(signal, readOptions): Promise<BoardDirectory> {
+      const forumList = await read('/api/getForumList', signal, undefined, false, readOptions?.requestRunner)
       if (!Array.isArray(forumList)) throw shapeError()
-      const timelineList = await read('/api/getTimelineList', signal)
+      const timelineList = await read('/api/getTimelineList', signal, undefined, false, readOptions?.requestRunner)
       if (!Array.isArray(timelineList)) throw shapeError()
       const groups: ForumGroup[] = []
       let skippedItems = 0
@@ -224,7 +225,7 @@ export function createForumClient(options: {
     async getThreadPage(threadId, mode, page, signal, readOptions): Promise<ThreadPage> {
       if (mode !== 'all' && mode !== 'po') throw new Error('Invalid reading mode')
       const fetchPage = async (number: number): Promise<ThreadPage> => {
-        const value = await read(mode === 'po' ? '/api/po' : '/api/thread', signal, { id: threadId, page: number }, readOptions?.anonymous)
+        const value = await read(mode === 'po' ? '/api/po' : '/api/thread', signal, { id: threadId, page: number }, readOptions?.anonymous, readOptions?.requestRunner)
         if (!isObject(value) || value.id !== threadId || !Array.isArray(value.Replies)) throw shapeError()
         const head = normalizePost(value)
         if (head === null) throw shapeError()
@@ -257,8 +258,8 @@ export function createForumClient(options: {
       }
       return result
     },
-    async getRef(postId, signal): Promise<Post> {
-      const value = await read('/api/ref', signal, { id: postId })
+    async getRef(postId, signal, readOptions): Promise<Post> {
+      const value = await read('/api/ref', signal, { id: postId }, false, readOptions?.requestRunner)
       const post = normalizePost(value)
       if (post === null || post.id !== postId) throw shapeError()
       return post

@@ -34,20 +34,24 @@ export interface ForumTransport {
   get(url: URL, signal: AbortSignal, credential?: { userhash: string }): Promise<TransportResponse>
 }
 
+/** Internal per-call lane/budget seam: invoked once for each actual transport request. */
+export type ForumRequestRunner = <T>(signal: AbortSignal, work: (signal: AbortSignal) => Promise<T>) => Promise<T>
+
 /** Public JSON read API of the forum, returning normalized content only. */
 export interface ForumClient {
   /** getForumList + getTimelineList. */
-  getDirectory(signal: AbortSignal): Promise<BoardDirectory>
+  getDirectory(signal: AbortSignal, options?: { requestRunner?: ForumRequestRunner }): Promise<BoardDirectory>
   /** showf (forum) or timeline list page. */
   getFeedPage(feed: FeedRef, page: number, signal: AbortSignal): Promise<FeedPage>
   /**
    * One thread page: `all` reads `thread`, `po` reads the PO-only `po` pages (own page numbering).
-   * `anonymous` sends this read without the browse cookie.
+   * `anonymous` sends this read without the browse cookie. `requestRunner` also wraps the
+   * page-100 probe when one is needed, so callers can account and space every HTTP request.
    */
-  getThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal, options?: { anonymous?: boolean }): Promise<ThreadPage>
+  getThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal, options?: { anonymous?: boolean; requestRunner?: ForumRequestRunner }): Promise<ThreadPage>
   /**
    * One quoted post (`ref`). The response carries no owning thread or page; a missing post is the
    * forum's business error `该串不存在`, classified `not-found`.
    */
-  getRef(postId: PostId, signal: AbortSignal): Promise<Post>
+  getRef(postId: PostId, signal: AbortSignal, options?: { requestRunner?: ForumRequestRunner }): Promise<Post>
 }

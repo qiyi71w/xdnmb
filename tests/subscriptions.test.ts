@@ -124,7 +124,7 @@ async function setup() {
   const protector = new Protector()
   const remote = await fixture()
   const store = asStore(db)
-  const scheduler = createRequestScheduler()
+  const scheduler = createRequestScheduler({ backgroundSpacingMs: 0 })
   const transport = createForumTransport({ allowedOrigins: [remote.origin], credentialOrigins: [remote.origin] })
   let clock = new Date('2026-10-23T12:00:00.000Z')
   const create = (selectedStore: AppStore = store) => createSubscriptionService({
@@ -244,7 +244,7 @@ describe('protected subscription configuration and observations', () => {
 
   it('uses the shared background lane while foreground work proceeds and queued cancellation sends nothing', async () => {
     const { store, protector, remote } = await setup()
-    const scheduler = createRequestScheduler()
+    const scheduler = createRequestScheduler({ backgroundSpacingMs: 0 })
     const release = Promise.withResolvers<void>()
     const held = scheduler.run('background', signal(), () => release.promise)
     const service = createSubscriptionService({ store, protector, scheduler,
@@ -270,7 +270,7 @@ describe('protected subscription configuration and observations', () => {
     const deadline = new AbortController()
     const timeouts = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal)
     let sent = 0
-    const service = createSubscriptionService({ store, protector, scheduler: createRequestScheduler(),
+    const service = createSubscriptionService({ store, protector, scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }),
       transport: { async get(_url, requestSignal) {
         sent++
         const { promise, reject } = Promise.withResolvers<never>()

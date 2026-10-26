@@ -1,0 +1,74 @@
+/* Bottom notice: a floating status layer centred over the content column. It starts after the
+   inline icon rail (--nav-width, 0 when the navigation is an overlay) and stays under the overlay
+   navigation, menus and dialogs. Only the notice itself takes pointer input. */
+.bottom-notice-region {
+  position: absolute;
+  z-index: 25;
+  inset-inline: var(--nav-width, 0px) 0;
+  bottom: 20px;
+  display: flex;
+  justify-content: center;
+  padding-inline: 16px;
+  pointer-events: none;
+}
+
+/* Strong glass, large radius and the float shadow, as context menus and dialogs. */
+.bottom-notice {
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+  max-width: 36rem;
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--radius-l);
+  background: var(--glass-strong);
+  backdrop-filter: blur(24px) saturate(1.5);
+  box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  animation: bottom-notice-in 0.22s var(--ease-out);
+}
+
+.bottom-notice-icon {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 3px;
+  color: var(--warn-ink);
+}
+
+/* Wide enough for one line of the message; when it is not, the action wraps below, at the end. */
+.bottom-notice-text {
+  flex: 1 1 14em;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.bottom-notice-message {
+  font-weight: 600;
+}
+
+.bottom-notice-detail {
+  color: var(--warn-ink);
+}
+
+.bottom-notice-action {
+  flex: none;
+  margin-inline-start: auto;
+}
+
+.bottom-notice-action[aria-disabled='true'] {
+  cursor: progress;
+}
+
+/* Rises into place from an already visible start; reduced motion (base.css) shows it at rest. */
+@keyframes bottom-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}

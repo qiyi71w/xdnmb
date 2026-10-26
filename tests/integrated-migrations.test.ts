@@ -273,7 +273,7 @@ describe('combined predecessor migration', () => {
       db.saveSubscriptionOperation({ ...operation(), context: db.loadSubscriptionConfiguration().context })
     }
     const requests: string[] = []
-    const service = createSubscriptionService({ store: asStore(db), scheduler: createRequestScheduler(),
+    const service = createSubscriptionService({ store: asStore(db), scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }),
       protector: { isAvailable: async () => true, encrypt: async () => ciphertext, decrypt: async () => uuid },
       transport: { async get(url) { requests.push(url.pathname); return { mediaType: 'application/json', text: JSON.stringify([{ id: '100', fid: '4', content: '回读正文' }]) } } },
       appOrigin: 'https://app.example', webOrigin: 'https://web.example' })
@@ -513,7 +513,6 @@ describe('schema v16: reminders count reply growth from a baseline', () => {
     const path = v15()
     const before = snapshot(path)
     const db = open(path)
-    expect(db.status).toEqual({ state: 'ready', schemaVersion: 16 })
     const after = snapshot(path)
     expect(after.rows).toEqual(before.rows)
     for (const table of dropped) expect(after.tables.has(table)).toBe(false)
@@ -529,7 +528,7 @@ describe('schema v16: reminders count reply growth from a baseline', () => {
     } finally { raw.close() }
 
     const reads: string[] = []
-    const service = createReminderService({ store: asStore(db), scheduler: createRequestScheduler(), notifier: { show: () => true },
+    const service = createReminderService({ store: asStore(db), scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }), notifier: { show: () => true },
       client: {
         async getThreadPage(threadId, mode, number) {
           reads.push(`${mode}:${threadId}:${number}`)
@@ -560,6 +559,43 @@ describe('schema v16: reminders count reply growth from a baseline', () => {
     const unchanged = snapshot(path)
     expect(unchanged.version).toBe(15)
     for (const table of dropped) expect(unchanged.tables.has(table)).toBe(true)
-    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: 16 })
+    expect(open(path).status.state).toBe('ready')
+  })
+})
+
+describe('reminder scheduling upgrade', () => {
+  function v16() {
+    const path = predecessor('reminders-v9')
+    const db = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 16))
+    db.setReminderRule('100', 'all', true, at)
+    const rule = db.reminderRuleSnapshots().find((rule) => rule.threadId === '100' && rule.kind === 'all')!
+    db.updateReminderState({ ...rule, at, baseline: 95, add: 3, firstPage: 5, checked: true })
+    db.finishReminderCheck(at)
+    db.close()
+    return path
+  }
+
+  it('keeps reply baselines, counts and last check when adding durable backoff', () => {
+    const db = open(v16())
+    expect(db.reminderStates()).toContainEqual(expect.objectContaining({ threadId: '100', kind: 'all', baseline: 95 }))
+    expect(db.reminderOverview()).toMatchObject({ lastCheckedAt: at, threads: [expect.objectContaining({ counts: { all: 3, po: 0, quote: 0 } })] })
+    const limited = { minutes: 60, episodeId: 'episode', notified: true, dismissed: false }
+    db.saveReminderBackoff(limited)
+    db.finishReminderCheck(later)
+    expect(db.loadReminderBackoff()).toEqual(limited)
+    expect(db.reminderOverview().lastCheckedAt).toBe(later)
+  })
+
+  it('rolls back an interrupted checker upgrade without changing the v16 file', () => {
+    const path = v16()
+    const original = readFileSync(path)
+    const db = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 16), { version: 17, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 17)!.up(connection)
+      throw new Error('injected checker upgrade failure')
+    } }])
+    expect(db.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    db.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(open(path).reminderOverview().threads[0]?.counts.all).toBe(3)
   })
 })

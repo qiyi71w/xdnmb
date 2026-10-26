@@ -101,7 +101,8 @@ export function createContentService(deps: {
         if (signal.aborted) throw new ReadCancelledError()
         failedPage = page
         readingPage = true
-        const observed = await scheduler.run('background', signal, (s) => client.getThreadPage(threadId, 'all', page, s))
+        const observed = await client.getThreadPage(threadId, 'all', page, signal,
+          { requestRunner: (requestSignal, work) => scheduler.run('background', requestSignal, work) })
         readingPage = false
         if (signal.aborted) throw new ReadCancelledError()
         await store.saveOfflinePage(observed, now())

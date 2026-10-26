@@ -71,7 +71,7 @@ afterEach(() => {
 })
 
 function service(client: ForumClient) {
-  return createReadingService({ client, store: asStore(db), scheduler: createRequestScheduler() })
+  return createReadingService({ client, store: asStore(db), scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }) })
 }
 
 async function locate(sizes: number[], replyCount: number | null) {

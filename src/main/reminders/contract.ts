@@ -50,6 +50,13 @@ export interface QuoteSource {
   cookieId: string | null
 }
 
+export interface ReminderBackoff {
+  minutes: number
+  episodeId: string | null
+  notified: boolean
+  dismissed: boolean
+}
+
 export type ReminderStoredOverview = Omit<ReminderOverview, 'checker'> & { lastCheckedAt: string | null }
 
 /** Short worker transactions only. Network requests and notification attempts never run in SQLite. */
@@ -68,6 +75,8 @@ export interface ReminderStore {
   /** Every count of the thread becomes 0; `false` when there was nothing to clear. */
   clearReminderCounts(threadId: ThreadId): Promise<boolean>
   finishReminderCheck(at: string): Promise<void>
+  loadReminderBackoff(): Promise<ReminderBackoff>
+  saveReminderBackoff(value: ReminderBackoff): Promise<void>
   reminderOverview(): Promise<ReminderStoredOverview>
 }
 

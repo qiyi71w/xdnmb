@@ -237,6 +237,8 @@ export async function openReadingStore(options: {
     updateReminderState: (value) => request('updateReminderState', value),
     clearReminderCounts: (id) => request('clearReminderCounts', id),
     finishReminderCheck: (at) => request('finishReminderCheck', at),
+    loadReminderBackoff: () => request('loadReminderBackoff'),
+    saveReminderBackoff: (value) => request('saveReminderBackoff', value),
     reminderOverview: () => request('reminderOverview'),
     close() {
       if (!closePromise) {

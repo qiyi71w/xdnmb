@@ -687,6 +687,35 @@ export function TabsSection({ settings, write }: { settings: AppSettings; write:
   )
 }
 
+/** 自动检查间隔 choices in minutes; 关闭 stops only the timer (cold start, reopen and 手动检查 remain). */
+const REMINDER_INTERVALS: readonly AppSettings['reminderInterval'][] = [0, 15, 30, 60]
+
+/** 提醒 settings: how often reminders are checked in the background and whether new ones notify the system. */
+export function ReminderSection({ settings, write }: { settings: AppSettings; write: Write }) {
+  return (
+    <Section id="settings-reminders" title="提醒">
+      <SettingRow labelId="setting-reminder-interval" label="自动检查间隔">
+        <Choice
+          labelledBy="setting-reminder-interval"
+          options={REMINDER_INTERVALS.map((minutes) => ({ value: String(minutes), label: minutes === 0 ? '关闭' : `${minutes} 分钟` }))}
+          value={String(settings.reminderInterval)}
+          onChange={(value) => {
+            const reminderInterval = REMINDER_INTERVALS.find((minutes) => String(minutes) === value)
+            if (reminderInterval !== undefined) write({ reminderInterval })
+          }}
+        />
+      </SettingRow>
+      <SettingRow labelId="setting-reminder-notifications" label="新提醒系统通知">
+        <Switch
+          labelledBy="setting-reminder-notifications"
+          checked={settings.reminderSystemNotifications}
+          onToggle={() => write({ reminderSystemNotifications: !settings.reminderSystemNotifications })}
+        />
+      </SettingRow>
+    </Section>
+  )
+}
+
 const CLOSE_ACTION_LABEL: Record<CloseAction, string> = {
   ask: '每次询问',
   background: '后台驻留',

@@ -9,6 +9,7 @@ import type { ReminderThreadRow } from '../../../../shared/reminders'
 import { contextMenuPoint, isContextMenuKey, type ContextMenuPoint } from '../../components/ContextMenu'
 import { Icon, Spinner } from '../../components/Icon'
 import { formatClockTime, meaningfulTitle } from '../../lib/format'
+import { SettingsContext } from '../../lib/settingsContext'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
 import { useImageScope } from '../image/useImageLoad'
@@ -18,7 +19,7 @@ import type { ThreadOpen } from '../tabs/tabsState'
 import { savedStart } from '../thread/readingStart'
 import { useListOpener } from './openList'
 import { ReminderRowMenu } from './ReminderRowMenu'
-import { countsText, hasCounts, issuesText, refusalText, secondsText } from './reminderText'
+import { countsText, hasCounts, issuesText, RATE_LIMIT_TEXT, rateLimitRetry, refusalText, secondsText } from './reminderText'
 import { failureText, useRemindersContext } from './useReminders'
 import '../feed/feed.css'
 import './reminders.css'
@@ -240,6 +241,12 @@ export function ReminderPane({
   }
 
   const lastChecked = overview?.checker.lastCheckedAt ?? null
+  const autoOff = useContext(SettingsContext)?.settings.reminderInterval === 0
+  // Stays while the episode lasts, also after its bottom notice was acknowledged. Not a live region:
+  // the bottom notice announces the episode.
+  const retryText = rateLimitRetry(overview?.checker.retryAt ?? null, autoOff)
+  const rateLimitLine =
+    overview?.checker.rateLimit == null ? null : retryText === null ? RATE_LIMIT_TEXT : `${RATE_LIMIT_TEXT}，${retryText}`
 
   return (
     <section className="list-pane reminder-pane" aria-labelledby={headingId}>
@@ -269,6 +276,12 @@ export function ReminderPane({
               </span>
             </div>
           </div>
+          {rateLimitLine !== null && (
+            <p className="notice-inline is-warning reminder-check-message">
+              <Icon name="alert" size={14} />
+              <span>{rateLimitLine}</span>
+            </p>
+          )}
           {message !== null && (
             <p
               className={message.tone === 'error' ? 'form-message is-error reminder-check-message' : 'notice-inline is-warning reminder-check-message'}

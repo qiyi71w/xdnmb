@@ -29,10 +29,10 @@ interface ReadingServiceDeps {
 type Fetched<T> = { ok: true; value: T; fetchedAt: string } | { ok: false; outcome: { status: 'cancelled' } | { status: 'failed'; error: ReadError } }
 
 export function createReadingService({ client, store, scheduler, now = () => new Date() }: ReadingServiceDeps): ReadingService {
-  /** One forum request through the scheduler; no retries. Cancellation and failures become outcomes. */
-  async function fetchOnce<T>(lane: Lane, signal: AbortSignal, work: (signal: AbortSignal) => Promise<T>): Promise<Fetched<T>> {
+  /** No retries; null lane means the client schedules each HTTP request inside a composite read. */
+  async function fetchOnce<T>(lane: Lane | null, signal: AbortSignal, work: (signal: AbortSignal) => Promise<T>): Promise<Fetched<T>> {
     try {
-      const value = await scheduler.run(lane, signal, work)
+      const value = await (lane === null ? work(signal) : scheduler.run(lane, signal, work))
       return { ok: true, value, fetchedAt: now().toISOString() }
     } catch (error) {
       if (error instanceof ReadCancelledError || signal.aborted) return { ok: false, outcome: { status: 'cancelled' } }
@@ -75,7 +75,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
 
   /** Network first; on failure show stored content with the reason instead of an empty/normal page. */
   async function readWithFallback<T, R = T>(
-    lane: Lane,
+    lane: Lane | null,
     signal: AbortSignal,
     fetch: (signal: AbortSignal) => Promise<T>,
     persist: (value: T, fetchedAt: string) => Promise<{ saved: boolean; result: R }>,
@@ -183,9 +183,10 @@ export function createReadingService({ client, store, scheduler, now = () => new
         if (cached) return { status: 'cached', data: cached.value, fetchedAt: cached.fetchedAt, networkError: null }
       }
       return readWithFallback(
-        strategy === 'background-refresh' ? 'background' : 'foreground',
+        strategy === 'background-refresh' ? null : 'foreground',
         signal,
-        (s) => client.getDirectory(s),
+        (s) => client.getDirectory(s, strategy === 'background-refresh'
+          ? { requestRunner: (requestSignal, work) => scheduler.run('background', requestSignal, work) } : undefined),
         async (directory, fetchedAt) => ({ saved: await trySave(() => store.saveDirectory(directory, fetchedAt)), result: directory }),
         () => store.loadDirectory()
       )

@@ -59,6 +59,9 @@ export const LIST_WIDTH_LIMITS = { min: 260, max: 1600, default: 340 } as const
 export const KAOMOJI_LIMITS = { count: 200, length: 500 } as const
 
 export interface AppSettings {
+  /** Automatic reminder checks in minutes; 0 disables only the timer. */
+  reminderInterval: 0 | 15 | 30 | 60
+  reminderSystemNotifications: boolean
   /** Split preference given to tabs created from now on; existing tabs keep their own. */
   newTabSplitDefault: boolean
   /** Remembered close behavior; actual quit still handles unsaved editors. */
@@ -80,6 +83,8 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
+  reminderInterval: 15,
+  reminderSystemNotifications: true,
   newTabSplitDefault: true,
   closeAction: 'ask',
   colorScheme: 'system',
@@ -95,6 +100,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 }
 
 export const SETTING_KEYS = [
+  'reminderInterval',
+  'reminderSystemNotifications',
   'newTabSplitDefault',
   'closeAction',
   'colorScheme',
@@ -216,6 +223,14 @@ function choice<T extends string>(value: unknown, values: readonly T[], field: s
 export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown): Parsed<AppSettings[K]> {
   let parsed: Parsed<unknown>
   switch (key) {
+    case 'reminderInterval':
+      parsed = typeof value !== 'number'
+        ? { ok: false, issues: [{ kind: 'field', field: key, problem: 'type' }] }
+        : [0, 15, 30, 60].includes(value)
+          ? { ok: true, value }
+          : { ok: false, issues: [{ kind: 'field', field: key, problem: 'range' }] }
+      break
+    case 'reminderSystemNotifications':
     case 'newTabSplitDefault':
     case 'customThemeEnabled':
       parsed = typeof value === 'boolean' ? { ok: true, value } : { ok: false, issues: [{ kind: 'field', field: key, problem: 'type' }] }

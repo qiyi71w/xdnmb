@@ -29,6 +29,7 @@ const api: XidaoApi = {
     cancel: () => ipcRenderer.invoke(IpcChannel.reminderCancel),
     closeForThreads: (input) => ipcRenderer.invoke(IpcChannel.reminderCloseForThreads, input),
     clear: (input) => ipcRenderer.invoke(IpcChannel.reminderClear, input),
+    dismissRateLimit: (input) => ipcRenderer.invoke(IpcChannel.reminderDismissRateLimit, input),
     onChanged(listener) {
       const receive = () => listener()
       ipcRenderer.on(REMINDERS_CHANGED_CHANNEL, receive)

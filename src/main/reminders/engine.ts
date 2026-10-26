@@ -1,7 +1,7 @@
 import type { ReadError } from '../../shared/api'
 import { comparePostIds, type ContentNode, type Post, type PostId, type ReadingMode, type ThreadPage } from '../../shared/forum'
 import { REMINDER_KINDS, type CoverageIssue, type ReminderKind } from '../../shared/reminders'
-import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
+import { ForumReadError, ReadCancelledError, type ForumClient, type ForumRequestRunner } from '../forum/contract'
 import type { RequestScheduler } from '../reading/scheduler'
 import type { AppStore } from '../storage/contract'
 import { assertReadablePage } from '../storage/coverage'
@@ -11,6 +11,7 @@ import type { QuoteSource, ReminderKindState, ReminderUpdate, RuleSnapshot } fro
 const PAGE_SIZE = 19
 /** Network reads (pages and quoted posts) of one thread before the round turns to the next thread. */
 const BATCH_READS = 5
+const ROUND_READS = 100
 
 /** Page holding reply number `reply` (1-based); page 1 for an empty thread. */
 function pageOf(reply: number): number {
@@ -51,6 +52,8 @@ interface QuoteRun {
 type Step = 'all' | 'po' | 'quote'
 interface ThreadRun {
   threadId: string
+  /** At least one actual request started this round, even if it failed or the batch is partial. */
+  attempted: boolean
   kinds: Partial<Record<ReminderKind, KindRun>>
   steps: Step[]
   /** Page 1 read by this check, per mode. */
@@ -81,12 +84,14 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   rules: RuleSnapshot[]
   signal: AbortSignal
   increased: Set<string>
-}): Promise<void> {
+}): Promise<{ rateLimited: boolean; complete: boolean }> {
   const { store, now } = deps
   const states = new Map((await store.reminderStates()).map((state) => [`${state.threadId}:${state.kind}`, state]))
   const cookieIds = new Set(await store.reminderCookieIds())
   const hasCookie = (await store.listCredentials()).length > 0
   const runs: ThreadRun[] = []
+  let remaining = ROUND_READS
+  let complete = true
   for (const threadId of new Set(input.rules.map((rule) => rule.threadId))) {
     const kinds: ThreadRun['kinds'] = {}
     for (const rule of input.rules.filter((item) => item.threadId === threadId)) {
@@ -96,7 +101,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     if (kinds.all || kinds.quote) steps.push('all')
     if (kinds.po) steps.push('po')
     if (kinds.quote) steps.push('quote')
-    runs.push({ threadId, kinds, steps, first: {}, withCookie: new Set(), quote: null })
+    runs.push({ threadId, attempted: false, kinds, steps, first: {}, withCookie: new Set(), quote: null })
   }
 
   async function write(run: ThreadRun, kind: ReminderKind, update: Omit<ReminderUpdate, 'threadId' | 'kind' | 'generation' | 'at'>): Promise<void> {
@@ -104,11 +109,12 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     if (applied && (update.add ?? 0) > 0) input.increased.add(run.threadId)
   }
   /** Saves the kind's issues of this check and marks it checked. */
-  async function finish(run: ThreadRun, kind: ReminderKind): Promise<void> {
+  async function finish(run: ThreadRun, kind: ReminderKind, checked = true): Promise<void> {
     const value = run.kinds[kind]
     if (!value || value.done) return
     value.done = true
-    await write(run, kind, { issues: [...value.issues], lastError: value.error, checked: true })
+    if (!checked || value.issues.size > 0 || value.error !== null) complete = false
+    await write(run, kind, { issues: [...value.issues], lastError: value.error, checked })
   }
   /**
    * The kind stops before it finished this check. Quote pages still unread (this check's, or a
@@ -122,24 +128,28 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       value.error = error
     }
     if (kind === 'quote' && (run.quote !== null || value.state?.issues.includes('incomplete'))) value.issues.add('incomplete')
-    await finish(run, kind)
+    await finish(run, kind, run.attempted)
   }
   function drop(run: ThreadRun, step: Step): void {
     run.steps = run.steps.filter((item) => item !== step)
   }
 
-  /** `cost`: forum requests this read makes; a batch never exceeds five of them. */
-  async function read<T>(budget: { remaining: number }, work: (signal: AbortSignal) => Promise<T>, cost = 1): Promise<T | null> {
-    if (input.signal.aborted) throw new ReadCancelledError()
-    if (budget.remaining < cost) return null
-    budget.remaining -= cost
-    return deps.scheduler.run('background', input.signal, work)
+  /** Each transport request consumes one slot, including a separately scheduled page-100 probe. */
+  function requestRunner(run: ThreadRun, budget: { remaining: number }): ForumRequestRunner {
+    return (signal, work) => deps.scheduler.run('background', signal, async (requestSignal) => {
+      if (requestSignal.aborted) throw new ReadCancelledError()
+      run.attempted = true
+      budget.remaining--
+      remaining--
+      return work(requestSignal)
+    })
   }
   async function readPage(budget: { remaining: number }, run: ThreadRun, mode: ReadingMode, number: number, anonymous: boolean): Promise<ThreadPage | null> {
-    // A page past 100 also makes the client read page 100 to detect the forum's page cap.
-    const value = await read(budget, (signal) => deps.client.getThreadPage(run.threadId, mode, number, signal, anonymous ? { anonymous: true } : undefined),
-      number > 100 ? 2 : 1)
-    if (value === null) return null
+    if (input.signal.aborted) throw new ReadCancelledError()
+    // Reserve room for a possible probe without charging for an HTTP request that never happens.
+    const reserve = number > 100 ? 2 : 1
+    if (Math.min(budget.remaining, remaining) < reserve) return null
+    const value = await deps.client.getThreadPage(run.threadId, mode, number, input.signal, { anonymous, requestRunner: requestRunner(run, budget) })
     assertReadablePage(value, await store.getThreadCoverage(value.threadId, value.mode))
     await store.saveThreadPage(value, now())
     return value
@@ -186,6 +196,9 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     if (replyCount === null) {
       value.issues.add('count-invalid')
       await interrupt(run, 'quote', null)
+    } else if (checked === null && pageOf(replyCount) === 1 && first.skippedItems > 0) {
+      value.issues.add('incomplete')
+      await interrupt(run, 'quote', null)
     } else if (checked === null && pageOf(replyCount) === 1) await write(run, 'quote', { baseline: replyCount, checkedPostId: highest })
     else if (checked === null) {
       run.quote = { init: true, replyCount, first: pageOf(replyCount), next: pageOf(replyCount), last: pageOf(replyCount), checked: run.threadId, page: null, sources: null, refs: [] }
@@ -218,9 +231,13 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     const page = q.page
     const stop = async () => {
       run.quote = null
-      await finish(run, 'quote')
+      await finish(run, 'quote', !value.issues.has('incomplete'))
       drop(run, 'quote')
       return true
+    }
+    if (page.skippedItems > 0) {
+      value.issues.add('incomplete')
+      return stop()
     }
     const highest = page.replies.reduce((max, reply) => comparePostIds(reply.id, max) > 0 ? reply.id : max, q.checked)
     if (q.init) {
@@ -244,16 +261,18 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     }
     while (q.refs.length > 0) {
       const id = q.refs[0]!
-      let post: Post | null
+      let post: Post
       try {
-        post = await read(budget, (signal) => deps.client.getRef(id, signal))
+        if (input.signal.aborted) throw new ReadCancelledError()
+        if (Math.min(budget.remaining, remaining) < 1) return false
+        post = await deps.client.getRef(id, input.signal, { requestRunner: requestRunner(run, budget) })
       } catch (error) {
         // Not obtained: the reply stays unverified, never a non-match. A rate limit stops the round.
         if (!(error instanceof ForumReadError) || error.error.kind === 'rate-limited') throw error
+        complete = false
         q.refs.shift()
         continue
       }
-      if (post === null) return false
       await store.savePost(post, now())
       q.sources.set(id, { postId: id, own: false, cookieId: post.userHash })
       q.refs.shift()
@@ -265,6 +284,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       if (sources.some((source) => source.own || (source.cookieId !== null && cookieIds.has(source.cookieId)))) add++
       else if (cookieIds.size > 0 && sources.some((source) => source.cookieId === null)) unverified++
     }
+    if (unverified > 0) complete = false
     const last = q.next === q.last
     await write(run, 'quote', { baseline: last ? q.replyCount : q.next * PAGE_SIZE, checkedPostId: highest, add, firstPage: q.first, unverified })
     q.checked = highest
@@ -284,9 +304,10 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
 
   let rateLimit: ReadError | null = null
   try {
-    while (rateLimit === null && !input.signal.aborted && runs.some((run) => run.steps.length > 0)) {
+    while (rateLimit === null && !input.signal.aborted && remaining > 0 && runs.some((run) => run.steps.length > 0)) {
+      const before = remaining
       for (const run of runs) {
-        if (rateLimit !== null || input.signal.aborted) break
+        if (rateLimit !== null || input.signal.aborted || remaining === 0) break
         if (run.steps.length === 0) continue
         const budget = { remaining: BATCH_READS }
         try {
@@ -303,14 +324,17 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
         await deps.afterBatch?.()
         deps.changed()
       }
+      // Only page+probe work may remain with a single round slot. Resume it next round.
+      if (remaining === before) break
     }
   } finally {
-    // Saved counts and positions stay. A rate limit marks every kind it kept from finishing; a
-    // cancelled or quitting check leaves unreached kinds as they were, except unfinished quote pages.
+    // Saved counts and positions stay. A rate limit marks every kind it kept from finishing.
+    // Attempted threads rotate even after failure; untouched threads keep next-round priority.
     for (const run of runs) for (const kind of REMINDER_KINDS) {
       if (rateLimit !== null) await interrupt(run, kind, rateLimit)
-      else if (kind === 'quote' && run.quote !== null) await interrupt(run, kind, null)
+      else if (run.steps.length > 0 && run.kinds[kind] && !run.kinds[kind]!.done) await interrupt(run, kind, null)
     }
     deps.changed()
   }
+  return { rateLimited: rateLimit !== null, complete: complete && !input.signal.aborted && runs.every((run) => run.steps.length === 0) }
 }

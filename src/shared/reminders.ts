@@ -81,6 +81,10 @@ export interface ReminderChecker {
   cooldownRemainingMs: number
   /** When the latest check ended (finished, cancelled or interrupted); null before the first one. */
   lastCheckedAt: string | null
+  /** Next automatic retry while rate-limited; null when automatic checks are off or not backed off. */
+  retryAt: string | null
+  /** Current rate-limit episode; survives restarts, cleared only by a wholly successful check. */
+  rateLimit: { id: string; dismissed: boolean } | null
 }
 
 export interface ReminderOverview {
@@ -123,6 +127,8 @@ export interface RemindersApi {
    * the thread becomes 0. Reading position, visits and history are untouched.
    */
   clear(input: { threadId: ThreadId }): Promise<RemindersResult<object>>
+  /** Acknowledge only this episode; a stale dismissal cannot hide a later one. */
+  dismissRateLimit(input: { id: string }): Promise<RemindersResult<object>>
   /** Rules, counts or checker state changed. Returns an unsubscribe function. */
   onChanged(listener: () => void): () => void
   /** A reminder notification was clicked: show the reminders list. */

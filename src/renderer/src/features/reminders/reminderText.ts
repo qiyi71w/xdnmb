@@ -7,7 +7,7 @@ import {
   type ReminderRule,
   type ReminderThreadRow
 } from '../../../../shared/reminders'
-import { describeReadError } from '../../lib/format'
+import { describeReadError, formatClockTime } from '../../lib/format'
 
 export const KIND_NAME: Record<ReminderKind, string> = {
   all: '全串更新',
@@ -105,4 +105,16 @@ export function refusalText(result: Extract<CheckRequestResult, { accepted: fals
 
 export function secondsText(ms: number): string {
   return `${Math.max(1, Math.ceil(ms / 1000))} 秒`
+}
+
+/** Start of every 论坛限流 message; `rateLimitRetry` gives the rest. */
+export const RATE_LIMIT_TEXT = '论坛限流，提醒检查已暂停'
+
+/**
+ * When checking resumes during a rate-limit episode: `HH:MM 后重试` at the automatic retry, or
+ * 自动检查已关闭 when none comes because the timer is off; null when neither is known.
+ */
+export function rateLimitRetry(retryAt: string | null, autoOff: boolean): string | null {
+  if (retryAt !== null) return `${formatClockTime(retryAt)} 后重试`
+  return autoOff ? '自动检查已关闭' : null
 }

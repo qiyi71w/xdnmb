@@ -587,6 +587,15 @@ export const MIGRATIONS: readonly Migration[] = [
           last_checked_at TEXT
         );`)
     }
+  },
+  {
+    version: 17,
+    up(db) {
+      db.exec(`ALTER TABLE reminder_checker ADD COLUMN backoff_minutes INTEGER NOT NULL DEFAULT 0 CHECK (backoff_minutes BETWEEN 0 AND 120);
+        ALTER TABLE reminder_checker ADD COLUMN episode_id TEXT;
+        ALTER TABLE reminder_checker ADD COLUMN notified INTEGER NOT NULL DEFAULT 0 CHECK (notified IN (0, 1));
+        ALTER TABLE reminder_checker ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0 CHECK (dismissed IN (0, 1));`)
+    }
   }
 ]
 

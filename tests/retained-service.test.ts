@@ -70,7 +70,7 @@ async function setup(read: ForumClient['getThreadPage'], overrides: Partial<Cont
     getFeedPage: async () => { throw new Error('not used') },
     getRef: async () => { throw new Error('not used') }
   }
-  const service = createContentService({ store, files, images, client, scheduler: createRequestScheduler(), databasePath })
+  const service = createContentService({ store, files, images, client, scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }), databasePath })
   resources.push({ dir, db, service })
   return { dir, db, store, files, images, service, downloads }
 }

@@ -135,6 +135,8 @@ port.on('message', (request: StorageRequest) => {
       case 'updateReminderState': value = db.updateReminderState(...request.args); break
       case 'clearReminderCounts': value = db.clearReminderCounts(...request.args); break
       case 'finishReminderCheck': value = db.finishReminderCheck(...request.args); break
+      case 'loadReminderBackoff': value = db.loadReminderBackoff(...request.args); break
+      case 'saveReminderBackoff': value = db.saveReminderBackoff(...request.args); break
       case 'reminderOverview': value = db.reminderOverview(...request.args); break
       case 'close': value = db.close(...request.args); break
       default: throw new Error('unknown storage method')

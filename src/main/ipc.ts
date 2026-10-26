@@ -384,6 +384,11 @@ export function registerIpc({
     return reminders.closeForThreads({ threadIds: threadIds(input.threadIds), reason })
   })
   handle(IpcChannel.reminderClear, async (_event, raw) => reminders.clear({ threadId: forumId(record(raw).threadId) }))
+  handle(IpcChannel.reminderDismissRateLimit, async (_event, raw) => {
+    const id = record(raw).id
+    if (typeof id !== 'string' || id.length > 128 || id.length === 0) throw new InvalidRequestError()
+    return reminders.dismissRateLimit({ id })
+  })
   handle(IpcChannel.listHistory, async () => content.listHistory())
   handle(IpcChannel.listOffline, async () => content.listOffline())
   handle(IpcChannel.clearHistory, async (_event, raw) => {

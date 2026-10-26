@@ -34,6 +34,7 @@ import { LifecycleHost } from '../features/lifecycle/LifecycleHost'
 import { useIdentities } from '../features/identity/useIdentities'
 import { SubscriptionsContext, useSubscriptions } from '../features/subscriptions/useSubscriptions'
 import { clearThreadReminders, RemindersContext, useReminderOverview } from '../features/reminders/useReminders'
+import { RateLimitNotice } from '../features/reminders/RateLimitNotice'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { QuoteCard } from '../features/quote/QuoteCard'
 import { QuoteActiveContext, QuoteControllerContext } from '../features/quote/QuoteContext'
@@ -1075,6 +1076,9 @@ export function App() {
     [historyRequest, tabTitle, continueDraft, openTargetInTab, pendingAttempts]
   )
 
+  /** Where focus goes when a notice it was in goes away: the active tab. */
+  const activeTabFocus = useCallback(() => document.getElementById(`tab-${stateRef.current.tabs?.activeId}`), [])
+
   /** A send waiting for the PO identity answer (one at a time: the dialog is modal). */
   const promptEditor = editors.state.editors.find((editor) => editor.publication?.phase === 'prompt')
 
@@ -1290,6 +1294,9 @@ export function App() {
                   </>
                 )}
               </div>
+
+              {/* Bottom centre of the content column, beside the inline rail and under the overlay one. */}
+              <RateLimitNotice fallbackFocus={activeTabFocus} />
 
               {navOverlay && navPopover.open && (
                 <>

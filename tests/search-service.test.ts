@@ -43,7 +43,7 @@ async function setup(response: (page: number, request: IncomingMessage, reply: S
   const origin = `http://127.0.0.1:${address.port}`
   const client = createForumClient({ baseUrl: origin, transport: createForumTransport({ allowedOrigins: [origin] }) })
   const store = override(asStore(db))
-  const service = createSearchService({ store, client, scheduler: createRequestScheduler(), enforceQuota: async () => {
+  const service = createSearchService({ store, client, scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }), enforceQuota: async () => {
     for (let batch = 0; batch < 1000; batch++) if (!db.evictContentBatch(false).more) return
     throw new Error('quota did not settle')
   } })

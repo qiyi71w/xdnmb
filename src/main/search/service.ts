@@ -98,8 +98,8 @@ export function createSearchService(deps: {
     let page = 1
     try {
       for (; page <= 100_000 && live(id, task); page++) {
-        const result = await scheduler.run('background', task.controller.signal,
-          (signal) => client.getThreadPage(fetch.threadId, 'all', page, signal))
+        const result = await client.getThreadPage(fetch.threadId, 'all', page, task.controller.signal,
+          { requestRunner: (signal, work) => scheduler.run('background', signal, work) })
         if (!live(id, task)) break
         assertReadablePage(result, fetch.coverage)
         assertReadablePage(result, await store.getThreadCoverage(result.threadId, result.mode))

@@ -10,6 +10,7 @@ export type SettingsSectionId =
   | 'features'
   | 'boards'
   | 'tabs'
+  | 'reminders'
   | 'cookies'
   | 'subscriptions'
   | 'publication'

@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, protocol, session, Tray,
+  app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, powerMonitor, protocol, session, Tray,
   type IpcMainInvokeEvent, type MenuItemConstructorOptions
 } from 'electron'
 import { createReadStream } from 'node:fs'
@@ -273,6 +273,8 @@ async function start(): Promise<void> {
       }
     })
   })
+  powerMonitor.on('suspend', () => reminders.suspend())
+  powerMonitor.on('resume', () => reminders.resume())
   const subscriptions = createSubscriptionService({
     store: openedStore,
     protector,
@@ -352,6 +354,7 @@ async function start(): Promise<void> {
     state: () => (mainWindow === null ? 'none' : mainWindow.isVisible() ? 'shown' : 'hidden'),
     open: async () => {
       await backgroundStopped
+      await reminders.startScheduling().catch(() => console.error('[reminders] scheduling unavailable'))
       retained.resume()
       searchService.resume()
       void searchService.recover().catch(() => console.error('[search] index unavailable'))
@@ -392,7 +395,7 @@ async function start(): Promise<void> {
     exit: () => app.quit(),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    onTrigger: () => { void reminders.request() }
+    onTrigger: () => { void reminders.request().catch(() => console.error('[reminders] check unavailable')) }
   })
   lifecycle = controller
 
@@ -410,7 +413,7 @@ async function start(): Promise<void> {
     search: searchService,
     onlineSearch,
     store: openedStore,
-    settings: createSettingsService(openedStore),
+    settings: createSettingsService(openedStore, reminders.configure),
     getStatus: () => ({ storage: openedStore.status, platform }),
     async chooseSavePath(sender, suggestedName, format) {
       const window = BrowserWindow.fromWebContents(sender)

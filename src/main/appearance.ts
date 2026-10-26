@@ -46,7 +46,7 @@ async function readThemeFile(path: string): Promise<ReadResult | { ok: 'invalid-
   }
 }
 
-export function createSettingsService(store: SettingsStore): SettingsService {
+export function createSettingsService(store: SettingsStore, onSaved?: (settings: AppSettings) => void): SettingsService {
   let queue: Promise<unknown> = Promise.resolve()
   function serial<T>(work: () => Promise<T>): Promise<T> {
     const run = queue.then(work, work)
@@ -60,6 +60,7 @@ export function createSettingsService(store: SettingsStore): SettingsService {
   async function save(settings: AppSettings): Promise<boolean> {
     try {
       await store.saveSettings(settings)
+      onSaved?.(settings)
       return true
     } catch {
       return false

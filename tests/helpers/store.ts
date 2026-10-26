@@ -109,6 +109,8 @@ export function asStore(db: ReadingDatabase): AppStore {
     updateReminderState: async (...args) => db.updateReminderState(...args),
     clearReminderCounts: async (...args) => db.clearReminderCounts(...args),
     finishReminderCheck: async (...args) => db.finishReminderCheck(...args),
+    loadReminderBackoff: async () => db.loadReminderBackoff(),
+    saveReminderBackoff: async (value) => db.saveReminderBackoff(value),
     reminderOverview: async () => db.reminderOverview(),
     listBlocks: async () => db.listBlocks(),
     setBlock: async (...args) => db.setBlock(...args),
