@@ -11,8 +11,14 @@ export type CredentialSource = 'export' | 'raw'
 
 export interface CredentialSummary {
   id: CredentialId
-  /** User-visible name; not secret. */
+  /** User-visible display name; not secret, and not the public 饼干 ID. */
   name: string
+  /**
+   * Public 饼干 ID shown beside this cookie's posts, used only to recognise them (own posts, PO
+   * cookie, quotes of mine). `null`: unknown — imported before IDs were kept; such a cookie is used
+   * as usual but matches nothing. Never derived from the display name.
+   */
+  cookieId: string | null
   source: CredentialSource
   /** ISO-8601 time of the local import. */
   importedAt: string
@@ -67,18 +73,34 @@ export type ImportFormatError =
   | 'not-json'
   /** Export entry: JSON lacks a non-empty string `cookie`. */
   | 'missing-cookie'
+  /** Export entry: JSON lacks a usable `name`, which is the cookie's public 饼干 ID. */
+  | 'missing-cookie-id'
   /** The userhash contains characters a cookie value cannot carry (spaces, `;`, quotes, controls…). */
   | 'invalid-cookie'
 
 export type NameError = 'empty' | 'too-long' | 'invalid'
 
+/** A typed 饼干 ID: empty, longer than {@link COOKIE_ID_MAX_LENGTH}, or containing whitespace/controls. */
+export type CookieIdError = 'empty' | 'too-long' | 'invalid'
+
+/**
+ * What re-importing an already stored userhash did to that entry's 饼干 ID. Nothing else of the
+ * entry (name, order, roles) ever changes.
+ * - `filled`: the entry had no ID; the import's ID was stored.
+ * - `same`: the entry already has this ID.
+ * - `conflict`: the entry has a different ID; it was kept as is.
+ */
+export type DuplicateCookieId = 'filled' | 'same' | 'conflict'
+
 /** Import failures. None of them echo any part of the pasted input. */
 export type ImportFailure =
   | { reason: 'format'; detail: ImportFormatError }
-  /** `required`: raw entry without a name, or export payload without a usable name and none given. */
+  /** `required`: export payload without a usable name and none given. */
   | { reason: 'name'; detail: NameError | 'required' }
-  /** Same userhash already stored; nothing was changed (name, roles untouched). */
-  | { reason: 'duplicate'; existing: CredentialSummary }
+  /** Userhash entry: the typed 饼干 ID is not acceptable. */
+  | { reason: 'cookie-id'; detail: CookieIdError }
+  /** Same userhash already stored: only its 饼干 ID may have been filled in (see `cookieId`); `existing` is the entry afterwards. */
+  | { reason: 'duplicate'; existing: CredentialSummary; cookieId: DuplicateCookieId }
   | { reason: 'protection-unavailable' }
   /** An existing credential could not be decrypted, so duplicates cannot be ruled out. */
   | { reason: 'decrypt-failed' }
@@ -92,9 +114,11 @@ export type ImportResult = { ok: true; credential: CredentialSummary } | { ok: f
 
 export type IdentityMutationResult =
   | { ok: true }
-  | { ok: false; reason: 'not-found' | 'storage' | 'name'; nameError?: NameError }
+  | { ok: false; reason: 'not-found' | 'storage' | 'name' | 'cookie-id'; nameError?: NameError; cookieIdError?: CookieIdError }
 
 /** Name limits shared by import and rename. */
 export const CREDENTIAL_NAME_MAX_LENGTH = 40
+/** Upper bound for a typed 饼干 ID (forum IDs are a handful of characters). */
+export const COOKIE_ID_MAX_LENGTH = 32
 /** Maximum pasted input length accepted by either import entry. */
 export const IMPORT_INPUT_MAX_LENGTH = 8192

@@ -300,13 +300,19 @@ export interface XidaoApi {
   }
   account: AccountApi
   identities: {
-    /** Names, sources, role selections and protection state; never any secret. */
+    /** Names, 饼干 IDs, sources, role selections and protection state; never any secret. */
     getOverview(): Promise<IdentityOverview>
-    /** 官网导出内容: Base64 of JSON `{"cookie": "<userhash>", "name": "…"}` (or that JSON itself). `name` overrides the payload name. */
+    /**
+     * 官网导出内容: Base64 of JSON `{"cookie": "<userhash>", "name": "<饼干 ID>"}` (or that JSON itself).
+     * The payload `name` is stored as the 饼干 ID; `name` here only overrides the display name.
+     * Re-importing a stored userhash fills a missing 饼干 ID and changes nothing else.
+     */
     importExport(input: { payload: string; name?: string }): Promise<ImportResult>
-    /** 原始 userhash, optionally prefixed with `userhash=`. */
-    importRaw(input: { userhash: string; name: string }): Promise<ImportResult>
+    /** 原始 userhash, optionally prefixed with `userhash=`, with its required 饼干 ID; the display name defaults to that ID. */
+    importRaw(input: { userhash: string; cookieId: string; name?: string }): Promise<ImportResult>
     rename(input: { credentialId: CredentialId; name: string }): Promise<IdentityMutationResult>
+    /** Fills in or changes one cookie's 饼干 ID; affects later matching only, never past reminders. */
+    setCookieId(input: { credentialId: CredentialId; cookieId: string }): Promise<IdentityMutationResult>
     /** Deletes the credential; roles that referenced it become `missing`. */
     remove(input: { credentialId: CredentialId }): Promise<IdentityMutationResult>
     /** Sets one role only; `null` clears it to `none`. */
@@ -413,6 +419,7 @@ export const IpcChannel = {
   identityImportExport: 'identities:import-export',
   identityImportRaw: 'identities:import-raw',
   identityRename: 'identities:rename',
+  identitySetCookieId: 'identities:set-cookie-id',
   identityRemove: 'identities:remove',
   identitySelect: 'identities:select',
   identityReorder: 'identities:reorder',
@@ -443,8 +450,6 @@ export const IpcChannel = {
   resolvePoPrompt: 'publication:resolve-prompt',
   listPublications: 'publication:list',
   getPublication: 'publication:get',
-  listOwnPosts: 'publication:own-posts',
-  addOwnPost: 'publication:add-own-post',
   getPoWarning: 'publication:get-po-warning',
   setPoWarning: 'publication:set-po-warning',
   lifecycleReside: 'lifecycle:reside',

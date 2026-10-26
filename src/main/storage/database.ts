@@ -23,7 +23,7 @@ import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, R
 import type { AttachmentId, DraftId, DraftSaveInput, PostTarget } from '../../shared/drafts'
 import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionPlan, SubscriptionSource } from '../../shared/subscriptions'
 import type { SubscriptionBaseline, SubscriptionConfiguration } from './contract'
-import type { OwnPost, PublicationAttempt } from '../../shared/publication'
+import type { PublicationAttempt } from '../../shared/publication'
 import type { PublicationStore } from '../publication/contract'
 import { StorageWriteRefusedError } from './contract'
 import type {
@@ -47,12 +47,13 @@ export type ReadingDatabase = {
 interface CredentialRow {
   id: number
   name: string
+  cookie_id: string | null
   source: CredentialSource
   imported_at: string
 }
 
 function credentialSummary(row: CredentialRow): CredentialSummary {
-  return { id: String(row.id), name: row.name, source: row.source, importedAt: row.imported_at }
+  return { id: String(row.id), name: row.name, cookieId: row.cookie_id, source: row.source, importedAt: row.imported_at }
 }
 
 function noRoles(): Record<IdentityRole, RoleSelection> {
@@ -231,26 +232,6 @@ function publicationAttempt(row: PublicationRow): PublicationAttempt {
   }
 }
 
-interface OwnPostRow {
-  post_id: string
-  thread_id: string
-  is_thread: number
-  credential_id: number | null
-  evidence: OwnPost['evidence']
-  confirmed_at: string
-}
-
-function ownPost(row: OwnPostRow): OwnPost {
-  return {
-    postId: row.post_id,
-    threadId: row.thread_id,
-    isThread: row.is_thread === 1,
-    credentialId: row.credential_id === null ? null : String(row.credential_id),
-    evidence: row.evidence,
-    confirmedAt: row.confirmed_at
-  }
-}
-
 const UPSERT_POST = `
   INSERT INTO posts (
     id, forum_id, created_at, user_hash, name, title, is_admin, is_sage,
@@ -322,7 +303,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
   getReminderCoverage: ReadingDatabase['getReminderCoverage'] = (id, mode) => this.reminders.getCoverage(id, mode)
   saveReminderCoverage: ReadingDatabase['saveReminderCoverage'] = (value) => this.reminders.saveCoverage(value)
   getReminderObservations: ReadingDatabase['getReminderObservations'] = (id, mode) => this.reminders.observations(id, mode)
-  reminderOwnRevision: ReadingDatabase['reminderOwnRevision'] = () => this.reminders.ownRevision()
+  reminderCookieIds: ReadingDatabase['reminderCookieIds'] = () => this.reminders.cookieIds()
   evaluateReminders: ReadingDatabase['evaluateReminders'] = (input) => this.reminders.evaluate(input)
   createReminderRound: ReadingDatabase['createReminderRound'] = (trigger, at, total) => this.reminders.createRound(trigger, at, total)
   saveReminderRound: ReadingDatabase['saveReminderRound'] = (value) => this.reminders.saveRound(value)
@@ -890,7 +871,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
   listCredentials(): CredentialSummary[] {
     if (!this.db) return []
     return this.db.prepare<[], CredentialRow>(
-      'SELECT id, name, source, imported_at FROM credentials ORDER BY position, id'
+      'SELECT id, name, cookie_id, source, imported_at FROM credentials ORDER BY position, id'
     ).all().map(credentialSummary)
   }
 
@@ -906,19 +887,27 @@ class SqliteReadingDatabase implements ReadingDatabase {
     return row ? new Uint8Array(row.ciphertext) : null
   }
 
-  insertCredential(input: { name: string; source: CredentialSource; importedAt: string; ciphertext: Uint8Array }): CredentialSummary {
+  insertCredential(input: { name: string; cookieId: string; source: CredentialSource; importedAt: string; ciphertext: Uint8Array }): CredentialSummary {
     const db = this.writable()
-    const row = db.prepare<[string, string, string, Buffer], CredentialRow>(`
-      INSERT INTO credentials (name, source, imported_at, ciphertext, position)
-      VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM credentials))
-      RETURNING id, name, source, imported_at
-    `).get(input.name, input.source, input.importedAt, Buffer.from(input.ciphertext))
+    const row = db.prepare<[string, string, string, string, Buffer], CredentialRow>(`
+      INSERT INTO credentials (name, cookie_id, source, imported_at, ciphertext, position)
+      VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM credentials))
+      RETURNING id, name, cookie_id, source, imported_at
+    `).get(input.name, input.cookieId, input.source, input.importedAt, Buffer.from(input.ciphertext))
     if (!row) throw new Error('credential insert returned no row')
     return credentialSummary(row)
   }
 
   renameCredential(id: CredentialId, name: string): boolean {
     return this.writable().prepare('UPDATE credentials SET name = ? WHERE id = ?').run(name, id).changes === 1
+  }
+
+  fillCredentialCookieId(id: CredentialId, cookieId: string): boolean {
+    return this.writable().prepare('UPDATE credentials SET cookie_id = ? WHERE id = ? AND cookie_id IS NULL').run(cookieId, id).changes === 1
+  }
+
+  setCredentialCookieId(id: CredentialId, cookieId: string): boolean {
+    return this.writable().prepare('UPDATE credentials SET cookie_id = ? WHERE id = ?').run(cookieId, id).changes === 1
   }
 
   deleteCredential(id: CredentialId): boolean {
@@ -1099,18 +1088,10 @@ class SqliteReadingDatabase implements ReadingDatabase {
           || (isThread ? input.postId !== input.threadId : payload.target.kind === 'reply' && payload.target.threadId !== input.threadId)) {
           throw new Error('publication confirmation target mismatch')
         }
-        const previous = db.prepare<[string], OwnPostRow>('SELECT * FROM own_posts WHERE post_id = ?').get(input.postId)
-        if (previous && (previous.thread_id !== input.threadId || previous.is_thread !== Number(isThread)
-          || (previous.evidence === 'submission-readback' && String(previous.credential_id) !== payload.credentialId))) {
-          throw new Error('own post confirmation conflict')
-        }
-        db.prepare(`
-          INSERT INTO own_posts (post_id, thread_id, is_thread, credential_id, evidence, confirmed_at)
-          VALUES (?, ?, ?, ?, 'submission-readback', ?)
-          ON CONFLICT(post_id) DO UPDATE SET credential_id = excluded.credential_id,
-            evidence = excluded.evidence, confirmed_at = excluded.confirmed_at
-          WHERE own_posts.evidence = 'manual'
-        `).run(input.postId, input.threadId, Number(isThread), payload.credentialId, input.at)
+        // One forum post confirms at most one attempt: an ID already claimed is never reassigned.
+        if (db.prepare<[string, string], { id: number }>(
+          "SELECT id FROM publication_attempts WHERE post_id = ? AND state = 'confirmed' AND id <> ?"
+        ).get(input.postId, input.id)) throw new Error('publication confirmation conflict')
         if (isThread) {
           db.prepare(`
             INSERT OR IGNORE INTO thread_post_identities (thread_id, credential_id, updated_at) VALUES (?, ?, ?)
@@ -1165,27 +1146,6 @@ class SqliteReadingDatabase implements ReadingDatabase {
       const statement = db.prepare('UPDATE publication_attempts SET launch_notice = 0 WHERE id = ?')
       for (const id of ids) statement.run(id)
     })()
-  }
-
-  listOwnPosts(): OwnPost[] {
-    return this.publicationDatabase().prepare<[], OwnPostRow>(
-      'SELECT * FROM own_posts ORDER BY confirmed_at DESC, post_id DESC'
-    ).all().map(ownPost)
-  }
-
-  addManualOwnPost(input: Parameters<PublicationStore['addManualOwnPost']>[0]): void {
-    const db = this.writable()
-    db.transaction(() => {
-      if (input.isThread && input.postId !== input.threadId) throw new Error('manual own post target mismatch')
-      const previous = db.prepare<[string], OwnPostRow>('SELECT * FROM own_posts WHERE post_id = ?').get(input.postId)
-      if (previous && (previous.thread_id !== input.threadId || previous.is_thread !== Number(input.isThread))) {
-        throw new Error('manual own post conflict')
-      }
-      db.prepare(`
-        INSERT OR IGNORE INTO own_posts (post_id, thread_id, is_thread, credential_id, evidence, confirmed_at)
-        VALUES (?, ?, ?, NULL, 'manual', ?)
-      `).run(input.postId, input.threadId, Number(input.isThread), input.at)
-    }).immediate()
   }
 
   getPoWarningEnabled(): boolean {

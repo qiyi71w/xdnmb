@@ -20,11 +20,19 @@ const t3 = '2026-10-24T00:03:00.000Z'
 const later = '2026-10-24T00:04:00.000Z'
 const folders: string[] = []
 const databases: ReadingDatabase[] = []
-function post(id: string, quotes: string[] = []): Post {
-  return { id, forumId: '4', createdAt: '2026-10-24 08:03', userHash: 'public-not-an-identity', name: null,
+function post(id: string, quotes: string[] = [], userHash: string | null = 'public-not-an-identity'): Post {
+  return { id, forumId: '4', createdAt: '2026-10-24 08:03', userHash, name: null,
     title: null, isAdmin: false, isSage: false, image: null,
     content: [{ type: 'text', text: `正文 ${id}\n\n` }, ...quotes.map((postId) => ({ type: 'quoteRef' as const, postId, raw: `>>No.${postId}` }))],
     plainText: `正文 ${id}\n\n${quotes.map((id) => `>>No.${id}`).join(' ')}` }
+}
+/** An imported cookie with the given public 饼干 ID (secret irrelevant to reminders). */
+function cookie(db: ReadingDatabase, cookieId: string, name = cookieId): string {
+  return db.insertCredential({ name, cookieId, source: 'raw', importedAt: t0, ciphertext: Uint8Array.of(1) }).id
+}
+/** Post No.90 as seen in another thread, written by the cookie whose 饼干 ID is `Mine90`. */
+function storeQuoted(db: ReadingDatabase): void {
+  db.savePost(post('90', [], 'Mine90'), t0)
 }
 function page(threadId: string, number: number, replies: Post[], count: number | null = replies.length, mode: ReadingMode = 'all'): ThreadPage {
   return { threadId, page: number, head: { ...post(threadId), title: `串 ${threadId}` }, replies, replyCount: count,
@@ -50,21 +58,27 @@ function fixture(prepare?: (path: string) => void) {
   let read = async (threadId: string, mode: ReadingMode, number: number, _signal: AbortSignal) =>
     page(threadId, number, number === 1 ? [post('101'), post('200')] : [], 2, mode)
   const requests: Array<{ threadId: string; mode: ReadingMode; page: number; lane: string }> = []
+  const refs: string[] = []
+  let ref = async (_postId: string): Promise<Post> => { throw new ForumReadError({ kind: 'not-found', detail: 'business' }) }
   const notifications: Array<{ title: string; body: string }> = []
   let notify = (_message: { title: string; body: string }, settle: (state: 'shown' | 'failed') => void): boolean => { settle('shown'); return true }
   const scheduler = createRequestScheduler()
   const service = createReminderService({ store: asStore(db), now: () => wall, monotonicNow: () => monotonic,
-    client: { async getThreadPage(threadId, mode, number, signal) {
-      requests.push({ threadId, mode, page: number, lane: 'background' })
-      return read(threadId, mode, number, signal)
-    } },
+    client: {
+      async getThreadPage(threadId, mode, number, signal) {
+        requests.push({ threadId, mode, page: number, lane: 'background' })
+        return read(threadId, mode, number, signal)
+      },
+      async getRef(postId) { refs.push(postId); return ref(postId) }
+    },
     scheduler: { run(lane, signal, work) { expect(lane).toBe('background'); return scheduler.run(lane, signal, work) } },
     notifier: { show(message, settle) { notifications.push(message); return notify(message, settle) } } })
-  return { db, path, service, requests, notifications,
+  return { db, path, service, requests, refs, notifications,
     enable(kind: ReminderKind = 'all', threadId = '100') { return service.setRule({ threadId, kind, enabled: true }) },
     next() { monotonic += 60_000; wall = later },
     setClock(value: number, at = later) { monotonic = value; wall = at },
     setRead(value: typeof read) { read = value },
+    setRef(value: typeof ref) { ref = value },
     setNotify(value: typeof notify) { notify = value },
     async run() { const result = await service.check(); expect(result.accepted).toBe(true); await service.whenIdle(); return result },
     raw<T>(sql: string): T[] {
@@ -122,7 +136,8 @@ describe('reminder rules and durable events', () => {
     await s.run()
     expect(s.db.reminderOverview().threads[0]?.events[0]?.kinds).toEqual(['all'])
     poVisible = true
-    s.db.addManualOwnPost({ postId: '90', threadId: '80', isThread: false, at: later })
+    cookie(s.db, 'Mine90')
+    storeQuoted(s.db)
     s.next()
     await s.run()
     const overview = s.db.reminderOverview()
@@ -137,7 +152,8 @@ describe('reminder rules and durable events', () => {
     await s.enable('all')
     await s.enable('quote')
     proof(s.db)
-    s.db.addManualOwnPost({ postId: '90', threadId: '80', isThread: false, at: t3 })
+    cookie(s.db, 'Mine90')
+    storeQuoted(s.db)
     const entered = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
     s.setRead(async (threadId, mode, number) => {
@@ -200,7 +216,8 @@ describe('reminder rules and durable events', () => {
     databases.push(reopened)
     const notices: unknown[] = []
     const service = createReminderService({ store: asStore(reopened), now: () => later,
-      client: { async getThreadPage(threadId, mode, number) { return page(threadId, number, number === 1 ? [post('200')] : [], 1, mode) } },
+      client: { async getThreadPage(threadId, mode, number) { return page(threadId, number, number === 1 ? [post('200')] : [], 1, mode) },
+        async getRef() { throw new Error('no quote read expected') } },
       scheduler: createRequestScheduler(), notifier: { show(message) { notices.push(message); return true } } })
     await service.recover()
     expect(reopened.reminderOverview().lastRound).toMatchObject({ state: 'interrupted', stopReason: 'crash' })
@@ -211,8 +228,10 @@ describe('reminder rules and durable events', () => {
     expect(reopened.reminderOverview().lastNotification?.state).toBe('unknown')
   })
 
-  it('re-evaluates retained replies after manually adding an own ID, excludes pre-start replies and never duplicates', async () => {
+  it('re-evaluates retained replies after a 饼干 ID is filled in: no immediate read, start bounded, never duplicated', async () => {
     const s = fixture()
+    const mine = cookie(s.db, 'Unrelated')
+    storeQuoted(s.db)
     s.db.saveThreadPage(page('100', 1, [post('101', ['90'])], 57), t0)
     await s.enable('quote')
     proof(s.db)
@@ -220,13 +239,18 @@ describe('reminder rules and durable events', () => {
       number === 1 ? [post('101', ['90'])] : number === 2 ? [post('200', ['90'])] : number === 3 ? [post('201', ['90'])] : [], 57, mode))
     await s.run()
     expect(s.notifications).toEqual([])
-    s.db.addManualOwnPost({ postId: '90', threadId: '80', isThread: false, at: later })
+    expect(s.db.reminderOverview().threads[0]?.issues).not.toContain('quote-unverified')
+    // No.90 is not the PO's post: matching is by its 饼干 ID alone. Changing an ID never starts a check.
+    expect(s.db.setCredentialCookieId(mine, 'Mine90')).toBe(true)
     const requestCount = s.requests.length
+    await nextTask()
+    expect(s.requests).toHaveLength(requestCount)
     expect(s.notifications).toEqual([])
     s.next()
     await s.run()
-    expect(s.db.reminderOverview().threads[0]?.events.map((event) => event.postId)).toEqual(['201', '200'])
+    expect(s.db.reminderOverview().threads[0]?.events).toMatchObject([{ postId: '201', quotedOwnIds: ['90'] }, { postId: '200', quotedOwnIds: ['90'] }])
     expect(s.requests.slice(requestCount).map((request) => request.page)).not.toContain(1) // Page 1 retained content was reused.
+    expect(s.refs).toEqual([])
     expect(s.notifications).toHaveLength(1)
     s.next()
     await s.run()
@@ -234,7 +258,68 @@ describe('reminder rules and durable events', () => {
     expect(s.notifications).toHaveLength(1)
   })
 
-  it('fetches only missing retained quote content after the own-ID set changes', async () => {
+  it('reads an unknown quoted post by ID, keeps a failed read as an unverified gap and never as a non-match', async () => {
+    const s = fixture()
+    cookie(s.db, 'Other')
+    cookie(s.db, 'Mine90')
+    await s.enable('quote')
+    proof(s.db)
+    s.setRead(async (threadId, mode, number) => page(threadId, number, number === 1 ? [post('101'), post('200', ['90'])] : [], 2, mode))
+    s.setRef(async () => { throw new ForumReadError({ kind: 'network', detail: 'connection' }) })
+    await s.run()
+    expect(s.refs).toEqual(['90'])
+    expect(s.raw('SELECT * FROM reminder_events')).toEqual([])
+    expect(s.db.reminderOverview().threads[0]).toMatchObject({ state: 'uncertain', issues: ['quote-unverified'] })
+    expect(s.notifications).toEqual([])
+    // Next check: read again (no thread scan for its owner); once obtained, the match is an event.
+    s.setRef(async (postId) => post(postId, [], 'Mine90'))
+    s.next()
+    await s.run()
+    expect(s.refs).toEqual(['90', '90'])
+    expect(s.db.reminderOverview().threads[0]).toMatchObject({ state: 'done', issues: [], events: [{ postId: '200', quotedOwnIds: ['90'] }] })
+    expect(s.db.loadPost('90')?.value.userHash).toBe('Mine90')
+    expect(s.notifications).toHaveLength(1)
+    s.next()
+    await s.run()
+    expect(s.refs).toEqual(['90', '90'])
+    expect(s.notifications).toHaveLength(1)
+  })
+
+  it('keeps the gap of a failed quoted read even when another quote of the same reply already matches', async () => {
+    const s = fixture()
+    cookie(s.db, 'Mine90')
+    storeQuoted(s.db)
+    await s.enable('quote')
+    proof(s.db)
+    s.setRead(async (threadId, mode, number) => page(threadId, number, number === 1 ? [post('101'), post('200', ['90', '91'])] : [], 2, mode))
+    s.setRef(async () => { throw new ForumReadError({ kind: 'network', detail: 'connection' }) })
+    await s.run()
+    expect(s.refs).toEqual(['91'])
+    expect(s.db.reminderOverview().threads[0]).toMatchObject({ state: 'uncertain', issues: ['quote-unverified'], events: [{ postId: '200', quotedOwnIds: ['90'] }] })
+    expect(s.notifications).toHaveLength(1)
+    s.setRef(async (postId) => post(postId, [], 'Mine90'))
+    s.next()
+    await s.run()
+    expect(s.db.reminderOverview().threads[0]).toMatchObject({ state: 'done', issues: [], eventCount: 1, events: [{ postId: '200', quotedOwnIds: ['90', '91'] }] })
+    expect(s.notifications).toHaveLength(1)
+  })
+
+  it('makes no quote reads and no quote events while no imported cookie has a 饼干 ID', async () => {
+    const s = fixture()
+    const legacy = cookie(s.db, 'Mine90')
+    const connection = new Database(s.path)
+    try { connection.prepare('UPDATE credentials SET cookie_id = NULL WHERE id = ?').run(legacy) } finally { connection.close() }
+    await s.enable('quote')
+    proof(s.db)
+    s.setRead(async (threadId, mode, number) => page(threadId, number, number === 1 ? [post('101'), post('200', ['90'])] : [], 2, mode))
+    s.setRef(async (postId) => post(postId, [], 'Mine90'))
+    await s.run()
+    expect(s.refs).toEqual([])
+    expect(s.raw('SELECT * FROM reminder_events')).toEqual([])
+    expect(s.db.reminderOverview().threads[0]?.issues).toEqual([])
+  })
+
+  it('fetches only missing retained quote content after the 饼干 ID set changes', async () => {
     const s = fixture()
     s.db.saveThreadPage(page('100', 1, [post('101')], 57), t0)
     await s.enable('quote')
@@ -244,7 +329,8 @@ describe('reminder rules and durable events', () => {
     await s.run()
     const connection = new Database(s.path)
     try { connection.prepare('DELETE FROM posts WHERE id = ?').run('200') } finally { connection.close() }
-    s.db.addManualOwnPost({ postId: '90', threadId: '80', isThread: false, at: later })
+    cookie(s.db, 'Mine90')
+    storeQuoted(s.db)
     const before = s.requests.length
     s.next()
     await s.run()
@@ -317,7 +403,7 @@ describe('after the schema v14 upgrade', () => {
         raw.prepare("INSERT INTO thread_attention VALUES ('100', ?, 'favorite', '101')").run(t0)
       } finally { raw.close() }
     })
-    expect(s.db.status).toMatchObject({ state: 'ready', schemaVersion: 14 })
+    expect(s.db.status).toMatchObject({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((migration) => migration.version)) })
     proof(s.db)
     await s.run()
     const group = s.db.reminderOverview().threads[0]!

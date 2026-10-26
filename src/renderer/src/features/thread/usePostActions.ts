@@ -1,20 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useMemo } from 'react'
 import type { IdentityChoice, PostTarget } from '../../../../shared/drafts'
+import type { Post } from '../../../../shared/forum'
 import { rememberComposeOpener } from '../directory/navStore'
 import { useEditorWorkspace } from '../editor/workspace'
 import { focusKey } from '../editor/useEditorsStore'
+import { isOwnPost, ownCookieIds } from './ownPosts'
 
 export function usePostActions(tabId: number | null, threadId: string) {
-  const { store } = useEditorWorkspace()
-  const [ownIds, setOwnIds] = useState<ReadonlySet<string>>(new Set())
-  useEffect(() => {
-    if (tabId === null) return
-    let alive = true
-    void window.xidao.publication.listOwnPosts().then((result) => {
-      if (alive && result.ok) setOwnIds(new Set(result.posts.map((post) => post.postId)))
-    }).catch(() => undefined)
-    return () => { alive = false }
-  }, [tabId, store.publicationRevision])
+  const { store, identities } = useEditorWorkspace()
+  // Follows the shared identity overview, so an import or a 饼干 ID change applies at once.
+  const ownIds = useMemo(() => ownCookieIds(identities.overview), [identities.overview])
   const open = async (postId: string, report: boolean, opener: HTMLElement | null) => {
     if (tabId === null) return
     const target: PostTarget = report ? { kind: 'thread', forumId: '18' } : { kind: 'reply', threadId }
@@ -25,5 +20,9 @@ export function usePostActions(tabId: number | null, threadId: string) {
     store.clearPublished(key)
     store.requestFocus(key)
   }
-  return { ownIds, reply: (postId: string, opener: HTMLElement | null) => void open(postId, false, opener), report: (postId: string, opener: HTMLElement | null) => void open(postId, true, opener) }
+  return {
+    isOwn: (post: Post) => isOwnPost(post, ownIds),
+    reply: (postId: string, opener: HTMLElement | null) => void open(postId, false, opener),
+    report: (postId: string, opener: HTMLElement | null) => void open(postId, true, opener)
+  }
 }

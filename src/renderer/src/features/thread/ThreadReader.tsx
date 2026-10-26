@@ -698,7 +698,7 @@ export function ThreadReader({
                   failure={rules.failure}
                   onRetry={rules.reload}
                   onUpdated={rules.updated}
-                  onReport={head === null || postActions.ownIds.has(head.id) ? undefined : (opener) => postActions.report(head.id, opener)}
+                  onReport={head === null || postActions.isOwn(head) ? undefined : (opener) => postActions.report(head.id, opener)}
                   onToStart={toStart}
                   onToEnd={toEnd}
                 />
@@ -741,7 +741,7 @@ export function ThreadReader({
               poHash={null}
               images={imageView}
               highlighted={highlighted === head.id}
-              actions={{ own: postActions.ownIds.has(head.id), reply: (opener) => postActions.reply(head.id, opener), report: (opener) => postActions.report(head.id, opener) }}
+              actions={{ own: postActions.isOwn(head), reply: (opener) => postActions.reply(head.id, opener), report: (opener) => postActions.report(head.id, opener) }}
             />
           )}
 
@@ -767,7 +767,7 @@ export function ThreadReader({
                     poHash={head?.userHash ?? null}
                     images={imageView}
                     highlighted={highlighted === reply.id}
-                    actions={{ own: postActions.ownIds.has(reply.id), reply: (opener) => postActions.reply(reply.id, opener), report: (opener) => postActions.report(reply.id, opener) }}
+                    actions={{ own: postActions.isOwn(reply), reply: (opener) => postActions.reply(reply.id, opener), report: (opener) => postActions.report(reply.id, opener) }}
                   />
                 ))}
                 {page.endCandidate && (

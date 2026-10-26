@@ -131,8 +131,8 @@ async function setup() {
     store: selectedStore, protector, scheduler, transport, appOrigin: remote.origin, webOrigin: remote.origin, now: () => clock
   })
   const service = create()
-  const a = db.insertCredential({ name: '固定对象甲', source: 'raw', importedAt: clock.toISOString(), ciphertext: await protector.encrypt(COOKIE_A) })
-  const b = db.insertCredential({ name: '固定对象乙', source: 'raw', importedAt: clock.toISOString(), ciphertext: await protector.encrypt(COOKIE_B) })
+  const a = db.insertCredential({ name: '固定对象甲', cookieId: 'SyncA01', source: 'raw', importedAt: clock.toISOString(), ciphertext: await protector.encrypt(COOKIE_A) })
+  const b = db.insertCredential({ name: '固定对象乙', cookieId: 'SyncB02', source: 'raw', importedAt: clock.toISOString(), ciphertext: await protector.encrypt(COOKIE_B) })
   db.setRoleSelection('web-sync', a.id)
   db.reorderCredentials([b.id, a.id])
   db.setRoleSelection('default-post', b.id)

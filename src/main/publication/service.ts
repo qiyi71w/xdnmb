@@ -146,17 +146,23 @@ export function createPublicationService(deps: {
     return { userhash, attachment, forumId: forum.id }
   }
 
+  /**
+   * The thread's stored main post names its 饼干 ID; when it belongs to another imported cookie than
+   * the one about to send, ask first. Unknown IDs (main post not stored, or no cookie with that ID)
+   * never prompt. This is a hint only, never evidence of who sent anything.
+   */
   async function promptFor(input: SubmitInput): Promise<PoPrompt | null> {
     if (input.payload.target.kind !== 'reply' || suppressed || !(await store.getPoWarningEnabled())) return null
-    const threadId = input.payload.target.threadId
-    const own = (await store.listOwnPosts()).find(post => post.isThread && post.postId === threadId && post.threadId === threadId)
-    if (!own || own.credentialId === null || own.credentialId === input.payload.credentialId) return null
+    const poCookieId = (await store.loadPost(input.payload.target.threadId))?.value.userHash ?? null
+    if (poCookieId === null) return null
     const credentials = await store.listCredentials()
     const current = credentials.find(credential => credential.id === input.payload.credentialId)
-    const po = credentials.find(credential => credential.id === own.credentialId)
+    if (current?.cookieId === poCookieId) return null
+    const po = credentials.find(credential => credential.cookieId === poCookieId)
+    if (po === undefined) return null
     let canSwitch = false
-    try { await secret(own.credentialId); canSwitch = true } catch { /* Missing/locked PO remains known, but unusable. */ }
-    return { token: randomUUID(), currentName: current?.name ?? '不可用的饼干', poName: po?.name ?? '已移除的 PO 饼干', poCredentialId: own.credentialId, canSwitch }
+    try { await secret(po.id); canSwitch = true } catch { /* Missing/locked PO cookie remains known, but unusable. */ }
+    return { token: randomUUID(), currentName: current?.name ?? '不可用的饼干', poName: po.name, poCredentialId: po.id, canSwitch }
   }
 
   async function run(entry: Running, validated: Awaited<ReturnType<typeof validate>>): Promise<PublicationAttempt | null> {
@@ -166,7 +172,10 @@ export function createPublicationService(deps: {
         onAccepted: () => { entry.accepted = true } })
       if (report.state === 'confirmed') {
         const candidateId = report.postId
-        if ((await store.listOwnPosts()).some(post => post.postId === candidateId)) report = { state: 'unconfirmed', problem: null }
+        // A post already confirming another attempt is not this send's result (e.g. a stale getLastPost).
+        if ((await store.listPublications()).some(other => other.id !== attempt.id && other.state === 'confirmed' && other.postId === candidateId)) {
+          report = { state: 'unconfirmed', problem: null }
+        }
       }
       const at = now().toISOString()
       // After an abandon, the store keeps the recorded uncertainty unless this is positive evidence.
@@ -312,17 +321,6 @@ export function createPublicationService(deps: {
         const draft = list?.ok ? list.drafts.find(item => item.id === attempt?.savedDraftId) ?? null : null
         return { ok: true, attempt, draft }
       } catch { return { ok: false, reason: 'storage' } }
-    },
-    async listOwnPosts() {
-      try {
-        if (store.status.state === 'unavailable') throw new Error('storage')
-        return { ok: true, posts: await store.listOwnPosts() }
-      } catch { return { ok: false, reason: 'storage' } }
-    },
-    async addOwnPost({ postId, threadId, isThread }) {
-      if (isThread !== (postId === threadId)) return { ok: false, reason: 'target' }
-      try { await store.addManualOwnPost({ postId, threadId, isThread, at: now().toISOString() }); return { ok: true } }
-      catch { return { ok: false, reason: 'storage' } }
     },
     async getPoWarning() { return { enabled: await store.getPoWarningEnabled() } },
     async setPoWarning({ enabled }) {

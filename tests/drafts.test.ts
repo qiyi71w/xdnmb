@@ -50,6 +50,8 @@ function asyncStore(db: ReadingDatabase): DraftStore & IdentityStore & { readonl
     loadCredentialCiphertext: async (id) => db.loadCredentialCiphertext(id),
     insertCredential: async (input) => db.insertCredential(input),
     renameCredential: async (id, name) => db.renameCredential(id, name),
+    fillCredentialCookieId: async (id, cookieId) => db.fillCredentialCookieId(id, cookieId),
+    setCredentialCookieId: async (id, cookieId) => db.setCredentialCookieId(id, cookieId),
     deleteCredential: async (id) => db.deleteCredential(id),
     reorderCredentials: async (ids) => db.reorderCredentials(ids),
     loadRoleSelections: async () => db.loadRoleSelections(),
@@ -80,7 +82,7 @@ async function setup(
 }
 
 function credential(db: ReadingDatabase, name: string): string {
-  return db.insertCredential({ name, source: 'raw', importedAt: '2026-10-24T00:00:00.000Z', ciphertext: Uint8Array.of(1, 2, 3) }).id
+  return db.insertCredential({ name, cookieId: `Id${name}`, source: 'raw', importedAt: '2026-10-24T00:00:00.000Z', ciphertext: Uint8Array.of(1, 2, 3) }).id
 }
 
 const replyA: PostTarget = { kind: 'reply', threadId: '50000001' }

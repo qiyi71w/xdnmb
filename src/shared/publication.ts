@@ -21,15 +21,6 @@ export interface PublicationAttempt {
   savedDraftId: string | null
 }
 
-export interface OwnPost {
-  postId: string
-  threadId: string
-  isThread: boolean
-  credentialId: CredentialId | null
-  evidence: 'submission-readback' | 'manual'
-  confirmedAt: string
-}
-
 export interface SubmitInput {
   /** A fresh UUID for each explicit send; reuse while awaiting the same send's result. */
   requestId: string
@@ -37,11 +28,13 @@ export interface SubmitInput {
   payload: DraftSaveInput
 }
 
+/** The thread's main post carries the 饼干 ID of another imported cookie than the one about to send. */
 export interface PoPrompt {
   token: string
   currentName: string
   poName: string
   poCredentialId: CredentialId
+  /** False when the matching cookie's secret is missing or cannot be decrypted. */
   canSwitch: boolean
 }
 
@@ -56,9 +49,6 @@ export interface PublicationApi {
   resolvePrompt(input: { token: string; choice: 'switch' | 'current' | 'cancel'; suppress: boolean }): Promise<SubmitResult | { kind: 'cancelled' }>
   listAttempts(): Promise<{ ok: true; attempts: PublicationAttempt[] } | { ok: false; reason: 'storage' }>
   getAttempt(input: { attemptId: string }): Promise<{ ok: true; attempt: PublicationAttempt | null; draft: SavedDraft | null } | { ok: false; reason: 'storage' }>
-  listOwnPosts(): Promise<{ ok: true; posts: OwnPost[] } | { ok: false; reason: 'storage' }>
-  /** Explicit user assertion about an old ID, with no inferred credential association. */
-  addOwnPost(input: { postId: string; threadId: string; isThread: boolean }): Promise<{ ok: true } | { ok: false; reason: 'storage' | 'target' }>
   getPoWarning(): Promise<{ enabled: boolean }>
   setPoWarning(input: { enabled: boolean }): Promise<{ ok: boolean; enabled: boolean }>
 }

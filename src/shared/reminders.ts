@@ -48,9 +48,11 @@ export type ThreadCheckState = 'baseline-pending' | 'checking' | 'done' | 'incom
  * - `gaps`: pages between 1 and the target were not obtained;
  * - `count-mismatch`: ReplyCount differs from the obtained replies;
  * - `target-unverified`: the bounded tail probe found no last page + empty successor;
- * - `boundary-uncertain`: some matching replies can be proven neither before nor after the start.
+ * - `boundary-uncertain`: some matching replies can be proven neither before nor after the start;
+ * - `quote-unverified`: some replies quote posts whose 饼干 ID could not be obtained, so whether they
+ *   quote one of the imported cookies is unknown (never counted as a non-match).
  */
-export type CoverageIssue = 'shifted' | 'gaps' | 'count-mismatch' | 'target-unverified' | 'boundary-uncertain'
+export type CoverageIssue = 'shifted' | 'gaps' | 'count-mismatch' | 'target-unverified' | 'boundary-uncertain' | 'quote-unverified'
 
 /** One reminder per post, whichever rules it matched. */
 export interface ReminderEvent {
@@ -64,7 +66,7 @@ export interface ReminderEvent {
   excerpt: string
   /** Server `now` text as provided (timezone unverified), or `null`. */
   createdAt: string | null
-  /** Own post IDs this reply explicitly quotes (`quote` kind), ascending. */
+  /** Quoted post IDs whose 饼干 ID matches an imported cookie (`quote` kind), ascending. */
   quotedOwnIds: PostId[]
   discoveredAt: string
 }

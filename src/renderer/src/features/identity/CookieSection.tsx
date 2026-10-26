@@ -4,6 +4,7 @@ import {
 } from 'react'
 import type { AccountCookie, AccountFailure, AccountOverview } from '../../../../shared/account'
 import {
+  COOKIE_ID_MAX_LENGTH,
   IDENTITY_ROLES,
   type CredentialId,
   type CredentialSummary,
@@ -22,11 +23,17 @@ import {
   accountFailureText,
   accountImportFailureText,
   accountImportSummary,
+  checkCookieId,
   checkName,
+  cookieIdErrorText,
+  cookieIdLabel,
+  duplicateText,
   importFailureText,
+  importedText,
   nameErrorText,
   roleList,
   rolesUsing,
+  type AccountImportCounts,
   type FailureField,
   type ImportEntry
 } from './identityText'
@@ -291,7 +298,7 @@ function CredentialList({ overview, onChanged }: { overview: IdentityOverview; o
   )
 }
 
-type ItemMode = 'view' | 'rename' | 'confirm-remove'
+type ItemMode = 'view' | 'rename' | 'cookie-id' | 'confirm-remove'
 
 function mutationErrorText(result: IdentityMutationResult & { ok: false }, action: string): string {
   switch (result.reason) {
@@ -301,6 +308,8 @@ function mutationErrorText(result: IdentityMutationResult & { ok: false }, actio
       return `本地存储不可写，未${action}`
     case 'name':
       return nameErrorText(result.nameError ?? 'invalid')
+    case 'cookie-id':
+      return cookieIdErrorText(result.cookieIdError ?? 'invalid')
   }
 }
 
@@ -342,8 +351,9 @@ function CredentialItem({
   const [pending, setPending] = useState(false)
   const itemRef = useRef<HTMLLIElement>(null)
   const renameButton = useRef<HTMLButtonElement>(null)
+  const cookieIdButton = useRef<HTMLButtonElement>(null)
   const removeButton = useRef<HTMLButtonElement>(null)
-  const renameInput = useRef<HTMLInputElement>(null)
+  const editInput = useRef<HTMLInputElement>(null)
   const cancelRemove = useRef<HTMLButtonElement>(null)
   const returnFocus = useRef<RefObject<HTMLButtonElement | null> | null>(null)
   const nameId = useId()
@@ -356,7 +366,7 @@ function CredentialItem({
 
   // Focus follows the mode: into the editor / confirmation, back to the button that opened it.
   useEffect(() => {
-    if (mode === 'rename') renameInput.current?.select()
+    if (mode === 'rename' || mode === 'cookie-id') editInput.current?.select()
     else if (mode === 'confirm-remove') cancelRemove.current?.focus()
     else if (returnFocus.current !== null) {
       returnFocus.current.current?.focus()
@@ -364,25 +374,37 @@ function CredentialItem({
     }
   }, [mode])
 
+  const refocusInput = useRef(false)
+  useEffect(() => {
+    if (pending || !refocusInput.current) return
+    refocusInput.current = false
+    editInput.current?.focus()
+  }, [pending])
+
   const leave = (focusTarget: RefObject<HTMLButtonElement | null>) => {
     returnFocus.current = focusTarget
     setError(null)
     setMode('view')
   }
 
-  const startRename = () => {
-    setDraft(credential.name)
+  const openerOf = (current: ItemMode) =>
+    current === 'rename' ? renameButton : current === 'cookie-id' ? cookieIdButton : removeButton
+
+  const startEdit = (next: 'rename' | 'cookie-id') => {
+    setDraft(next === 'rename' ? credential.name : (credential.cookieId ?? ''))
     setError(null)
-    setMode('rename')
+    setMode(next)
   }
 
-  const saveRename = async (event: FormEvent) => {
-    event.preventDefault()
-    if (pending) return
+  const invalidDraft = (text: string) => {
+    setError(text)
+    editInput.current?.focus()
+  }
+
+  const saveRename = async () => {
     const nameError = checkName(draft)
     if (nameError !== null) {
-      setError(nameErrorText(nameError))
-      renameInput.current?.focus()
+      invalidDraft(nameErrorText(nameError))
       return
     }
     const name = draft.trim()
@@ -406,6 +428,46 @@ function CredentialItem({
     } finally {
       setPending(false)
     }
+  }
+
+  // Only later matching changes (own posts, PO 饼干, quotes of mine); past reminders stay as they are.
+  const saveCookieId = async () => {
+    const cookieIdError = checkCookieId(draft)
+    if (cookieIdError !== null) {
+      invalidDraft(cookieIdErrorText(cookieIdError))
+      return
+    }
+    const cookieId = draft.trim()
+    if (cookieId === credential.cookieId) {
+      leave(cookieIdButton)
+      return
+    }
+    setPending(true)
+    try {
+      const result = await window.xidao.identities.setCookieId({ credentialId: credential.id, cookieId })
+      if (result.ok) {
+        onAnnounce({ tone: 'success', text: `「${credential.name}」的饼干 ID 已${credential.cookieId === null ? '填写' : '改'}为 ${cookieId}` })
+        await onChanged()
+        leave(cookieIdButton)
+      } else if (result.reason === 'cookie-id') {
+        // The input is disabled while saving; it takes focus back once the save ends.
+        refocusInput.current = true
+        setError(mutationErrorText(result, '保存'))
+      } else {
+        setError(mutationErrorText(result, '保存'))
+        if (result.reason === 'not-found') await onChanged()
+      }
+    } catch {
+      setError('请求失败，饼干 ID 未保存，请重试')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const saveEdit = (event: FormEvent) => {
+    event.preventDefault()
+    if (pending) return
+    void (mode === 'cookie-id' ? saveCookieId() : saveRename())
   }
 
   const confirmRemove = async () => {
@@ -440,7 +502,7 @@ function CredentialItem({
     if (event.key !== 'Escape') return
     event.preventDefault()
     event.stopPropagation()
-    if (!pending) leave(mode === 'rename' ? renameButton : removeButton)
+    if (!pending) leave(openerOf(mode))
   }
 
   const itemClass = ['credential-item', dragging ? 'is-dragging' : null, dropMark === null ? null : `is-drop-${dropMark}`]
@@ -449,22 +511,25 @@ function CredentialItem({
 
   return (
     <li ref={itemRef} className={itemClass} data-credential={credential.id} {...dragProps}>
-      {mode === 'rename' ? (
-        <form className="credential-rename" onSubmit={(event) => void saveRename(event)} onKeyDown={onEditorKeyDown}>
+      {mode === 'rename' || mode === 'cookie-id' ? (
+        <form className="credential-rename" onSubmit={saveEdit} onKeyDown={onEditorKeyDown}>
           <label className="field-label" htmlFor={nameId}>
-            新名称
+            {mode === 'rename' ? '新名称' : `「${credential.name}」的饼干 ID`}
           </label>
           <div className="credential-rename-row">
             <input
               id={nameId}
-              ref={renameInput}
-              className="text-input"
+              ref={editInput}
+              className={mode === 'cookie-id' ? 'text-input cookie-id-input' : 'text-input'}
               value={draft}
               onChange={(event) => {
                 setDraft(event.target.value)
                 setError(null)
               }}
+              maxLength={mode === 'cookie-id' ? COOKIE_ID_MAX_LENGTH : undefined}
               autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
               spellCheck={false}
               aria-invalid={error !== null ? true : undefined}
               aria-describedby={errorId}
@@ -473,7 +538,7 @@ function CredentialItem({
             <button type="submit" className="btn btn-small" disabled={pending}>
               {pending ? '正在保存…' : '保存'}
             </button>
-            <button type="button" className="btn btn-small" onClick={() => leave(renameButton)} disabled={pending}>
+            <button type="button" className="btn btn-small" onClick={() => leave(openerOf(mode))} disabled={pending}>
               取消
             </button>
           </div>
@@ -516,6 +581,8 @@ function CredentialItem({
               )}
             </p>
             <p className="credential-meta">
+              <span className="credential-cookie-id">{cookieIdLabel(credential.cookieId)}</span>
+              {' · '}
               {SOURCE_LABEL[credential.source]} · 导入于 {formatLocalTime(credential.importedAt)}
             </p>
           </div>
@@ -550,11 +617,21 @@ function CredentialItem({
               type="button"
               ref={renameButton}
               className="btn btn-small"
-              onClick={startRename}
+              onClick={() => startEdit('rename')}
               disabled={!writable || mode !== 'view'}
               aria-label={`重命名「${credential.name}」`}
             >
               重命名
+            </button>
+            <button
+              type="button"
+              ref={cookieIdButton}
+              className="btn btn-small"
+              onClick={() => startEdit('cookie-id')}
+              disabled={!writable || mode !== 'view'}
+              aria-label={`${credential.cookieId === null ? '填写' : '修改'}「${credential.name}」的饼干 ID`}
+            >
+              {credential.cookieId === null ? '填写 ID' : '修改 ID'}
             </button>
             <button
               type="button"
@@ -651,14 +728,17 @@ function ImportForm({
   // Uncontrolled on purpose: React would mirror a controlled value into the `value` attribute.
   const secretRef = useRef<HTMLInputElement>(null)
   const [shown, setShown] = useState(false)
+  const [cookieId, setCookieId] = useState('')
   const [name, setName] = useState('')
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
   const [invalid, setInvalid] = useState<FailureField>(null)
   const secretId = useId()
+  const cookieIdId = useId()
   const nameId = useId()
   const messageId = useId()
-  const nameRequired = entry === 'raw'
+  // The userhash alone carries no public ID; an export carries it as its `name`.
+  const askCookieId = entry === 'raw'
 
   // The pasted value never outlives this form (dialog closed or section unmounted).
   useEffect(() => {
@@ -671,15 +751,32 @@ function ImportForm({
   const fail = (text: string, field: FailureField) => {
     setMessage({ tone: 'error', text })
     setInvalid(field)
-    if (field === 'secret') secretRef.current?.focus()
-    else if (field === 'name') document.getElementById(nameId)?.focus()
+    const target = field === 'secret' ? secretId : field === 'cookie-id' ? cookieIdId : field === 'name' ? nameId : null
+    if (target !== null) document.getElementById(target)?.focus()
+  }
+
+  /** The entered values are done with: stored, or the same userhash was already there. */
+  const clear = () => {
+    if (secretRef.current !== null) secretRef.current.value = ''
+    setShown(false)
+    setCookieId('')
+    setName('')
+    setInvalid(null)
   }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     if (pending || disabled) return
+    const trimmedId = cookieId.trim()
+    if (askCookieId) {
+      const cookieIdError = checkCookieId(cookieId)
+      if (cookieIdError !== null) {
+        fail(cookieIdErrorText(cookieIdError), 'cookie-id')
+        return
+      }
+    }
     const trimmedName = name.trim()
-    if (nameRequired || trimmedName !== '') {
+    if (trimmedName !== '') {
       const nameError = checkName(name)
       if (nameError !== null) {
         fail(nameErrorText(nameError), 'name')
@@ -687,22 +784,23 @@ function ImportForm({
       }
     }
     const secret = secretRef.current?.value ?? ''
+    const named = trimmedName === '' ? {} : { name: trimmedName }
     setPending(true)
     setMessage(null)
     try {
       const result =
         entry === 'export'
-          ? await window.xidao.identities.importExport(
-              trimmedName === '' ? { payload: secret } : { payload: secret, name: trimmedName }
-            )
-          : await window.xidao.identities.importRaw({ userhash: secret, name: trimmedName })
+          ? await window.xidao.identities.importExport({ payload: secret, ...named })
+          : await window.xidao.identities.importRaw({ userhash: secret, cookieId: trimmedId, ...named })
       if (result.ok) {
-        if (secretRef.current !== null) secretRef.current.value = ''
-        setShown(false)
-        setName('')
-        setInvalid(null)
-        setMessage({ tone: 'success', text: `已导入「${result.credential.name}」` })
+        clear()
+        setMessage({ tone: 'success', text: `已导入${importedText(result.credential)}` })
         await onImported()
+      } else if (result.failure.reason === 'duplicate') {
+        const failure = result.failure
+        clear()
+        setMessage({ tone: failure.cookieId === 'conflict' ? 'error' : 'success', text: duplicateText(failure, askCookieId ? trimmedId : null) })
+        if (failure.cookieId === 'filled') await onImported()
       } else {
         const { text, field } = importFailureText(result.failure, entry)
         fail(text, field)
@@ -747,8 +845,34 @@ function ImportForm({
             {shown ? '隐藏' : '显示'}
           </button>
         </div>
+        {askCookieId && (
+          <>
+            <label className="field-label" htmlFor={cookieIdId}>
+              饼干 ID
+            </label>
+            <input
+              id={cookieIdId}
+              className="text-input cookie-id-input"
+              value={cookieId}
+              onChange={(event) => {
+                setCookieId(event.target.value)
+                if (invalid === 'cookie-id') setInvalid(null)
+              }}
+              maxLength={COOKIE_ID_MAX_LENGTH}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              placeholder="发言旁显示的饼干 ID"
+              required
+              aria-required
+              aria-describedby={invalid === 'cookie-id' ? messageId : undefined}
+              aria-invalid={invalid === 'cookie-id' ? true : undefined}
+            />
+          </>
+        )}
         <label className="field-label" htmlFor={nameId}>
-          名称{nameRequired ? '' : '（可选）'}
+          显示名称（可选）
         </label>
         <input
           id={nameId}
@@ -760,8 +884,7 @@ function ImportForm({
           }}
           autoComplete="off"
           spellCheck={false}
-          required={nameRequired}
-          aria-required={nameRequired ? true : undefined}
+          placeholder={entry === 'export' ? '默认为导出内容中的饼干 ID' : '默认为饼干 ID'}
           aria-describedby={invalid === 'name' ? messageId : undefined}
           aria-invalid={invalid === 'name' ? true : undefined}
         />
@@ -894,26 +1017,29 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
       if (!alive.current) return
       const next = new Map(outcomes)
       const settled = new Set<string>()
-      let imported = 0
-      let duplicates = 0
-      let failures = 0
+      const publicIds = new Map(cookies.map((cookie) => [cookie.id, cookie.publicId]))
+      const counts: AccountImportCounts = { imported: 0, filled: 0, same: 0, conflict: 0, failed: 0 }
       for (const { id, result: item } of result.value) {
         if (item.ok) {
-          imported += 1
+          counts.imported += 1
           settled.add(id)
-          next.set(id, { tone: 'success', text: `已导入为「${item.credential.name}」` })
+          next.set(id, { tone: 'success', text: `已导入为${importedText(item.credential)}` })
         } else if (item.failure.reason === 'duplicate') {
-          duplicates += 1
+          const failure = item.failure
+          counts[failure.cookieId] += 1
           settled.add(id)
-          next.set(id, { tone: 'success', text: `已有相同饼干「${item.failure.existing.name}」` })
+          next.set(id, {
+            tone: failure.cookieId === 'conflict' ? 'error' : 'success',
+            text: duplicateText(failure, publicIds.get(id) ?? null)
+          })
         } else {
-          failures += 1
+          counts.failed += 1
           next.set(id, { tone: 'error', text: accountImportFailureText(item.failure) })
         }
       }
       setOutcomes(next)
       setSelected((current) => new Set([...current].filter((id) => !settled.has(id))))
-      setMessage({ tone: failures > 0 ? 'error' : 'success', text: accountImportSummary(imported, duplicates, failures) })
+      setMessage({ tone: counts.failed > 0 || counts.conflict > 0 ? 'error' : 'success', text: accountImportSummary(counts) })
     } catch {
       // The request may have stored some of them before failing: re-read what is there.
       void onImported()

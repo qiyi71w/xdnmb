@@ -368,7 +368,9 @@ describe('schema v14: thread favourites and read state removed', () => {
     const raw = new Database(path, { readonly: true })
     try {
       const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
-      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(`SELECT * FROM ${table}`).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
+      // Later versions add columns (credentials.cookie_id in v15); compare the columns v13 had.
+      const query = (table: string) => table === 'credentials' ? 'SELECT id, name, source, imported_at, ciphertext, position FROM credentials' : `SELECT * FROM ${table}`
+      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(query(table)).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
       return { version: raw.pragma('user_version', { simple: true }), tables, rows }
     } finally { raw.close() }
   }
@@ -377,9 +379,9 @@ describe('schema v14: thread favourites and read state removed', () => {
     const path = v13()
     const before = snapshot(path)
     const db = open(path)
-    expect(db.status).toEqual({ state: 'ready', schemaVersion: 14 })
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
     const after = snapshot(path)
-    expect(after.version).toBe(14)
+    expect(after.version).toBe(supportedVersion)
     for (const table of removed) expect(after.tables.has(table)).toBe(false)
     expect(after.rows).toEqual(before.rows)
     expect(before.rows.reading_observations?.length).toBeGreaterThan(0)
@@ -405,6 +407,78 @@ describe('schema v14: thread favourites and read state removed', () => {
     const unchanged = snapshot(path)
     expect(unchanged.version).toBe(13)
     for (const table of removed) expect(unchanged.tables.has(table)).toBe(true)
-    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: 14 })
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+  })
+})
+
+describe('schema v15: 饼干 IDs replace the own-post record', () => {
+  const kept = ['thread_reading', 'reading_positions', 'thread_visits', 'end_observations', 'reading_observations', 'post_threads',
+    'reminder_rules', 'reminder_events', 'reminder_rounds', 'reminder_notifications', 'local_blocks', 'drafts', 'draft_attachments',
+    'publication_attempts', 'publication_settings', 'thread_post_identities', 'identity_roles', 'settings', 'subscription_operations',
+    'offline_copies', 'workspace']
+
+  /** A v14 database with an own-post record, a confirmed send and quote re-check markers. */
+  function v14(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 14)).close()
+    const raw = new Database(path)
+    try {
+      expect(raw.pragma('user_version', { simple: true })).toBe(14)
+      const payload = { draftId: null, target: { kind: 'thread', forumId: '4' }, credentialId: '7',
+        fields: { content: '已确认的发送', title: '', name: '', email: '', watermark: false }, attachmentId: null }
+      raw.prepare(`INSERT INTO publication_attempts(request_id, editor_id, payload_json, credential_id, forum_id, state,
+        created_at, updated_at, post_id, thread_id, launch_notice) VALUES ('confirmed-send', 'editor', ?, 7, '4', 'confirmed', ?, ?, '700', '700', 0)`)
+        .run(JSON.stringify(payload), at, later)
+      raw.prepare("INSERT INTO own_posts VALUES ('700', '700', 1, 7, 'submission-readback', ?)").run(later)
+      raw.prepare(`INSERT INTO reminder_coverage(thread_id, mode, state, issues_json, quote_own_revision)
+        VALUES ('100', 'all', 'done', '[]', '[{"post_id":"700"}]'), ('100', 'po', 'done', '[]', NULL)`).run()
+    } finally { raw.close() }
+    return path
+  }
+  function snapshot(path: string) {
+    const raw = new Database(path, { readonly: true })
+    try {
+      const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
+      const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(`SELECT * FROM ${table}`).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
+      return { version: raw.pragma('user_version', { simple: true }), tables, rows }
+    } finally { raw.close() }
+  }
+
+  it('keeps earlier cookies usable with an unknown 饼干 ID, drops own_posts and keeps send results and ID confirmations', () => {
+    const path = v14()
+    const before = snapshot(path)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: 15 })
+    const after = snapshot(path)
+    expect(after.tables.has('own_posts')).toBe(false)
+    expect(after.rows).toEqual(before.rows)
+    expect(db.listCredentials()).toEqual([{ id: '7', name: '旧同步饼干', cookieId: null, source: 'raw', importedAt: at }])
+    expect(db.loadCredentialCiphertext('7')).toEqual(ciphertext)
+    expect(db.loadRoleSelections()['web-sync']).toEqual({ state: 'selected', credentialId: '7' })
+    expect(db.reminderCookieIds()).toEqual([])
+    expect(db.listPublications().find((item) => item.requestId === 'confirmed-send')).toMatchObject({ state: 'confirmed', postId: '700', threadId: '700' })
+    // Retained replies were already evaluated against an empty 饼干 ID set; a never-run marker stays unset.
+    expect(db.getReminderCoverage('100', 'all').quoteCookieRevision).toBe('[]')
+    expect(db.getReminderCoverage('100', 'po').quoteCookieRevision).toBeNull()
+    expect(db.fillCredentialCookieId('7', 'Filled1')).toBe(true)
+    expect(db.fillCredentialCookieId('7', 'Other22')).toBe(false)
+    expect(db.listCredentials()[0]).toMatchObject({ name: '旧同步饼干', cookieId: 'Filled1' })
+  })
+
+  it('leaves the v14 file byte-for-byte unchanged when the v15 migration fails', () => {
+    const path = v14()
+    const original = readFileSync(path)
+    const failing = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 14), { version: 15, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 15)!.up(connection)
+      throw new Error('injected failure after the v15 changes')
+    } }])
+    connections.push(failing)
+    expect(failing.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failing.close()
+    expect(readFileSync(path)).toEqual(original)
+    const unchanged = snapshot(path)
+    expect(unchanged.version).toBe(14)
+    expect(unchanged.tables.has('own_posts')).toBe(true)
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: 15 })
   })
 })

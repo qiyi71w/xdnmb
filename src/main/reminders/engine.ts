@@ -1,5 +1,5 @@
 import type { ReadError } from '../../shared/api'
-import { comparePostIds, type ThreadPage } from '../../shared/forum'
+import { comparePostIds, type PostId, type ThreadPage } from '../../shared/forum'
 import { threadTotalPages } from '../../shared/threadPages'
 import type { CheckRound, RoundStopReason } from '../../shared/reminders'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
@@ -7,6 +7,7 @@ import type { RequestScheduler } from '../reading/scheduler'
 import type { AppStore } from '../storage/contract'
 import { assertReadablePage } from '../storage/coverage'
 import type { ReminderCoverage, RuleSnapshot } from './contract'
+import { quotedPostIds } from './evaluation'
 
 interface ModeWork {
   coverage: ReminderCoverage
@@ -23,12 +24,13 @@ interface ModeWork {
   verifyPages: number[]
   nextPage: number
   missingPages: number[] | null
-  ownRevision: string
+  /** Quoted posts without local content, read one by one through the controlled quote read. */
+  pendingRefs: PostId[] | null
 }
 interface ThreadWork { threadId: string; modes: ModeWork[]; failed: boolean; counted: boolean }
 export interface RoundEngineDeps {
   store: AppStore
-  client: Pick<ForumClient, 'getThreadPage'>
+  client: Pick<ForumClient, 'getThreadPage' | 'getRef'>
   scheduler: RequestScheduler
   now(): string
   changed(): void
@@ -40,7 +42,7 @@ function issue(work: ModeWork, value: ReminderCoverage['issues'][number]): void 
   if (!work.coverage.issues.includes(value)) work.coverage.issues.push(value)
 }
 
-/** One trigger owns one engine. A batch contains at most five network page reads for a thread. */
+/** One trigger owns one engine. A batch contains at most five network reads (pages or quoted posts) for a thread. */
 export async function runReminderRound(deps: RoundEngineDeps, input: {
   round: CheckRound
   rules: RuleSnapshot[]
@@ -50,7 +52,9 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   const { store } = deps
   const round = input.round
   const threads: ThreadWork[] = []
-  const ownRevision = await store.reminderOwnRevision()
+  // 饼干 IDs as of this round. A changed set is not a trigger; it makes this check revisit retained replies.
+  const cookieIds = await store.reminderCookieIds()
+  const cookieRevision = JSON.stringify(cookieIds)
   for (const threadId of new Set(input.rules.map((rule) => rule.threadId))) {
     const rules = input.rules.filter((rule) => rule.threadId === threadId)
     const modes: ModeWork[] = []
@@ -65,7 +69,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       coverage.updatedAt = deps.now()
       await store.saveReminderCoverage(coverage)
       modes.push({ coverage, rules: applicable, phase: 'probe', fetched: new Map(), target: null,
-        probeStart: null, probePage: null, forward: 0, backward: 0, reanchored: false, verifyPages: [], nextPage: 1, missingPages: null, ownRevision })
+        probeStart: null, probePage: null, forward: 0, backward: 0, reanchored: false, verifyPages: [], nextPage: 1, missingPages: null, pendingRefs: null })
     }
     threads.push({ threadId, modes, failed: false, counted: false })
   }
@@ -83,8 +87,9 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     round.newEvents += result.newEvents
     work.coverage.uncertainCount = result.uncertainCount
     work.coverage.uncertainty = result.uncertainty
-    work.coverage.issues = work.coverage.issues.filter((value) => value !== 'boundary-uncertain')
+    work.coverage.issues = work.coverage.issues.filter((value) => value !== 'boundary-uncertain' && value !== 'quote-unverified')
     if (result.uncertainCount > 0) issue(work, 'boundary-uncertain')
+    if (result.quoteUnverified > 0) issue(work, 'quote-unverified')
     if (work.phase === 'done' && work.coverage.state !== 'failed' && work.coverage.state !== 'incomplete') {
       work.coverage.state = result.baselinePending ? 'baseline-pending' : work.coverage.issues.length ? 'uncertain' : 'done'
     }
@@ -218,9 +223,9 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       const missing = new Set(candidates.filter((observation) => observation.replyIds.some((id, index) =>
         (quoteRule.watermarkPostId === null || comparePostIds(id, quoteRule.watermarkPostId) > 0) &&
         comparePostIds(id, work.target!.id) <= 0 && observation.posts[index] === null)).map((observation) => observation.page))
-      // A changed own-ID set revisits retained replies, not their network pages. Only absent content
+      // A changed 饼干 ID set revisits retained replies, not their network pages. Only absent content
       // and gaps need reads; the revision advances only after the entire evaluation completes.
-      if (work.coverage.quoteOwnRevision !== work.ownRevision && candidates.length > 0) {
+      if (work.coverage.quoteCookieRevision !== cookieRevision && candidates.length > 0) {
         const first = candidates[0]!.page // Observations are ordered by page in the worker.
         const present = new Set(observations.filter((observation) => observation.skippedItems === 0).map((observation) => observation.page))
         for (let number = first; number <= work.target!.page; number++) if (!present.has(number)) missing.add(number)
@@ -234,6 +239,38 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       if (!(await page(work, number, budget))) return false
       work.missingPages.shift()
     }
+    if (quoteRule && cookieIds.length > 0 && work.pendingRefs === null) {
+      // Whose post a reply quotes is known from the quoted post's 饼干 ID: stored content first, then
+      // a controlled quote read by ID. The quoted post's thread is never searched for.
+      const observations = await store.getReminderObservations(work.coverage.threadId, work.coverage.mode)
+      const quoted = new Set<PostId>()
+      for (const observation of observations) {
+        observation.replyIds.forEach((id, index) => {
+          const post = observation.posts[index]
+          if (!post || comparePostIds(id, work.target!.id) > 0) return
+          if (quoteRule.watermarkPostId !== null && comparePostIds(id, quoteRule.watermarkPostId) <= 0) return
+          quotedPostIds(post.content, quoted)
+        })
+      }
+      const absent: PostId[] = []
+      for (const id of quoted) if ((await store.loadPost(id)) === null) absent.push(id)
+      work.pendingRefs = absent.sort(comparePostIds)
+    }
+    while (work.pendingRefs?.length) {
+      const id = work.pendingRefs[0]!
+      if (input.signal.aborted) throw new ReadCancelledError()
+      if (budget.remaining === 0) return false
+      budget.remaining--
+      try {
+        const post = await deps.scheduler.run('background', input.signal, (signal) => deps.client.getRef(id, signal))
+        await store.savePost(post, deps.now())
+      } catch (error) {
+        // Not obtained: the reply stays unverified (never a non-match) and is read again next check.
+        // A rate limit or captcha stops the round exactly as for pages.
+        if (!(error instanceof ForumReadError) || error.error.kind === 'rate-limited') throw error
+      }
+      work.pendingRefs.shift()
+    }
     const observed = await store.getReminderObservations(work.coverage.threadId, work.coverage.mode)
     const upToTarget = observed.filter((observation) => observation.page <= work.target!.page)
     const obtained = new Set(upToTarget.flatMap((observation) => observation.replyIds).filter((id) => comparePostIds(id, work.target!.id) <= 0))
@@ -242,7 +279,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     if (count != null && obtained.size !== count) issue(work, 'count-mismatch')
     if (upToTarget.some((observation) => observation.skippedItems > 0)) issue(work, 'gaps')
     work.coverage.checkpoint = work.coverage.checkpoint ? { ...work.coverage.checkpoint, complete: true } : null
-    work.coverage.quoteOwnRevision = work.ownRevision
+    work.coverage.quoteCookieRevision = cookieRevision
     work.coverage.state = 'done'
     work.phase = 'done'
     return true

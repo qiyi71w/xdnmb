@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { REPORT_REASONS, parseReportContent, reportContent, reportDraftContent, reportReason, type ReportFields } from '../../src/shared/report'
 import { isPostBlocked, type LocalBlock } from '../../src/shared/blocks'
+import type { CredentialSummary, IdentityOverview } from '../../src/shared/identity'
+import { isOwnPost, ownCookieIds } from '../../src/renderer/src/features/thread/ownPosts'
 import { editorFor, editorsReducer, INITIAL_EDITORS, saveInput } from '../../src/renderer/src/features/editor/editorsState'
 import { EMPTY_FIELDS, type IdentityChoice, type SavedDraft } from '../../src/shared/drafts'
 
@@ -99,5 +101,28 @@ describe('local block matching', () => {
     const heads = [{ id: '100', userHash: 'cookie-a' }, { id: '101', userHash: null }, { id: '102', userHash: 'cookie-b' }]
     expect(heads.filter((post) => !isPostBlocked(post, blocks))).toEqual([heads[2]])
     expect(heads.filter((post) => !isPostBlocked(post, []))).toEqual(heads)
+  })
+})
+
+describe('own post recognition', () => {
+  const credential = (id: string, name: string, cookieId: string | null): CredentialSummary =>
+    ({ id, name, cookieId, source: 'export', importedAt: '2026-10-25T00:00:00.000Z' })
+  const overview = (credentials: CredentialSummary[]): IdentityOverview => ({
+    protection: 'available', writable: true, credentials,
+    roles: { 'default-post': { state: 'none' }, 'web-sync': { state: 'none' } }
+  })
+
+  it('matches only by a known 饼干 ID, never by display name or a missing ID', () => {
+    const ids = ownCookieIds(overview([credential('1', 'AbC123', null), credential('2', '小号', 'xYz789')]))
+    expect(isOwnPost({ userHash: 'xYz789' }, ids)).toBe(true)
+    expect(isOwnPost({ userHash: 'AbC123' }, ids)).toBe(false)
+    expect(isOwnPost({ userHash: '小号' }, ids)).toBe(false)
+    expect(isOwnPost({ userHash: 'xyz789' }, ids)).toBe(false)
+    expect(isOwnPost({ userHash: null }, ids)).toBe(false)
+  })
+
+  it('follows the overview: nothing before it is read, a filled-in ID matches afterwards', () => {
+    expect(isOwnPost({ userHash: 'AbC123' }, ownCookieIds(null))).toBe(false)
+    expect(isOwnPost({ userHash: 'AbC123' }, ownCookieIds(overview([credential('1', '主号', 'AbC123')])))).toBe(true)
   })
 })

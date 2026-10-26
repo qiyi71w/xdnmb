@@ -130,17 +130,21 @@ export interface ReadingStore {
 }
 
 /**
- * Credential persistence: local references, names and ciphertext only. Plain-text secrets never
- * reach this layer. IDs are never reused, so a role pointing at a removed credential stays missing.
+ * Credential persistence: local references, names, public 饼干 IDs and ciphertext only. Plain-text
+ * secrets never reach this layer. IDs are never reused, so a role pointing at a removed credential stays missing.
  */
 export interface IdentityStore {
   /** In the user's order (position, then ID). */
   listCredentials(): Promise<CredentialSummary[]>
   loadCredentialCiphertexts(): Promise<Array<{ id: CredentialId; ciphertext: Uint8Array }>>
   loadCredentialCiphertext(id: CredentialId): Promise<Uint8Array | null>
-  insertCredential(input: { name: string; source: CredentialSource; importedAt: string; ciphertext: Uint8Array }): Promise<CredentialSummary>
+  insertCredential(input: { name: string; cookieId: string; source: CredentialSource; importedAt: string; ciphertext: Uint8Array }): Promise<CredentialSummary>
   /** False when the credential does not exist. */
   renameCredential(id: CredentialId, name: string): Promise<boolean>
+  /** Stores the 饼干 ID only while it is unknown. False (and no change) when absent or already known. */
+  fillCredentialCookieId(id: CredentialId, cookieId: string): Promise<boolean>
+  /** Replaces the 饼干 ID. False when the credential does not exist. */
+  setCredentialCookieId(id: CredentialId, cookieId: string): Promise<boolean>
   /** Deletes the ciphertext; role references are kept. False when it did not exist. */
   deleteCredential(id: CredentialId): Promise<boolean>
   /** Stores the given order. False (and no change) unless `ids` are exactly the stored credentials. */

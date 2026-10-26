@@ -60,6 +60,8 @@ function asyncStore(db: ReadingDatabase): IdentityStore {
     loadCredentialCiphertext: async (id) => db.loadCredentialCiphertext(id),
     insertCredential: async (input) => db.insertCredential(input),
     renameCredential: async (id, name) => db.renameCredential(id, name),
+    fillCredentialCookieId: async (id, cookieId) => db.fillCredentialCookieId(id, cookieId),
+    setCredentialCookieId: async (id, cookieId) => db.setCredentialCookieId(id, cookieId),
     deleteCredential: async (id) => db.deleteCredential(id),
     reorderCredentials: async (ids) => db.reorderCredentials(ids),
     loadRoleSelections: async () => db.loadRoleSelections(),
@@ -82,8 +84,8 @@ function databasePath() {
   return join(folder, 'identity.sqlite')
 }
 
-async function imported(service: IdentityService, secret: string, name: string) {
-  const result = await service.importRaw(secret, name)
+async function imported(service: IdentityService, secret: string, name: string, cookieId = 'SynthId') {
+  const result = await service.importRaw(secret, cookieId, name)
   if (!result.ok) throw new Error(`import failed: ${result.failure.reason}`)
   return result.credential
 }
@@ -95,7 +97,7 @@ describe('paste entries', () => {
     const urlSafe = standard.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
     const wrapped = `  ${standard.slice(0, 10)}\n${standard.slice(10)}\n`
     for (const input of [standard, urlSafe, wrapped, json]) {
-      expect(parseExportPayload(input)).toEqual({ ok: true, userhash: SECRET_B, payloadName: '饼干甲' })
+      expect(parseExportPayload(input)).toEqual({ ok: true, userhash: SECRET_B, cookieId: '饼干甲' })
     }
   })
 
@@ -110,14 +112,18 @@ describe('paste entries', () => {
     [Buffer.from(JSON.stringify({ name: 'x' })).toString('base64'), 'missing-cookie'],
     [exportPayload('has space'), 'invalid-cookie'],
     [exportPayload('semi;colon'), 'invalid-cookie'],
-    ['A'.repeat(9000), 'too-long']
+    ['A'.repeat(9000), 'too-long'],
+    [exportPayload(SECRET_A), 'missing-cookie-id'],
+    [exportPayload(SECRET_A, '  '), 'missing-cookie-id'],
+    [exportPayload(SECRET_A, 'two words'), 'missing-cookie-id'],
+    [exportPayload(SECRET_A, 'x'.repeat(33)), 'missing-cookie-id']
   ])('classifies a bad export payload (%#) as %s', (input, error) => {
     expect(parseExportPayload(input)).toEqual({ ok: false, error })
   })
 
   it('accepts a raw userhash with or without the cookie name prefix and refuses header-breaking values', () => {
-    expect(parseRawUserhash(`  userhash=${SECRET_A} `)).toEqual({ ok: true, userhash: SECRET_A, payloadName: null })
-    expect(parseRawUserhash(SECRET_A)).toEqual({ ok: true, userhash: SECRET_A, payloadName: null })
+    expect(parseRawUserhash(`  userhash=${SECRET_A} `)).toEqual({ ok: true, userhash: SECRET_A, cookieId: null })
+    expect(parseRawUserhash(SECRET_A)).toEqual({ ok: true, userhash: SECRET_A, cookieId: null })
     expect(parseRawUserhash('userhash=')).toEqual({ ok: false, error: 'empty' })
     expect(parseRawUserhash(`${SECRET_A}\r\nX-Injected: 1`)).toEqual({ ok: false, error: 'invalid-cookie' })
     expect(parseRawUserhash('引号"')).toEqual({ ok: false, error: 'invalid-cookie' })
@@ -128,7 +134,7 @@ describe('identity service with real SQLite', () => {
   it('stores only ciphertext and never returns the secret in overview or failures', async () => {
     const { service, db, path } = setup()
     const first = await service.importExport(exportPayload(SECRET_A, '导出名'), null)
-    expect(first).toMatchObject({ ok: true, credential: { name: '导出名', source: 'export' } })
+    expect(first).toMatchObject({ ok: true, credential: { name: '导出名', cookieId: '导出名', source: 'export' } })
     const failure = await service.importExport(exportPayload(`${SECRET_A} broken`), null)
     expect(failure).toEqual({ ok: false, failure: { reason: 'format', detail: 'invalid-cookie' } })
     const overview = await service.getOverview()
@@ -139,20 +145,60 @@ describe('identity service with real SQLite', () => {
     }
   })
 
-  it('reports a duplicate across both entries without changing its name or any role', async () => {
+  it('stores the payload name as 饼干 ID and requires one for a raw userhash; renaming never changes it', async () => {
     const { service } = setup()
-    const a = await imported(service, SECRET_A, '原名')
-    const b = await imported(service, SECRET_B, '另一块')
+    const fromExport = await service.importExport(exportPayload(SECRET_A, 'Abc1234'), '我的显示名')
+    expect(fromExport).toMatchObject({ ok: true, credential: { name: '我的显示名', cookieId: 'Abc1234' } })
+    expect(await service.importRaw(SECRET_B, '  ', '名称')).toEqual({ ok: false, failure: { reason: 'cookie-id', detail: 'empty' } })
+    expect(await service.importRaw(SECRET_B, 'two words', '名称')).toEqual({ ok: false, failure: { reason: 'cookie-id', detail: 'invalid' } })
+    expect(await service.importRaw(SECRET_B, 'x'.repeat(33), '名称')).toEqual({ ok: false, failure: { reason: 'cookie-id', detail: 'too-long' } })
+    // Without a display name the 饼干 ID is used as one, still stored separately.
+    const raw = await service.importRaw(`userhash=${SECRET_B}`, ' Def5678 ', null)
+    expect(raw).toMatchObject({ ok: true, credential: { name: 'Def5678', cookieId: 'Def5678', source: 'raw' } })
+    if (!fromExport.ok || !raw.ok) throw new Error('import failed')
+    expect(await service.rename(fromExport.credential.id, '改了名字')).toEqual({ ok: true })
+    expect(await service.rename(raw.credential.id, 'Other99')).toEqual({ ok: true })
+    expect((await service.getOverview()).credentials.map(({ name, cookieId }) => ({ name, cookieId }))).toEqual([
+      { name: '改了名字', cookieId: 'Abc1234' }, { name: 'Other99', cookieId: 'Def5678' }
+    ])
+  })
+
+  it('re-importing a stored userhash only fills a missing 饼干 ID, keeps a different one and changes nothing else', async () => {
+    const { service, path } = setup()
+    const a = await imported(service, SECRET_A, '原名', 'OldA')
+    const b = await imported(service, SECRET_B, '另一块', 'IdB')
     await service.select('default-post', a.id)
     await service.select('web-sync', b.id)
+    expect(await service.reorder([b.id, a.id])).toEqual({ ok: true })
+    // As after the upgrade: the entry kept from before has no 饼干 ID.
+    const raw = new Database(path)
+    try { raw.prepare('UPDATE credentials SET cookie_id = NULL WHERE id = ?').run(a.id) } finally { raw.close() }
     const before = await service.getOverview()
+    expect(before.credentials.find((item) => item.id === a.id)?.cookieId).toBeNull()
 
-    const duplicate = await service.importExport(exportPayload(SECRET_A, '新名字'), '覆盖名')
-    expect(duplicate).toEqual({ ok: false, failure: { reason: 'duplicate', existing: a } })
-    expect(await service.importRaw(`userhash=${SECRET_B}`, '再来')).toEqual({
-      ok: false, failure: { reason: 'duplicate', existing: b }
+    const filled = await service.importExport(exportPayload(SECRET_A, 'Real7Id'), '覆盖名')
+    expect(filled).toEqual({ ok: false, failure: { reason: 'duplicate', cookieId: 'filled', existing: { ...a, cookieId: 'Real7Id' } } })
+    const expected = { ...before, credentials: before.credentials.map((item) => item.id === a.id ? { ...item, cookieId: 'Real7Id' } : item) }
+    expect(await service.getOverview()).toEqual(expected)
+
+    expect(await service.importExport(exportPayload(SECRET_A, 'Changed1'), null)).toEqual({
+      ok: false, failure: { reason: 'duplicate', cookieId: 'conflict', existing: { ...a, cookieId: 'Real7Id' } }
     })
-    expect(await service.getOverview()).toEqual(before)
+    expect(await service.importRaw(`userhash=${SECRET_B}`, 'IdB', '再来')).toEqual({
+      ok: false, failure: { reason: 'duplicate', cookieId: 'same', existing: b }
+    })
+    expect(await service.getOverview()).toEqual(expected)
+  })
+
+  it('fills in or changes a 饼干 ID from settings, validating it', async () => {
+    const { service } = setup()
+    const a = await imported(service, SECRET_A, 'A', 'First1')
+    expect(await service.setCookieId(a.id, ' Second2 ')).toEqual({ ok: true })
+    expect((await service.getOverview()).credentials[0]).toEqual({ ...a, cookieId: 'Second2' })
+    expect(await service.setCookieId(a.id, '')).toEqual({ ok: false, reason: 'cookie-id', cookieIdError: 'empty' })
+    expect(await service.setCookieId(a.id, 'a\tb')).toEqual({ ok: false, reason: 'cookie-id', cookieIdError: 'invalid' })
+    expect(await service.setCookieId('999', 'Third3')).toEqual({ ok: false, reason: 'not-found' })
+    expect((await service.getOverview()).credentials[0]?.cookieId).toBe('Second2')
   })
 
   it('keeps default-post and web-sync selections independent of the order', async () => {
@@ -241,7 +287,7 @@ describe('identity service with real SQLite', () => {
     const { service, protector } = setup()
     const a = await imported(service, SECRET_A, 'A')
     protector.available = false
-    expect(await service.importRaw(SECRET_B, 'B')).toEqual({ ok: false, failure: { reason: 'protection-unavailable' } })
+    expect(await service.importRaw(SECRET_B, 'IdB', 'B')).toEqual({ ok: false, failure: { reason: 'protection-unavailable' } })
     expect((await service.getOverview())).toMatchObject({ protection: 'unavailable', credentials: [a] })
     await expect(service.browseUserhash()).rejects.toMatchObject({ error: { kind: 'identity', detail: 'identity-locked' } })
     expect(await service.remove(a.id)).toEqual({ ok: true })
@@ -252,14 +298,14 @@ describe('identity service with real SQLite', () => {
     const { service, protector } = setup()
     const a = await imported(service, SECRET_A, 'A')
     protector.decryptFails = true
-    expect(await service.importRaw(SECRET_B, 'B')).toEqual({ ok: false, failure: { reason: 'decrypt-failed' } })
+    expect(await service.importRaw(SECRET_B, 'IdB', 'B')).toEqual({ ok: false, failure: { reason: 'decrypt-failed' } })
     await expect(service.browseUserhash()).rejects.toMatchObject({ error: { kind: 'identity', detail: 'identity-locked' } })
     expect((await service.getOverview()).credentials).toEqual([a])
   })
 
   it('serializes concurrent imports of the same value into one credential', async () => {
     const { service } = setup()
-    const results = await Promise.all([service.importRaw(SECRET_A, 'one'), service.importRaw(SECRET_A, 'two')])
+    const results = await Promise.all([service.importRaw(SECRET_A, 'IdA', 'one'), service.importRaw(SECRET_A, 'IdA', 'two')])
     expect(results.filter((result) => result.ok)).toHaveLength(1)
     expect(results.find((result) => !result.ok)).toMatchObject({ failure: { reason: 'duplicate' } })
   })

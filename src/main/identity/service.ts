@@ -1,10 +1,10 @@
 import type { StorageStatus } from '../../shared/api'
 import type {
-  CredentialId, CredentialSource, IdentityMutationResult, IdentityOverview, IdentityRole, ImportResult
+  CredentialId, CredentialSource, DuplicateCookieId, IdentityMutationResult, IdentityOverview, IdentityRole, ImportResult
 } from '../../shared/identity'
 import { ForumReadError } from '../forum/contract'
 import { StorageWriteRefusedError, type IdentityStore } from '../storage/contract'
-import { parseExportPayload, parseRawUserhash, validateName, type ParsedCredential } from './parse'
+import { parseExportPayload, parseRawUserhash, validateCookieId, validateName, type ParsedCredential } from './parse'
 import type { SecretProtector } from './protection'
 
 /** Stored credentials and role selections cannot be read; distinct from a stored `none`. */
@@ -18,8 +18,11 @@ export class IdentityStorageUnavailableError extends Error {
 export interface IdentityService {
   getOverview(): Promise<IdentityOverview>
   importExport(payload: string, name: string | null): Promise<ImportResult>
-  importRaw(userhash: string, name: string): Promise<ImportResult>
+  /** The 饼干 ID is required; an empty `name` defaults the display name to it. */
+  importRaw(userhash: string, cookieId: string, name: string | null): Promise<ImportResult>
   rename(id: CredentialId, name: string): Promise<IdentityMutationResult>
+  /** Fills in or replaces the 饼干 ID; only later matching changes. */
+  setCookieId(id: CredentialId, cookieId: string): Promise<IdentityMutationResult>
   remove(id: CredentialId): Promise<IdentityMutationResult>
   select(role: IdentityRole, id: CredentialId | null): Promise<IdentityMutationResult>
   /** Stores the credential order; the first credential is the one sent with forum reads. */
@@ -57,17 +60,26 @@ export function createIdentityService(deps: {
     throw error
   }
 
-  async function importParsed(parsed: ParsedCredential, source: CredentialSource, requestedName: string | null): Promise<ImportResult> {
+  async function importParsed(parsed: ParsedCredential, source: CredentialSource, typedCookieId: string | null, requestedName: string | null): Promise<ImportResult> {
     if (!parsed.ok) return { ok: false, failure: { reason: 'format', detail: parsed.error } }
+    let cookieId: string
+    if (parsed.cookieId !== null) {
+      cookieId = parsed.cookieId
+    } else {
+      const checked = validateCookieId(typedCookieId ?? '')
+      if (!checked.ok) return { ok: false, failure: { reason: 'cookie-id', detail: checked.error } }
+      cookieId = checked.cookieId
+    }
     let name: string
     if (requestedName !== null && requestedName.trim() !== '') {
       const checked = validateName(requestedName)
       if (!checked.ok) return { ok: false, failure: { reason: 'name', detail: checked.error } }
       name = checked.name
-    } else if (parsed.payloadName !== null) {
-      name = parsed.payloadName
     } else {
-      return { ok: false, failure: { reason: 'name', detail: 'required' } }
+      // The 饼干 ID is the default display name; it stays a separate value when renamed later.
+      const checked = validateName(cookieId)
+      if (!checked.ok) return { ok: false, failure: { reason: 'name', detail: 'required' } }
+      name = checked.name
     }
     if (!writable()) return { ok: false, failure: { reason: 'storage' } }
     if (!(await protector.isAvailable())) return { ok: false, failure: { reason: 'protection-unavailable' } }
@@ -84,7 +96,21 @@ export function createIdentityService(deps: {
         }
         if (stored === parsed.userhash) {
           const summary = (await store.listCredentials()).find((credential) => credential.id === entry.id)
-          if (summary) return { ok: false, failure: { reason: 'duplicate', existing: summary } }
+          if (summary) {
+            // Re-importing the same secret only ever fills a missing 饼干 ID: name, order and roles stay.
+            let filled = false
+            if (summary.cookieId === null) {
+              try {
+                filled = await store.fillCredentialCookieId(summary.id, cookieId)
+              } catch (error) {
+                if (error instanceof StorageWriteRefusedError) return { ok: false, failure: { reason: 'storage' } }
+                throw error
+              }
+            }
+            const current = (await store.listCredentials()).find((credential) => credential.id === entry.id) ?? summary
+            const outcome: DuplicateCookieId = filled ? 'filled' : current.cookieId === cookieId ? 'same' : 'conflict'
+            return { ok: false, failure: { reason: 'duplicate', existing: current, cookieId: outcome } }
+          }
         }
       }
       let ciphertext: Uint8Array
@@ -94,7 +120,7 @@ export function createIdentityService(deps: {
         return { ok: false, failure: { reason: 'protection-unavailable' } }
       }
       try {
-        const credential = await store.insertCredential({ name, source, importedAt: now().toISOString(), ciphertext })
+        const credential = await store.insertCredential({ name, cookieId, source, importedAt: now().toISOString(), ciphertext })
         return { ok: true, credential }
       } catch (error) {
         if (error instanceof StorageWriteRefusedError) return { ok: false, failure: { reason: 'storage' } }
@@ -112,8 +138,8 @@ export function createIdentityService(deps: {
       return { protection: available ? 'available' : 'unavailable', writable: writable(), credentials, roles }
     },
 
-    importExport: (payload, name) => importParsed(parseExportPayload(payload), 'export', name),
-    importRaw: (userhash, name) => importParsed(parseRawUserhash(userhash), 'raw', name),
+    importExport: (payload, name) => importParsed(parseExportPayload(payload), 'export', null, name),
+    importRaw: (userhash, cookieId, name) => importParsed(parseRawUserhash(userhash), 'raw', cookieId, name),
 
     rename(id, name) {
       const checked = validateName(name)
@@ -121,6 +147,18 @@ export function createIdentityService(deps: {
       return serialized(async () => {
         try {
           return (await store.renameCredential(id, checked.name)) ? { ok: true } : { ok: false, reason: 'not-found' }
+        } catch (error) {
+          return storageFailure(error)
+        }
+      })
+    },
+
+    setCookieId(id, cookieId) {
+      const checked = validateCookieId(cookieId)
+      if (!checked.ok) return Promise.resolve({ ok: false, reason: 'cookie-id', cookieIdError: checked.error })
+      return serialized(async () => {
+        try {
+          return (await store.setCredentialCookieId(id, checked.cookieId)) ? { ok: true } : { ok: false, reason: 'not-found' }
         } catch (error) {
           return storageFailure(error)
         }

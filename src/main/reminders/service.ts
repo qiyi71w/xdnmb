@@ -17,7 +17,7 @@ export interface ReminderService extends Omit<RemindersApi, 'onOpenList'> {
 
 export function createReminderService(deps: {
   store: AppStore
-  client: Pick<ForumClient, 'getThreadPage'>
+  client: Pick<ForumClient, 'getThreadPage' | 'getRef'>
   scheduler: RequestScheduler
   notifier: ReminderNotifier
   now?: () => string

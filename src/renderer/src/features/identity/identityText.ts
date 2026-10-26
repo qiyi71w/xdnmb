@@ -1,10 +1,13 @@
 import type { AccountFailure, AccountOverview } from '../../../../shared/account'
 import {
+  COOKIE_ID_MAX_LENGTH,
   CREDENTIAL_NAME_MAX_LENGTH,
   IDENTITY_ROLES,
   IMPORT_INPUT_MAX_LENGTH,
+  type CookieIdError,
   type CredentialId,
   type CredentialSource,
+  type CredentialSummary,
   type IdentityOverview,
   type IdentityRole,
   type ImportFailure,
@@ -12,7 +15,8 @@ import {
   type NameError
 } from '../../../../shared/identity'
 
-// None of the texts here ever include pasted input: only fixed copy and user-chosen names.
+// None of the texts here ever include pasted input: only fixed copy, user-chosen names and the
+// public 饼干 IDs.
 
 export const SOURCE_LABEL: Record<CredentialSource, string> = {
   export: '官网导出',
@@ -66,10 +70,61 @@ export function checkName(name: string): NameError | null {
   return null
 }
 
+export function cookieIdErrorText(error: CookieIdError): string {
+  switch (error) {
+    case 'empty':
+      return '请填写饼干 ID'
+    case 'too-long':
+      return `饼干 ID 不能超过 ${COOKIE_ID_MAX_LENGTH} 个字符`
+    case 'invalid':
+      return '饼干 ID 不能包含空格或无法使用的字符'
+  }
+}
+
+/** Local 饼干 ID check for what can be told before sending: trimmed, 1–32 characters. */
+export function checkCookieId(cookieId: string): CookieIdError | null {
+  const trimmed = cookieId.trim()
+  if (trimmed === '') return 'empty'
+  if ([...trimmed].length > COOKIE_ID_MAX_LENGTH) return 'too-long'
+  return null
+}
+
+/** The 饼干 ID as shown in a credential's row; an unknown one is said to be so. */
+export function cookieIdLabel(cookieId: string | null): string {
+  return cookieId === null ? '饼干 ID 未知' : `饼干 ID ${cookieId}`
+}
+
+/** A stored credential, by display name, with its 饼干 ID when the name does not already say it. */
+export function importedText(credential: CredentialSummary): string {
+  return credential.cookieId === null || credential.cookieId === credential.name
+    ? `「${credential.name}」`
+    : `「${credential.name}」（饼干 ID ${credential.cookieId}）`
+}
+
 export type ImportEntry = 'export' | 'raw'
 
 /** Which field an import failure belongs to, for `aria-invalid`. */
-export type FailureField = 'secret' | 'name' | null
+export type FailureField = 'secret' | 'cookie-id' | 'name' | null
+
+export type DuplicateFailure = Extract<ImportFailure, { reason: 'duplicate' }>
+
+/**
+ * The same userhash was already stored: only its 饼干 ID may have been filled in, never its name,
+ * order or roles. `importedId`: the 饼干 ID this import carried, when the view knows it.
+ */
+export function duplicateText(failure: DuplicateFailure, importedId: string | null): string {
+  const { existing } = failure
+  switch (failure.cookieId) {
+    case 'filled':
+      return `已有相同饼干「${existing.name}」，已补上${cookieIdLabel(existing.cookieId)}`
+    case 'same':
+      return `已有相同饼干「${existing.name}」，未做更改`
+    case 'conflict':
+      return importedId === null
+        ? `已有相同饼干「${existing.name}」，其${cookieIdLabel(existing.cookieId)}与导入内容中的不同，已保留原 ID`
+        : `已有相同饼干「${existing.name}」，其${cookieIdLabel(existing.cookieId)}与导入的 ${importedId} 不同，已保留原 ID`
+  }
+}
 
 export function importFailureText(failure: ImportFailure, entry: ImportEntry): { text: string; field: FailureField } {
   switch (failure.reason) {
@@ -81,8 +136,10 @@ export function importFailureText(failure: ImportFailure, entry: ImportEntry): {
           failure.detail === 'required' && entry === 'export' ? '导出内容中没有可用的名称，请填写名称' : nameErrorText(failure.detail),
         field: 'name'
       }
+    case 'cookie-id':
+      return { text: cookieIdErrorText(failure.detail), field: 'cookie-id' }
     case 'duplicate':
-      return { text: `已有相同饼干「${failure.existing.name}」，未做任何更改`, field: null }
+      return { text: duplicateText(failure, null), field: null }
     case 'protection-unavailable':
       return { text: '系统凭据保护不可用，未导入', field: null }
     case 'decrypt-failed':
@@ -104,6 +161,8 @@ function formatErrorText(detail: ImportFormatError, entry: ImportEntry): string 
       return '格式无法识别：Base64 解码后不是 JSON'
     case 'missing-cookie':
       return '导出内容中没有饼干（缺少 cookie）'
+    case 'missing-cookie-id':
+      return '导出内容中没有可用的饼干 ID（缺少 name）'
     case 'invalid-cookie':
       return entry === 'export'
         ? '导出内容中的饼干包含无法使用的字符'
@@ -148,7 +207,7 @@ export function accountFailureText(reason: AccountFailure): string {
 export function accountImportFailureText(failure: ImportFailure): string {
   switch (failure.reason) {
     case 'format':
-      return '官网导出内容无法识别，未导入'
+      return failure.detail === 'missing-cookie-id' ? '官网导出内容中没有可用的饼干 ID，未导入' : '官网导出内容无法识别，未导入'
     case 'name':
       return '导出内容中的名称不可用，未导入'
     default:
@@ -156,9 +215,20 @@ export function accountImportFailureText(failure: ImportFailure): string {
   }
 }
 
-export function accountImportSummary(imported: number, duplicates: number, failures: number): string {
-  const parts = [`导入 ${imported} 块`]
-  if (duplicates > 0) parts.push(`${duplicates} 块已存在`)
-  if (failures > 0) parts.push(`${failures} 块失败`)
+/** What one account import did, row by row: stored, already there (by 饼干 ID outcome), or failed. */
+export interface AccountImportCounts {
+  imported: number
+  filled: number
+  same: number
+  conflict: number
+  failed: number
+}
+
+export function accountImportSummary(counts: AccountImportCounts): string {
+  const parts = [`导入 ${counts.imported} 块`]
+  if (counts.filled > 0) parts.push(`${counts.filled} 块已存在，补上了饼干 ID`)
+  if (counts.same > 0) parts.push(`${counts.same} 块已存在`)
+  if (counts.conflict > 0) parts.push(`${counts.conflict} 块已存在但饼干 ID 不同，保留原 ID`)
+  if (counts.failed > 0) parts.push(`${counts.failed} 块失败`)
   return parts.join('，')
 }

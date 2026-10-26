@@ -44,7 +44,7 @@ export function PoPromptDialog({
     <Modal className="po-dialog" labelledBy={titleId} onClose={() => choose('cancel')}>
       <header className="modal-header">
         <h2 className="modal-title" id={titleId}>
-          发送到自己的串：饼干与开串时不同
+          发送到自己的串：当前饼干不是 PO 饼干
         </h2>
       </header>
       <div className="modal-body po-body">
@@ -55,7 +55,7 @@ export function PoPromptDialog({
             <dd>{prompt.currentName}</dd>
           </div>
           <div className="po-name is-po">
-            <dt>PO 饼干（开串时）</dt>
+            <dt>PO 饼干</dt>
             <dd>{prompt.poName}</dd>
           </div>
         </dl>

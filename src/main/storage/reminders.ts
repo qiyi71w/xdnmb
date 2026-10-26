@@ -17,7 +17,7 @@ interface RuleRow {
 interface CoverageRow {
   thread_id: string; mode: ReadingMode; checkpoint_json: string | null; probe_json: string | null
   state: ThreadCheckState; issues_json: string; last_error_json: string | null; last_round_id: number | null
-  updated_at: string | null; uncertain_count: number; quote_own_revision: string | null
+  updated_at: string | null; uncertain_count: number; quote_cookie_revision: string | null
   uncertainty_json: string
 }
 interface EventRow {
@@ -50,7 +50,7 @@ function coverage(row: CoverageRow): ReminderCoverage {
     probe: row.probe_json ? JSON.parse(row.probe_json) : null, state: row.state, issues: JSON.parse(row.issues_json),
     lastError: row.last_error_json ? JSON.parse(row.last_error_json) : null, lastRoundId: row.last_round_id,
     updatedAt: row.updated_at, uncertainCount: row.uncertain_count,
-    uncertainty: JSON.parse(row.uncertainty_json), quoteOwnRevision: row.quote_own_revision }
+    uncertainty: JSON.parse(row.uncertainty_json), quoteCookieRevision: row.quote_cookie_revision }
 }
 
 /** Durable personal records. No cascading FK to the evictable posts/thread_pages caches. */
@@ -122,7 +122,7 @@ export class ReminderDatabase {
   getCoverage(threadId: string, mode: ReadingMode): ReminderCoverage {
     const row = this.readable().prepare<[string, string], CoverageRow>('SELECT * FROM reminder_coverage WHERE thread_id = ? AND mode = ?').get(threadId, mode)
     return row ? coverage(row) : { threadId, mode, checkpoint: null, probe: null, state: 'baseline-pending', issues: [], lastError: null,
-      lastRoundId: null, updatedAt: null, uncertainCount: 0, uncertainty: {}, quoteOwnRevision: null }
+      lastRoundId: null, updatedAt: null, uncertainCount: 0, uncertainty: {}, quoteCookieRevision: null }
   }
 
   saveCoverage(value: ReminderCoverage): void {
@@ -130,10 +130,10 @@ export class ReminderDatabase {
       ON CONFLICT(thread_id, mode) DO UPDATE SET checkpoint_json = excluded.checkpoint_json, probe_json = excluded.probe_json,
       state = excluded.state, issues_json = excluded.issues_json, last_error_json = excluded.last_error_json,
       last_round_id = excluded.last_round_id, updated_at = excluded.updated_at, uncertain_count = excluded.uncertain_count,
-      quote_own_revision = excluded.quote_own_revision, uncertainty_json = excluded.uncertainty_json`)
+      quote_cookie_revision = excluded.quote_cookie_revision, uncertainty_json = excluded.uncertainty_json`)
       .run(value.threadId, value.mode, value.checkpoint ? JSON.stringify(value.checkpoint) : null,
         value.probe ? JSON.stringify(value.probe) : null, value.state, JSON.stringify(value.issues),
-        value.lastError ? JSON.stringify(value.lastError) : null, value.lastRoundId, value.updatedAt, value.uncertainCount, value.quoteOwnRevision,
+        value.lastError ? JSON.stringify(value.lastError) : null, value.lastRoundId, value.updatedAt, value.uncertainCount, value.quoteCookieRevision,
         JSON.stringify(value.uncertainty))
   }
 
@@ -146,9 +146,10 @@ export class ReminderDatabase {
       })
   }
 
-  ownRevision(): string {
-    return JSON.stringify(this.readable().prepare<[], { post_id: string; evidence: string; confirmed_at: string }>(
-      'SELECT post_id, evidence, confirmed_at FROM own_posts ORDER BY length(post_id), post_id').all())
+  /** Distinct known 饼干 IDs of the imported cookies, sorted; unknown (NULL) IDs match nothing. */
+  cookieIds(): string[] {
+    return this.readable().prepare<[], { cookie_id: string }>(
+      'SELECT DISTINCT cookie_id FROM credentials WHERE cookie_id IS NOT NULL ORDER BY cookie_id').all().map((row) => row.cookie_id)
   }
 
   evaluate(input: EvaluationInput): EvaluationResult {
@@ -161,8 +162,9 @@ export class ReminderDatabase {
         return row?.enabled === 1 && row.generation === rule.generation
       })
       const thresholds = new Map(rules.map((rule) => [rule.kind, this.threshold(rule.startedAt)]))
-      const ownIds = new Set(db.prepare<[], { post_id: string }>('SELECT post_id FROM own_posts').all().map((row) => row.post_id))
-      const result = evaluateObservedReplies({ rules, thresholds, ownIds, target: input.target, observations: this.observations(input.threadId, input.mode) })
+      const cookieIds = new Set(db.prepare<[], { cookie_id: string }>('SELECT cookie_id FROM credentials WHERE cookie_id IS NOT NULL').all().map((row) => row.cookie_id))
+      const result = evaluateObservedReplies({ rules, thresholds, cookieIds, quotedPost: (postId) => this.loadPost(postId),
+        target: input.target, observations: this.observations(input.threadId, input.mode) })
       let newEvents = 0
       const select = db.prepare<[string], EventRow>('SELECT * FROM reminder_events WHERE post_id = ?')
       for (const hit of result.hits) {
@@ -181,7 +183,7 @@ export class ReminderDatabase {
           newEvents++
         }
       }
-      return { newEvents, uncertainCount: result.uncertainIds.length, uncertainty: result.uncertainty,
+      return { newEvents, uncertainCount: result.uncertainIds.length, uncertainty: result.uncertainty, quoteUnverified: result.quoteUnverifiedIds.length,
         baselinePending: rules.some((rule) => !this.baselineEstablished(input.threadId, rule.kind, rule.startedAt)) }
     }).immediate()
   }

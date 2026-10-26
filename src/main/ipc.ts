@@ -623,12 +623,18 @@ export function registerIpc({
 
   handle(IpcChannel.identityImportRaw, async (_event, raw) => {
     const input = record(raw)
-    return identities.importRaw(text(input.userhash), text(input.name))
+    const name = input.name === undefined || input.name === null ? null : text(input.name)
+    return identities.importRaw(text(input.userhash), text(input.cookieId), name)
   })
 
   handle(IpcChannel.identityRename, async (_event, raw) => {
     const input = record(raw)
     return identities.rename(credentialId(input.credentialId), text(input.name))
+  })
+
+  handle(IpcChannel.identitySetCookieId, async (_event, raw) => {
+    const input = record(raw)
+    return identities.setCookieId(credentialId(input.credentialId), text(input.cookieId))
   })
 
   handle(IpcChannel.identityRemove, async (_event, raw) => identities.remove(credentialId(record(raw).credentialId)))
@@ -765,12 +771,6 @@ export function registerIpc({
   })
   handle(IpcChannel.listPublications, async () => publication.listAttempts())
   handle(IpcChannel.getPublication, async (_event, raw) => publication.getAttempt({ attemptId: localId(record(raw).attemptId) }))
-  handle(IpcChannel.listOwnPosts, async () => publication.listOwnPosts())
-  handle(IpcChannel.addOwnPost, async (_event, raw) => {
-    const input = record(raw)
-    if (typeof input.isThread !== 'boolean') throw new InvalidRequestError()
-    return publication.addOwnPost({ postId: forumId(input.postId), threadId: forumId(input.threadId), isThread: input.isThread })
-  })
   handle(IpcChannel.getPoWarning, async () => publication.getPoWarning())
   handle(IpcChannel.setPoWarning, async (_event, raw) => {
     const input = record(raw)

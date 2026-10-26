@@ -103,14 +103,21 @@ describe('encrypted local account lifecycle', () => {
     expect(await env.service.getOverview()).toMatchObject({ loggedIn: false })
     expect(env.db.loadAccountSession()).toBeNull()
   })
-  it('reuses export import, appends, and reports duplicates without replacing', async () => {
+  it('reuses export import, appends, and reports duplicates without replacing; a re-import fills a missing 饼干 ID', async () => {
     const env = setup()
-    await env.identities.importRaw('synthetic-original', '原有饼干')
+    await env.identities.importRaw('synthetic-original', 'OrigId1', '原有饼干')
     await env.service.login()
-    expect(await env.service.importSelected({ ids: ['101'] })).toMatchObject({ ok: true, value: [{ result: { ok: true, credential: { name: '合成饼干', source: 'export' } } }] })
+    expect(await env.service.importSelected({ ids: ['101'] })).toMatchObject({ ok: true, value: [{ result: { ok: true, credential: { name: '合成饼干', cookieId: '合成饼干', source: 'export' } } }] })
     expect(env.db.listCredentials().map((row) => row.name)).toEqual(['原有饼干', '合成饼干'])
-    expect(await env.service.importSelected({ ids: ['101'] })).toMatchObject({ ok: true, value: [{ result: { ok: false, failure: { reason: 'duplicate' } } }] })
+    expect(await env.service.importSelected({ ids: ['101'] })).toMatchObject({ ok: true, value: [{ result: { ok: false, failure: { reason: 'duplicate', cookieId: 'same' } } }] })
     expect(env.db.listCredentials()).toHaveLength(2)
+    // An entry kept from before 饼干 IDs were stored gets the payload's ID on the next account import.
+    const raw = new Database(env.path)
+    try { raw.prepare("UPDATE credentials SET cookie_id = NULL WHERE name = '合成饼干'").run() } finally { raw.close() }
+    expect(await env.service.importSelected({ ids: ['101'] })).toMatchObject({ ok: true, value: [{ result: { ok: false, failure: { reason: 'duplicate', cookieId: 'filled' } } }] })
+    expect(env.db.listCredentials().map(({ name, cookieId }) => ({ name, cookieId }))).toEqual([
+      { name: '原有饼干', cookieId: 'OrigId1' }, { name: '合成饼干', cookieId: '合成饼干' }
+    ])
     expect(await env.service.importSelected({ ids: ['999'] })).toEqual({ ok: false, reason: 'blocked' })
   })
 })

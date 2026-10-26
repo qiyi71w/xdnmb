@@ -54,7 +54,7 @@ export function LifecycleHost({
 }: {
   platform: AppPlatform | null
   onSettingsChange: (settings: AppSettings) => void
-  /** Closes the app's other dialogs (settings, drafts, attempts, own posts, a tab's close question). */
+  /** Closes the app's other dialogs (settings, drafts, attempts, a tab's close question). */
   closeModals: () => void
   /** The workspace now, each shown thread captured where it is; `null` before the tabs exist. */
   buildWorkspace: () => Workspace | null

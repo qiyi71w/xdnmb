@@ -140,6 +140,7 @@ const api: XidaoApi = {
     importExport: (input) => ipcRenderer.invoke(IpcChannel.identityImportExport, input),
     importRaw: (input) => ipcRenderer.invoke(IpcChannel.identityImportRaw, input),
     rename: (input) => ipcRenderer.invoke(IpcChannel.identityRename, input),
+    setCookieId: (input) => ipcRenderer.invoke(IpcChannel.identitySetCookieId, input),
     remove: (input) => ipcRenderer.invoke(IpcChannel.identityRemove, input),
     select: (input) => ipcRenderer.invoke(IpcChannel.identitySelect, input),
     reorder: (input) => ipcRenderer.invoke(IpcChannel.identityReorder, input)
@@ -161,8 +162,6 @@ const api: XidaoApi = {
     resolvePrompt: (input) => ipcRenderer.invoke(IpcChannel.resolvePoPrompt, input),
     listAttempts: () => ipcRenderer.invoke(IpcChannel.listPublications),
     getAttempt: (input) => ipcRenderer.invoke(IpcChannel.getPublication, input),
-    listOwnPosts: () => ipcRenderer.invoke(IpcChannel.listOwnPosts),
-    addOwnPost: (input) => ipcRenderer.invoke(IpcChannel.addOwnPost, input),
     getPoWarning: () => ipcRenderer.invoke(IpcChannel.getPoWarning),
     setPoWarning: (input) => ipcRenderer.invoke(IpcChannel.setPoWarning, input)
   },

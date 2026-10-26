@@ -526,6 +526,20 @@ export const MIGRATIONS: readonly Migration[] = [
         DROP TABLE IF EXISTS post_reads;
         DROP TABLE IF EXISTS thread_attention;`)
     }
+  },
+  {
+    // Cookies keep their public 饼干 ID beside the display name; cookies imported earlier have
+    // none (NULL) and match nothing until re-imported or filled in. The own-post record is gone:
+    // own posts, the PO cookie and quotes of mine are matched by 饼干 ID; publication attempts keep
+    // their results and confirmed IDs. The quote re-check marker now follows the 饼干 ID set: every
+    // credential is unknown here, so a marker already evaluated equals the empty set.
+    version: 15,
+    up(db) {
+      db.exec(`ALTER TABLE credentials ADD COLUMN cookie_id TEXT;
+        DROP TABLE IF EXISTS own_posts;
+        ALTER TABLE reminder_coverage RENAME COLUMN quote_own_revision TO quote_cookie_revision;
+        UPDATE reminder_coverage SET quote_cookie_revision = '[]' WHERE quote_cookie_revision IS NOT NULL;`)
+    }
   }
 ]
 

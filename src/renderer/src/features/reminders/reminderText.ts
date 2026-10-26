@@ -56,7 +56,8 @@ export const ISSUE_TEXT: Record<CoverageIssue, string> = {
   gaps: '有页没有取得',
   'count-mismatch': '回复数与取得的不一致',
   'target-unverified': '没能确认最后一页',
-  'boundary-uncertain': '部分回复无法确认是否在起点之后'
+  'boundary-uncertain': '部分回复无法确认是否在起点之后',
+  'quote-unverified': '部分被引用的发言没能取得，无法确认是否引用了你'
 }
 
 /** Whether a thread's coverage leaves something unknown (never folded into the confirmed count). */

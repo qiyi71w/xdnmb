@@ -7,6 +7,7 @@ import { afterEach, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import { EMPTY_FIELDS, type DraftSaveInput } from '../src/shared/drafts'
 import type { PublicationAttempt, SubmitResult } from '../src/shared/publication'
+import type { Post } from '../src/shared/forum'
 import type { AppStore } from '../src/main/storage/contract'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { createDraftService } from '../src/main/drafts/service'
@@ -82,9 +83,14 @@ async function setup() {
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   let db = openReadingDatabase(join(dir, 'db.sqlite'))
   cleanups.push(() => db.close())
-  const protector = { isAvailable: async () => true, encrypt: async (s: string) => Buffer.from(s), decrypt: async (b: Uint8Array) => Buffer.from(b).toString() }
-  const a = db.insertCredential({ name: 'A', source: 'raw', importedAt: '2026-01-01', ciphertext: Buffer.from('cookie-A') }).id
-  const b = db.insertCredential({ name: 'B', source: 'raw', importedAt: '2026-01-01', ciphertext: Buffer.from('cookie-B') }).id
+  // Ciphertext starting with "locked" stands for a credential the OS can no longer decrypt.
+  const protector = { isAvailable: async () => true, encrypt: async (s: string) => Buffer.from(s), decrypt: async (b: Uint8Array) => {
+    const value = Buffer.from(b).toString()
+    if (value.startsWith('locked')) throw new Error('synthetic locked')
+    return value
+  } }
+  const a = db.insertCredential({ name: 'A', cookieId: 'IdA', source: 'raw', importedAt: '2026-01-01', ciphertext: Buffer.from('cookie-A') }).id
+  const b = db.insertCredential({ name: 'B', cookieId: 'IdB', source: 'raw', importedAt: '2026-01-01', ciphertext: Buffer.from('cookie-B') }).id
   const files = await openManagedImageFiles(join(dir, 'draft-images'))
   const start = async (store: AppStore = asyncStore(db)) => {
     const drafts = createDraftService({ store, files })
@@ -104,6 +110,12 @@ function payload(credentialId: string, content = '测试正文'): DraftSaveInput
 function attempt(result: SubmitResult): PublicationAttempt {
   if (result.kind !== 'attempt') throw new Error(`Expected attempt: ${JSON.stringify(result)}`)
   return result.attempt
+}
+/** Stores a thread's main post as reading would, with the given public 饼干 ID. */
+function storeHead(db: ReadingDatabase, threadId: string, userHash: string | null) {
+  const head: Post = { id: threadId, forumId: '1', createdAt: null, userHash, name: null, title: null, isAdmin: null, isSage: null,
+    content: [{ type: 'text', text: '主帖' }], plainText: '主帖', image: null }
+  db.savePost(head, '2026-01-01T00:00:00.000Z')
 }
 async function finished(service: Awaited<ReturnType<typeof setup>>['service'], id: string) {
   let result: PublicationAttempt | null = null
@@ -129,7 +141,6 @@ it('freezes one durable request, uses one same-session ID lookup, and records ac
   await expect.poll(() => s.remote.seen.filter(r => r.path.startsWith('/Home/')).length).toBe(1)
   s.remote.release()
   expect(await finished(s.service, first.id)).toMatchObject({ state: 'confirmed', postId: '701', payload: { credentialId: s.a, fields: { content: '测试正文' } } })
-  expect(s.db.listOwnPosts()).toEqual([{ postId: '701', threadId: '701', isThread: true, credentialId: s.a, evidence: 'submission-readback', confirmedAt: expect.any(String) }])
   expect(s.db.getThreadPostIdentity('701')).toEqual({ state: 'selected', credentialId: s.b })
   const lookup = s.remote.seen.filter(r => r.path === '/Api/getLastPost')
   expect(lookup).toHaveLength(1)
@@ -148,6 +159,7 @@ it('releases a refused PO choice so an edited retry cannot submit the old frozen
   const s = await setup()
   const head = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'head', payload: payload(s.a) }))
   await finished(s.service, head.id)
+  storeHead(s.db, '701', 'IdA')
   const input = { requestId: randomUUID(), editorId: 'reply', payload: { ...payload(s.b, '旧内容'), target: { kind: 'reply' as const, threadId: '701' } } }
   const first = await s.service.submit(input)
   if (first.kind !== 'prompt') throw new Error('missing prompt')
@@ -180,7 +192,6 @@ it('keeps committed-but-disconnected content and its image locked across a real 
   expect(await s.drafts.delete(data.draftId)).toEqual({ ok: false, reason: 'locked' })
   await s.restart()
   expect((await s.service.getAttempt({ attemptId: result.id }))).toMatchObject({ ok: true, attempt: { state: 'unknown', payload: data } })
-  expect(s.db.listOwnPosts()).toEqual([])
   const record = s.db.getDraftAttachment(data.attachmentId)
   expect(record).not.toBeNull()
   expect(existsSync(s.files.pathOf(record!.fileName)!)).toBe(true)
@@ -215,7 +226,6 @@ it.each(['empty', 'unrelated'] as const)('does not claim a %s latest-post respon
   expect(attempt(await s.service.submit({ ...input, requestId: randomUUID() })).id).toBe(sent.id)
   await s.restart()
   expect(s.db.listPublications()[0]!.state).toBe('unconfirmed')
-  expect(s.db.listOwnPosts()).toEqual([])
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
   expect(s.remote.seen.filter(r => r.path === '/Api/getLastPost')).toHaveLength(1)
 })
@@ -232,7 +242,6 @@ it('recovers an intent after result persistence fails without manufacturing a re
   expect(s.db.getPublication(sent.id)!.state).toBe('sending')
   await s.restart()
   expect(s.db.getPublication(sent.id)!.state).toBe('unknown')
-  expect(s.db.listOwnPosts()).toEqual([])
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
 })
 
@@ -278,6 +287,7 @@ it('PO cancel changes nothing; switch remembers the actual identity; suppression
   const s = await setup()
   const head = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'head', payload: payload(s.a) }))
   await finished(s.service, head.id)
+  storeHead(s.db, '701', 'IdA')
   const reply = () => ({ requestId: randomUUID(), editorId: randomUUID(), payload: { ...payload(s.b, '回复内容'), target: { kind: 'reply' as const, threadId: '701' } } })
   const first = await s.service.submit(reply())
   if (first.kind !== 'prompt') throw new Error('missing PO prompt')
@@ -302,24 +312,39 @@ it('PO cancel changes nothing; switch remembers the actual identity; suppression
   await s.restart()
   expect(await s.service.getPoWarning()).toEqual({ enabled: false })
   await s.service.setPoWarning({ enabled: true })
-  s.db.deleteCredential(s.a)
-  const missing = await s.service.submit(reply())
-  if (missing.kind !== 'prompt') throw new Error('known removed PO should still prompt')
-  expect(missing.prompt.canSwitch).toBe(false)
-  expect(await s.service.resolvePrompt({ token: missing.prompt.token, choice: 'switch', suppress: false })).toEqual({ kind: 'refused', reason: 'identity' })
+  // A matching cookie that can no longer be decrypted is still named, but cannot be switched to.
+  const raw = new Database(join(s.dir, 'db.sqlite'))
+  try { raw.prepare("UPDATE credentials SET ciphertext = CAST('locked' AS BLOB) WHERE id = ?").run(s.a) } finally { raw.close() }
+  const locked = await s.service.submit(reply())
+  if (locked.kind !== 'prompt') throw new Error('an unusable PO cookie should still prompt')
+  expect(locked.prompt).toMatchObject({ poName: 'A', canSwitch: false })
+  expect(await s.service.resolvePrompt({ token: locked.prompt.token, choice: 'switch', suppress: false })).toEqual({ kind: 'refused', reason: 'identity' })
 })
 
-it('manual old IDs retain human evidence and never acquire a credential from the current selection', async () => {
+it('asks about the PO cookie only when the stored main post 饼干 ID matches another imported cookie', async () => {
   const s = await setup()
-  s.db.setThreadPostIdentity('800', s.a, '2026-01-01')
-  expect(await s.service.addOwnPost({ postId: '800', threadId: '800', isThread: true })).toEqual({ ok: true })
-  const result = await s.service.listOwnPosts()
-  expect(result).toMatchObject({ ok: true, posts: [{ postId: '800', credentialId: null, evidence: 'manual' }] })
-  const sent = await s.service.submit({ requestId: randomUUID(), editorId: 'new', payload: { ...payload(s.b), target: { kind: 'reply', threadId: '800' } } })
-  expect(sent.kind).toBe('attempt')
-  await finished(s.service, attempt(sent).id)
-  expect(await s.service.addOwnPost({ postId: '800', threadId: '900', isThread: false })).toEqual({ ok: false, reason: 'storage' })
-  expect(s.db.listOwnPosts().find(post => post.postId === '800')!.credentialId).toBeNull()
+  const reply = (credentialId: string, threadId: string) => ({ requestId: randomUUID(), editorId: randomUUID(),
+    payload: { ...payload(credentialId, `回复 ${threadId}`), target: { kind: 'reply' as const, threadId } } })
+  const sent = async (result: SubmitResult) => { await finished(s.service, attempt(result).id) }
+  storeHead(s.db, '900', 'IdA')
+  storeHead(s.db, '901', 'Stranger')
+  storeHead(s.db, '903', null)
+  const asked = await s.service.submit(reply(s.b, '900'))
+  expect(asked).toMatchObject({ kind: 'prompt', prompt: { poName: 'A', poCredentialId: s.a, currentName: 'B', canSwitch: true } })
+  s.service.releasePrompts()
+  // The current cookie is the PO cookie; no imported cookie has the ID; main post unknown or without an ID.
+  await sent(await s.service.submit(reply(s.a, '900')))
+  await sent(await s.service.submit(reply(s.b, '901')))
+  await sent(await s.service.submit(reply(s.b, '902')))
+  await sent(await s.service.submit(reply(s.b, '903')))
+  // An ID filled in or changed in settings applies to the next send; an unknown ID matches nothing.
+  s.db.setCredentialCookieId(s.a, 'Stranger')
+  expect(await s.service.submit(reply(s.b, '901'))).toMatchObject({ kind: 'prompt', prompt: { poName: 'A' } })
+  s.service.releasePrompts()
+  const raw = new Database(join(s.dir, 'db.sqlite'))
+  try { raw.prepare('UPDATE credentials SET cookie_id = NULL WHERE id = ?').run(s.a) } finally { raw.close() }
+  await sent(await s.service.submit(reply(s.b, '901')))
+  await sent(await s.service.submit(reply(s.b, '900')))
 })
 
 it('a failed result transaction leaves intent and original draft intact for conservative restart recovery', async () => {
@@ -362,6 +387,7 @@ it('does not commit a PO identity switch when persisting the send intent fails',
   const head = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'head', payload: payload(s.a) }))
   await finished(s.service, head.id)
   s.db.setThreadPostIdentity('701', s.b, '2026-01-01')
+  storeHead(s.db, '701', 'IdA')
   const question = await s.service.submit({ requestId: randomUUID(), editorId: 'reply', payload: { ...payload(s.b), target: { kind: 'reply', threadId: '701' } } })
   if (question.kind !== 'prompt') throw new Error('missing prompt')
   const raw = new Database(join(s.dir, 'db.sqlite'))
@@ -379,7 +405,7 @@ it('does not associate a second submission with an already confirmed old ID even
   s.remote.setMode('stale')
   const second = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'second', payload: payload(s.a) }))
   expect(await finished(s.service, second.id)).toMatchObject({ state: 'unconfirmed', postId: null })
-  expect(s.db.listOwnPosts().map(post => post.postId)).toEqual(['701'])
+  expect(s.db.listPublications().filter(item => item.postId === '701').map(item => item.id)).toEqual([first.id])
 })
 
 it('serializes the actual cookie across removal and reimport while other cookies remain independent', async () => {
@@ -391,7 +417,7 @@ it('serializes the actual cookie across removal and reimport while other cookies
   const first = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'first', payload: payload(s.a) }))
   await expect.poll(() => s.remote.seen.filter(r => r.path.startsWith('/Home/')).length).toBe(1)
   expect(await identities.remove(s.a)).toEqual({ ok: true })
-  const imported = await identities.importRaw('cookie-A', 'A reimported')
+  const imported = await identities.importRaw('cookie-A', 'IdA', 'A reimported')
   if (!imported.ok) throw new Error('reimport failed')
   expect(imported.credential.id).not.toBe(s.a)
   expect(await s.service.submit({ requestId: randomUUID(), editorId: 'second', payload: payload(imported.credential.id) })).toEqual({ kind: 'refused', reason: 'busy' })

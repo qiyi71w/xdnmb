@@ -1,5 +1,5 @@
 import type { DraftSaveInput } from '../../shared/drafts'
-import type { OwnPost, PublicationAttempt, PublicationProblem, PublicationState } from '../../shared/publication'
+import type { PublicationAttempt, PublicationProblem, PublicationState } from '../../shared/publication'
 
 /** Original limit of one send, from its recorded intent. A quit never extends or restarts it. */
 export const PUBLISH_DEADLINE_MS = 60_000
@@ -24,15 +24,13 @@ export interface PublicationStore {
   createPublication(input: { requestId: string; editorId: string; payload: DraftSaveInput; forumId: string; at: string; switchThreadIdentity?: boolean }): Promise<PublicationAttempt>
   listPublications(): Promise<PublicationAttempt[]>
   getPublication(id: string): Promise<PublicationAttempt | null>
-  /** Atomic result + own-post registration + thread preference initialization + draft disposition. */
+  /** Atomic result + claimed-ID check + thread preference initialization + draft disposition. */
   finishPublication(input: PublicationFinish): Promise<PublicationAttempt>
   /** Startup only: sending becomes unknown with a launch notice; never sends. */
   recoverPublications(at: string): Promise<void>
   /** Attempts carrying a launch notice, oldest first. */
   listLaunchNotices(): Promise<PublicationAttempt[]>
   dismissLaunchNotices(ids: string[]): Promise<void>
-  listOwnPosts(): Promise<OwnPost[]>
-  addManualOwnPost(input: { postId: string; threadId: string; isThread: boolean; at: string }): Promise<void>
   getPoWarningEnabled(): Promise<boolean>
   setPoWarningEnabled(enabled: boolean): Promise<void>
   /** Last intent start for this identity in this forum; survives restarts. */

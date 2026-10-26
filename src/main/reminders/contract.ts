@@ -31,7 +31,8 @@ export interface ReminderCoverage {
   updatedAt: string | null
   uncertainCount: number
   uncertainty: ReminderUncertainty
-  quoteOwnRevision: string | null
+  /** 饼干 ID set (JSON) against which the retained replies were last fully re-checked for quotes. */
+  quoteCookieRevision: string | null
 }
 export interface ReminderObservation {
   page: number
@@ -51,6 +52,8 @@ export interface EvaluationResult {
   newEvents: number
   uncertainCount: number
   uncertainty: ReminderUncertainty
+  /** Replies past the quote rule's start whose quoted posts have no known 饼干 ID. */
+  quoteUnverified: number
   baselinePending: boolean
 }
 export type ReminderStoredOverview = Omit<ReminderOverview, 'checker'>
@@ -65,7 +68,8 @@ export interface ReminderStore {
   getReminderCoverage(threadId: ThreadId, mode: ReadingMode): Promise<ReminderCoverage>
   saveReminderCoverage(coverage: ReminderCoverage): Promise<void>
   getReminderObservations(threadId: ThreadId, mode: ReadingMode): Promise<ReminderObservation[]>
-  reminderOwnRevision(): Promise<string>
+  /** Distinct known 饼干 IDs of the imported cookies, sorted. */
+  reminderCookieIds(): Promise<string[]>
   evaluateReminders(input: EvaluationInput): Promise<EvaluationResult>
   createReminderRound(trigger: CheckTrigger, at: string, threadsTotal: number): Promise<CheckRound>
   saveReminderRound(round: CheckRound): Promise<void>

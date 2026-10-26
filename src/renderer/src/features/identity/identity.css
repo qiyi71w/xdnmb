@@ -195,6 +195,15 @@
   color: var(--ink-3);
 }
 
+/* The public 饼干 ID beside the display name's meta line; quiet, readable as typed. */
+.credential-cookie-id {
+  overflow-wrap: anywhere;
+}
+
+.cookie-id-input {
+  font-family: var(--font-mono);
+}
+
 .credential-roles {
   display: inline-flex;
   flex-wrap: wrap;
