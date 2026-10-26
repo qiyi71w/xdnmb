@@ -1,6 +1,7 @@
-import type { ReadError } from '../../../../shared/api'
+import type { ReadError, ThreadPageResult } from '../../../../shared/api'
 import { comparePostIds, type Post, type ThreadCoverage, type ThreadPage } from '../../../../shared/forum'
-import type { Failure, Source } from '../../lib/operations'
+import { threadTotalPages } from '../../../../shared/threadPages'
+import type { Failure, Settled, Source } from '../../lib/operations'
 
 /** One observed page inside the loaded range. */
 export interface LoadedPage {
@@ -17,7 +18,8 @@ export type ThreadTask =
   | { type: 'initial'; page?: number }
   | { type: 'append'; page: number }
   | { type: 'prepend'; page: number }
-  | { type: 'refresh'; page: number }
+  /** 刷新: one run over several pages, see `refreshThread`. */
+  | { type: 'refresh' }
   | { type: 'jump'; page: number }
   | { type: 'locate' }
 
@@ -47,7 +49,15 @@ export interface ThreadState {
 
 export type ThreadAction =
   | { type: 'start'; task: ThreadTask }
-  | { type: 'page-loaded'; task: Exclude<ThreadTask, { type: 'locate' }>; page: ThreadPage; coverage: ThreadCoverage; source: Source }
+  | {
+      type: 'page-loaded'
+      task: Exclude<ThreadTask, { type: 'locate' }>
+      page: ThreadPage
+      coverage: ThreadCoverage
+      source: Source
+      /** A refresh reads on after this page: its task keeps running. */
+      continues?: boolean
+    }
   | {
       type: 'end-located'
       page: ThreadPage
@@ -82,6 +92,17 @@ export function showsHead(state: ThreadState): boolean {
 export function canPrependPrevious(state: ThreadState): boolean {
   const first = state.pages[0]
   return first !== undefined && first.page > 1 && state.task === null && state.error?.task.type !== 'prepend'
+}
+
+/**
+ * The loaded range reaches the end of the thread as far as it is known: its last page is an empty
+ * end candidate, or the mode's reported reply count puts no page after it.
+ */
+export function reachesEnd(state: ThreadState): boolean {
+  const last = state.pages.at(-1)
+  if (last === undefined) return false
+  const total = threadTotalPages(state.coverage?.reportedReplyCount ?? null)
+  return last.endCandidate || (total !== null && last.page >= total)
 }
 
 function toLoaded(page: ThreadPage, source: Source): LoadedPage {
@@ -150,7 +171,7 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
         head: action.page.head,
         coverage: action.coverage,
         pages: placePage(state.pages, action.task, toLoaded(action.page, action.source)),
-        task: null,
+        task: action.continues === true ? state.task : null,
         error: null,
         pageCap: null,
         rangeVersion: replaces ? state.rangeVersion + 1 : state.rangeVersion
@@ -189,5 +210,46 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
         task: null,
         endProbe: { status: 'interrupted', probedPages: action.probedPages, failedPage: action.failedPage, error: action.error }
       }
+  }
+}
+
+/** Reads one page of the thread for a refresh, through the reader's operation scope. */
+export type RefreshRead = (page: number) => Promise<Settled<ThreadPageResult>>
+
+/**
+ * 刷新 of a non-empty range, as one `refresh` task: re-reads from the last page with replies (an
+ * empty end candidate seen earlier never starts it, a reply may since have landed on the page
+ * before) and, when the range reaches the end of the thread, the pages after it until an empty one
+ * (a reply may have opened a new page). A range that stops before the end re-reads only its last
+ * page; the automatic next page still follows the reader down, so the rest is never prefetched.
+ * A page served from the cache ends the run: the network read failed, and that page shows why.
+ */
+export async function refreshThread(state: ThreadState, read: RefreshRead, dispatch: (action: ThreadAction) => void): Promise<void> {
+  const start = state.pages.findLast((page) => page.replies.length > 0) ?? state.pages[0]
+  if (start === undefined) return
+  const onward = reachesEnd(state)
+  const task: ThreadTask = { type: 'refresh' }
+  dispatch({ type: 'start', task })
+  for (let page = start.page; ; page += 1) {
+    const settled = await read(page)
+    switch (settled.type) {
+      case 'stale':
+        return
+      case 'cancelled':
+        dispatch({ type: 'cancelled' })
+        return
+      case 'failed': {
+        const error = settled.failure.type === 'read' ? settled.failure.error : null
+        if (error?.kind === 'page-cap' && error.highestReadablePage !== undefined) dispatch({ type: 'page-cap', highestReadablePage: error.highestReadablePage })
+        else dispatch({ type: 'failed', task, failure: settled.failure })
+        return
+      }
+      case 'ok': {
+        const { page: loaded, coverage } = settled.data
+        const continues = onward && settled.source.status === 'fresh' && !loaded.endCandidate
+        dispatch({ type: 'page-loaded', task, page: loaded, coverage, source: settled.source, continues })
+        if (!continues) return
+      }
+    }
   }
 }

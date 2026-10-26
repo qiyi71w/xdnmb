@@ -14,7 +14,7 @@ import { useRegisterContent } from '../tabs/contentRegistry'
 import type { SourceFocus } from '../tabs/tabsState'
 import { PostView } from './PostView'
 import { startPage, type ReaderPosition } from './readingStart'
-import { showsHead, type ThreadTask } from './threadState'
+import { reachesEnd, showsHead, type ThreadTask } from './threadState'
 import { useReadingViewport } from './useReadingViewport'
 import { useThread } from './useThread'
 import type { ComposeEntry } from '../editor/ComposePanel'
@@ -485,10 +485,9 @@ export function ThreadReader({
   /** Which ends of the thread are on screen, for the corner buttons. */
   const pillEnds = (scroller: HTMLElement): PillEnds => {
     const near = scroller.clientHeight / 2
-    const realEnd = lastPage !== undefined && (lastPage.endCandidate || (totalPages !== null && lastPage.page >= totalPages))
     return {
       atStart: firstPage?.page === 1 && scroller.scrollTop < near,
-      atEnd: realEnd && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < near
+      atEnd: reachesEnd(state) && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < near
     }
   }
   const pillFocusBack = useCallback(() => scrollRef.current?.focus({ preventScroll: true }), [])
@@ -566,7 +565,8 @@ export function ThreadReader({
   )
 
   // The end of a fully read thread is only a quiet 刷新. It stays focusable while it works
-  // (aria-disabled); if new replies replace it, focus moves to the first new reply.
+  // (aria-disabled); if new replies come in, focus moves to the first of them (the 刷新 may now
+  // end a later page), otherwise it stays on 刷新.
   const endRefreshRef = useRef<HTMLButtonElement>(null)
   /** Posts shown when the focused end 刷新 was pressed; null when it was not the focus. */
   const endRefreshFrom = useRef<number | null>(null)
@@ -581,10 +581,9 @@ export function ThreadReader({
     const shown = endRefreshFrom.current
     if (shown === null || state.task?.type === 'refresh') return
     endRefreshFrom.current = null
-    if (endRefreshRef.current !== null) return
     const posts = contentRef.current?.querySelectorAll<HTMLElement>(SHOWN_POSTS)
-    const next = posts?.[shown] ?? posts?.[posts.length - 1]
-    next?.focus()
+    const next = posts !== undefined && posts.length > shown ? posts[shown] : (endRefreshRef.current ?? posts?.[posts.length - 1])
+    if (next !== undefined && next !== document.activeElement) next.focus()
   }, [state.task, state.pages])
 
   const notes = (
