@@ -83,3 +83,62 @@
 .content-link.is-static {
   cursor: inherit;
 }
+
+/* 防剧透: a quiet graphite bar over the hidden words, drawn in the line like a highlight. Masked and
+   revealed share the same box (padding, wrapping per line fragment), so revealing only lets the
+   words appear: line height and surrounding text stay put. */
+.spoiler {
+  padding: 0 0.15em;
+  border-radius: 3px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.spoiler.is-masked {
+  background: color-mix(in oklch, var(--ink-2) 65%, var(--paper));
+  user-select: none;
+}
+
+/* Hidden content keeps its width but is never painted; it is also aria-hidden and inert. */
+.spoiler-content {
+  visibility: hidden;
+}
+
+.spoiler.is-masked.is-interactive {
+  cursor: pointer;
+  transition: background-color 0.12s var(--ease-out);
+}
+
+.spoiler.is-masked.is-interactive:hover {
+  background: color-mix(in oklch, var(--ink-2) 82%, var(--paper));
+}
+
+.spoiler.is-masked.is-interactive:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Revealed: the words sit on the post's own surface (no tint, so no new text/surface contrast
+   pair). It keeps focus after a keyboard reveal (so focus does not fall to the page) but draws no
+   ring for it. */
+.spoiler.is-revealed:focus {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spoiler.is-masked.is-interactive {
+    transition: none;
+  }
+}
+
+/* Forced colors drop backgrounds; keep the mask a solid system-colored bar. */
+@media (forced-colors: active) {
+  .spoiler.is-masked {
+    forced-color-adjust: none;
+    background: GrayText;
+  }
+
+  .spoiler.is-masked.is-interactive:focus-visible {
+    outline-color: Highlight;
+  }
+}

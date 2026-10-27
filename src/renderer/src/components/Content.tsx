@@ -1,5 +1,7 @@
-import { Fragment, type ReactNode } from 'react'
+import { Fragment, useMemo, type ReactNode } from 'react'
 import type { ContentNode, EmphasisStyle } from '../../../shared/forum'
+import { Spoiler, SpoilerPlaceholder } from './Spoiler'
+import { withSpoilers, type DisplayNode } from './spoilers'
 import './content.css'
 
 type Mode =
@@ -31,7 +33,7 @@ interface RenderContext {
   quoteCount: number
 }
 
-function renderNodes(nodes: readonly ContentNode[], ctx: RenderContext, path: string): ReactNode[] {
+function renderNodes(nodes: readonly DisplayNode[], ctx: RenderContext, path: string): ReactNode[] {
   const mode = ctx.mode
   return nodes.map((node, index) => {
     const key = `${path}.${index}`
@@ -59,6 +61,13 @@ function renderNodes(nodes: readonly ContentNode[], ctx: RenderContext, path: st
             {renderNodes(node.children, ctx, key)}
           </span>
         )
+      case 'spoiler': {
+        if (mode === 'excerpt') return <SpoilerPlaceholder key={key} masked={renderNodes(node.children, ctx, key)} />
+        // Masked, the content renders static yet counts the same references as its revealed form,
+        // so references after the mask keep their indexes in both states.
+        const masked = renderNodes(node.children, { mode: 'excerpt', renderQuote: undefined, quoteCount: ctx.quoteCount }, key)
+        return <Spoiler key={key} masked={masked} revealed={renderNodes(node.children, ctx, key)} />
+      }
       case 'link': {
         const renderQuote = ctx.renderQuote
         ctx.renderQuote = undefined
@@ -104,10 +113,11 @@ export function Content({
 }) {
   const base = mode === 'body' ? 'content-body' : 'content-excerpt'
   const classes = className === undefined ? base : `${base} ${className}`
+  const display = useMemo(() => withSpoilers(nodes), [nodes])
   const ctx: RenderContext = { mode, renderQuote: mode === 'body' ? renderQuote : undefined, quoteCount: 0 }
   // Excerpts sit inside buttons, which only allow phrasing content (`<br>` included).
-  if (mode === 'excerpt') return <span className={classes}>{renderNodes(nodes, ctx, 'n')}</span>
-  return <div className={classes}>{renderNodes(nodes, ctx, 'n')}</div>
+  if (mode === 'excerpt') return <span className={classes}>{renderNodes(display, ctx, 'n')}</span>
+  return <div className={classes}>{renderNodes(display, ctx, 'n')}</div>
 }
 
 /** Plain text of a content tree, for short summaries. */
