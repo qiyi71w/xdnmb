@@ -446,9 +446,11 @@ export function createPublicationService(deps: {
       try {
         if (store.status.state === 'unavailable') throw new Error('storage')
         const attempt = [...editorAttempts.values()].find(item => item.id === attemptId) ?? await store.getPublication(attemptId)
-        const list = attempt?.state === 'failed' ? await drafts.list() : null
-        const draft = list?.ok ? list.drafts.find(item => item.id === attempt?.savedDraftId) ?? null : null
-        return { ok: true, attempt, draft }
+        if (attempt?.state !== 'failed' || attempt.savedDraftId === null) return { ok: true, attempt, draft: null }
+        // The failure's draft is read with it: answering without it would cost the editor its binding.
+        const list = await drafts.list()
+        if (!list.ok) return { ok: false, reason: 'storage' }
+        return { ok: true, attempt, draft: list.drafts.find(item => item.id === attempt.savedDraftId) ?? null }
       } catch { return { ok: false, reason: 'storage' } }
     },
     async getPoWarning() { return { enabled: await store.getPoWarningEnabled() } },

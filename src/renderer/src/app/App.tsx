@@ -23,7 +23,7 @@ import {
 import { useDirectory } from '../features/directory/useDirectory'
 import { HistoryPageContext, type HistoryPageHost } from '../features/content/RetainedPane'
 import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
-import { editorFor, editorForDraft, editorOnScreen, pendingInTab, wantsWrite } from '../features/editor/editorsState'
+import { editorFor, editorForDraft, editorOnScreen, wantsWrite } from '../features/editor/editorsState'
 import { DraftSaveFailedDialog } from '../features/editor/DraftSaveFailedDialog'
 import { loadFailureText } from '../features/editor/editorText'
 import { planSendFollowUp, runSendFollowUp, type SendFollowUp, type SendOrigin, type ShownEntry } from '../features/editor/sendFollowUp'
@@ -785,18 +785,18 @@ export function App() {
   const closingTabs = useRef(new Set<number>())
   /**
    * Saves the drafts of the editors only this tab has, then closes it; asks only when a save
-   * failed. Nothing is asked when every draft is saved.
+   * failed. `flush` decides what each needs, including a save still running when the tab closes.
    */
   const closeTab = useCallback(
     (tabId: number) => {
       if (stateRef.current.closing !== null || closingTabs.current.has(tabId)) return
-      const pending = pendingInTab(currentEditors(), tabId)
-      if (pending.length === 0) {
+      const owned = currentEditors().editors.filter((editor) => editor.tabIds.length === 1 && editor.tabIds[0] === tabId)
+      if (owned.length === 0) {
         finishCloseTab(tabId)
         return
       }
       closingTabs.current.add(tabId)
-      void flushEditors(pending.map((editor) => editor.id)).then((failures) => {
+      void flushEditors(owned.map((editor) => editor.id)).then((failures) => {
         closingTabs.current.delete(tabId)
         if (stateRef.current.tabs?.tabs.some((tab) => tab.id === tabId) !== true) return
         if (failures.size === 0) finishCloseTab(tabId)
@@ -1461,7 +1461,7 @@ export function App() {
                   fallbackFocus={activeTabFocus}
                 />
                 <LaunchNotices openDraft={openFailedDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
-                <DraftDeletedNotices reopen={(draft) => void continueDraft(draft)} fallbackFocus={activeTabFocus} />
+                <DraftDeletedNotices reopen={continueDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
               </BottomNoticeStack>
 
               {navOverlay && navPopover.open && (

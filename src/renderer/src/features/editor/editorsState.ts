@@ -408,20 +408,6 @@ export function wantsWrite(editor: Editor): boolean {
   return isBlank(editor) ? editor.draft !== null : isUnsaved(editor)
 }
 
-/**
- * Editors of every tab whose draft is out of date, including collapsed ones and those hidden
- * because their tab shows another target. An editor whose content is held by a durable unresolved
- * attempt is not among them: its content stays in that attempt (发送记录).
- */
-export function pendingEditors(state: EditorsState): Editor[] {
-  return state.editors.filter((editor) => editor.publication?.phase !== 'attempt' && wantsWrite(editor))
-}
-
-/** Pending editors that would lose their last owning tab; shared ones stay open elsewhere. */
-export function pendingInTab(state: EditorsState, tabId: number): Editor[] {
-  return pendingEditors(state).filter((editor) => editor.tabIds.length === 1 && editor.tabIds[0] === tabId)
-}
-
 export function saveInput(editor: Editor): DraftSaveInput {
   return {
     draftId: editor.draft?.id ?? null,

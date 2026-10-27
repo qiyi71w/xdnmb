@@ -587,6 +587,15 @@ function SendStatus({ editor }: { editor: Editor }) {
       )
     case 'attempt': {
       const state = publication.attempt.state
+      if (state === 'failed' && publication.readFailed) {
+        // Stays locked until the draft the failure was saved to is read; the editor then continues it.
+        return (
+          <p className="notice-inline is-warning editor-send-notice">
+            <Icon name="alert" size={14} />
+            发送失败，内容已存为草稿；暂时读不到这份草稿，正在重新读取
+          </p>
+        )
+      }
       if (state !== 'sending' && state !== 'unknown') return null
       return (
         <>

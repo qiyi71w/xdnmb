@@ -8,7 +8,6 @@ import {
   editorsReducer,
   identityStatus,
   INITIAL_EDITORS,
-  pendingInTab,
   saveInput,
   wantsWrite,
   type Editor,
@@ -65,11 +64,9 @@ describe('editors across threads and tabs', () => {
     state = run(state, { type: 'edit', editorId: only(state, 1, replyA).id, patch: { content: '标签一' } })
     expect(state.editors).toHaveLength(1)
     expect(only(state, 2, replyA).fields.content).toBe('标签一')
-    expect(pendingInTab(state, 2)).toEqual([])
     state = run(state, { type: 'close-tab', tabId: 2 })
     expect(only(state, 1, replyA).fields.content).toBe('标签一')
     expect(only(state, 1, replyA).tabIds).toEqual([1])
-    expect(pendingInTab(state, 1)).toHaveLength(1)
     state = run(state, { type: 'close-tab', tabId: 1 })
     expect(state.editors).toEqual([])
   })
@@ -201,7 +198,7 @@ describe('drafts in editors', () => {
     expect(run(state, { type: 'load-draft', editorId: editor.id, draft: draft({ id: '9' }) })).toBe(state)
   })
 
-  it('collects only last-owner editors whose draft is out of date, including hidden and emptied ones', () => {
+  it('closing a tab drops only its last-owner editors, including hidden and emptied ones', () => {
     let state = run(INITIAL_EDITORS,
       { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') },
       { type: 'open', tabId: 1, target: replyB, identity: byDefault('1') },
@@ -213,7 +210,6 @@ describe('drafts in editors', () => {
       { type: 'edit', editorId: only(state, 1, newThread).id, patch: { content: '' } },
       { type: 'edit', editorId: only(state, 2, replyA).id, patch: { content: '另一标签' } }
     )
-    expect(pendingInTab(state, 1).map((editor) => editor.target)).toEqual([replyB, newThread])
     state = run(state, { type: 'close-tab', tabId: 1 })
     expect(state.editors.map((editor) => editor.tabId)).toEqual([2])
     expect(only(state, 2, replyA).fields.content).toBe('另一标签')

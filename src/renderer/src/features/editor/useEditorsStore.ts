@@ -515,15 +515,17 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
         return
       }
       settle(editorId, attempt)
-      // Explicit failure: continue the automatically saved draft (read it when not given).
+      // Explicit failure: continue the automatically saved draft (read it when not given). Until it
+      // is read the editor stays locked and is read again: unlocked without it, the next save would
+      // make a second draft.
       let saved = draft ?? null
       if (draft === undefined && attempt.savedDraftId !== null) {
-        try {
-          const read = await window.xidao.publication.getAttempt({ attemptId: attempt.id })
-          if (read.ok) saved = read.draft
-        } catch {
-          saved = null
+        const read = await window.xidao.publication.getAttempt({ attemptId: attempt.id }).catch(() => null)
+        if (read?.ok !== true) {
+          rawDispatch({ type: 'publish-attempt', editorId, attempt, readFailed: true })
+          return
         }
+        saved = read.draft
       }
       if (saved !== null) lastSaved.current.set(editorId, saved)
       rawDispatch({ type: 'publish-failed', editorId, problem: attempt.problem, forumMessage: attempt.forumMessage, draft: saved })
@@ -652,11 +654,15 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
     [find, lookup]
   )
 
-  // While any editor's attempt is sending, or its result is unknown and being checked, read its local
-  // record until that settles: sent ends the editor, failed continues its saved draft. Runs for
-  // hidden editors too; an editor that went away leaves its attempt to 发送记录 and 草稿.
+  // While any editor's attempt is sending, or its result is unknown and being checked, or it failed
+  // but its saved draft could not be read yet, read its local record until that settles: sent ends
+  // the editor, failed continues its saved draft. Runs for hidden editors too; an editor that went
+  // away leaves its attempt to 发送记录 and 草稿.
   const watchedKey = state.editors
-    .flatMap((editor) => (editor.publication?.phase === 'attempt' && isUnsettled(editor.publication.attempt) ? [editor.publication.attempt.id] : []))
+    .flatMap((editor) => {
+      const publication = editor.publication
+      return publication?.phase === 'attempt' && (isUnsettled(publication.attempt) || publication.readFailed) ? [publication.attempt.id] : []
+    })
     .join('|')
   useEffect(() => {
     if (watchedKey === '') return
@@ -667,7 +673,7 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
       reading = true
       for (const editor of stateRef.current.editors) {
         const publication = editor.publication
-        if (publication?.phase !== 'attempt' || !isUnsettled(publication.attempt)) continue
+        if (publication?.phase !== 'attempt' || !(isUnsettled(publication.attempt) || publication.readFailed)) continue
         let attempt: PublicationAttempt | null = null
         let draft: SavedDraft | null = null
         try {

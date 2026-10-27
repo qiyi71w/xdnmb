@@ -291,6 +291,12 @@ it('saves an explicit rejection exactly once and sends again only on a new delib
   const status = await s.service.getAttempt({ attemptId: rejected.id })
   if (!status.ok || !status.draft) throw new Error('missing saved draft')
   expect(status.draft.fields.content).toBe('测试正文')
+  // That draft is answered with the failure or not at all: without it the editor would lose its
+  // binding and its next save would make a second draft.
+  const list = s.drafts.list
+  s.drafts.list = async () => ({ ok: false, reason: 'storage' })
+  expect(await s.service.getAttempt({ attemptId: rejected.id })).toEqual({ ok: false, reason: 'storage' })
+  s.drafts.list = list
   expect(attempt(await s.service.submit(input)).id).toBe(rejected.id)
   expect(s.db.listDrafts()).toHaveLength(1)
   s.remote.setMode('success')
