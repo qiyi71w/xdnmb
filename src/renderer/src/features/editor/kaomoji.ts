@@ -3,7 +3,7 @@
 // https://github.com/orzogc/xdnmb_api/blob/28fdba53031a15e0de88954679afe91b9308f71a/lib/src/xdnmb.dart
 // That project is licensed under AGPL-3.0.
 
-import { KAOMOJI_LIMITS } from '../../../../shared/settings'
+import { isKaomojiName, isKaomojiText, KAOMOJI_LIMITS, type CustomKaomoji } from '../../../../shared/settings'
 
 /** A preset kaomoji: `name` is what its button shows, `text` what it inserts. */
 export interface Kaomoji {
@@ -119,20 +119,26 @@ export const KAOMOJI_PRESETS: readonly Kaomoji[] = [
 
 // The user's own kaomoji come after the presets; they are the `customKaomoji` setting.
 
-/** Control characters other than tab and line feed (refused by the setting's validation). */
-const FORBIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f]/
+/** Pasted CRLF / CR line breaks become LF before validation. */
+export function normalizeKaomojiText(text: string): string {
+  return text.replace(/\r\n?/g, '\n')
+}
 
 /**
- * Whether `text` may be added to `custom`: not blank, neither a preset's text nor already added,
- * and within the setting's limits (`KAOMOJI_LIMITS`, no control characters).
+ * The entry `text` and the name field's `name` add to `custom`, or null when they may not: the text
+ * must be valid (`isKaomojiText`), neither a preset's text nor already added, within the count limit;
+ * the name is trimmed and may be empty (no name) or else a valid one (`isKaomojiName`).
  */
-export function canAddKaomoji(custom: readonly string[], text: string): boolean {
-  return (
-    text.trim() !== '' &&
-    custom.length < KAOMOJI_LIMITS.count &&
-    [...text].length <= KAOMOJI_LIMITS.length &&
-    !FORBIDDEN.test(text) &&
-    !custom.includes(text) &&
-    !KAOMOJI_PRESETS.some((preset) => preset.text === text)
-  )
+export function newKaomoji(custom: readonly CustomKaomoji[], text: string, name: string): CustomKaomoji | null {
+  const trimmed = name.trim()
+  if (
+    custom.length >= KAOMOJI_LIMITS.count ||
+    !isKaomojiText(text) ||
+    custom.some((item) => item.text === text) ||
+    KAOMOJI_PRESETS.some((preset) => preset.text === text) ||
+    (trimmed !== '' && !isKaomojiName(trimmed))
+  ) {
+    return null
+  }
+  return trimmed === '' ? { text } : { text, name: trimmed }
 }

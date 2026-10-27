@@ -55,8 +55,30 @@ export interface BoardSettings {
 /** Split-view list width bounds, CSS pixels; the reader still keeps its minimum text width. */
 export const LIST_WIDTH_LIMITS = { min: 260, max: 1600, default: 340 } as const
 
-/** The user's own kaomoji: count and per-entry length (characters) limits. */
-export const KAOMOJI_LIMITS = { count: 200, length: 500 } as const
+/** The user's own kaomoji: count, per-entry length and name length (characters) limits. */
+export const KAOMOJI_LIMITS = { count: 200, length: 500, nameLength: 16 } as const
+
+/** One of the user's own kaomoji: `text` is what it inserts; a `name`, when given, is what its button shows. */
+export interface CustomKaomoji {
+  text: string
+  name?: string
+}
+
+/** Control characters other than tab and line feed are refused in a kaomoji's text. */
+const KAOMOJI_FORBIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f]/
+/** A name is one line without control characters. */
+const KAOMOJI_NAME_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+
+/** Whether `text` may be a kaomoji's text: not blank, within the length limit, no control characters but line feeds and tabs. */
+export function isKaomojiText(text: string): boolean {
+  return text.trim() !== '' && [...text].length <= KAOMOJI_LIMITS.length && !KAOMOJI_FORBIDDEN.test(text)
+}
+
+/** Whether `name` may be a kaomoji's name: already trimmed, 1–16 characters, one line, no control characters. */
+export function isKaomojiName(name: string): boolean {
+  const length = [...name].length
+  return name === name.trim() && length >= 1 && length <= KAOMOJI_LIMITS.nameLength && !KAOMOJI_NAME_FORBIDDEN.test(name)
+}
 
 export interface AppSettings {
   /** Automatic reminder checks in minutes; 0 disables only the timer. */
@@ -79,7 +101,7 @@ export interface AppSettings {
   /** List width chosen with the split divider. */
   listWidth: number
   /** Kaomoji added by the user, after the presets, in the order added. */
-  customKaomoji: readonly string[]
+  customKaomoji: readonly CustomKaomoji[]
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -122,7 +144,6 @@ const BOARD_KEY = /^(?:forum|timeline):[0-9A-Za-z_-]{1,32}$/
 const FORUM_KEY = /^forum:[0-9A-Za-z_-]{1,32}$/
 const GROUP_ID = /^(?:timelines|favorites|group-[0-9A-Za-z_-]{1,32})$/
 const FORUM_GROUP_ID = /^group-[0-9A-Za-z_-]{1,32}$/
-const KAOMOJI_FORBIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f]/
 
 type Issues = AppearanceIssue[]
 
@@ -196,11 +217,40 @@ function parseBoards(value: unknown, field: string): Parsed<BoardSettings> {
   return { ok: true, value: { favorites, hidden, order, collapsed } }
 }
 
-function parseKaomoji(value: unknown, field: string): Parsed<string[]> {
-  const issues: Issues = []
-  const valid = (item: string) => item.trim() !== '' && [...item].length <= KAOMOJI_LIMITS.length && !KAOMOJI_FORBIDDEN.test(item)
-  const list = stringList(value, field, valid, KAOMOJI_LIMITS.count, issues)
-  return list === null ? { ok: false, issues } : { ok: true, value: list }
+/** A stored or submitted entry `{ text, name? }`, or null when it is not a valid one. */
+function kaomojiEntry(item: unknown): CustomKaomoji | null {
+  if (!isRecord(item) || typeof item.text !== 'string' || !isKaomojiText(item.text)) return null
+  if (Object.keys(item).some((key) => key !== 'text' && key !== 'name')) return null
+  if (item.name === undefined) return { text: item.text }
+  return typeof item.name === 'string' && isKaomojiName(item.name) ? { text: item.text, name: item.name } : null
+}
+
+/** An update replaces the whole list; any invalid or repeated entry refuses it. */
+function parseKaomoji(value: unknown, field: string): Parsed<CustomKaomoji[]> {
+  if (!Array.isArray(value)) return { ok: false, issues: [{ kind: 'field', field, problem: value === undefined ? 'missing' : 'type' }] }
+  if (value.length > KAOMOJI_LIMITS.count) return { ok: false, issues: [{ kind: 'field', field, problem: 'range' }] }
+  const list: CustomKaomoji[] = []
+  for (const item of value) {
+    const entry = kaomojiEntry(item)
+    if (entry === null || list.some((saved) => saved.text === entry.text)) return { ok: false, issues: [{ kind: 'field', field, problem: 'range' }] }
+    list.push(entry)
+  }
+  return { ok: true, value: list }
+}
+
+/**
+ * The stored list: a plain string (saved before kaomoji had names) reads as an unnamed entry; an
+ * invalid or repeated entry, or one past the count limit, is dropped without affecting the rest.
+ */
+function storedKaomoji(value: unknown, field: string): Parsed<CustomKaomoji[]> {
+  if (!Array.isArray(value)) return { ok: false, issues: [{ kind: 'field', field, problem: 'type' }] }
+  const list: CustomKaomoji[] = []
+  for (const item of value) {
+    if (list.length === KAOMOJI_LIMITS.count) break
+    const entry = kaomojiEntry(typeof item === 'string' ? { text: item } : item)
+    if (entry !== null && !list.some((saved) => saved.text === entry.text)) list.push(entry)
+  }
+  return { ok: true, value: list }
 }
 
 function parseListWidth(value: unknown, field: string): Parsed<number> {
@@ -301,14 +351,15 @@ export function applySettingsPatch(current: AppSettings, patch: unknown): Parsed
 }
 
 /**
- * Settings from stored values. A missing or no longer valid value falls back to its default, and a
- * custom scheme whose theme is unusable falls back to `system`; the stored rows are not rewritten.
+ * Settings from stored values. A missing or no longer valid value falls back to its default (the
+ * custom kaomoji list drops only its invalid entries), and a custom scheme whose theme is unusable
+ * falls back to `system`; the stored rows are not rewritten.
  */
 export function settingsFromStored(stored: ReadonlyMap<string, unknown>): AppSettings {
   const settings: AppSettings = { ...DEFAULT_SETTINGS }
   for (const key of SETTING_KEYS) {
     if (!stored.has(key)) continue
-    const parsed = parseSetting(key, stored.get(key))
+    const parsed = key === 'customKaomoji' ? storedKaomoji(stored.get(key), key) : parseSetting(key, stored.get(key))
     if (parsed.ok) (settings as Record<keyof AppSettings, unknown>)[key] = parsed.value
   }
   if (stored.get('colorScheme') === 'custom' && settings.customTheme !== null) {
