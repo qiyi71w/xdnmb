@@ -177,5 +177,6 @@ describe('safe forum content', () => {
     }
     expect(submittedText(plain)).toBe('[1,5]后')
     expect(submittedText(parseContent('<span style="color:red"><b>2</b></span>后').nodes)).toBe('2后')
+    expect(submittedText(parseContent('<b><i>2</i></b><small>[1,5]</small>后').nodes)).toBe('[1,5]后')
   })
 })
