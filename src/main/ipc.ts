@@ -26,6 +26,7 @@ import type { SubscriptionItemChoice, SubscriptionSource } from '../shared/subsc
 import type { SubscriptionService } from './subscriptions/service'
 import type { PublicationService } from './publication/service'
 import type { Lifecycle } from './lifecycle/controller'
+import type { UpdateService } from './updates/service'
 import { REMINDERS_CHANGED_CHANNEL } from '../shared/reminders'
 import type { ReminderService } from './reminders/service'
 import { applyZoom, currentZoom } from './zoom'
@@ -73,6 +74,7 @@ interface IpcDeps {
   publication: PublicationService
   reminders: ReminderService
   lifecycle: Pick<Lifecycle, 'reside' | 'requestQuit' | 'presentQuit' | 'cancelQuit' | 'completeQuit'>
+  updates: UpdateService
   settings: SettingsService
   getStatus: () => AppStatus
   /** Operating system light/dark preference, for exporting a built-in scheme under `system`. */
@@ -305,7 +307,7 @@ export interface IpcRegistration {
 
 export function registerIpc({
   reading, images, identities, account, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
-  getStatus, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
+  updates, getStatus, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): IpcRegistration {
   const owner = (sender: WebContents): string => String(sender.id)
   const operations = new OperationRegistry()
@@ -834,7 +836,8 @@ export function registerIpc({
 
   // Window lifecycle. The serialized workspace is opaque here; the renderer validates it on load.
   handle(IpcChannel.lifecycleReside, async () => lifecycle.reside())
-  handle(IpcChannel.lifecycleRequestQuit, async () => lifecycle.requestQuit())
+  // A renderer quit is always an ordinary quit; only `updates.installAndRestart` quits for installing.
+  handle(IpcChannel.lifecycleRequestQuit, async () => lifecycle.requestQuit('quit'))
   handle(IpcChannel.lifecyclePresentQuit, async () => lifecycle.presentQuit())
   handle(IpcChannel.lifecycleCancelQuit, async () => lifecycle.cancelQuit())
   handle(IpcChannel.lifecycleCompleteQuit, async () => lifecycle.completeQuit())
@@ -865,6 +868,19 @@ export function registerIpc({
   })
   handle(IpcChannel.listUnstoredResults, async () => ({ attempts: publication.unstoredResults() }))
   handle(IpcChannel.retryUnstoredResults, async () => ({ ok: await publication.retryUnstored().catch(() => false) }))
+
+  // Software updates: no input names a URL, path or version to fetch; the source is fixed.
+  handle(IpcChannel.updateGetState, async () => updates.state())
+  handle(IpcChannel.updateCheck, async () => { await updates.check() })
+  handle(IpcChannel.updateDownload, async () => { await updates.download() })
+  handle(IpcChannel.updateCancelDownload, async () => updates.cancelDownload())
+  handle(IpcChannel.updateInstallAndRestart, async () => updates.installAndRestart())
+  handle(IpcChannel.updateOpenInstaller, async () => updates.openInstaller())
+  handle(IpcChannel.updateAcknowledgeNotice, async (_event, raw) => {
+    const version = record(raw).version
+    if (typeof version !== 'string' || version.length > 32) throw new InvalidRequestError()
+    await updates.acknowledgeNotice(version)
+  })
 
   handle(IpcChannel.getStatus, async () => getStatus())
 

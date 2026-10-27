@@ -40,6 +40,8 @@ import { SubscriptionsContext, useSubscriptions } from '../features/subscription
 import { clearThreadReminders, RemindersContext, useReminderOverview } from '../features/reminders/useReminders'
 import { RateLimitNotice } from '../features/reminders/RateLimitNotice'
 import { SendFailureNotices } from '../features/publication/SendFailureNotices'
+import { UpdateNotice } from '../features/updates/UpdateNotice'
+import { UpdatesContext, useUpdatesSource } from '../features/updates/updatesState'
 import { BottomNoticeStack } from '../components/BottomNotice'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { QuoteCard } from '../features/quote/QuoteCard'
@@ -184,6 +186,8 @@ export function App() {
   const { refreshOverview: refreshSubscriptions, refreshOperations: refreshSubscriptionJournal } = subscriptions
   const reminders = useReminderOverview()
   const { overview: reminderOverview, reload: reloadReminders } = reminders
+  /** Software updates: the one subscription, read by 关于, the update notice and the settings buttons. */
+  const updates = useUpdatesSource()
   const reminderThreads = reminderOverview?.badge ?? null
   const reminderBadge = useMemo(() => (reminderThreads === null ? null : { threads: reminderThreads }), [reminderThreads])
   /** The app's coverage: every modal dialog (`Modal`) and the settings page cover it while open. */
@@ -1353,6 +1357,7 @@ export function App() {
     <AppCoveredContext value={coverage}>
     <SettingsContext value={settingsAccess}>
     <SettingsOpenerContext value={openSettings}>
+    <UpdatesContext value={updates}>
       <EditorWorkspaceContext value={editorWorkspace}>
       <SubscriptionsContext value={subscriptions}>
       <RemindersContext value={reminders}>
@@ -1462,6 +1467,7 @@ export function App() {
                 />
                 <LaunchNotices openDraft={openFailedDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
                 <DraftDeletedNotices reopen={continueDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
+                <UpdateNotice fallbackFocus={activeTabFocus} />
               </BottomNoticeStack>
 
               {navOverlay && navPopover.open && (
@@ -1549,6 +1555,7 @@ export function App() {
       </RemindersContext>
       </SubscriptionsContext>
       </EditorWorkspaceContext>
+    </UpdatesContext>
     </SettingsOpenerContext>
     </SettingsContext>
     </AppCoveredContext>

@@ -1,5 +1,6 @@
 // Global preferences: one source of validation for IPC updates, stored rows and theme imports.
 import { CLOSE_ACTIONS, type CloseAction } from './lifecycle'
+import { UPDATE_NETWORKS, type UpdateNetwork } from './updates'
 import {
   BUILTIN_PALETTES,
   BUILTIN_RADIUS,
@@ -102,6 +103,14 @@ export interface AppSettings {
   listWidth: number
   /** Kaomoji added by the user, after the presets, in the order added. */
   customKaomoji: readonly CustomKaomoji[]
+  /** Check for updates at cold start and every 24 hours while running. */
+  updateAutoCheck: boolean
+  /** Windows: download a found release and install it when the user really quits. */
+  updateAutoInstall: boolean
+  /** macOS: download a found release's DMG automatically. */
+  updateAutoDownload: boolean
+  /** Network for update checks and package downloads only. */
+  updateNetwork: UpdateNetwork
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -118,7 +127,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   rail: { order: [], hidden: [] },
   boards: { favorites: [], hidden: [], order: {}, collapsed: [] },
   listWidth: LIST_WIDTH_LIMITS.default,
-  customKaomoji: []
+  customKaomoji: [],
+  updateAutoCheck: true,
+  updateAutoInstall: false,
+  updateAutoDownload: false,
+  updateNetwork: 'system'
 }
 
 export const SETTING_KEYS = [
@@ -135,7 +148,11 @@ export const SETTING_KEYS = [
   'rail',
   'boards',
   'listWidth',
-  'customKaomoji'
+  'customKaomoji',
+  'updateAutoCheck',
+  'updateAutoInstall',
+  'updateAutoDownload',
+  'updateNetwork'
 ] as const satisfies readonly (keyof AppSettings)[]
 
 /** At most this many entries in any board list (favorites, hidden, one group's order, collapsed). */
@@ -283,6 +300,9 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
     case 'reminderSystemNotifications':
     case 'newTabSplitDefault':
     case 'customThemeEnabled':
+    case 'updateAutoCheck':
+    case 'updateAutoInstall':
+    case 'updateAutoDownload':
       parsed = typeof value === 'boolean' ? { ok: true, value } : { ok: false, issues: [{ kind: 'field', field: key, problem: 'type' }] }
       break
     case 'closeAction':
@@ -314,6 +334,9 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
       break
     case 'customKaomoji':
       parsed = parseKaomoji(value, key)
+      break
+    case 'updateNetwork':
+      parsed = choice(value, UPDATE_NETWORKS, key)
       break
     default:
       parsed = { ok: false, issues: [{ kind: 'field', field: String(key), problem: 'unknown' }] }

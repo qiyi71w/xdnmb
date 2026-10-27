@@ -222,6 +222,18 @@ export function LifecycleHost({
     }
   }, [closeModals, whenRestored, flush, settle, ask, store, buildWorkspace])
 
+  /**
+   * The system is ending the session: pending drafts and the workspace are saved at once, without any
+   * question (nobody can answer and the process may end at any moment). Nothing closes or quits here.
+   */
+  const saveForSessionEnd = useCallback(async () => {
+    await whenRestored()
+    await store.flush()
+    await flush()
+    const workspace = buildWorkspace()
+    if (workspace !== null) await window.xidao.lifecycle.saveWorkspace({ workspace: serializeWorkspace(workspace) })
+  }, [whenRestored, store, flush, buildWorkspace])
+
   // The app-level dispatcher skips shortcuts while a modal dialog covers the app; a running quit
   // takes them all for its whole duration (dialog or not), before that dispatcher, which skips
   // prevented events.
@@ -281,6 +293,11 @@ export function LifecycleHost({
   const onRequest = useRef<(request: LifecycleRequest) => void>(() => undefined)
   useLayoutEffect(() => {
     onRequest.current = (request) => {
+      if (request.kind === 'session-end') {
+        // A running quit is already saving everything itself.
+        if (!quitting.current) void saveForSessionEnd().catch(ignore)
+        return
+      }
       if (request.kind === 'close') {
         if (quitting.current || choiceOpenRef.current) return
         choiceOpenRef.current = true

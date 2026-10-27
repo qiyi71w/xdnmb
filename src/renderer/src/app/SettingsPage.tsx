@@ -32,6 +32,7 @@ import { SubscriptionSection } from '../features/subscriptions/SubscriptionSecti
 import type { SubscriptionsState } from '../features/subscriptions/useSubscriptions'
 import { BoardManageSection, FeatureVisibilitySection } from '../features/directory/NavigationSettings'
 import { useBlocks } from '../features/thread/useBlocks'
+import { AboutSection } from '../features/updates/AboutSection'
 import '../features/directory/shell.css'
 
 type SectionId = SettingsSectionId
@@ -75,7 +76,8 @@ const CATEGORIES: readonly { id: string; title: string; sections: readonly { id:
     title: '系统',
     sections: [
       { id: 'window', title: '窗口' },
-      { id: 'cache', title: '存储与缓存' }
+      { id: 'cache', title: '存储与缓存' },
+      { id: 'about', title: '关于' }
     ]
   }
 ]
@@ -420,6 +422,8 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
       return <WindowSection settings={settings} write={write} />
     case 'cache':
       return <CacheSection />
+    case 'about':
+      return <AboutSection settings={settings} write={write} />
   }
 }
 

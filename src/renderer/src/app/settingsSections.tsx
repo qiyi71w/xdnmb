@@ -68,19 +68,22 @@ interface ChoiceOption<T extends string> {
 }
 
 /** Exclusive choice as pressed buttons (`.segmented`); the pressed one is bold, not only tinted. */
-function Choice<T extends string>({
+export function Choice<T extends string>({
   labelledBy,
+  describedBy,
   options,
   value,
   onChange
 }: {
   labelledBy: string
+  /** Help text of the whole choice. */
+  describedBy?: string
   options: readonly ChoiceOption<T>[]
   value: T
   onChange: (value: T) => void
 }) {
   return (
-    <div className="segmented setting-choice" role="group" aria-labelledby={labelledBy}>
+    <div className="segmented setting-choice" role="group" aria-labelledby={labelledBy} aria-describedby={describedBy}>
       {options.map((option) => (
         <button
           key={option.value}
@@ -111,7 +114,7 @@ export function Section({ id, title, children }: { id: string; title: ReactNode;
   )
 }
 
-function SettingRow({
+export function SettingRow({
   labelId,
   label,
   help,
@@ -195,7 +198,21 @@ function Slider({
 }
 
 /** On / off switch: a text-free track, its name outside (DESIGN.md). */
-function Switch({ labelledBy, checked, busy, disabled, onToggle }: { labelledBy: string; checked: boolean; busy?: boolean; disabled?: boolean; onToggle: () => void }) {
+export function Switch({
+  labelledBy,
+  describedBy,
+  checked,
+  busy,
+  disabled,
+  onToggle
+}: {
+  labelledBy: string
+  describedBy?: string
+  checked: boolean
+  busy?: boolean
+  disabled?: boolean
+  onToggle: () => void
+}) {
   return (
     <button
       type="button"
@@ -203,6 +220,7 @@ function Switch({ labelledBy, checked, busy, disabled, onToggle }: { labelledBy:
       className="switch"
       aria-checked={checked}
       aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
       aria-busy={busy}
       disabled={disabled}
       onClick={onToggle}

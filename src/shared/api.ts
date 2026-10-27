@@ -18,6 +18,7 @@ import type { AppSettings, ZoomAction, ZoomState } from './settings'
 import type { AppearanceIssue } from './theme'
 import type { SearchApi } from './search'
 import type { SearchOutcome, SearchSessionId } from './online-search'
+import type { UpdatesApi } from './updates'
 
 /** Edit commands the main process runs on the requesting window, as its Edit menu would. */
 export const CLIPBOARD_EDIT_COMMANDS = ['cut', 'copy', 'paste', 'selectAll'] as const
@@ -374,6 +375,8 @@ export interface XidaoApi {
   lifecycle: LifecycleApi
   /** Thread reminders, bounded catch-up checks and reminder notifications. */
   reminders: RemindersApi
+  /** About and software updates (fixed GitHub Releases source; see `shared/updates.ts`). */
+  updates: UpdatesApi
   app: {
     getStatus(): Promise<AppStatus>
   }
@@ -494,7 +497,14 @@ export const IpcChannel = {
   reminderCloseForThreads: 'reminders:close-for-threads',
   reminderClear: 'reminders:clear',
   reminderDismissRateLimit: 'reminders:dismiss-rate-limit',
-  getStatus: 'app:get-status'
+  getStatus: 'app:get-status',
+  updateGetState: 'updates:get-state',
+  updateCheck: 'updates:check',
+  updateDownload: 'updates:download',
+  updateCancelDownload: 'updates:cancel-download',
+  updateInstallAndRestart: 'updates:install-and-restart',
+  updateOpenInstaller: 'updates:open-installer',
+  updateAcknowledgeNotice: 'updates:acknowledge-notice'
 } as const
 
 /** The one main → renderer event channel; carries a `LifecycleRequest`. */

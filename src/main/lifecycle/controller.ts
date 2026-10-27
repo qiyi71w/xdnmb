@@ -32,6 +32,15 @@ export interface MainWindowHost {
   send(request: LifecycleRequest): void
 }
 
+/**
+ * Why a real quit started: `quit` from any quit entry, or `install` from 「安装并重启」. Cancelling the
+ * quit, a save failure, or reopening while finishing drops the purpose with the quit.
+ */
+export type QuitPurpose = 'quit' | 'install'
+
+/** Why the process ends: the quit's purpose, or `session-end` once the system is ending the session. */
+export type ExitReason = QuitPurpose | 'session-end'
+
 /** Sends that ended failed or unknown while finishing without a window. */
 export interface FinishingSummary {
   failed: PublicationAttempt[]
@@ -47,8 +56,8 @@ export interface LifecycleDeps {
   stopBackgroundWork(): void | Promise<void>
   /** Best-effort system notification; may be unavailable or throw. Launch notices are already stored. */
   notify(summary: FinishingSummary): void
-  /** Ends the process (storage is closed on the way out). */
-  exit(): void
+  /** Ends the process (storage is closed on the way out); `reason` decides whether an update installs. */
+  exit(reason: ExitReason): void
   /** Wall clock (epoch ms): send deadlines are recorded wall-clock times. */
   now(): number
   sleep(ms: number): Promise<void>
@@ -63,8 +72,8 @@ export interface Lifecycle {
   closeRequested(): Promise<void>
   /** 后台驻留 chosen in the renderer. */
   reside(): void
-  /** Real quit from any entry (close choice, remembered choice, tray, app menu). */
-  requestQuit(): void
+  /** Real quit from any entry (close choice, remembered choice, tray, app menu) or for installing an update. */
+  requestQuit(purpose?: QuitPurpose): void
   presentQuit(): void
   cancelQuit(): void
   completeQuit(): void
@@ -72,6 +81,11 @@ export interface Lifecycle {
   reopen(): void
   /** Notification clicks reveal/create a window without starting another check. */
   revealWithoutTrigger(): Promise<void>
+  /**
+   * The operating system is ending the session (shutdown, restart, log-off). From now on the process
+   * never exits for installing; a running window is asked to save drafts and the workspace at once.
+   */
+  endSession(): void
 }
 
 export function createLifecycle(deps: LifecycleDeps): Lifecycle {
@@ -81,6 +95,8 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
   let generation = 0
   let opening = false
   let openingTask: Promise<void> | null = null
+  let purpose: QuitPurpose = 'quit'
+  let sessionEnding = false
 
   /** `trigger`: an explicit opening to report; `null` when the app brings its window back itself. */
   async function openWindow(trigger: LaunchTrigger | null): Promise<void> {
@@ -99,6 +115,7 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
   function stopFinishing(trigger: LaunchTrigger | null): void {
     generation++
     phase = 'running'
+    purpose = 'quit'
     deps.publication.setUnattended(false)
     void openWindow(trigger)
   }
@@ -142,16 +159,18 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       }
     }
     phase = 'exiting'
-    deps.exit()
+    deps.exit(sessionEnding ? 'session-end' : purpose)
   }
 
-  function requestQuit(): void {
+  function requestQuit(requested: QuitPurpose = 'quit'): void {
     if (phase === 'quitting') {
+      if (requested === 'install') purpose = 'install'
       window.send({ kind: 'quit' })
       return
     }
     if (phase !== 'running') return
     phase = 'quitting'
+    purpose = requested
     if (window.state() === 'none') void finish()
     else window.send({ kind: 'quit' })
   }
@@ -198,7 +217,10 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
     },
 
     cancelQuit() {
-      if (phase === 'quitting') phase = 'running'
+      if (phase === 'quitting') {
+        phase = 'running'
+        purpose = 'quit'
+      }
     },
 
     completeQuit() {
@@ -229,11 +251,16 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       if (phase === 'finishing') {
         generation++
         phase = 'running'
+        purpose = 'quit'
         deps.publication.setUnattended(false)
       }
       if (openingTask !== null) await openingTask
       else if (window.state() === 'none') await openWindow(null)
       window.reveal()
+    },
+    endSession() {
+      sessionEnding = true
+      if (phase === 'running' && window.state() !== 'none') window.send({ kind: 'session-end' })
     }
   }
 }

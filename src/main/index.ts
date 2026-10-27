@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, powerMonitor, protocol, session, Tray,
+  app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, powerMonitor, protocol, session, shell, Tray,
   type IpcMainInvokeEvent, type MenuItemConstructorOptions
 } from 'electron'
 import { createReadStream } from 'node:fs'
@@ -11,7 +11,7 @@ import { LIFECYCLE_REQUEST_CHANNEL, type AppPlatform } from '../shared/api'
 import { IMAGE_FORMAT_EXTENSION, IMAGE_SCHEME } from '../shared/images'
 import { createContentService, type ContentService } from './content/service'
 import { createDraftService } from './drafts/service'
-import type { ZoomAction } from '../shared/settings'
+import { DEFAULT_SETTINGS, type ZoomAction } from '../shared/settings'
 import { createSettingsService } from './appearance'
 import { createForumClient } from './forum/client'
 import { createForumTransport } from './forum/transport'
@@ -32,7 +32,12 @@ import { createPublicationAdapter } from './publication/adapter'
 import { createPublicationService } from './publication/service'
 import { createFailureNotifier } from './publication/failureNotifier'
 import { PUBLICATION_CHANGED_CHANNEL, PUBLICATION_FAILURE_CHANNEL, PUBLICATION_OPEN_DRAFT_CHANNEL } from '../shared/publication'
-import trayIconPath from '../../resources/tray-icon.png?asset'
+import appIconPng from '../../resources/icons/xidao-icon-512.png?asset'
+import appIconIco from '../../resources/icons/xidao-icon.ico?asset'
+import { UPDATE_STATE_CHANNEL } from '../shared/updates'
+import { createUpdateEngine, updateAvailability } from './updates/engine'
+import { createRecordStore, removeFile, runWindowsInstaller, sha512OfFile } from './updates/files'
+import { createUpdateService, type UpdateService } from './updates/service'
 import { REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
 import { createReminderService } from './reminders/service'
 import { createReminderNotifier } from './reminders/notifier'
@@ -49,6 +54,8 @@ const FORUM_API_ORIGIN = 'https://api.nmb.best'
 const FORUM_WEB_ORIGIN = 'https://www.nmbxd1.com'
 /** Image server announced by `getCDNPath` (both entries); thumbnails under `thumb/`, originals under `image/`. */
 const IMAGE_ORIGIN = 'https://image.nmb.best'
+/** Stable application identity (electron-builder `appId`): Windows taskbar/notifications and the macOS bundle. */
+const APP_ID = 'io.github.qiyi71w.xidao'
 
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL
 const rendererFile = join(import.meta.dirname, '../renderer/index.html')
@@ -67,9 +74,11 @@ let lifecycle: Lifecycle | null = null
 /** Kept referenced for the app's lifetime (Windows/Linux). */
 let tray: Tray | null = null
 let search: SearchService | null = null
+let updates: UpdateService | null = null
 
 // Every renderer runs sandboxed; one main process owns the database worker.
 app.enableSandbox()
+if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 if (!app.requestSingleInstanceLock()) app.quit()
 // Managed image files are shown through the app's own scheme, never by file path or remote URL.
 protocol.registerSchemesAsPrivileged([{ scheme: IMAGE_SCHEME, privileges: { standard: true, secure: true } }])
@@ -130,6 +139,8 @@ function createWindow(): BrowserWindow {
     minWidth: 480,
     minHeight: 480,
     show: false,
+    // Windows and macOS take the icon from the packaged executable / bundle.
+    ...(platform === 'linux' ? { icon: appIconPng } : {}),
     title: '汐岛',
     // Native window controls stay; the app draws the title bar area. Windows/Linux color the
     // controls through the overlay (kept in step with the theme by `updateTitleBar`).
@@ -156,6 +167,9 @@ function createWindow(): BrowserWindow {
     event.preventDefault()
     void lifecycle.closeRequested()
   })
+  // Shutdown, restart or log-off (Windows): never install, save what can be saved at once.
+  window.on('query-session-end', () => lifecycle?.endSession())
+  window.on('session-end', () => lifecycle?.endSession())
   window.webContents.on('before-input-event', (event, input) => {
     const action = zoomActionOf(input, platform)
     if (action === null) return
@@ -167,9 +181,10 @@ function createWindow(): BrowserWindow {
   return window
 }
 
-/** 16 px tray icon with a 2× representation for high-DPI taskbars. */
+/** Tray icon: the multi-size ICO on Windows; elsewhere 16 px with a 2× representation from the app icon. */
 function trayImage(): Electron.NativeImage {
-  const source = nativeImage.createFromPath(trayIconPath)
+  if (platform === 'win32') return nativeImage.createFromPath(appIconIco)
+  const source = nativeImage.createFromPath(appIconPng)
   const image = nativeImage.createEmpty()
   if (source.isEmpty()) return image
   for (const scaleFactor of [1, 2]) {
@@ -380,10 +395,31 @@ async function start(): Promise<void> {
     window.on('restore', () => failures.windowShown())
     window.on('focus', () => failures.windowShown())
   }
+  const availability = updateAvailability()
+  const updateService = createUpdateService({
+    platform: availability.platform,
+    unavailable: availability.unavailable,
+    currentVersion: app.getVersion(),
+    engine: availability.unavailable === null && availability.target !== null ? createUpdateEngine(availability.target) : null,
+    records: createRecordStore(join(app.getPath('userData'), 'update-state.json')),
+    sha512: sha512OfFile,
+    remove: removeFile,
+    runInstaller: runWindowsInstaller,
+    async openPackage(path) {
+      const problem = await shell.openPath(path)
+      if (problem !== '') throw new Error('package not opened')
+    },
+    requestInstallQuit: () => lifecycle?.requestQuit('install'),
+    publish(state) {
+      if (mainWindow !== null && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send(UPDATE_STATE_CHANNEL, state)
+    }
+  })
+  updates = updateService
   const host: MainWindowHost = {
     state: () => (mainWindow === null ? 'none' : mainWindow.isVisible() ? 'shown' : 'hidden'),
     open: async () => {
       await backgroundStopped
+      updateService.resume()
       await reminders.startScheduling().catch(() => console.error('[reminders] scheduling unavailable'))
       retained.resume()
       searchService.resume()
@@ -418,11 +454,17 @@ async function start(): Promise<void> {
     publication,
     stopBackgroundWork: async () => {
       ipc?.cancelAll()
+      // Nothing is downloaded while quitting; a package that is not ready is not installed.
+      updateService.stop()
       backgroundStopped = Promise.all([retained.stop(), reminders.stop('quit'), searchService.stop()]).then(() => undefined)
       await backgroundStopped
     },
     notify: notifyUnfinished,
-    exit: () => app.quit(),
+    exit: (reason) => {
+      void updateService.prepareExit(reason)
+        .catch(() => console.error('[updates] package not confirmed'))
+        .finally(() => app.quit())
+    },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     onTrigger: () => { void reminders.request().catch(() => console.error('[reminders] check unavailable')) }
@@ -440,10 +482,14 @@ async function start(): Promise<void> {
     publication,
     reminders,
     lifecycle: controller,
+    updates: updateService,
     search: searchService,
     onlineSearch,
     store: openedStore,
-    settings: createSettingsService(openedStore, reminders.configure),
+    settings: createSettingsService(openedStore, (saved) => {
+      reminders.configure(saved)
+      updateService.configure(saved)
+    }),
     getStatus: () => ({ storage: openedStore.status, platform }),
     async chooseSavePath(sender, suggestedName, format) {
       const window = BrowserWindow.fromWebContents(sender)
@@ -489,6 +535,9 @@ async function start(): Promise<void> {
   }
 
   await controller.start()
+  // Cold start only: reopening or focusing the window never checks again.
+  void updateService.start(await openedStore.loadSettings().catch(() => DEFAULT_SETTINGS))
+    .catch(() => console.error('[updates] unavailable'))
 }
 
 app.whenReady().then(start, (error: unknown) => {
@@ -514,5 +563,7 @@ app.on('will-quit', (event) => {
     await search?.stop()
     await content?.stop()
     await store?.close()
+    // Only after storage is closed; the installer closes nothing the app still writes.
+    await updates?.launchInstaller()
   })().finally(() => app.quit())
 })

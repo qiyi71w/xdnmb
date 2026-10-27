@@ -151,6 +151,18 @@
   color: var(--on-accent);
 }
 
+/* A plain mark without figures (settings: a newer version is known). The button's name says it too. */
+.shell-dot.is-mark {
+  top: 4px;
+  right: 4px;
+  min-width: 0;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  background: var(--accent);
+  pointer-events: none;
+}
+
 /* ---------- Icon rail ---------- */
 
 .nav.shell-nav {

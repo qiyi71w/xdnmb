@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "汐岛：X 岛匿名版第三方桌面客户端",
+  "author": "qiyi71w",
   "license": "AGPL-3.0-only",
   "type": "module",
   "main": "./out/main/index.js",
@@ -15,10 +16,13 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node scripts/run-tests.mjs"
+    "test": "node scripts/run-tests.mjs",
+    "dist:win": "electron-vite build && electron-builder --win --publish never",
+    "dist:mac": "electron-vite build && electron-builder --mac --publish never"
   },
   "dependencies": {
     "better-sqlite3": "13.0.3",
+    "electron-updater": "6.8.9",
     "htmlparser2": "12.0.0"
   },
   "devDependencies": {
@@ -28,6 +32,7 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
     "electron": "45.0.0",
+    "electron-builder": "26.15.3",
     "electron-vite": "6.0.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",

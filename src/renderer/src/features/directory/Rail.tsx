@@ -24,6 +24,7 @@ import { useRovingFocus } from '../../lib/useRovingFocus'
 import type { ListRef } from '../tabs/tabsState'
 import { FeatureDot, featureInfo, featureIsDialog, featureLabel, featureTitle, GridIcon, type FeatureHost } from './navParts'
 import { orderedFeatures, useNavActions, type Board, type FeatureId } from './navStore'
+import { hasNewVersion, settingsEntryLabel, useUpdates } from '../updates/updatesState'
 
 /** Width of the rail, CSS pixels (App widens the navigation column by it). */
 export const RAIL_WIDTH = 52
@@ -74,6 +75,8 @@ export function Rail({
   const shown = ordered.filter((feature) => !prefs.hidden.includes(feature.id))
   const hidden = ordered.filter((feature) => prefs.hidden.includes(feature.id))
   const marks = favoriteMarks(favorites.boards)
+  const updateState = useUpdates().state
+  const settingsLabel = settingsEntryLabel(updateState)
 
   const railRef = useRef<HTMLDivElement>(null)
   const favoritesRef = useRef<HTMLDivElement>(null)
@@ -233,13 +236,14 @@ export function Rail({
           type="button"
           className={settingsCurrent ? 'shell-rail-btn is-current' : 'shell-rail-btn'}
           aria-current={settingsCurrent ? 'page' : undefined}
-          aria-label="设置"
+          aria-label={settingsLabel}
           data-settings-entry=""
-          data-rail-tip="设置"
+          data-rail-tip={settingsLabel}
           onClick={onOpenSettings}
           {...rail.itemProps(SETTINGS_KEY)}
         >
           <Icon name="settings" size={18} />
+          {hasNewVersion(updateState) && <span className="shell-dot is-mark" aria-hidden="true" />}
         </button>
         <span className="visually-hidden" role="status">
           {announced.text}

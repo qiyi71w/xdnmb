@@ -26,6 +26,12 @@ export type LifecycleRequest =
    * or `cancelQuit`. Sent again if quit is requested again while it is still being handled.
    */
   | { kind: 'quit' }
+  /**
+   * The operating system is ending the session (shutdown, restart, log-off). The renderer saves
+   * pending drafts and the workspace at once without asking anything; the system may end the process
+   * at any moment, so nothing waits for an answer. Ignored while a real quit is being handled.
+   */
+  | { kind: 'session-end' }
 
 /** Upper bound of the serialized workspace accepted over IPC (UTF-16 code units). */
 export const MAX_WORKSPACE_LENGTH = 2_000_000

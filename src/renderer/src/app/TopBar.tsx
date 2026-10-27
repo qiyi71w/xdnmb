@@ -2,6 +2,7 @@ import { useEffect, useRef, type KeyboardEvent, type RefObject } from 'react'
 import type { AppPlatform } from '../../../shared/api'
 import { Icon } from '../components/Icon'
 import type { Tab } from '../features/tabs/tabsState'
+import { hasNewVersion, settingsEntryLabel, useUpdates } from '../features/updates/updatesState'
 import { shortcutLabel } from './shortcuts'
 
 function withShortcut(label: string, shortcut: string): string {
@@ -54,6 +55,8 @@ export function TopBar({
   onNewTab: () => void
 }) {
   const stripRef = useRef<HTMLDivElement>(null)
+  const updateState = useUpdates().state
+  const settingsLabel = settingsEntryLabel(updateState)
 
   useEffect(() => {
     // Instant on purpose: no smooth scrolling (reduced motion), the selected tab is simply brought into view.
@@ -177,12 +180,13 @@ export function TopBar({
         <button
           ref={settingsTrigger.ref}
           type="button"
-          className="icon-btn"
-          aria-label="设置"
-          title={withShortcut('设置', shortcutLabel('open-settings', platform))}
+          className="icon-btn settings-trigger"
+          aria-label={settingsLabel}
+          title={withShortcut(settingsLabel, shortcutLabel('open-settings', platform))}
           onClick={settingsTrigger.onOpen}
         >
           <Icon name="settings" />
+          {hasNewVersion(updateState) && <span className="shell-dot is-mark" aria-hidden="true" />}
         </button>
       )}
     </header>

@@ -1,0 +1,57 @@
+# Installers: Windows x64 NSIS (current user) and macOS x64 / arm64 DMG, using prebuilt Electron.
+# The identity below is permanent: it keeps the data directory, the Windows install/uninstall entry,
+# taskbar and notification identity, and the macOS bundle identifier stable across versions.
+appId: io.github.qiyi71w.xidao
+productName: 汐岛
+executableName: xidao
+copyright: Copyright © qiyi71w
+# Release assets must keep their names on GitHub (it renames non-ASCII names), and the update
+# metadata names them exactly: xidao-<version>-<os>-<arch>.<ext>.
+artifactName: xidao-${version}-${os}-${arch}.${ext}
+directories:
+  output: dist
+files:
+  - out/**/*
+  - resources/icons/**/*
+  - package.json
+  - LICENSE
+# The update metadata's fixed source; the client also fixes it in code.
+publish:
+  provider: github
+  owner: qiyi71w
+  repo: xdnmb
+  releaseType: release
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: resources/icons/xidao-icon.ico
+  # No developer certificate: nothing is signed and the updater does not ask for a publisher.
+  signAndEditExecutable: true
+  verifyUpdateCodeSignature: false
+nsis:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  # Uninstalling keeps the data directory; updates never touch it.
+  deleteAppDataOnUninstall: false
+  # The client always downloads whole installers.
+  differentialPackage: false
+  installerIcon: resources/icons/xidao-icon.ico
+  uninstallerIcon: resources/icons/xidao-icon.ico
+  shortcutName: 汐岛
+  uninstallDisplayName: 汐岛
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  icon: resources/icons/xidao-icon.icns
+  category: public.app-category.social-networking
+  minimumSystemVersion: '13.0'
+  # Ad-hoc signature only (required to run on Apple Silicon); not a Developer ID and not notarized.
+  identity: '-'
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  notarize: false

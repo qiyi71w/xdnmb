@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CloseAction, LifecycleRequest } from '../src/shared/lifecycle'
 import type { PublicationAttempt, PublicationState } from '../src/shared/publication'
-import { createLifecycle, type FinishingSummary, type LaunchTrigger } from '../src/main/lifecycle/controller'
+import { createLifecycle, type ExitReason, type FinishingSummary, type LaunchTrigger } from '../src/main/lifecycle/controller'
 import type { InFlightPublication } from '../src/main/publication/service'
 
 function deferred<T>() {
@@ -36,7 +36,7 @@ function setup(options: { closeAction?: CloseAction | 'unreadable'; notify?: (su
   const unstored: PublicationAttempt[] = []
   let storageUp = true
   let opens = 0
-  let exits = 0
+  const exitReasons: ExitReason[] = []
   let stops = 0
   let clock = Date.parse('2026-10-24T08:00:00.000Z')
   const runs: InFlightPublication[] = []
@@ -86,18 +86,18 @@ function setup(options: { closeAction?: CloseAction | 'unreadable'; notify?: (su
       notified.push(summary)
       options.notify?.(summary)
     },
-    exit: () => exits++,
+    exit: (reason) => exitReasons.push(reason),
     now: () => clock,
     sleep: (ms) => new Promise<void>((resolve) => sleeps.push({ ms, resolve })),
     onTrigger: (trigger) => triggers.push(trigger)
   })
 
   return {
-    lifecycle, sent, triggers, sleeps, notified, unattended, abandoned, runs, unstored,
+    lifecycle, sent, triggers, sleeps, notified, unattended, abandoned, runs, unstored, exitReasons,
     setStorageUp(up: boolean) { storageUp = up },
     get windowState() { return windowState },
     get opens() { return opens },
-    get exits() { return exits },
+    get exits() { return exitReasons.length },
     get stops() { return stops },
     advance(ms: number) { clock += ms },
     now: () => clock,
@@ -292,5 +292,54 @@ describe('window lifecycle', () => {
     expect(s.sleeps).toEqual([])
     expect(s.notified).toEqual([])
     expect(s.exits).toBe(1)
+  })
+
+  it('exits for installing only from the install quit itself: cancelling it or reopening while finishing makes later quits ordinary', async () => {
+    const s = setup()
+    await s.started()
+    s.lifecycle.requestQuit('install')
+    // A draft could not be saved / the user cancelled: no install, and the next quit is an ordinary one.
+    s.lifecycle.cancelQuit()
+    s.lifecycle.requestQuit()
+    s.lifecycle.completeQuit()
+    await flush()
+    expect(s.exitReasons).toEqual(['quit'])
+
+    const reopened = setup()
+    await reopened.started()
+    const run = deferred<PublicationAttempt | null>()
+    reopened.runs.push({ attempt: sendAttempt('11', 'sending', new Date(reopened.now()).toISOString()), deadline: reopened.now() + 60_000, done: run.promise })
+    reopened.lifecycle.requestQuit('install')
+    reopened.lifecycle.completeQuit()
+    await flush()
+    reopened.lifecycle.reopen()
+    await reopened.showWindow()
+    run.resolve(sendAttempt('11', 'confirmed', new Date(reopened.now()).toISOString()))
+    await flush()
+    expect(reopened.exits).toBe(0)
+    reopened.runs.length = 0
+    reopened.lifecycle.requestQuit()
+    reopened.lifecycle.completeQuit()
+    await flush()
+    expect(reopened.exitReasons).toEqual(['quit'])
+
+    const installing = setup()
+    await installing.started()
+    installing.lifecycle.requestQuit('install')
+    installing.lifecycle.completeQuit()
+    await flush()
+    expect(installing.exitReasons).toEqual(['install'])
+  })
+
+  it('never exits for installing once the session is ending, and asks a running window to save at once', async () => {
+    const s = setup()
+    await s.started()
+    s.lifecycle.endSession()
+    expect(s.sent).toEqual([{ kind: 'session-end' }])
+    // The system closes the window while ending the session; whatever quit follows is not an install.
+    s.lifecycle.requestQuit('install')
+    s.lifecycle.completeQuit()
+    await flush()
+    expect(s.exitReasons).toEqual(['session-end'])
   })
 })

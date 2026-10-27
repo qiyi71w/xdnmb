@@ -5,6 +5,7 @@ import { REMINDERS_CHANGED_CHANNEL, REMINDERS_OPEN_CHANNEL } from '../shared/rem
 import { OFFLINE_CHANGED_CHANNEL } from '../shared/content'
 import { PUBLICATION_CHANGED_CHANNEL, PUBLICATION_FAILURE_CHANNEL, PUBLICATION_OPEN_DRAFT_CHANNEL, type SendFailureNotice } from '../shared/publication'
 import type { ThreadId } from '../shared/forum'
+import { UPDATE_STATE_CHANNEL, type UpdateState } from '../shared/updates'
 
 // A notification can create a window before React has mounted its listener. Keep the intent in
 // preload, not an arbitrary timeout, until a subscriber can open the in-app list.
@@ -234,6 +235,20 @@ const api: XidaoApi = {
     dismissLaunchNotices: (input) => ipcRenderer.invoke(IpcChannel.dismissLaunchNotices, input),
     listUnstoredResults: () => ipcRenderer.invoke(IpcChannel.listUnstoredResults),
     retryUnstoredResults: () => ipcRenderer.invoke(IpcChannel.retryUnstoredResults)
+  },
+  updates: {
+    getState: () => ipcRenderer.invoke(IpcChannel.updateGetState),
+    onState(listener) {
+      const handler = (_event: IpcRendererEvent, state: UpdateState) => listener(state)
+      ipcRenderer.on(UPDATE_STATE_CHANNEL, handler)
+      return () => { ipcRenderer.removeListener(UPDATE_STATE_CHANNEL, handler) }
+    },
+    check: () => ipcRenderer.invoke(IpcChannel.updateCheck),
+    download: () => ipcRenderer.invoke(IpcChannel.updateDownload),
+    cancelDownload: () => ipcRenderer.invoke(IpcChannel.updateCancelDownload),
+    installAndRestart: () => ipcRenderer.invoke(IpcChannel.updateInstallAndRestart),
+    openInstaller: () => ipcRenderer.invoke(IpcChannel.updateOpenInstaller),
+    acknowledgeNotice: (input) => ipcRenderer.invoke(IpcChannel.updateAcknowledgeNotice, input)
   },
   app: {
     getStatus: () => ipcRenderer.invoke(IpcChannel.getStatus)
