@@ -247,12 +247,12 @@ it('releases a refused PO choice so an edited retry cannot submit the old frozen
   const first = await s.service.submit(input)
   if (first.kind !== 'prompt') throw new Error('missing prompt')
   s.remote.setMode('preflight-rate')
-  expect(await s.service.resolvePrompt({ token: first.prompt.token, choice: 'current', suppress: true })).toEqual({ kind: 'refused', reason: 'rate-limited' })
+  expect(await s.service.resolvePrompt({ token: first.prompt.token, answer: { kind: 'send', credentialId: s.b, suppress: true } })).toEqual({ kind: 'refused', reason: 'rate-limited' })
   s.remote.setMode('success')
   const next = await s.service.submit({ ...input, requestId: randomUUID(), payload: { ...input.payload, fields: { ...input.payload.fields, content: '修改后的内容' } } })
   if (next.kind !== 'prompt') throw new Error('missing fresh prompt')
   expect(next.prompt.token).not.toBe(first.prompt.token)
-  const sent = attempt(await s.service.resolvePrompt({ token: next.prompt.token, choice: 'current', suppress: false }) as SubmitResult)
+  const sent = attempt(await s.service.resolvePrompt({ token: next.prompt.token, answer: { kind: 'send', credentialId: s.b, suppress: false } }) as SubmitResult)
   expect(await finished(s.service, sent.id)).toMatchObject({ state: 'confirmed', payload: { fields: { content: '修改后的内容' } } })
 })
 
@@ -298,6 +298,37 @@ it('saves an explicit rejection exactly once and sends again only on a new delib
   expect(await finished(s.service, retry.id)).toMatchObject({ state: 'confirmed' })
   expect(s.db.listDrafts()).toEqual([])
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(2)
+})
+
+it('writes a failed or unverified send back into the draft its editor continues, never a second draft', async () => {
+  const s = await setup()
+  const saveDraft = async (content: string) => {
+    const result = await s.drafts.save({ ...payload(s.a, content), draftId: null })
+    if (!result.ok) throw new Error('save failed')
+    return result.draft
+  }
+  const continued = await saveDraft('自动保存的旧版本')
+  const other = await saveDraft('同目标的另一份草稿')
+  s.remote.setMode('reject')
+  const rejected = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: { ...payload(s.a, '发送时的版本'), draftId: continued.id } }))
+  expect(await finished(s.service, rejected.id)).toMatchObject({ state: 'failed', savedDraftId: continued.id })
+  expect(s.db.listDrafts().map(draft => [draft.id, draft.fields.content]).sort()).toEqual([
+    [continued.id, '发送时的版本'], [other.id, '同目标的另一份草稿']
+  ].sort())
+  // The forum never shows it, so the check cannot find it.
+  s.remote.lag()
+
+  // Unknown after sending, then failed by the one check: the same draft takes the content again.
+  s.remote.setMode('drop')
+  const dropped = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: { ...payload(s.a, '再次发送的版本'), draftId: continued.id } }))
+  expect(await finished(s.service, dropped.id)).toMatchObject({ state: 'unknown' })
+  s.remote.setMode('success')
+  await s.restart({ afterSendMs: null, onRecover: true })
+  await expect.poll(() => s.db.getPublication(dropped.id)?.state).toBe('failed')
+  expect(s.db.getPublication(dropped.id)).toMatchObject({ problem: 'unverified', savedDraftId: continued.id })
+  expect(s.db.listDrafts().map(draft => [draft.id, draft.fields.content]).sort()).toEqual([
+    [continued.id, '再次发送的版本'], [other.id, '同目标的另一份草稿']
+  ].sort())
 })
 
 it('notifies only explicit failures with their saved draft, never refusals, unknown results or a quit without a window', async () => {
@@ -450,22 +481,30 @@ it('records a result the store refuses (not a storage failure) as unknown, so it
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
 })
 
-it('PO cancel changes nothing; switch remembers the actual identity; suppression is runtime-scoped and re-enable clears it', async () => {
+it('PO cancel changes nothing; sending with a PO cookie remembers it for the thread; suppression is runtime-scoped and re-enable clears it', async () => {
   const s = await setup()
   const head = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'head', payload: payload(s.a) }))
   await finished(s.service, head.id)
   storeHead(s.db, '701', 'IdA')
+  s.db.setThreadPostIdentity('701', s.b, '2026-01-01')
   const reply = () => ({ requestId: randomUUID(), editorId: randomUUID(), payload: { ...payload(s.b, '回复内容'), target: { kind: 'reply' as const, threadId: '701' } } })
   const first = await s.service.submit(reply())
   if (first.kind !== 'prompt') throw new Error('missing PO prompt')
-  expect(first.prompt).toMatchObject({ currentName: 'B', poName: 'A', canSwitch: true })
-  expect(await s.service.resolvePrompt({ token: first.prompt.token, choice: 'cancel', suppress: true })).toEqual({ kind: 'cancelled' })
-  expect(s.db.getThreadPostIdentity('701')).toEqual({ state: 'selected', credentialId: s.a })
+  expect(await s.service.resolvePrompt({ token: first.prompt.token, answer: { kind: 'cancel' } })).toEqual({ kind: 'cancelled' })
+  expect(s.db.getThreadPostIdentity('701')).toEqual({ state: 'selected', credentialId: s.b })
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
+  // Keeping the current cookie sends with it and leaves the thread's choice alone.
+  const kept = await s.service.submit(reply())
+  if (kept.kind !== 'prompt') throw new Error('cancel incorrectly suppressed prompt')
+  const current = attempt(await s.service.resolvePrompt({ token: kept.prompt.token, answer: { kind: 'send', credentialId: s.b, suppress: false } }) as SubmitResult)
+  expect(current.payload.credentialId).toBe(s.b)
+  await finished(s.service, current.id)
+  expect(s.db.getThreadPostIdentity('701')).toEqual({ state: 'selected', credentialId: s.b })
   const next = await s.service.submit(reply())
-  if (next.kind !== 'prompt') throw new Error('cancel incorrectly suppressed prompt')
-  const switched = attempt(await s.service.resolvePrompt({ token: next.prompt.token, choice: 'switch', suppress: true }) as SubmitResult)
+  if (next.kind !== 'prompt') throw new Error('sending without suppression stopped asking')
+  const switched = attempt(await s.service.resolvePrompt({ token: next.prompt.token, answer: { kind: 'send', credentialId: s.a, suppress: true } }) as SubmitResult)
   expect(switched.payload.credentialId).toBe(s.a)
+  expect(s.db.getThreadPostIdentity('701')).toEqual({ state: 'selected', credentialId: s.a })
   await finished(s.service, switched.id)
   s.service.releasePrompts()
   const suppressed = attempt(await s.service.submit(reply()))
@@ -478,14 +517,54 @@ it('PO cancel changes nothing; switch remembers the actual identity; suppression
   await s.service.setPoWarning({ enabled: false })
   await s.restart()
   expect(await s.service.getPoWarning()).toEqual({ enabled: false })
-  await s.service.setPoWarning({ enabled: true })
-  // A matching cookie that can no longer be decrypted is still named, but cannot be switched to.
+})
+
+it('offers the current cookie and every cookie with the main post’s 饼干 ID, choosable only when usable', async () => {
+  const s = await setup()
+  const head = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'head', payload: payload(s.a) }))
+  await finished(s.service, head.id)
+  storeHead(s.db, '701', 'IdA')
+  // A second cookie with the PO's 饼干 ID, after A in 饼干管理 order; A can no longer be decrypted.
+  const c = s.db.insertCredential({ name: 'C', cookieId: 'IdA', source: 'raw', importedAt: '2026-01-02', ciphertext: Buffer.from('cookie-C') }).id
   const raw = new Database(join(s.dir, 'db.sqlite'))
   try { raw.prepare("UPDATE credentials SET ciphertext = CAST('locked' AS BLOB) WHERE id = ?").run(s.a) } finally { raw.close() }
-  const locked = await s.service.submit(reply())
-  if (locked.kind !== 'prompt') throw new Error('an unusable PO cookie should still prompt')
-  expect(locked.prompt).toMatchObject({ poName: 'A', canSwitch: false })
-  expect(await s.service.resolvePrompt({ token: locked.prompt.token, choice: 'switch', suppress: false })).toEqual({ kind: 'refused', reason: 'identity' })
+  const reply = () => ({ requestId: randomUUID(), editorId: randomUUID(), payload: { ...payload(s.b, '回复内容'), target: { kind: 'reply' as const, threadId: '701' } } })
+  const asked = await s.service.submit(reply())
+  if (asked.kind !== 'prompt') throw new Error('missing PO prompt')
+  expect(asked.prompt.candidates).toEqual([
+    { credentialId: s.b, name: 'B', cookieId: 'IdB', role: 'current', unavailable: null },
+    { credentialId: s.a, name: 'A', cookieId: 'IdA', role: 'po', unavailable: 'unreadable' },
+    { credentialId: c, name: 'C', cookieId: 'IdA', role: 'po', unavailable: null }
+  ])
+  // The first usable PO cookie is chosen when the question opens.
+  expect(asked.prompt.initial).toBe(c)
+
+  // An unusable candidate, or any cookie the question did not offer, is refused without a request.
+  const seen = s.remote.seen.filter(r => r.path.startsWith('/Home/')).length
+  const identity = s.db.getThreadPostIdentity('701')
+  expect(await s.service.resolvePrompt({ token: asked.prompt.token, answer: { kind: 'send', credentialId: s.a, suppress: true } })).toEqual({ kind: 'refused', reason: 'identity' })
+  const other = s.db.insertCredential({ name: 'D', cookieId: 'IdD', source: 'raw', importedAt: '2026-01-03', ciphertext: Buffer.from('cookie-D') }).id
+  const again = await s.service.submit(reply())
+  if (again.kind !== 'prompt') throw new Error('a refused answer must not suppress the question')
+  expect(await s.service.resolvePrompt({ token: again.prompt.token, answer: { kind: 'send', credentialId: other, suppress: false } })).toEqual({ kind: 'refused', reason: 'identity' })
+  expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(seen)
+  expect(s.db.getThreadPostIdentity('701')).toEqual(identity)
+
+  // Sending with the second PO cookie: that cookie sends and becomes the thread's 发言饼干.
+  const last = await s.service.submit(reply())
+  if (last.kind !== 'prompt') throw new Error('missing PO prompt')
+  const sent = attempt(await s.service.resolvePrompt({ token: last.prompt.token, answer: { kind: 'send', credentialId: c, suppress: false } }) as SubmitResult)
+  expect(sent.payload.credentialId).toBe(c)
+  expect(s.db.getThreadPostIdentity('701')).toEqual({ state: 'selected', credentialId: c })
+  await finished(s.service, sent.id)
+  expect(s.remote.seen.filter(r => r.path.startsWith('/Home/')).at(-1)!.cookie).toContain('userhash=cookie-C')
+
+  // No usable PO cookie: the current cookie is selected.
+  const raw2 = new Database(join(s.dir, 'db.sqlite'))
+  try { raw2.prepare("UPDATE credentials SET ciphertext = CAST('locked' AS BLOB) WHERE id = ?").run(c) } finally { raw2.close() }
+  const fallback = await s.service.submit(reply())
+  if (fallback.kind !== 'prompt') throw new Error('missing PO prompt')
+  expect(fallback.prompt.initial).toBe(s.b)
 })
 
 it('asks about the PO cookie only when the stored main post 饼干 ID matches another imported cookie', async () => {
@@ -497,7 +576,7 @@ it('asks about the PO cookie only when the stored main post 饼干 ID matches an
   storeHead(s.db, '901', 'Stranger')
   storeHead(s.db, '903', null)
   const asked = await s.service.submit(reply(s.b, '900'))
-  expect(asked).toMatchObject({ kind: 'prompt', prompt: { poName: 'A', poCredentialId: s.a, currentName: 'B', canSwitch: true } })
+  expect(asked).toMatchObject({ kind: 'prompt', prompt: { initial: s.a, candidates: [{ credentialId: s.b, role: 'current' }, { credentialId: s.a, role: 'po', unavailable: null }] } })
   s.service.releasePrompts()
   // The current cookie is the PO cookie; no imported cookie has the ID; main post unknown or without an ID.
   await sent(await s.service.submit(reply(s.a, '900')))
@@ -506,7 +585,7 @@ it('asks about the PO cookie only when the stored main post 饼干 ID matches an
   await sent(await s.service.submit(reply(s.b, '903')))
   // An ID filled in or changed in settings applies to the next send; an unknown ID matches nothing.
   s.db.setCredentialCookieId(s.a, 'Stranger', new Date().toISOString())
-  expect(await s.service.submit(reply(s.b, '901'))).toMatchObject({ kind: 'prompt', prompt: { poName: 'A' } })
+  expect(await s.service.submit(reply(s.b, '901'))).toMatchObject({ kind: 'prompt', prompt: { candidates: [{ credentialId: s.b }, { credentialId: s.a }] } })
   s.service.releasePrompts()
   const raw = new Database(join(s.dir, 'db.sqlite'))
   try { raw.prepare('UPDATE credentials SET cookie_id = NULL WHERE id = ?').run(s.a) } finally { raw.close() }
@@ -571,7 +650,7 @@ it('does not commit a PO identity switch when persisting the send intent fails',
   const raw = new Database(join(s.dir, 'db.sqlite'))
   raw.exec("CREATE TRIGGER fail_intent BEFORE INSERT ON publication_attempts BEGIN SELECT RAISE(ABORT, 'controlled write failure'); END")
   raw.close()
-  expect(await s.service.resolvePrompt({ token: question.prompt.token, choice: 'switch', suppress: true })).toEqual({ kind: 'refused', reason: 'storage' })
+  expect(await s.service.resolvePrompt({ token: question.prompt.token, answer: { kind: 'send', credentialId: s.a, suppress: true } })).toEqual({ kind: 'refused', reason: 'storage' })
   expect(s.db.getThreadPostIdentity('701')).toEqual({ state: 'selected', credentialId: s.b })
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
 })

@@ -17,7 +17,6 @@ export interface EditorWorkspace {
    * the active tab. `occupied`: another editor already edits that target; nothing changed.
    */
   retarget: (editorId: EditorId, target: PostTarget) => 'done' | 'occupied'
-  showTarget: (tabId: number, target: PostTarget) => void
 }
 
 export const EditorWorkspaceContext = createContext<EditorWorkspace | null>(null)

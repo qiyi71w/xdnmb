@@ -1,70 +1,90 @@
-import { useId, useLayoutEffect, useRef, useState } from 'react'
-import type { PoPrompt } from '../../../../shared/publication'
-import { Icon } from '../../components/Icon'
+import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import type { CredentialId } from '../../../../shared/identity'
+import type { PoAnswer, PoPrompt } from '../../../../shared/publication'
+import { CookieId } from '../../components/CookieId'
 import { Modal } from '../../components/Modal'
-import type { PromptChoice } from '../editor/useEditorsStore'
 import './publication.css'
 
 /**
  * 发送前身份提示 for one's own thread: the main process holds the frozen payload behind `prompt`.
- * 切回 PO 饼干并发送 / 仍用当前饼干发送 / 取消; Esc is 取消. “本次启动不再提示” only counts with a
- * send choice; cancelling changes neither the identity nor the suppression and sends nothing.
+ * The cookies to choose from are a radio group (the current cookie, then every imported cookie with
+ * the main post's 饼干 ID); 发送 sends with the selected one, 取消 or Esc sends nothing. Focus starts
+ * on the selected cookie, arrow keys move it, Enter sends. “本次启动不再提示” only counts with a
+ * send; cancelling changes neither the identity nor the suppression.
  */
 export function PoPromptDialog({
   prompt,
   target,
   resolving,
-  onChoose
+  onAnswer
 }: {
   prompt: PoPrompt
   /** Where the post goes, e.g. “回复 No.123”. */
   target: string
   resolving: boolean
-  onChoose: (choice: PromptChoice, suppress: boolean) => void
+  onAnswer: (answer: PoAnswer) => void
 }) {
   const titleId = useId()
-  const switchHelpId = useId()
+  const name = useId()
   const [suppress, setSuppress] = useState(false)
-  const primaryRef = useRef<HTMLButtonElement>(null)
-  const currentRef = useRef<HTMLButtonElement>(null)
+  const [selected, setSelected] = useState<CredentialId>(prompt.initial)
+  const groupRef = useRef<HTMLDivElement>(null)
 
-  // Start on the switch when it is possible, else on 仍用当前 (Modal focused its first control).
+  // Start on the selected cookie (Modal focused its first control).
   useLayoutEffect(() => {
-    const first = prompt.canSwitch ? primaryRef.current : currentRef.current
-    first?.focus()
-  }, [prompt.canSwitch])
+    groupRef.current?.querySelector<HTMLInputElement>('input:checked')?.focus()
+  }, [])
 
-  const choose = (choice: PromptChoice) => {
+  const send = () => {
     if (resolving) return
-    if (choice === 'switch' && !prompt.canSwitch) return
-    onChoose(choice, choice === 'cancel' ? false : suppress)
+    const chosen = prompt.candidates.find((candidate) => candidate.credentialId === selected)
+    if (chosen === undefined || chosen.unavailable !== null) return
+    onAnswer({ kind: 'send', credentialId: chosen.credentialId, suppress })
+  }
+  const cancel = () => {
+    if (!resolving) onAnswer({ kind: 'cancel' })
+  }
+
+  const onGroupKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' || !(event.target instanceof HTMLInputElement) || event.target.type !== 'radio') return
+    event.preventDefault()
+    send()
   }
 
   return (
-    <Modal className="po-dialog" labelledBy={titleId} onClose={() => choose('cancel')}>
+    <Modal className="po-dialog" labelledBy={titleId} onClose={cancel}>
       <header className="modal-header">
         <h2 className="modal-title" id={titleId}>
           发送到自己的串：当前饼干不是 PO 饼干
         </h2>
       </header>
       <div className="modal-body po-body">
-        <p className="po-intro">{target}</p>
-        <dl className="po-names">
-          <div className="po-name">
-            <dt>当前饼干</dt>
-            <dd>{prompt.currentName}</dd>
-          </div>
-          <div className="po-name is-po">
-            <dt>PO 饼干</dt>
-            <dd>{prompt.poName}</dd>
-          </div>
-        </dl>
-        {!prompt.canSwitch && (
-          <p className="notice-inline is-warning" id={switchHelpId}>
-            <Icon name="alert" size={14} />
-            PO 饼干当前不可用，不能切回
-          </p>
-        )}
+        <p className="po-intro">{target}，用哪块饼干发送？</p>
+        <div className="po-choices" role="radiogroup" aria-labelledby={titleId} ref={groupRef} onKeyDown={onGroupKeyDown}>
+          {prompt.candidates.map((candidate) => {
+            const unavailable = candidate.unavailable !== null
+            return (
+              <label key={candidate.credentialId} className={`po-choice${unavailable ? ' is-unavailable' : ''}`}>
+                <input
+                  type="radio"
+                  name={name}
+                  value={candidate.credentialId}
+                  checked={selected === candidate.credentialId}
+                  disabled={unavailable}
+                  onChange={() => {
+                    if (!resolving) setSelected(candidate.credentialId)
+                  }}
+                />
+                <span className="po-choice-text">
+                  <span className="po-choice-name">{candidate.name}</span>
+                  {candidate.cookieId !== null && <CookieId cookieId={candidate.cookieId} />}
+                  <span className="po-choice-role">{candidate.role === 'current' ? '当前饼干' : 'PO 饼干'}</span>
+                  {unavailable && <span className="po-choice-reason">无法读取这块饼干，不能使用</span>}
+                </span>
+              </label>
+            )
+          })}
+        </div>
       </div>
       <div className="modal-actions po-actions">
         <label className="po-suppress">
@@ -72,30 +92,17 @@ export function PoPromptDialog({
           <span>本次启动不再提示</span>
         </label>
         <div className="po-buttons">
-          <button type="button" className="btn" aria-disabled={resolving || undefined} onClick={() => choose('cancel')}>
+          <button type="button" className="btn" aria-disabled={resolving || undefined} onClick={cancel}>
             取消
           </button>
           <button
-            ref={currentRef}
-            type="button"
-            className="btn"
-            aria-disabled={resolving || undefined}
-            aria-busy={resolving || undefined}
-            onClick={() => choose('current')}
-          >
-            仍用当前饼干发送
-          </button>
-          <button
-            ref={primaryRef}
             type="button"
             className="btn btn-primary"
-            disabled={!prompt.canSwitch}
-            aria-describedby={prompt.canSwitch ? undefined : switchHelpId}
             aria-disabled={resolving || undefined}
             aria-busy={resolving || undefined}
-            onClick={() => choose('switch')}
+            onClick={send}
           >
-            切回 PO 饼干并发送
+            发送
           </button>
         </div>
       </div>

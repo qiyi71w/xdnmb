@@ -1,13 +1,15 @@
 import { reportContent } from '../../../../shared/report'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { targetKey, type AttachmentId, type EditorId, type PostTarget, type SavedDraft } from '../../../../shared/drafts'
-import { isSent, isUnsettled, type PublicationAttempt, type SubmitResult } from '../../../../shared/publication'
+import { targetKey, type DraftContent, type EditorId, type PostTarget, type SavedDraft } from '../../../../shared/drafts'
+import { isSent, isUnsettled, type PoAnswer, type PublicationAttempt, type SubmitResult } from '../../../../shared/publication'
 import {
   attachmentHolds,
+  editorForDraft,
   editorsReducer,
   INITIAL_EDITORS,
-  isUnsaved,
+  isBlank,
   saveInput,
+  wantsWrite,
   type Editor,
   type EditorsAction,
   type EditorsState
@@ -15,12 +17,30 @@ import {
 import type { SendOrigin } from './sendFollowUp'
 
 /**
- * Why a save did not replace the saved version; `locked`: a send holds the editor or the draft
- * (unresolved attempt); `internal`: the request itself failed.
+ * Why an editor's draft could not be brought up to date; `locked`: a send holds the editor or the
+ * draft (unresolved attempt); `internal`: the request itself failed.
  */
 export type SaveFailure = 'storage' | 'not-found' | 'attachment-missing' | 'locked' | 'internal'
 
 export type SaveOutcome = { ok: true } | { ok: false; reason: SaveFailure }
+
+/** Quiet time after an editor's last change before its content is saved as its draft. */
+export const AUTOSAVE_MS = 1000
+
+/**
+ * A draft deleted on request, restorable while its notice is shown. Its image copy is held (by
+ * `key`) until then, so undoing brings the image back too. Not kept across a restart.
+ */
+export interface DeletedDraft {
+  key: string
+  /** What the draft (or the editor continuing it) held when it was deleted. */
+  content: DraftContent
+  /** The deletion emptied or closed an editor: undoing opens the restored draft again. */
+  reopen: boolean
+  restoring: boolean
+  /** Why the last undo did not restore it; null when it has not failed. */
+  failure: SaveFailure | null
+}
 
 /** Where keyboard focus should go next: the panel of this tab's editor for this target. */
 export function focusKey(tabId: number, target: PostTarget): string {
@@ -33,8 +53,6 @@ export interface PublishedNote {
   threadId: string
   isThread: boolean
 }
-
-export type PromptChoice = 'switch' | 'current' | 'cancel'
 
 /**
  * How often an editor's attempt is read again while it is `sending`, or `unknown` with its
@@ -55,17 +73,38 @@ export interface EditorsStore {
   dispatch: (action: EditorsAction) => void
   /** Latest committed state, for event handlers that run outside render. */
   current: () => EditorsState
-  /** Editors whose save request is running. */
+  /** Editors whose draft write is running. */
   saving: ReadonlySet<EditorId>
-  /** Last failed save of each editor, until it is saved, discarded or saved again. */
+  /** Last failed write of each editor, until a write of it succeeds or starts again. */
   saveErrors: ReadonlyMap<EditorId, SaveFailure>
   /**
-   * Saves the editor as a draft (new or replacing its version). Never runs two saves of one editor
-   * at once: while one runs, the call waits for it and then saves again only if edits made
-   * meanwhile are still unsaved, so success always covers the contents at the time of the call.
-   * A locked editor (see `Editor.publication`) is never saved.
+   * Brings the editors' drafts up to date now (all editors when omitted), without waiting for the
+   * automatic save: content is saved (creating or replacing the draft), and the draft of an editor
+   * that was emptied is deleted. Locked editors are not written: one that is still settling its
+   * send fails as `locked`; one whose content an attempt holds needs nothing. Resolves to the
+   * editors whose write failed.
    */
-  save: (editorId: EditorId) => Promise<SaveOutcome>
+  flush: (editorIds?: readonly EditorId[]) => Promise<ReadonlyMap<EditorId, SaveFailure>>
+  /**
+   * Deletes a draft on request. An unlocked editor continuing it is emptied and collapsed
+   * (`empty`, from the editor) or closed (`close`, from the library); a locked one refuses (`locked`). The deleted
+   * content is kept in `deleted` for undoing.
+   */
+  deleteDraft: (draft: SavedDraft, editorMode: 'empty' | 'close') => Promise<SaveOutcome>
+  /** Deletions that can still be undone, oldest first. */
+  deleted: readonly DeletedDraft[]
+  /**
+   * Saves the deleted content as a draft again; resolves to it (and whether to reopen it), or null
+   * when it could not be restored (the entry then says why and stays).
+   */
+  undoDelete: (key: string) => Promise<{ draft: SavedDraft; reopen: boolean } | null>
+  /** The deletion's notice went away: it can no longer be undone and its image copy is released. */
+  forgetDeleted: (key: string) => void
+  /**
+   * Continues `draft` in the editor (same target): the editor's own content is saved first, then
+   * replaced. Refused while the editor is locked or when that save fails.
+   */
+  loadDraft: (editorId: EditorId, draft: SavedDraft) => Promise<SaveOutcome>
   /**
    * The one send handler of every entry (button, Ctrl/Cmd+Enter) in tab `tabId`: locks the editor,
    * waits for a running save, then submits its contents once with a fresh request ID. Ignored
@@ -73,7 +112,7 @@ export interface EditorsStore {
    */
   send: (editorId: EditorId, tabId: number) => Promise<void>
   /** Answers the PO identity question holding the editor's frozen payload. */
-  resolvePrompt: (editorId: EditorId, choice: PromptChoice, suppress: boolean) => Promise<void>
+  resolvePrompt: (editorId: EditorId, answer: PoAnswer) => Promise<void>
   /** Looks up again, by its request ID, whether an uncertain request left an attempt. */
   recheck: (editorId: EditorId) => Promise<void>
   /** Sent sends with their post known, by `focusKey`, until a new editor opens there or the tab closes. */
@@ -98,8 +137,10 @@ export interface SendHooks {
 
 /**
  * The app-level store of all editors. Lives beside the tab state, so editors survive their
- * panels unmounting, thread switches and content refreshes. Holds each editor's attachment copy
- * in the main process while the editor shows it, and releases editors that are gone.
+ * panels unmounting, thread switches and content refreshes. Saves each editor's content as its
+ * draft `AUTOSAVE_MS` after its last change (and at once whenever the window is hidden). Holds
+ * each editor's attachment copy in the main process while the editor shows it, and releases
+ * editors that are gone.
  */
 export function useEditorsStore(hooks?: SendHooks): EditorsStore {
   const [state, rawDispatch] = useReducer(editorsReducer, INITIAL_EDITORS)
@@ -137,51 +178,78 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
     })
   }, [])
 
-  const dispatch = useCallback(
-    (action: EditorsAction) => {
-      if (action.type === 'discard' || action.type === 'discard-undoable') clearError(action.editorId)
-      if (action.type === 'close-tab') {
-        const prefix = `${action.tabId}|`
-        setPublished((previous) => {
-          const kept = new Map([...previous].filter(([key]) => !key.startsWith(prefix)))
-          return kept.size === previous.size ? previous : kept
-        })
-      }
-      rawDispatch(action)
-    },
-    [clearError]
-  )
+  const dispatch = useCallback((action: EditorsAction) => {
+    if (action.type === 'close-tab') {
+      const prefix = `${action.tabId}|`
+      setPublished((previous) => {
+        const kept = new Map([...previous].filter(([key]) => !key.startsWith(prefix)))
+        return kept.size === previous.size ? previous : kept
+      })
+    }
+    rawDispatch(action)
+  }, [])
+
+  const find = useCallback((editorId: EditorId) => stateRef.current.editors.find((item) => item.id === editorId), [])
+  const bump = useCallback(() => setPublicationRevision((revision) => revision + 1), [])
 
   /** The draft each editor's latest successful save produced, before the reducer state reflects it. */
   const lastSaved = useRef(new Map<EditorId, SavedDraft>())
+  /** The editor's draft is gone (deleted): its last save no longer applies. */
+  const forgetDraft = useCallback((editorId: EditorId, draftId: string) => {
+    lastSaved.current.delete(editorId)
+    rawDispatch({ type: 'draft-cleared', editorId, draftId })
+  }, [])
 
-  const save = useCallback(
+  /**
+   * Brings one editor's draft up to date: saves its content (creating or replacing the draft), or
+   * deletes the draft of an emptied editor. Never runs two writes of one editor at once: while one
+   * runs, the call waits for it and then writes again only if edits made meanwhile are still out of
+   * date, so success always covers the contents at the time of the call. A locked editor (see
+   * `Editor.publication`) is never written.
+   */
+  const write = useCallback(
     (editorId: EditorId): Promise<SaveOutcome> => {
       const running = inflight.current.get(editorId)
       if (running !== undefined) {
-        // Edits made while that save ran are not in it: once it succeeds, save again if anything is left.
         return running.then((outcome) => {
-          if (!outcome.ok) return outcome
-          const latest = stateRef.current.editors.find((item) => item.id === editorId)
+          const latest = find(editorId)
           if (latest === undefined || latest.publication !== null) return outcome
-          return isUnsaved(withLastSaved(latest, lastSaved.current)) ? save(editorId) : outcome
+          return wantsWrite(withLastSaved(latest, lastSaved.current)) ? write(editorId) : outcome
         })
       }
-      const found = stateRef.current.editors.find((item) => item.id === editorId)
+      const found = find(editorId)
       if (found === undefined) return Promise.resolve({ ok: false, reason: 'internal' })
       if (found.publication !== null) return Promise.resolve({ ok: false, reason: 'locked' })
-      const input = saveInput(withLastSaved(found, lastSaved.current))
+      const editor = withLastSaved(found, lastSaved.current)
+      if (!wantsWrite(editor)) return Promise.resolve({ ok: true })
       clearError(editorId)
       setSaving((previous) => new Set(previous).add(editorId))
       const run = (async (): Promise<SaveOutcome> => {
         let outcome: SaveOutcome
         try {
-          const result = await window.xidao.drafts.save(input)
-          if (result.ok) {
-            lastSaved.current.set(editorId, result.draft)
-            rawDispatch({ type: 'saved', editorId, draft: result.draft })
-            outcome = { ok: true }
-          } else outcome = { ok: false, reason: result.reason }
+          if (isBlank(editor)) {
+            // Emptied: its draft goes too (nothing to undo; the content was cleared by hand).
+            const draftId = editor.draft!.id
+            const result = await window.xidao.drafts.delete({ draftId })
+            if (result.ok) {
+              forgetDraft(editorId, draftId)
+              outcome = { ok: true }
+            } else outcome = { ok: false, reason: result.reason }
+          } else {
+            let input = saveInput(editor)
+            let result = await window.xidao.drafts.save(input)
+            if (!result.ok && result.reason === 'not-found' && input.draftId !== null) {
+              // Its draft is gone: keep the content as a new draft rather than losing it.
+              forgetDraft(editorId, input.draftId)
+              input = { ...input, draftId: null }
+              result = await window.xidao.drafts.save(input)
+            }
+            if (result.ok) {
+              lastSaved.current.set(editorId, result.draft)
+              rawDispatch({ type: 'saved', editorId, draft: result.draft })
+              outcome = { ok: true }
+            } else outcome = { ok: false, reason: result.reason }
+          }
         } catch {
           outcome = { ok: false, reason: 'internal' }
         }
@@ -200,11 +268,179 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
       inflight.current.set(editorId, run)
       return run
     },
-    [clearError]
+    [clearError, find, forgetDraft]
+  )
+
+  // ---------- Automatic saving ----------
+  const timers = useRef(new Map<EditorId, number>())
+  /** The editor object each timer was set for: any change of the editor restarts its wait. */
+  const timed = useRef(new Map<EditorId, Editor>())
+  const cancelTimer = useCallback((editorId: EditorId) => {
+    const timer = timers.current.get(editorId)
+    if (timer !== undefined) window.clearTimeout(timer)
+    timers.current.delete(editorId)
+  }, [])
+  useEffect(() => {
+    const present = new Set<EditorId>()
+    for (const editor of state.editors) {
+      present.add(editor.id)
+      const before = timed.current.get(editor.id)
+      if (before === editor) continue
+      timed.current.set(editor.id, editor)
+      cancelTimer(editor.id)
+      if (editor.publication !== null || !wantsWrite(withLastSaved(editor, lastSaved.current))) continue
+      // Collapsing saves at once; any other change waits for a quiet moment.
+      if (before?.expanded === true && !editor.expanded) {
+        void write(editor.id)
+        continue
+      }
+      timers.current.set(editor.id, window.setTimeout(() => {
+        timers.current.delete(editor.id)
+        void write(editor.id)
+      }, AUTOSAVE_MS))
+    }
+    for (const editorId of [...timed.current.keys()]) {
+      if (present.has(editorId)) continue
+      timed.current.delete(editorId)
+      cancelTimer(editorId)
+      lastSaved.current.delete(editorId)
+    }
+  }, [state, cancelTimer, write])
+
+  const flush = useCallback(
+    async (editorIds?: readonly EditorId[]): Promise<ReadonlyMap<EditorId, SaveFailure>> => {
+      const ids = editorIds ?? stateRef.current.editors.map((editor) => editor.id)
+      const failures = new Map<EditorId, SaveFailure>()
+      await Promise.all(ids.map(async (editorId) => {
+        cancelTimer(editorId)
+        const editor = find(editorId)
+        if (editor === undefined || editor.publication?.phase === 'attempt') return
+        if (!inflight.current.has(editorId) && !wantsWrite(withLastSaved(editor, lastSaved.current))) return
+        const outcome = await write(editorId)
+        if (!outcome.ok) failures.set(editorId, outcome.reason)
+      }))
+      return failures
+    },
+    [cancelTimer, find, write]
+  )
+
+  // A hidden window (resident in the background, minimised) may not come back: save now.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') void flush()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [flush])
+
+  // ---------- Deleting and undoing ----------
+  const [deleted, setDeleted] = useState<readonly DeletedDraft[]>([])
+  const deletedRef = useRef(deleted)
+  useLayoutEffect(() => {
+    deletedRef.current = deleted
+  })
+  const patchDeleted = useCallback((key: string, patch: Partial<DeletedDraft>) => {
+    setDeleted((list) => list.map((item) => (item.key === key ? { ...item, ...patch } : item)))
+  }, [])
+  const releaseDeleted = useCallback((key: string) => {
+    setDeleted((list) => list.filter((item) => item.key !== key))
+    window.xidao.drafts.releaseEditor({ editorId: key }).catch(() => undefined)
+  }, [])
+
+  const deleteDraft = useCallback(
+    async (draft: SavedDraft, editorMode: 'empty' | 'close'): Promise<SaveOutcome> => {
+      let editor = editorForDraft(stateRef.current, draft.id)
+      if (editor !== null) {
+        if (editor.publication !== null) return { ok: false, reason: 'locked' }
+        // A running write may be replacing this draft; what the editor shows is what gets deleted.
+        cancelTimer(editor.id)
+        await inflight.current.get(editor.id)
+        editor = find(editor.id) ?? null
+        if (editor !== null && editor.publication !== null) return { ok: false, reason: 'locked' }
+      }
+      const content: DraftContent = editor === null
+        ? { target: draft.target, credentialId: draft.credentialId, fields: draft.fields, attachment: draft.attachment }
+        : { target: editor.target, credentialId: editor.credentialId, fields: editor.fields, attachment: editor.attachment }
+      const key = `undo-${crypto.randomUUID()}`
+      try {
+        // Hold the image first: deleting the draft reclaims every copy nobody holds.
+        if (content.attachment !== null) await window.xidao.drafts.holdAttachment({ editorId: key, attachmentId: content.attachment.id })
+        const result = await window.xidao.drafts.delete({ draftId: draft.id })
+        if (!result.ok) {
+          window.xidao.drafts.releaseEditor({ editorId: key }).catch(() => undefined)
+          return { ok: false, reason: result.reason }
+        }
+      } catch {
+        window.xidao.drafts.releaseEditor({ editorId: key }).catch(() => undefined)
+        return { ok: false, reason: 'internal' }
+      }
+      if (editor !== null) {
+        lastSaved.current.delete(editor.id)
+        clearError(editor.id)
+        rawDispatch(editorMode === 'empty' ? { type: 'draft-deleted', editorId: editor.id } : { type: 'close-editor', editorId: editor.id })
+      }
+      setDeleted((list) => [...list, { key, content, reopen: editor !== null, restoring: false, failure: null }])
+      bump()
+      return { ok: true }
+    },
+    [cancelTimer, clearError, find, bump]
+  )
+
+  const undoDelete = useCallback(
+    async (key: string): Promise<{ draft: SavedDraft; reopen: boolean } | null> => {
+      const entry = deletedRef.current.find((item) => item.key === key)
+      if (entry === undefined || entry.restoring) return null
+      patchDeleted(key, { restoring: true, failure: null })
+      const { content } = entry
+      let failure: SaveFailure
+      try {
+        const result = await window.xidao.drafts.save({ draftId: null, target: content.target, credentialId: content.credentialId,
+          fields: content.fields, attachmentId: content.attachment?.id ?? null })
+        if (result.ok) {
+          // The restored draft references the image now: the undo hold can go.
+          releaseDeleted(key)
+          bump()
+          return { draft: result.draft, reopen: entry.reopen }
+        }
+        failure = result.reason
+      } catch {
+        failure = 'internal'
+      }
+      patchDeleted(key, { restoring: false, failure })
+      return null
+    },
+    [patchDeleted, releaseDeleted, bump]
+  )
+
+  const forgetDeleted = useCallback((key: string) => {
+    if (deletedRef.current.some((item) => item.key === key && !item.restoring)) releaseDeleted(key)
+  }, [releaseDeleted])
+
+  const loadDraft = useCallback(
+    async (editorId: EditorId, draft: SavedDraft): Promise<SaveOutcome> => {
+      const editor = find(editorId)
+      if (editor === undefined) return { ok: false, reason: 'internal' }
+      if (editor.publication !== null) return { ok: false, reason: 'locked' }
+      if (editor.draft?.id === draft.id) {
+        rawDispatch({ type: 'set-expanded', editorId, expanded: true })
+        return { ok: true }
+      }
+      // Its own content first, so nothing it holds is lost by continuing another draft.
+      const failures = await flush([editorId])
+      const failure = failures.get(editorId)
+      if (failure !== undefined) return { ok: false, reason: failure }
+      if (find(editorId)?.publication !== null) return { ok: false, reason: 'locked' }
+      cancelTimer(editorId)
+      lastSaved.current.delete(editorId)
+      clearError(editorId)
+      rawDispatch({ type: 'load-draft', editorId, draft })
+      return { ok: true }
+    },
+    [find, flush, cancelTimer, clearError]
   )
 
   // Attachment copies: hold what each editor shows now; release editors that no longer exist.
-  const holds = useRef(new Map<EditorId, AttachmentId | null>())
+  const holds = useRef(new Map<EditorId, string | null>())
   useEffect(() => {
     const next = attachmentHolds(state)
     const previous = holds.current
@@ -222,7 +458,7 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
       const token = promptTokens.current.get(editorId)
       if (token !== undefined) {
         promptTokens.current.delete(editorId)
-        window.xidao.publication.resolvePrompt({ token, choice: 'cancel', suppress: false }).catch(() => undefined)
+        window.xidao.publication.resolvePrompt({ token, answer: { kind: 'cancel' } }).catch(() => undefined)
       }
     }
     holds.current = next
@@ -244,9 +480,7 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
   useLayoutEffect(() => {
     hooksRef.current = hooks
   })
-  const bump = useCallback(() => setPublicationRevision((revision) => revision + 1), [])
   useEffect(() => window.xidao.publication.onChanged(bump), [bump])
-  const find = useCallback((editorId: EditorId) => stateRef.current.editors.find((item) => item.id === editorId), [])
 
   /** Hands a send's result to `hooks.settled` once, then forgets where the send started. */
   const settle = useCallback((editorId: EditorId, attempt: PublicationAttempt | null) => {
@@ -330,7 +564,7 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
         case 'prompt':
           if (find(editorId) === undefined) {
             settle(editorId, null)
-            window.xidao.publication.resolvePrompt({ token: result.prompt.token, choice: 'cancel', suppress: false }).catch(() => undefined)
+            window.xidao.publication.resolvePrompt({ token: result.prompt.token, answer: { kind: 'cancel' } }).catch(() => undefined)
             return
           }
           promptTokens.current.set(editorId, result.prompt.token)
@@ -360,8 +594,10 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
       try {
         // Lock first, so nothing typed from now on can miss the payload or change it.
         rawDispatch({ type: 'publish-start', editorId, requestId })
+        cancelTimer(editorId)
         clearError(editorId)
-        // A running save may be creating this editor's draft: the attempt must reference it.
+        // A running save may be creating this editor's draft: the attempt must reference it, so a
+        // failure writes back to that draft instead of creating a second one.
         await inflight.current.get(editorId)
         const latest = find(editorId) ?? editor
         const payload = saveInput(withLastSaved(latest, lastSaved.current))
@@ -377,21 +613,21 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
         handling.current.delete(editorId)
       }
     },
-    [find, clearError, lookup, handleResult]
+    [find, cancelTimer, clearError, lookup, handleResult]
   )
 
   const resolvePrompt = useCallback(
-    async (editorId: EditorId, choice: PromptChoice, suppress: boolean) => {
+    async (editorId: EditorId, answer: PoAnswer) => {
       const publication = find(editorId)?.publication
       if (publication?.phase !== 'prompt' || publication.resolving || handling.current.has(editorId)) return
       handling.current.add(editorId)
       rawDispatch({ type: 'publish-resolving', editorId, resolving: true })
       try {
-        const result = await window.xidao.publication.resolvePrompt({ token: publication.prompt.token, choice, suppress })
+        const result = await window.xidao.publication.resolvePrompt({ token: publication.prompt.token, answer })
         await handleResult(editorId, publication.requestId, result)
       } catch {
         promptTokens.current.delete(editorId)
-        if (choice === 'cancel') {
+        if (answer.kind === 'cancel') {
           settle(editorId, null)
           rawDispatch({ type: 'publish-released', editorId, notice: null })
         } else await lookup(editorId, publication.requestId)
@@ -471,7 +707,12 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
       current,
       saving,
       saveErrors,
-      save,
+      flush,
+      deleteDraft,
+      deleted,
+      undoDelete,
+      forgetDeleted,
+      loadDraft,
       send,
       resolvePrompt,
       recheck,
@@ -487,7 +728,12 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
       current,
       saving,
       saveErrors,
-      save,
+      flush,
+      deleteDraft,
+      deleted,
+      undoDelete,
+      forgetDeleted,
+      loadDraft,
       send,
       resolvePrompt,
       recheck,

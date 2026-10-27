@@ -16,9 +16,10 @@ type Locks = ReadonlySet<DraftId> | null
 
 /**
  * 草稿 library: every saved draft, most recently saved first; several may share a target.
- * 继续 hands the draft to the shell (focus its editor, or open it in a new tab); 删除 removes the
- * record after confirmation and is unavailable while the draft is being edited. A draft whose send
- * is still sending or being checked is locked until that send is sent or failed.
+ * 继续 hands the draft to the shell (focus its editor, load it into the editor already on its
+ * target, or open it in a new tab); 删除 removes the record after confirmation, closing an editor
+ * that continues it, and can be undone from its bottom notice. A draft whose send is still sending
+ * or being checked is locked until that send is sent or failed: 删除 then only says why.
  */
 export function DraftLibraryDialog({
   tabTitle,
@@ -27,7 +28,8 @@ export function DraftLibraryDialog({
   fallbackFocus
 }: {
   tabTitle: (tabId: number) => string
-  onContinue: (draft: SavedDraft) => void
+  /** Resolves to why the draft could not be continued, or null when it was. */
+  onContinue: (draft: SavedDraft) => Promise<string | null>
   onClose: () => void
   fallbackFocus?: () => HTMLElement | null
 }) {
@@ -99,22 +101,24 @@ export function DraftLibraryDialog({
     if (deleting !== null) return
     setDeleting(draft.id)
     setDeleteFailed(null)
-    let failure: { draftId: DraftId; locked: boolean } | null = null
-    try {
-      const result = await window.xidao.drafts.delete({ draftId: draft.id })
-      if (!result.ok) failure = { draftId: draft.id, locked: result.reason === 'locked' }
-    } catch {
-      failure = { draftId: draft.id, locked: false }
-    }
+    // An editor continuing the draft is closed with it; the deletion can be undone from its notice.
+    const outcome = await store.deleteDraft(draft, 'close')
     if (!alive.current) return
     setDeleting(null)
     setConfirming(null)
-    if (failure !== null) {
-      setDeleteFailed(failure)
+    if (!outcome.ok) {
+      setDeleteFailed({ draftId: draft.id, locked: outcome.reason === 'locked' })
       return
     }
     focusAfterDelete.current = index
     setList((current) => (current.status === 'ready' ? { status: 'ready', drafts: current.drafts.filter((item) => item.id !== draft.id) } : current))
+  }
+
+  const [continueFailed, setContinueFailed] = useState<{ draftId: DraftId; text: string } | null>(null)
+  const continueDraft = async (draft: SavedDraft) => {
+    setContinueFailed(null)
+    const failure = await onContinue(draft)
+    if (failure !== null && alive.current) setContinueFailed({ draftId: draft.id, text: failure })
   }
 
   return (
@@ -149,7 +153,8 @@ export function DraftLibraryDialog({
           <ul className="drafts-list" ref={listRef} aria-label={`草稿列表，共 ${list.drafts.length} 份`}>
             {list.drafts.map((draft, index) => {
               const editing = editorForDraft(store.state, draft.id)
-              const locked = locks?.has(draft.id) === true
+              // A send holds it: its attempt (sending or being checked), or the editor continuing it.
+              const locked = locks?.has(draft.id) === true || (editing !== null && editing.publication !== null)
               const identity = credentialLine(draft.credentialId, identities.overview)
               const target = targetText(draft.target, forumName)
               const rowId = `draft-${draft.id}`
@@ -188,20 +193,29 @@ export function DraftLibraryDialog({
                     {locked && (
                       <p className="draft-locked" id={`${rowId}-locked`}>
                         <Icon name="alert" size={13} />
-                        正在发送或确认是否已发出，已锁定
+                        正在发送或确认是否已发出，不能删除
                       </p>
                     )}
                     {deleteFailed?.draftId === draft.id && (
                       <p className="notice-inline is-warning" role="alert">
                         <Icon name="alert" size={14} />
                         {deleteFailed.locked
-                          ? '删除失败：草稿已锁定'
+                          ? '删除失败：正在发送或确认是否已发出'
                           : '删除失败：本地存储不可用'}
+                      </p>
+                    )}
+                    {continueFailed?.draftId === draft.id && (
+                      <p className="notice-inline is-warning" role="alert">
+                        <Icon name="alert" size={14} />
+                        {continueFailed.text}
                       </p>
                     )}
                   </div>
                   {confirming === draft.id ? (
                     <div className="draft-actions" role="group" aria-label={`确认删除：${target}`}>
+                      {editing !== null && (
+                        <p className="draft-confirm-note">会同时关闭「{tabTitle(editing.tabId)}」标签里的这份编辑</p>
+                      )}
                       <button
                         ref={confirmRef}
                         type="button"
@@ -222,7 +236,7 @@ export function DraftLibraryDialog({
                           type="button"
                           className="btn btn-small"
                           aria-describedby={`${rowId}-target`}
-                          onClick={() => onContinue(draft)}
+                          onClick={() => void continueDraft(draft)}
                         >
                           <Icon name="draft" size={14} />
                           继续
@@ -233,8 +247,10 @@ export function DraftLibraryDialog({
                         className="btn btn-small btn-danger"
                         data-delete-id={draft.id}
                         aria-describedby={locked ? `${rowId}-locked` : editing !== null ? `${rowId}-editing` : `${rowId}-target`}
-                        disabled={locked || editing !== null || deleting !== null}
+                        aria-disabled={locked || deleting !== null || undefined}
+                        data-tip={locked ? '正在发送或确认是否已发出，不能删除' : undefined}
                         onClick={() => {
+                          if (locked || deleting !== null) return
                           setDeleteFailed(null)
                           setConfirming(draft.id)
                         }}

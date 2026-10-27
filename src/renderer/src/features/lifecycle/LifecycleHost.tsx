@@ -5,8 +5,9 @@ import type { LifecycleRequest } from '../../../../shared/lifecycle'
 import type { PublicationAttempt } from '../../../../shared/publication'
 import type { AppSettings } from '../../../../shared/settings'
 import { matchShortcut } from '../../app/shortcuts'
-import { unsavedEditors, type Editor } from '../editor/editorsState'
-import { UnsavedEditorsDialog } from '../editor/UnsavedEditorsDialog'
+import type { Editor } from '../editor/editorsState'
+import { DraftSaveFailedDialog } from '../editor/DraftSaveFailedDialog'
+import type { SaveFailure } from '../editor/useEditorsStore'
 import { useEditorWorkspace } from '../editor/workspace'
 import { serializeWorkspace, type Workspace } from '../tabs/workspaceSnapshot'
 import { CloseChoiceDialog, type CloseChoice } from './CloseChoiceDialog'
@@ -14,7 +15,7 @@ import { QuitUncheckedDialog, QuitWorkingDialog, UnstoredResultsDialog, Workspac
 
 /** What the running quit is asking; `null` while it works without asking. */
 type QuitQuestion =
-  | { kind: 'unsaved'; editorIds: EditorId[] }
+  | { kind: 'drafts-failed'; failures: ReadonlyMap<EditorId, SaveFailure> }
   | { kind: 'unchecked' }
   | { kind: 'save-failed'; saving: boolean }
 
@@ -38,11 +39,11 @@ function ignore(): undefined {
 /**
  * Main-process lifecycle requests. `close` offers 后台驻留 / 退出汐岛; `quit` runs the real quit:
  * close competing dialogs, cancel open PO questions, wait for sends that settle by themselves (an
- * uncertain one is checked once; still uncertain stops the quit), handle every unsaved editor of
- * every tab, save the workspace, then let the main process close the window. Nothing is ever sent,
- * a locked editor is never saved, and the window is shown only when there is something to answer.
- * From start to completion or cancellation the rest of the window is inert (a question, or the
- * working dialog), so nothing can change after the unsaved edits were handled.
+ * uncertain one is checked once; still uncertain stops the quit), save every editor's draft now
+ * (asking only when that fails), save the workspace, then let the main process close the window.
+ * Nothing is ever sent, a locked editor is never saved, and the window is shown only when there is
+ * something to answer. From start to completion or cancellation the rest of the window is inert (a
+ * question, or the working dialog), so nothing can change after the drafts were saved.
  * After the startup restore, results the last quit could not store stop it with a retry dialog.
  */
 export function LifecycleHost({
@@ -133,7 +134,7 @@ export function LifecycleHost({
       const editors = store.current().editors
       const prompts = editors.filter((editor) => editor.publication?.phase === 'prompt' && !editor.publication.resolving)
       if (prompts.length > 0) {
-        await Promise.all(prompts.map((editor) => store.resolvePrompt(editor.id, 'cancel', false)))
+        await Promise.all(prompts.map((editor) => store.resolvePrompt(editor.id, { kind: 'cancel' })))
         await flush()
         continue
       }
@@ -178,17 +179,17 @@ export function LifecycleHost({
         return
       }
 
-      const unsaved = unsavedEditors(store.current())
-      if (unsaved.length > 0) {
-        const choice = await ask({ kind: 'unsaved', editorIds: unsaved.map((editor) => editor.id) })
+      const failures = await store.flush()
+      if (failures.size > 0) {
+        const choice = await ask({ kind: 'drafts-failed', failures })
         setQuestion(null)
         if (choice === 'cancel') {
           cancel()
           return
         }
-        // Saved drafts and discards must be in the state the workspace is built from.
-        await flush()
       }
+      // Saved drafts must be in the state the workspace is built from.
+      await flush()
 
       setWork('saving')
       for (;;) {
@@ -309,13 +310,13 @@ export function LifecycleHost({
       )}
       {work !== null && question === null && <QuitWorkingDialog work={work} />}
       {question?.kind === 'unchecked' && <QuitUncheckedDialog onClose={() => answer('cancel')} />}
-      {question?.kind === 'unsaved' && (
-        <UnsavedEditorsDialog
+      {question?.kind === 'drafts-failed' && (
+        <DraftSaveFailedDialog
           label="退出汐岛"
-          intro={`还有 ${question.editorIds.length} 份未保存的编辑`}
           verb="退出"
-          editorIds={question.editorIds}
-          onFinish={() => answer('continue')}
+          cancelLabel="取消退出"
+          failures={question.failures}
+          onConfirm={() => answer('continue')}
           onCancel={() => answer('cancel')}
         />
       )}

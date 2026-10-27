@@ -2,7 +2,7 @@ import { REPORT_REASONS, reportReason } from '../../../../shared/report'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
 import { forumLabel, sameTarget, targetText, type IdentityChoice, type PostFields, type PostTarget } from '../../../../shared/drafts'
 import type { CredentialId } from '../../../../shared/identity'
-import { isSendShortcut, saveAriaShortcut, sendAriaShortcut, sendShortcutLabel, shortcutLabel } from '../../app/shortcuts'
+import { isSendShortcut, sendAriaShortcut, sendShortcutLabel } from '../../app/shortcuts'
 import { Icon, Spinner } from '../../components/Icon'
 import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { useSettingsOpener } from '../../lib/settingsOpener'
@@ -13,8 +13,8 @@ import { ATTEMPT_STATE_DETAIL, unverifiedText } from '../publication/publication
 import type { IdentitiesState } from '../identity/useIdentities'
 import { ROLE_INFO } from '../identity/identityText'
 import { ATTACH_FAILURE_TEXT, editorStateText, SAVE_FAILURE_TEXT } from './editorText'
-import { editorFor, identityStatus, isUnsaved, type Editor, type IdentityStatus } from './editorsState'
-import { focusKey } from './useEditorsStore'
+import { identityStatus, type Editor, type IdentityStatus } from './editorsState'
+import { focusKey, type SaveFailure } from './useEditorsStore'
 import { useEditorWorkspace } from './workspace'
 import { AttachmentPreview } from './AttachmentPreview'
 import { useComposeTips } from './composeTips'
@@ -50,7 +50,7 @@ export function useComposeOpen(tabId: number, target: PostTarget, editor: Editor
 /**
  * The editor of one target, as the floating panel lays it out: one header line (target as the title
  * that opens 更改目标, the 发言饼干 pill, close), the 举报 reasons, the optional 标题／名称 row,
- * the text as the page, and a bottom toolbar (image, fields, 颜文字, status; 放弃修改, 保存草稿, 发送).
+ * the text as the page, and a bottom toolbar (image, fields, 颜文字, status; 删除草稿, 发送).
  */
 export function EditorPanel({
   tabId,
@@ -65,7 +65,7 @@ export function EditorPanel({
   displayed: boolean
   focusBar: RefObject<boolean>
 }) {
-  const { store, platform, showTarget } = useEditorWorkspace()
+  const { store, platform } = useEditorWorkspace()
   const { focusRequest, requestFocus } = store
   const ids = useId()
   const panelRef = useRef<HTMLDivElement>(null)
@@ -73,9 +73,10 @@ export function EditorPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const retargetRef = useRef<HTMLButtonElement>(null)
   const editorId = editor.id
-  const unsaved = isUnsaved(editor)
   const saving = store.saving.has(editorId)
   const saveError = store.saveErrors.get(editorId) ?? null
+  const [deleteError, setDeleteError] = useState<SaveFailure | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const attach = useAttachImage(editor)
   const [retargeting, setRetargeting] = useState(false)
   const [identityNotice, setIdentityNotice] = useState<string | null>(null)
@@ -161,14 +162,22 @@ export function EditorPanel({
     else edit({ content: next })
   }
 
+  /** Collapsing saves the draft at once (see `useEditorsStore`). */
   const collapse = () => {
     focusBar.current = true
     store.dispatch({ type: 'set-expanded', editorId, expanded: false })
   }
 
-  const save = () => {
-    if (!unsaved || saving || locked) return
-    void store.save(editorId)
+  /** 删除草稿: the editor empties and collapses; the bottom notice offers 撤销. */
+  const deleteDraft = async () => {
+    const draft = editor.draft
+    if (draft === null || locked || deleting) return
+    setDeleting(true)
+    setDeleteError(null)
+    const outcome = await store.deleteDraft(draft, 'empty')
+    setDeleting(false)
+    if (outcome.ok) focusBar.current = true
+    else setDeleteError(outcome.reason)
   }
 
   const report = editor.report
@@ -186,13 +195,6 @@ export function EditorPanel({
     send()
   }
 
-  const discard = () => {
-    store.dispatch({ type: 'discard-undoable', editorId })
-    const draft = editor.draft
-    if (draft !== null && editorFor(store.state, draft.target) === null) showTarget(tabId, draft.target)
-    textareaRef.current?.focus()
-  }
-
   const chooseIdentity = async (credentialId: CredentialId) => {
     if (locked) return
     store.dispatch({ type: 'set-identity', editorId, credentialId })
@@ -207,10 +209,8 @@ export function EditorPanel({
     }
   }
 
-  const canDiscard = !saving && !locked && (unsaved || (editor.draft === null && editor.discarded === undefined))
-  const saveShortcut = shortcutLabel('save', platform)
   const sendShortcut = sendShortcutLabel(platform)
-  const statusText = saving ? '正在保存…' : editorStateText(editor)
+  const statusText = editorStateText(editor, saving)
   const sendLabel = report !== undefined ? '发送举报' : '发送'
   /** Text buttons without frames. */
   const textButton = 'compose-text-btn'
@@ -298,25 +298,24 @@ export function EditorPanel({
 
   const status = (
     <div className="editor-status" role="status">
-      {editor.discarded !== undefined ? <>
-        <span className="editor-state">已放弃修改</span>
-        <button type="button" className="btn btn-small btn-quiet" disabled={locked} onClick={() => {
-          store.dispatch({ type: 'undo-discard', editorId })
-          if (editor.discarded !== undefined) showTarget(tabId, editor.discarded.target)
-          textareaRef.current?.focus()
-        }}>撤销</button>
-      </> : <span className="editor-state">{statusText}</span>}
+      <span className="editor-state">{statusText}</span>
     </div>
   )
 
   const saveFailure = saveError !== null && !saving && !locked && (
     <p className="notice-inline is-warning editor-error" role="alert">
       <Icon name="alert" size={14} />
-      {SAVE_FAILURE_TEXT[saveError]}
+      草稿没能保存：{SAVE_FAILURE_TEXT[saveError]}
     </p>
   )
 
-  const saveTip = locked ? '发送进行中，不能另存' : unsaved ? (saveShortcut === '' ? undefined : saveShortcut) : '没有需要保存的内容'
+  const deleteFailure = deleteError !== null && !locked && (
+    <p className="notice-inline is-warning editor-error" role="alert">
+      <Icon name="alert" size={14} />
+      草稿没能删除：{SAVE_FAILURE_TEXT[deleteError]}
+    </p>
+  )
+
   const sendText =
     publication === null
       ? sendLabel
@@ -343,26 +342,17 @@ export function EditorPanel({
         </button>
       ) : (
         <>
-          <button
-            type="button"
-            className={textButton}
-            disabled={!canDiscard}
-            onClick={discard}
-          >
-            放弃修改
-          </button>
-          <button
-            type="button"
-            className={textButton}
-            aria-label="保存草稿"
-            aria-keyshortcuts={saveAriaShortcut(platform)}
-            aria-disabled={!unsaved || saving || locked}
-            aria-busy={saving || undefined}
-            data-tip={saveTip}
-            onClick={save}
-          >
-            保存草稿
-          </button>
+          {editor.draft !== null && !locked && (
+            <button
+              type="button"
+              className={`${textButton} is-danger`}
+              aria-busy={deleting || undefined}
+              aria-disabled={deleting || undefined}
+              onClick={() => void deleteDraft()}
+            >
+              删除草稿
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-primary"
@@ -439,6 +429,7 @@ export function EditorPanel({
       <footer className="compose-foot">
         <div className="compose-notes">
           {saveFailure}
+          {deleteFailure}
           {identityNotice !== null && (
             <p className="notice-inline is-warning" role="alert">
               <Icon name="alert" size={14} />
