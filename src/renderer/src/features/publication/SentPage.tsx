@@ -27,6 +27,7 @@ import { useRovingFocus } from '../../lib/useRovingFocus'
 import { historyMemory, rememberHistory } from '../content/retainedList'
 import { forumLabel } from '../editor/editorText'
 import { useEditorWorkspace } from '../editor/workspace'
+import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { ContentRegistryContext } from '../tabs/contentRegistry'
 import { listRowGestures } from '../tabs/ThreadTabMenu'
 import type { EntryInit, ThreadOpen } from '../tabs/tabsState'
@@ -134,6 +135,7 @@ export function SentPage({
   openInTab: ((init: EntryInit) => void) | null
 }) {
   const registry = useContext(ContentRegistryContext)
+  const { identities } = useEditorWorkspace()
   const view = kind === 'thread' ? 'threads' : 'replies'
   const text = PAGE_TEXT[kind]
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -229,24 +231,31 @@ export function SentPage({
     )
   }
 
-  // ---------- Row context menu: 在新标签页打开, 复制串号 ----------
+  // ---------- Row context menu: 在新标签页打开, 复制串号, 饼干颜色… ----------
   /**
    * The record's own items: 复制串号 copies the number of the post it created (a reply's own, a new
-   * thread's), only when that number is known; nothing is guessed or fetched.
+   * thread's), only when that number is known; nothing is guessed or fetched. 饼干颜色… only on a
+   * new thread's record, whose 饼干 ID is its 串主's (a reply's is only the sender's).
    */
-  const recordItems = (attempt: PublicationAttempt): ContextMenuItem[] => [
-    ...(openInTab === null ? [] : [{ type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => open(attempt, true) } satisfies ContextMenuItem]),
-    ...(attempt.postId === null ? [] : [copyNumberItem(attempt.postId)])
-  ]
+  const recordItems = (attempt: PublicationAttempt, point: ContextMenuPoint, row: HTMLElement): ContextMenuItem[] => {
+    const cookie = attempt.payload.target.kind === 'thread' ? recordCookie(attempt, identities.overview) : null
+    return [
+      ...(openInTab === null ? [] : [{ type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => open(attempt, true) } satisfies ContextMenuItem]),
+      ...(attempt.postId === null ? [] : [copyNumberItem(attempt.postId)]),
+      ...cookieColorItems(cookie?.kind === 'id' ? { userHash: cookie.text } : null, point, row)
+    ]
+  }
   const [rowMenu, setRowMenu] = useState<{ attemptId: string; point: ContextMenuPoint; row: HTMLElement; selection: ContextMenuItem | null } | null>(null)
   const openRowMenu = (attempt: PublicationAttempt, event: ReactMouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
     const row = event.currentTarget.querySelector<HTMLElement>('[data-roving-item]')
+    if (row === null) return
     const selection = selectionCopyItem(undefined, event.currentTarget)
-    if (row === null || (selection === null && recordItems(attempt).length === 0)) return
+    const point = contextMenuPoint(event, row)
+    if (selection === null && recordItems(attempt, point, row).length === 0) return
     event.preventDefault()
     // No scrolling into view: a scroll closes the menu that is about to open.
     row.focus({ preventScroll: true })
-    setRowMenu({ attemptId: attempt.id, point: contextMenuPoint(event, row), row, selection })
+    setRowMenu({ attemptId: attempt.id, point, row, selection })
   }
   const closeRowMenu = (returnFocus: boolean) => {
     const row = rowMenu?.row
@@ -314,7 +323,7 @@ export function SentPage({
           key={`menu:${rowMenu.attemptId}`}
           point={rowMenu.point}
           label={`发送记录操作：${recordLabel(menuAttempt)}`}
-          items={withSelectionCopy(rowMenu.selection, recordItems(menuAttempt))}
+          items={withSelectionCopy(rowMenu.selection, recordItems(menuAttempt, rowMenu.point, rowMenu.row))}
           onClose={closeRowMenu}
         />
       )}

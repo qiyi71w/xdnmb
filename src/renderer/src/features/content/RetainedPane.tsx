@@ -6,6 +6,7 @@ import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, use
 import type { ForumId, Post, ThreadId } from '../../../../shared/forum'
 import { ContextMenu, contextMenuPoint, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { CookieId } from '../../components/CookieId'
+import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { copyNumberItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
@@ -183,7 +184,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
   const shownIds = useMemo(() => filtered.shown.map(({ item }) => item.threadId), [filtered])
   const roving = useRovingFocus(shownIds, selectedThreadId)
 
-  // ---------- Row context menu: 在新标签页打开, 复制串号, 删除… ----------
+  // ---------- Row context menu: 在新标签页打开, 复制串号, 饼干颜色… (the 串主's, when held), 删除… ----------
   const [rowMenu, setRowMenu] = useState<{ threadId: ThreadId; point: ContextMenuPoint; row: HTMLElement; selection: ContextMenuItem | null } | null>(null)
   /** The row a deletion was asked from; focus goes back there when the dialog closes without deleting. */
   const askedFrom = useRef<HTMLElement | null>(null)
@@ -347,6 +348,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
               ? []
               : [{ type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => openInTab(menuEntry.threadId, null) } satisfies ContextMenuItem]),
             copyNumberItem(menuEntry.threadId),
+            ...cookieColorItems(menuEntry.head, rowMenu.point, rowMenu.row),
             { type: 'separator', key: 'delete-separator' },
             {
               type: 'action',

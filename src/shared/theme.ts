@@ -263,8 +263,8 @@ const WINDOW_BACKDROPS: Surface[] = [['window'], ['window-tint-a'], ['window-tin
 /**
  * Where a 饼干 ID is drawn: post headers on the paper (and the highlighted post's accent tint),
  * thread rows of every list on the pane or the paper (hovered, selected), the history pages and
- * settings rows on the paper, and quote cards' frosted sheet over the reading paper, the list pane
- * (rules and timeline notes in lists have quotes too) or the window.
+ * settings rows on the paper, and quote cards' frosted sheet (and the 饼干颜色 palette's) over the
+ * reading paper, the list pane (rules and timeline notes in lists have quotes too) or the window.
  */
 const COOKIE_ID_SURFACES: Surface[] = [
   ['paper'],
@@ -314,7 +314,8 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
   { foreground: 'greentext', surfaces: [['paper']] },
   { foreground: 'quote-ref-ink', surfaces: [['paper', 'quote-ref-bg']] },
   { foreground: 'warn-ink', surfaces: [['warn-bg'], ['paper'], ['pane'], ['window', 'glass-strong']] },
-  { foreground: 'danger-ink', surfaces: [['danger-bg'], ['paper']] },
+  // Context-menu footers (reminder and subscription menus, the 饼干颜色 palette) show errors on the glass sheet.
+  { foreground: 'danger-ink', surfaces: [['danger-bg'], ['paper'], ['paper', 'glass-strong'], ['pane', 'glass-strong'], ['window', 'glass-strong']] },
   ...COOKIE_COLORS.map((name) => ({ foreground: cookieColorToken(name), surfaces: COOKIE_ID_SURFACES }))
 ]
 

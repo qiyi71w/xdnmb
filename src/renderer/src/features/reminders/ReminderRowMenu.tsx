@@ -3,17 +3,20 @@ import { REMINDER_KINDS, type ReminderKind, type ReminderRule, type ThreadRemind
 import { ContextMenu, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { copyNumberItem, withSelectionCopy } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
+import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 import { useReminderToggle } from './ReminderMenu'
 import { KIND_NAME } from './reminderText'
 
 /**
- * Context menu of one 提醒 row: 在新标签页打开, 复制串号, the three kinds as checkable items (saved
+ * Context menu of one 提醒 row: 在新标签页打开, 复制串号, 饼干颜色… (the 串主's, when the main post is
+ * held), the three kinds as checkable items (saved
  * like the 提醒 panel: one rule at a time, never starting a check) and 清除提醒, unavailable while
  * the thread has no count. 复制选中文字 (taken when the menu opened) comes first.
  */
 export function ReminderRowMenu({
   point,
+  row,
   threadId,
   head,
   selection,
@@ -25,6 +28,8 @@ export function ReminderRowMenu({
   onClose
 }: {
   point: ContextMenuPoint
+  /** The row control: it shows the 串主's 饼干 ID and gets focus back. */
+  row: HTMLElement
   threadId: ThreadId
   /** Main post held here, shown in the new tab until page 1 arrives; null when not held. */
   head: Post | null
@@ -45,6 +50,7 @@ export function ReminderRowMenu({
       ? []
       : [{ type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => openInTab(threadId, head) } satisfies ContextMenuItem]),
     copyNumberItem(threadId),
+    ...cookieColorItems(head, point, row),
     { type: 'separator', key: 'open-separator' },
     ...REMINDER_KINDS.map((kind): ContextMenuItem => ({
       type: 'check',

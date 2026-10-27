@@ -9,6 +9,7 @@ import { QuoteRef } from '../quote/QuoteRef'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { CookieId } from '../../components/CookieId'
 import { copyNumberItem, copyTextItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
+import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { setBlocked } from './useBlocks'
 import { useCover } from '../../lib/appCovered'
 
@@ -23,8 +24,8 @@ export interface PostActions {
  * One post: the meta line (cookie ID, PO, SAGE, time, No.), then the title and the name in bold on
  * their own lines, the image and the body. The head's title is the reader's one h1; an untitled
  * thread keeps a hidden one. The context menu (right click, ContextMenu key, Shift+F10) offers
- * 回复／举报／屏蔽串号／屏蔽饼干 (no 屏蔽 on the user's own posts), then 复制内容／复制串号／复制饼干,
- * under 复制选中文字 when text in the post is selected.
+ * 回复／举报／屏蔽串号／屏蔽饼干 (no 屏蔽 on the user's own posts), then 复制内容／复制串号／复制饼干
+ * and 饼干颜色… (not for an admin), under 复制选中文字 when text in the post is selected.
  */
 export function PostView({
   post,
@@ -44,7 +45,7 @@ export function PostView({
   actions?: PostActions
 }) {
   const articleRef = useRef<HTMLElement>(null)
-  const [menu, setMenu] = useState<{ point: ContextMenuPoint; selection: ContextMenuItem | null } | null>(null)
+  const [menu, setMenu] = useState<{ point: ContextMenuPoint; owner: HTMLElement; selection: ContextMenuItem | null } | null>(null)
   useCover(menu !== null)
   const block = (kind: 'post' | 'cookie', value: string) => {
     const reader = articleRef.current?.closest('.reader')
@@ -63,7 +64,8 @@ export function PostView({
     { type: 'separator', key: 'copy-separator' },
     copyTextItem('copy-content', '复制内容', post.plainText, '这条发言没有正文'),
     copyNumberItem(post.id),
-    ...(userHash !== null ? [copyTextItem('copy-cookie', '复制饼干', userHash, '')] : [])
+    ...(userHash !== null ? [copyTextItem('copy-cookie', '复制饼干', userHash, '')] : []),
+    ...cookieColorItems({ userHash, isAdmin: post.isAdmin }, menu.point, menu.owner)
   ])
   const name = meaningfulName(post.name)
   const title = meaningfulTitle(post.title)
@@ -72,7 +74,7 @@ export function PostView({
   const openMenu = actions === undefined ? undefined : (event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
     event.preventDefault()
     event.stopPropagation()
-    setMenu({ point: contextMenuPoint(event, event.currentTarget), selection: selectionCopyItem(undefined, event.currentTarget) })
+    setMenu({ point: contextMenuPoint(event, event.currentTarget), owner: event.currentTarget, selection: selectionCopyItem(undefined, event.currentTarget) })
   }
 
   return (

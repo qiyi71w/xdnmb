@@ -264,6 +264,7 @@ export function OfflinePane({
         <OfflineRowMenu
           key={`menu:${rowMenu.threadId}`}
           point={rowMenu.point}
+          row={rowMenu.row}
           threadId={rowMenu.threadId}
           head={menuEntry.head}
           selection={rowMenu.selection}

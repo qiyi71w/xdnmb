@@ -3,13 +3,14 @@ import { REMINDER_KINDS, type ReminderKind, type ReminderRule, type ThreadRemind
 import { ContextMenu, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { copyNumberItem, withSelectionCopy } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
+import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { useReminderToggle } from '../reminders/ReminderMenu'
 import { KIND_NAME } from '../reminders/reminderText'
 import { failureText, type LoadFailure } from '../reminders/useReminders'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 
 /**
- * Context menu of one subscription row: 在新标签页打开, 复制串号, then the three 提醒 kinds as
+ * Context menu of one subscription row: 在新标签页打开, 复制串号, 饼干颜色… (the 串主's), then the three 提醒 kinds as
  * checkable items (saved like the 提醒 panel: one rule at a time, never starting a check) and
  * 取消订阅, which sends the write at once (no confirmation; the thread's reminders stay as they
  * are). While the rules are unknown the kinds cannot be toggled; a failed read offers a retry.
@@ -17,6 +18,7 @@ import { useOpenThreadInTab } from '../tabs/openThreadInTab'
  */
 export function SubscriptionRowMenu({
   point,
+  row,
   threadId,
   head,
   selection,
@@ -30,6 +32,8 @@ export function SubscriptionRowMenu({
   onClose
 }: {
   point: ContextMenuPoint
+  /** The row control: it shows the 串主's 饼干 ID and gets focus back. */
+  row: HTMLElement
   threadId: ThreadId
   /** Main post already on screen, shown in the new tab until page 1 arrives. */
   head: Post
@@ -53,6 +57,7 @@ export function SubscriptionRowMenu({
       ? []
       : [{ type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => openInTab(threadId, head) } satisfies ContextMenuItem]),
     copyNumberItem(threadId),
+    ...cookieColorItems(head, point, row),
     { type: 'separator', key: 'open-separator' },
     ...REMINDER_KINDS.map((kind): ContextMenuItem => ({
       type: 'check',

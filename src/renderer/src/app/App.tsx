@@ -32,6 +32,7 @@ import { PoPromptDialog } from '../features/publication/PoPromptDialog'
 import { LaunchNotice } from '../features/lifecycle/LaunchNotice'
 import { LifecycleHost } from '../features/lifecycle/LifecycleHost'
 import { EditContextMenuHost } from '../components/EditContextMenu'
+import { CookieColorPickerHost } from '../features/cookieColors/CookieColorPicker'
 import { useIdentities } from '../features/identity/useIdentities'
 import { SubscriptionsContext, useSubscriptions } from '../features/subscriptions/useSubscriptions'
 import { clearThreadReminders, RemindersContext, useReminderOverview } from '../features/reminders/useReminders'
@@ -1374,6 +1375,7 @@ export function App() {
             whenRestored={whenRestored}
           />
           <EditContextMenuHost />
+          <CookieColorPickerHost />
         </div>
       </HistoryPageContext>
       </ThreadTabOpenerContext>

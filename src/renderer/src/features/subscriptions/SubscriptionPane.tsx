@@ -648,6 +648,7 @@ export function SubscriptionPane({
         <SubscriptionRowMenu
           key={rowMenu.threadId}
           point={rowMenu.point}
+          row={rowMenu.row}
           threadId={rowMenu.threadId}
           head={menuThread.head}
           selection={rowMenu.selection}

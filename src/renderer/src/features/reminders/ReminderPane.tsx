@@ -391,6 +391,7 @@ export function ReminderPane({
         <ReminderRowMenu
           key={rowMenu.threadId}
           point={rowMenu.point}
+          row={rowMenu.row}
           threadId={rowMenu.threadId}
           head={menuRow.head}
           selection={rowMenu.selection}

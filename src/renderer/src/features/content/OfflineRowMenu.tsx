@@ -1,16 +1,19 @@
 import type { Post, ThreadId } from '../../../../shared/forum'
 import { ContextMenu, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { copyNumberItem, withSelectionCopy } from '../../components/copyMenuItems'
+import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 
 /**
- * Context menu of one 离线 row: 在新标签页打开, 复制串号, 更新离线副本 (the 离线副本 dialog's update,
+ * Context menu of one 离线 row: 在新标签页打开, 复制串号, 饼干颜色… (the 串主's, when the main post is
+ * held), 更新离线副本 (the 离线副本 dialog's update,
  * started at once; unavailable while the copy is saving, the start is on its way or it is being
  * deleted), 离线详情…, which opens that dialog, and 删除离线副本…, which asks for confirmation first.
  * 复制选中文字 (taken when the menu opened) comes first.
  */
 export function OfflineRowMenu({
   point,
+  row,
   threadId,
   head,
   selection,
@@ -23,6 +26,8 @@ export function OfflineRowMenu({
   onClose
 }: {
   point: ContextMenuPoint
+  /** The row control: it shows the 串主's 饼干 ID and gets focus back. */
+  row: HTMLElement
   threadId: ThreadId
   /** Main post held here, shown in the new tab until page 1 arrives; null when not held. */
   head: Post | null
@@ -44,6 +49,7 @@ export function OfflineRowMenu({
       ? []
       : [{ type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => openInTab(threadId, head) } satisfies ContextMenuItem]),
     copyNumberItem(threadId),
+    ...cookieColorItems(head, point, row),
     { type: 'separator', key: 'open-separator' },
     {
       type: 'action',

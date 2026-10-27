@@ -2,6 +2,7 @@ import { useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'r
 import type { Post, ThreadId } from '../../../../shared/forum'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { copyNumberItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
+import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { useOpenThreadInTab } from './openThreadInTab'
 
 export interface ThreadRowHandlers {
@@ -63,8 +64,9 @@ export function listRowGestures(
  * 在新标签页打开 and 复制串号 for the thread rows of one list: one context menu at a time
  * (right-click, ContextMenu key, Shift+F10 on the focused row; 复制选中文字 on top while text in
  * the row is selected), middle-click and Ctrl/Cmd+click. Closing the menu returns focus to its row.
+ * With `cookieColor` (rows that show the head post's 饼干 ID), 饼干颜色… for the 串主's ID follows.
  */
-export function useThreadTabMenu(): ThreadTabMenu {
+export function useThreadTabMenu({ cookieColor = false }: { cookieColor?: boolean } = {}): ThreadTabMenu {
   const openInTab = useOpenThreadInTab()
   const [open, setOpen] = useState<{ threadId: ThreadId; head: Post | null; openable: boolean; point: ContextMenuPoint; row: HTMLElement; selection: ContextMenuItem | null } | null>(null)
 
@@ -115,7 +117,8 @@ export function useThreadTabMenu(): ThreadTabMenu {
           label={`串操作：No.${open.threadId}`}
           items={withSelectionCopy(open.selection, [
             ...(openInTab === null || !open.openable ? [] : [{ type: 'action', key: 'open-in-tab', label: '在新标签页打开', onSelect: () => openInTab(open.threadId, open.head) } satisfies ContextMenuItem]),
-            copyNumberItem(open.threadId)
+            copyNumberItem(open.threadId),
+            ...(cookieColor ? cookieColorItems(open.head, open.point, open.row) : [])
           ])}
           onClose={close}
         />
