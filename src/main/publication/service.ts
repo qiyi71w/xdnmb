@@ -7,6 +7,7 @@ import type { DraftService } from '../drafts/service'
 import type { ManagedImageFiles } from '../images/files'
 import type { SecretProtector } from '../identity/protection'
 import { ForumReadError, type ForumClient } from '../forum/contract'
+import { userhashCookieValue } from '../forum/userhash'
 import { PUBLISH_DEADLINE_MS, type PublicationAdapter, type PublicationFinish, type PublishReport } from './contract'
 
 /** A send whose intent is recorded and whose request has not produced a recorded result yet. */
@@ -62,7 +63,8 @@ export function createPublicationService(deps: {
   const { store, drafts, files, protector, adapter } = deps
   const now = deps.now ?? (() => new Date())
   const deadlineMs = deps.deadlineMs ?? PUBLISH_DEADLINE_MS
-  // Active secrets only: local credential IDs can change when a cookie is removed and reimported.
+  // Active secrets, in the form sent (one actual cookie, however it was written when imported):
+  // local credential IDs can change when a cookie is removed and reimported.
   const busy = new Set<string>()
   const editorAttempts = new Map<string, PublicationAttempt>()
   const submissions = new Map<string, Promise<SubmitResult>>()
@@ -197,7 +199,7 @@ export function createPublicationService(deps: {
       return await persist(attempt, [{ id: attempt.id, state: 'unknown', problem: 'network', postId: null, threadId: null, at: result.updatedAt, launchNotice: unattended }])
     } finally {
       running.delete(attempt.id)
-      busy.delete(validated.userhash)
+      busy.delete(userhashCookieValue(validated.userhash))
       await drafts.releaseEditor('publication', attempt.id).catch(() => undefined)
     }
   }
@@ -214,9 +216,10 @@ export function createPublicationService(deps: {
     try {
       if (!recovered || store.status.state !== 'ready') throw new Refusal('storage')
       const userhash = await secret(input.payload.credentialId)
-      if (busy.has(userhash)) return { kind: 'refused', reason: 'busy' }
-      busy.add(userhash)
-      lockedUserhash = userhash
+      const lock = userhashCookieValue(userhash)
+      if (busy.has(lock)) return { kind: 'refused', reason: 'busy' }
+      busy.add(lock)
+      lockedUserhash = lock
       await drafts.holdAttachment('publication', preparation, input.payload.attachmentId)
       const validated = await validate(input.payload, userhash)
       if (!bypassPrompt) {

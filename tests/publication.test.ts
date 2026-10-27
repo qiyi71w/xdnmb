@@ -417,6 +417,17 @@ it('total publication deadline stops a hanging response without replay and leave
   expect(remote.seen.filter(r => r.path === '/Api/getLastPost')).toHaveLength(0)
 })
 
+it('sends an exported userhash with `+` written as `%20` on the post and its same-session lookup', async () => {
+  const remote = await forum()
+  const adapter = createPublicationAdapter({ origin: remote.origin, apiOrigin: remote.origin, publishTimeoutMs: 1500 })
+  // Synthetic value in the export form: a space as `+`, a tilde as `%7E`.
+  expect(await adapter.publish({ payload: payload('1'), userhash: 'Synth+etic%7EHash/+=', attachment: null })).toMatchObject({ state: 'confirmed' })
+  const post = remote.seen.filter(r => r.path.startsWith('/Home/'))
+  const lookup = remote.seen.filter(r => r.path === '/Api/getLastPost')
+  expect(post.map(r => r.cookie)).toEqual(['userhash=Synth%20etic%7EHash/%20='])
+  expect(lookup.map(r => r.cookie)).toEqual(['userhash=Synth%20etic%7EHash/%20=; PHPSESSID=controlled-session'])
+})
+
 it('reports preflight throttling as throttling and does not create or send an intent', async () => {
   const s = await setup()
   s.remote.setMode('preflight-rate')
@@ -473,6 +484,34 @@ it('serializes the actual cookie across removal and reimport while other cookies
   const deliberate = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'second', payload: payload(imported.credential.id, '完成后显式发送') }))
   expect(await finished(s.service, deliberate.id)).toMatchObject({ state: 'confirmed' })
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(3)
+})
+
+it.each([
+  ['export form, then browser form', 'Synthetic+Hold', 'Synthetic%20Hold'],
+  ['browser form, then export form', 'Synthetic%20Hold', 'Synthetic+Hold']
+])('serializes one actual cookie across its two written forms (%s), on reimport and when both are stored', async (_name, stored, other) => {
+  const s = await setup()
+  const identities = createIdentityService({ store: asyncStore(s.db), storageState: () => 'ready', protector: {
+    isAvailable: async () => true, encrypt: async text => Buffer.from(text), decrypt: async bytes => Buffer.from(bytes).toString()
+  } })
+  const original = s.db.insertCredential({ name: 'H', cookieId: 'IdH', source: 'export', importedAt: '2026-01-01', ciphertext: Buffer.from(stored) }).id
+  // Both forms stored side by side, as imports from before the forms were treated as one cookie may be.
+  const coexisting = s.db.insertCredential({ name: 'H2', cookieId: 'IdH', source: 'raw', importedAt: '2026-01-01', ciphertext: Buffer.from(other) }).id
+  s.remote.setMode('hold')
+  const first = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'first', payload: payload(original) }))
+  await expect.poll(() => s.remote.seen.filter(r => r.path.startsWith('/Home/')).length).toBe(1)
+  expect(await s.service.submit({ requestId: randomUUID(), editorId: 'coexisting', payload: payload(coexisting) })).toEqual({ kind: 'refused', reason: 'busy' })
+  expect(await identities.remove(original)).toEqual({ ok: true })
+  expect(await identities.remove(coexisting)).toEqual({ ok: true })
+  const imported = await identities.importRaw(`userhash=${other}`, 'IdH', null)
+  if (!imported.ok) throw new Error('reimport failed')
+  expect(await s.service.submit({ requestId: randomUUID(), editorId: 'second', payload: payload(imported.credential.id) })).toEqual({ kind: 'refused', reason: 'busy' })
+  expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(1)
+  s.remote.setMode('success')
+  s.remote.release()
+  await finished(s.service, first.id)
+  const deliberate = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'second', payload: payload(imported.credential.id, '完成后显式发送') }))
+  expect(await finished(s.service, deliberate.id)).toMatchObject({ state: 'confirmed' })
 })
 
 it('keeps a launch notice only for failures reached without a window, until dismissed', async () => {

@@ -190,6 +190,23 @@ describe('identity service with real SQLite', () => {
     expect(await service.getOverview()).toEqual(expected)
   })
 
+  it('treats the export form (`+`) and the browser form (`%20`) of one userhash as the same cookie, in either order', async () => {
+    const { service } = setup()
+    const exported = await service.importExport(exportPayload('SyntheticSpace+A%7Ex', 'SpcA123'), null)
+    const pasted = await service.importRaw('userhash=SyntheticSpace%20B%7Ex', 'SpcB123', null)
+    if (!exported.ok || !pasted.ok) throw new Error('import failed')
+    const before = await service.getOverview()
+    expect(await service.importRaw('userhash=SyntheticSpace%20A%7Ex', 'SpcA123', null)).toEqual({
+      ok: false, failure: { reason: 'duplicate', cookieId: 'same', existing: exported.credential }
+    })
+    expect(await service.importExport(exportPayload('SyntheticSpace+B%7Ex', 'SpcB123'), null)).toEqual({
+      ok: false, failure: { reason: 'duplicate', cookieId: 'same', existing: pasted.credential }
+    })
+    // `%7E` is not decoded: a literal `~` is a different value.
+    expect(await service.importRaw('userhash=SyntheticSpace%20A~x', 'SpcC123', null)).toMatchObject({ ok: true })
+    expect((await service.getOverview()).credentials).toHaveLength(before.credentials.length + 1)
+  })
+
   it('fills in or changes a 饼干 ID from settings, validating it', async () => {
     const { service } = setup()
     const a = await imported(service, SECRET_A, 'A', 'First1')
