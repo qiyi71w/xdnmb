@@ -29,7 +29,7 @@ export interface QuoteRefInfo {
 export interface QuoteController {
   pointerEnter(info: QuoteRefInfo): void
   pointerLeave(): void
-  /** Keyboard focus previews unless the controller is restoring a previous trigger. */
+  /** Keyboard focus previews unless the controller is restoring a previous trigger or the quote is inside a card. */
   focus(info: QuoteRefInfo): void
   /** Focus left the quote reference. */
   blur(): void

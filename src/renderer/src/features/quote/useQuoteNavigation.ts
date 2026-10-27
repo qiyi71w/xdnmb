@@ -338,7 +338,10 @@ export function useQuoteNavigation(options: Options) {
         scheduleLeave()
       },
       focus(info) {
-        if (restoringFocus.current) return
+        // A quote inside a card only takes focus: previewing it would replace the card and send
+        // focus back to the outer quote, so its Enter, Ctrl/Cmd+Enter and menu keys could never act
+        // on it. Space (or hovering) previews it.
+        if (restoringFocus.current || info.origin !== undefined) return
         window.clearTimeout(openTimer.current)
         open(info, 'preview')
       },
