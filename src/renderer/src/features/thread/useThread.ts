@@ -3,9 +3,9 @@ import type { ReadError, ThreadEndResult, ThreadPageResult } from '../../../../s
 import type { Post, ReadingMode, ThreadId } from '../../../../shared/forum'
 import { threadTotalPages } from '../../../../shared/threadPages'
 import { OperationScope } from '../../lib/operations'
-import { canPrependPrevious, initialThreadState, threadReducer, type ThreadTask } from './threadState'
+import { canPrependPrevious, initialThreadState, refreshThread, threadReducer, type ThreadTask } from './threadState'
 
-type PageTask = Exclude<ThreadTask, { type: 'locate' }>
+type PageTask = Exclude<ThreadTask, { type: 'locate' } | { type: 'refresh' }>
 
 /**
  * Continuous reading of one thread in one mode. The owning component is keyed by thread and mode:
@@ -29,17 +29,24 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     holdRef.current = hold
   })
 
+  /** One page of the thread in this reader's mode, read only once the reader's content is held. */
+  const readThreadPage = useCallback(
+    (page: number) =>
+      scope.current.run<ThreadPageResult>(async (operationId) => {
+        await holdRef.current()
+        if (!scope.current.isActive(operationId)) return { status: 'cancelled' }
+        return window.xidao.reading.readThreadPage({ operationId, threadId: threadRef.current, mode: modeRef.current, page })
+      }),
+    []
+  )
+
   const showCap = useCallback(async (highestReadablePage: number, task: ThreadTask, observed: ReadError['readablePage']) => {
     if (task.type !== 'locate' && task.type !== 'jump' && task.type !== 'initial') {
       dispatch({ type: 'page-cap', highestReadablePage })
       return
     }
     const settled = observed === undefined
-      ? await scope.current.run<ThreadPageResult>(async (operationId) => {
-          await holdRef.current()
-          if (!scope.current.isActive(operationId)) return { status: 'cancelled' }
-          return window.xidao.reading.readThreadPage({ operationId, threadId: threadRef.current, mode: modeRef.current, page: highestReadablePage })
-        })
+      ? await readThreadPage(highestReadablePage)
       : { type: 'ok' as const, data: observed.data, source: { status: 'fresh' as const, fetchedAt: observed.fetchedAt, saved: observed.saved } }
     switch (settled.type) {
       case 'stale':
@@ -54,16 +61,12 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
       case 'ok':
         dispatch({ type: 'cap-loaded', highestReadablePage, page: settled.data.page, coverage: settled.data.coverage, source: settled.source })
     }
-  }, [])
+  }, [readThreadPage])
 
   const readPage = useCallback(async (task: PageTask) => {
     const page = task.type === 'initial' ? (task.page ?? 1) : task.page
     dispatch({ type: 'start', task })
-    const settled = await scope.current.run<ThreadPageResult>(async (operationId) => {
-      await holdRef.current()
-      if (!scope.current.isActive(operationId)) return { status: 'cancelled' }
-      return window.xidao.reading.readThreadPage({ operationId, threadId: threadRef.current, mode: modeRef.current, page })
-    })
+    const settled = await readThreadPage(page)
     switch (settled.type) {
       case 'stale':
         return
@@ -80,7 +83,7 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
       case 'ok':
         dispatch({ type: 'page-loaded', task, page: settled.data.page, coverage: settled.data.coverage, source: settled.source })
     }
-  }, [showCap])
+  }, [showCap, readThreadPage])
 
   const locate = useCallback(async () => {
     const task: ThreadTask = { type: 'locate' }
@@ -133,9 +136,11 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
   const supersede = useCallback(
     (task: ThreadTask) => {
       scope.current.cancelAll()
-      void (task.type === 'locate' ? locate() : readPage(task))
+      if (task.type === 'locate') void locate()
+      else if (task.type === 'refresh') void refreshThread(stateRef.current, readThreadPage, dispatch)
+      else void readPage(task)
     },
-    [locate, readPage]
+    [locate, readPage, readThreadPage]
   )
 
   useEffect(() => {
@@ -166,10 +171,14 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     void readPage({ type: 'prepend', page: first.page - 1 })
   }, [readPage])
 
-  /** Re-reads the last loaded page (including an end-candidate page) and merges it. */
+  /**
+   * 刷新 (end of the thread, 更多 › 刷新, Ctrl/Cmd+R); an empty reader loads its first page again.
+   * A refresh already running is left alone: the entries never start a second one.
+   */
   const refresh = useCallback(() => {
-    const last = stateRef.current.pages.at(-1)
-    supersede(last === undefined ? { type: 'initial', page: firstPageRef.current } : { type: 'refresh', page: last.page })
+    const state = stateRef.current
+    if (state.task?.type === 'refresh') return
+    supersede(state.pages.length === 0 ? { type: 'initial', page: firstPageRef.current } : { type: 'refresh' })
   }, [supersede])
 
   const jump = useCallback((page: number) => {

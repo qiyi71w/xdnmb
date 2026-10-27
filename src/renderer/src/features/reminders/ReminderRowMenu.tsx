@@ -10,9 +10,9 @@ import { KIND_NAME } from './reminderText'
 
 /**
  * Context menu of one 提醒 row: 在新标签页打开, 复制串号, 饼干颜色… (the 串主's, when the main post is
- * held), the three kinds as checkable items (saved
- * like the 提醒 panel: one rule at a time, never starting a check) and 清除提醒, unavailable while
- * the thread has no count. 复制选中文字 (taken when the menu opened) comes first.
+ * held), the three kinds as checkable items (saved through `useReminderToggle` like the thread's
+ * 更多 › 提醒: one rule at a time, never starting a check) and 清除提醒, unavailable while the thread
+ * has no count. 复制选中文字 (taken when the menu opened) comes first.
  */
 export function ReminderRowMenu({
   point,

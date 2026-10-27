@@ -25,6 +25,7 @@ import type {
 import { contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { selectionCopyItem } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
+import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { FailureNotice } from '../../components/Notices'
 import { describeReadError } from '../../lib/format'
 import { useSettingsOpener } from '../../lib/settingsOpener'
@@ -393,6 +394,9 @@ export function SubscriptionPane({
   /** Whether a row event comes from its unsettled line (核对订阅), which is not part of the row's menu or link. */
   const fromInline = (event: { target: EventTarget }) => event.target instanceof Element && event.target.closest('.sub-inline') !== null
   const menuThread = rowMenu === null ? undefined : threads.find((thread) => thread.head.id === rowMenu.threadId)
+  const readInFlight = state.activity === 'first' || state.activity === 'next'
+  // Before the early return below: hooks run in the same order on every render.
+  const refreshTurn = useRefreshTurn(readInFlight)
 
   // ---------- Render ----------
   if (overview === null) {
@@ -407,7 +411,6 @@ export function SubscriptionPane({
 
   const source = overview.source
   const shown = state.shown
-  const readInFlight = state.activity === 'first' || state.activity === 'next'
   const endPage = displayed?.pages.find((page) => page.endCandidate)?.page ?? null
   const nextPage = shown !== null && shown.error === null && !readInFlight && blocker === null ? shown.nextPage : null
 
@@ -461,12 +464,15 @@ export function SubscriptionPane({
               <button
                 type="button"
                 className="icon-btn"
-                onClick={refresh}
+                onClick={() => {
+                  if (!refreshTurn.turning) refresh()
+                }}
                 disabled={blocker !== null}
                 aria-label="刷新订阅"
                 title="刷新订阅"
+                aria-busy={refreshTurn.turning || undefined}
               >
-                <Icon name="refresh" />
+                <RefreshIcon turn={refreshTurn} />
               </button>
             </div>
           </div>
@@ -482,9 +488,7 @@ export function SubscriptionPane({
           {blocker !== null && (
             <div className="notice notice-cached is-compact" role="status">
               <Icon name="alert" className="notice-icon" />
-              <p className="notice-text">
-                {SOURCE_NAME[source]}暂时不可用：{blocker}
-              </p>
+              <p className="notice-text">{blocker}</p>
               {openSettings !== null && (
                 <button type="button" className="btn btn-small" onClick={() => openSettings('subscriptions')}>
                   打开设置

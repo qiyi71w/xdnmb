@@ -10,11 +10,11 @@ import { failureText, type LoadFailure } from '../reminders/useReminders'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 
 /**
- * Context menu of one subscription row: 在新标签页打开, 复制串号, 饼干颜色… (the 串主's), then the three 提醒 kinds as
- * checkable items (saved like the 提醒 panel: one rule at a time, never starting a check) and
- * 取消订阅, which sends the write at once (no confirmation; the thread's reminders stay as they
- * are). While the rules are unknown the kinds cannot be toggled; a failed read offers a retry.
- * 复制选中文字 (taken when the menu opened) comes first.
+ * Context menu of one subscription row: 在新标签页打开, 复制串号, 饼干颜色… (the 串主's), then the three
+ * 提醒 kinds as checkable items (saved through `useReminderToggle` like the thread's 更多 › 提醒: one
+ * rule at a time, never starting a check) and 取消订阅, which sends the write at once (no
+ * confirmation; the thread's reminders stay as they are). While the rules are unknown the kinds
+ * cannot be toggled; a failed read offers a retry. 复制选中文字 (taken when the menu opened) comes first.
  */
 export function SubscriptionRowMenu({
   point,

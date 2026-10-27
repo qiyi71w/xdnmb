@@ -165,15 +165,36 @@ const PATHS = {
       <circle cx="12" cy="12" r="8.5" />
       <path d="M8.6 9.8v.6M15.4 9.8v.6M8.5 14c.9 1.3 2.1 2 3.5 2s2.6-.7 3.5-2" />
     </>
+  ),
+  /** 举报: a flag on its pole. */
+  flag: <path d="M6.5 20V4.5M6.5 5h11l-2.5 4 2.5 4h-11" />,
+  /** 在新标签页打开: a tab over another, with a plus. */
+  newTab: (
+    <>
+      <rect x="8.5" y="4.5" width="11" height="11" rx="2" />
+      <path d="M15.5 19.5H6.5a2 2 0 0 1-2-2v-9M14 7.5v5M11.5 10h5" />
+    </>
   )
 } as const
 
 export type IconName = keyof typeof PATHS
 
-export function Icon({ name, size = 16, className }: { name: IconName; size?: number; className?: string }) {
+export function Icon({
+  name,
+  size = 16,
+  className,
+  onAnimationIteration
+}: {
+  name: IconName
+  size?: number
+  className?: string
+  /** For icons that animate themselves (the turning ↻ in RefreshIcon). */
+  onAnimationIteration?: () => void
+}) {
   return (
     <svg
       className={className === undefined ? 'icon' : `icon ${className}`}
+      onAnimationIteration={onAnimationIteration}
       width={size}
       height={size}
       viewBox="0 0 24 24"

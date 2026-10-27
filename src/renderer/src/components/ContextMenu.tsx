@@ -4,10 +4,11 @@ import { openLayer } from '../lib/layers'
 import { Icon } from './Icon'
 import './context-menu.css'
 
-/** Viewport point a context menu opens at. */
+/** Viewport point a context menu opens at; `end`: the point is the menu's top-end corner (a menu dropped from a button). */
 export interface ContextMenuPoint {
   x: number
   y: number
+  end?: boolean
 }
 
 export type ContextMenuItem =
@@ -81,8 +82,8 @@ export function ContextMenu({
     closeRef.current = onClose
   })
 
-  // Inside the window: left of the point when it would cross the right edge, above it when it
-  // would cross the bottom; never past the top-left margin.
+  // Inside the window: left of the point when it would cross the right edge (or when the point is
+  // its end), above it when it would cross the bottom; never past the top-left margin.
   useLayoutEffect(() => {
     const box = boxRef.current
     if (box === null) return
@@ -91,7 +92,7 @@ export function ContextMenu({
     const { width, height } = box.getBoundingClientRect()
     const maxLeft = window.innerWidth - margin - width
     const maxTop = window.innerHeight - margin - height
-    const left = point.x > maxLeft ? Math.max(margin, Math.min(point.x - width, maxLeft)) : Math.max(margin, point.x)
+    const left = point.end === true || point.x > maxLeft ? Math.max(margin, Math.min(point.x - width, maxLeft)) : Math.max(margin, point.x)
     const top = point.y > maxTop ? Math.max(margin, Math.min(point.y - height, maxTop)) : Math.max(margin, point.y)
     box.style.left = `${left}px`
     box.style.top = `${top}px`

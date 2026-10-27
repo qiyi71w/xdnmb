@@ -2,7 +2,8 @@ import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, use
 import type { Post, PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
 import { threadTotalPages } from '../../../../shared/threadPages'
 import type { ReadingAnchor } from '../../../../shared/reading'
-import { Icon, Spinner } from '../../components/Icon'
+import { Icon } from '../../components/Icon'
+import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { FailureNotice, IdentitySettingsAction, Loading, PartialNotice, SourceNotice } from '../../components/Notices'
 import { describeReadError, meaningfulTitle } from '../../lib/format'
 import { useNearEnd } from '../../lib/useNearEnd'
@@ -14,7 +15,7 @@ import { useRegisterContent } from '../tabs/contentRegistry'
 import type { SourceFocus } from '../tabs/tabsState'
 import { PostView } from './PostView'
 import { startPage, type ReaderPosition } from './readingStart'
-import { showsHead, type ThreadTask } from './threadState'
+import { reachesEnd, showsHead, type ThreadTask } from './threadState'
 import { useReadingViewport } from './useReadingViewport'
 import { useThread } from './useThread'
 import type { ComposeEntry } from '../editor/ComposePanel'
@@ -485,10 +486,9 @@ export function ThreadReader({
   /** Which ends of the thread are on screen, for the corner buttons. */
   const pillEnds = (scroller: HTMLElement): PillEnds => {
     const near = scroller.clientHeight / 2
-    const realEnd = lastPage !== undefined && (lastPage.endCandidate || (totalPages !== null && lastPage.page >= totalPages))
     return {
       atStart: firstPage?.page === 1 && scroller.scrollTop < near,
-      atEnd: realEnd && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < near
+      atEnd: reachesEnd(state) && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < near
     }
   }
   const pillFocusBack = useCallback(() => scrollRef.current?.focus({ preventScroll: true }), [])
@@ -558,21 +558,17 @@ export function ThreadReader({
     </button>
   )
 
-  const refreshButton = (
-    <button type="button" className={barButton} onClick={thread.refresh} title="刷新" aria-busy={task?.type === 'refresh' || undefined}>
-      <Icon name="refresh" />
-      <span className="btn-label">刷新</span>
-    </button>
-  )
-
-  // The end of a fully read thread is only a quiet 刷新. It stays focusable while it works
-  // (aria-disabled); if new replies replace it, focus moves to the first new reply.
+  // Refreshing is at the end of the thread, in 更多 › 刷新 and on Ctrl/Cmd+R (all thread.refresh).
+  // Once the read reaches the end, a quiet 刷新 ends the last loaded page. Its ↻ turns while it works
+  // and it stays focusable (aria-disabled); if new replies come in, focus moves to the first of them
+  // (the 刷新 may now end a later page), otherwise it stays on 刷新.
   const endRefreshRef = useRef<HTMLButtonElement>(null)
   /** Posts shown when the focused end 刷新 was pressed; null when it was not the focus. */
   const endRefreshFrom = useRef<number | null>(null)
-  const endRefreshing = task?.type === 'refresh'
+  const endTurn = useRefreshTurn(task?.type === 'refresh')
+  const endShown = reachesEnd(state)
   const refreshAtEnd = () => {
-    if (endRefreshing) return
+    if (endTurn.turning) return
     endRefreshFrom.current =
       document.activeElement === endRefreshRef.current ? (contentRef.current?.querySelectorAll(SHOWN_POSTS).length ?? 0) : null
     thread.refresh()
@@ -581,10 +577,9 @@ export function ThreadReader({
     const shown = endRefreshFrom.current
     if (shown === null || state.task?.type === 'refresh') return
     endRefreshFrom.current = null
-    if (endRefreshRef.current !== null) return
     const posts = contentRef.current?.querySelectorAll<HTMLElement>(SHOWN_POSTS)
-    const next = posts?.[shown] ?? posts?.[posts.length - 1]
-    next?.focus()
+    const next = posts !== undefined && posts.length > shown ? posts[shown] : (endRefreshRef.current ?? posts?.[posts.length - 1])
+    if (next !== undefined && next !== document.activeElement) next.focus()
   }, [state.task, state.pages])
 
   const notes = (
@@ -692,8 +687,8 @@ export function ThreadReader({
                 {compose?.entry}
                 <SubscribeButton threadId={threadId} label={title ?? `No.${threadId}`} />
                 {searchButton}
-                {refreshButton}
                 <ThreadMoreMenu
+                  onRefresh={thread.refresh}
                   threadId={threadId}
                   mode={mode}
                   label={title ?? `No.${threadId}`}
@@ -773,17 +768,17 @@ export function ThreadReader({
                     actions={{ own: postActions.isOwn(reply), reply: (opener) => postActions.reply(reply.id, opener), report: (opener) => postActions.report(reply.id, opener) }}
                   />
                 ))}
-                {page.endCandidate && (
+                {endShown && page === lastPage && (
                   <div className="thread-end">
                     <button
                       ref={endRefreshRef}
                       type="button"
                       className="btn btn-quiet"
-                      aria-busy={endRefreshing || undefined}
-                      aria-disabled={endRefreshing || undefined}
+                      aria-busy={endTurn.turning || undefined}
+                      aria-disabled={endTurn.turning || undefined}
                       onClick={refreshAtEnd}
                     >
-                      {endRefreshing ? <Spinner /> : <Icon name="refresh" />}
+                      <RefreshIcon turn={endTurn} />
                       刷新
                     </button>
                   </div>

@@ -10,7 +10,7 @@ function withShortcut(label: string, shortcut: string): string {
 
 /**
  * D layout top bar, which is also the window's title bar: back / forward of the current tab, the tab
- * strip, the tab's 分栏 toggle (list entries only), 新标签 and, while the navigation is an overlay,
+ * strip, the tab's 分栏 toggle (an icon button; list entries only), 新标签 and, while the navigation is an overlay,
  * its trigger first and 设置 last. Its empty space drags the window; the controls do not. It leaves
  * room for the window controls (Windows / Linux overlay on the right, macOS traffic lights on the left).
  */
@@ -153,9 +153,15 @@ export function TopBar({
       </div>
 
       {splitToggle !== null && (
-        <button type="button" className="btn btn-toggle" aria-pressed={splitToggle.pressed} onClick={splitToggle.onToggle}>
+        <button
+          type="button"
+          className="icon-btn split-toggle"
+          aria-label="分栏"
+          title="分栏"
+          aria-pressed={splitToggle.pressed}
+          onClick={splitToggle.onToggle}
+        >
           <Icon name="split" />
-          分栏
         </button>
       )}
       <button

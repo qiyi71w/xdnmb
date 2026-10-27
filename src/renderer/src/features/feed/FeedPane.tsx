@@ -3,6 +3,7 @@ import type { ForumId, ThreadSummary } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import { Content, contentText } from '../../components/Content'
 import { Icon } from '../../components/Icon'
+import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { FailureNotice, PartialNotice, SourceNotice } from '../../components/Notices'
 import { formatPageList } from '../../lib/format'
 import { useNearEnd } from '../../lib/useNearEnd'
@@ -80,6 +81,7 @@ export function FeedPane({
   const [saved] = useState(() => (remembered === null ? (registry?.savedLists.get(entryKey) ?? null) : null))
   const restorePages = saved === null ? null : Math.min(saved.pages, info.maxPage ?? saved.pages)
   const { state, hasMore, canAppend, loadMore, refresh, retry } = useFeed(info.ref, info.maxPage, remembered?.state ?? null, restorePages)
+  const refreshTurn = useRefreshTurn(state.activity === 'refresh')
   const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtering = contentFilterCount(filters) > 0
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -219,8 +221,17 @@ export function FeedPane({
               <span className="list-name">{listHost?.boardTitle != null ? listHost.boardTitle(info.name) : info.name}</span>
             </h2>
             {compose !== null && compose.entry}
-            <button type="button" className="icon-btn" onClick={refreshList} aria-label="刷新列表" title="刷新列表">
-              <Icon name="refresh" />
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => {
+                if (!refreshTurn.turning) refreshList()
+              }}
+              aria-label="刷新列表"
+              title="刷新列表"
+              aria-busy={refreshTurn.turning || undefined}
+            >
+              <RefreshIcon turn={refreshTurn} />
             </button>
           </div>
           {compose !== null && (

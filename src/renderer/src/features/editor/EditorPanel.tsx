@@ -4,6 +4,7 @@ import { sameTarget, type IdentityChoice, type PostFields, type PostTarget } fro
 import type { CredentialId } from '../../../../shared/identity'
 import { isSendShortcut, saveAriaShortcut, sendAriaShortcut, sendShortcutLabel, shortcutLabel } from '../../app/shortcuts'
 import { Icon, Spinner } from '../../components/Icon'
+import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { usePopover } from '../../lib/usePopover'
 import { formatBytes } from '../image/imageView'
@@ -100,6 +101,7 @@ export function EditorPanel({
   const publication = editor.publication
   /** A send holds this editor: its content, target and identity are fixed. */
   const locked = publication !== null
+  const recheckTurn = useRefreshTurn(publication?.phase === 'uncertain' && publication.checking)
 
   // Focus the text once a requested panel is on screen (opened, continued, retargeted).
   const key = focusKey(tabId, editor.target)
@@ -329,11 +331,13 @@ export function EditorPanel({
         <button
           type="button"
           className="btn btn-primary"
-          aria-busy={publication.checking || undefined}
+          aria-busy={recheckTurn.turning || undefined}
           aria-disabled={publication.checking || undefined}
-          onClick={() => void store.recheck(editorId)}
+          onClick={() => {
+            if (!recheckTurn.turning) void store.recheck(editorId)
+          }}
         >
-          <Icon name="refresh" />
+          <RefreshIcon turn={recheckTurn} />
           {publication.checking ? '正在核对…' : '重新核对'}
         </button>
       ) : (
