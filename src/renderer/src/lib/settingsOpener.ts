@@ -17,6 +17,7 @@ export type SettingsSectionId =
   | 'window'
   | 'cache'
   | 'blocks'
+  | 'cookieColors'
 
 /**
  * Opens settings from anywhere below the app shell, at the section the entry is about (the top

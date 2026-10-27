@@ -1,4 +1,5 @@
 import type { BlockKind, LocalBlock } from '../../shared/blocks'
+import type { CookieColor, CookieColorName } from '../../shared/cookieColors'
 import type { StorageStatus } from '../../shared/api'
 import type {
   BoardDirectory,
@@ -102,6 +103,9 @@ export interface ReadingStore {
   loadSettings(): Promise<AppSettings>
   listBlocks(): Promise<LocalBlock[]>
   setBlock(kind: BlockKind, value: string, blocked: boolean, at: string): Promise<void>
+  /** Every 饼干 ID with a color, oldest first; rows with a color name this version does not know are left out. */
+  listCookieColors(): Promise<CookieColor[]>
+  setCookieColor(cookieId: string, color: CookieColorName | null, at: string): Promise<void>
   saveSettings(settings: AppSettings): Promise<void>
 
   /** Image location of a stored post; null when the post is not stored or has no image. */
@@ -138,13 +142,17 @@ export interface IdentityStore {
   listCredentials(): Promise<CredentialSummary[]>
   loadCredentialCiphertexts(): Promise<Array<{ id: CredentialId; ciphertext: Uint8Array }>>
   loadCredentialCiphertext(id: CredentialId): Promise<Uint8Array | null>
+  /** Also gives the cookie's 饼干 ID the default color if that ID was never given it automatically. */
   insertCredential(input: { name: string; cookieId: string; source: CredentialSource; importedAt: string; ciphertext: Uint8Array }): Promise<CredentialSummary>
   /** False when the credential does not exist. */
   renameCredential(id: CredentialId, name: string): Promise<boolean>
-  /** Stores the 饼干 ID only while it is unknown. False (and no change) when absent or already known. */
-  fillCredentialCookieId(id: CredentialId, cookieId: string): Promise<boolean>
-  /** Replaces the 饼干 ID. False when the credential does not exist. */
-  setCredentialCookieId(id: CredentialId, cookieId: string): Promise<boolean>
+  /**
+   * Stores the 饼干 ID only while it is unknown. False (and no change) when absent or already known.
+   * A stored ID gets the default color as on import.
+   */
+  fillCredentialCookieId(id: CredentialId, cookieId: string, at: string): Promise<boolean>
+  /** Replaces the 饼干 ID; it gets the default color as on import. False when the credential does not exist. */
+  setCredentialCookieId(id: CredentialId, cookieId: string, at: string): Promise<boolean>
   /** Deletes the ciphertext; role references are kept. False when it did not exist. */
   deleteCredential(id: CredentialId): Promise<boolean>
   /** Stores the given order. False (and no change) unless `ids` are exactly the stored credentials. */

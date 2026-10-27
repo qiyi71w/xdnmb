@@ -326,6 +326,16 @@ ul {
   color: var(--ink-2);
 }
 
+/* 饼干颜色 (`--cookie-color` names one of the `--cookie-*` tokens) and the admin's danger color are
+   kept in every state: selected rows, highlighted posts. An admin's ID is never colored. */
+.user-hash.is-colored {
+  color: var(--cookie-color);
+}
+
+.user-hash.is-admin {
+  color: var(--danger-ink);
+}
+
 .skeleton-line {
   display: block;
   height: 10px;

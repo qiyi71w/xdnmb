@@ -212,15 +212,9 @@
 
 .thread-row.is-selected .row-name,
 .thread-row.is-selected .row-time,
-.thread-row.is-selected .user-hash,
+.thread-row.is-selected .user-hash:not(.is-colored, .is-admin),
 .thread-row.is-selected .row-excerpt {
   color: var(--ink);
-}
-
-/* An admin's cookie ID is the only marker of an admin (no tag); it stays red when selected. */
-.user-hash.is-admin,
-.thread-row.is-selected .user-hash.is-admin {
-  color: var(--danger-ink);
 }
 
 .thread-row.is-selected::before,

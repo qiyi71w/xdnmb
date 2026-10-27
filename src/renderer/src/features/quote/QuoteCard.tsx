@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { ReadError } from '../../../../shared/api'
 import { Content } from '../../components/Content'
+import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
 import { Loading, SourceNotice } from '../../components/Notices'
 import { describeReadError, meaningfulName } from '../../lib/format'
@@ -152,7 +153,7 @@ export function QuoteCard({
           </Status>
         )}
         <div className="quote-card-meta">
-          {post.userHash !== null && <span className={post.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{post.userHash}</span>}
+          {post.userHash !== null && <CookieId cookieId={post.userHash} admin={post.isAdmin === true} />}
           {name !== null && <span className="post-name">{name}</span>}
           {post.createdAt !== null && <span>{formatForumTime(post.createdAt)}</span>}
           {post.image !== null && (

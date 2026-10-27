@@ -122,3 +122,14 @@ export const CREDENTIAL_NAME_MAX_LENGTH = 40
 export const COOKIE_ID_MAX_LENGTH = 32
 /** Maximum pasted input length accepted by either import entry. */
 export const IMPORT_INPUT_MAX_LENGTH = 8192
+// A 饼干 ID is one token as shown beside posts: no whitespace (any Unicode space) or controls.
+const COOKIE_ID_FORBIDDEN = /[\s\u0000-\u001F\u007F-\u009F]/u
+
+/** A 饼干 ID compared verbatim (after trimming) with the public IDs shown beside posts. */
+export function validateCookieId(input: string): { ok: true; cookieId: string } | { ok: false; error: CookieIdError } {
+  const cookieId = input.trim()
+  if (cookieId === '') return { ok: false, error: 'empty' }
+  if ([...cookieId].length > COOKIE_ID_MAX_LENGTH) return { ok: false, error: 'too-long' }
+  if (COOKIE_ID_FORBIDDEN.test(cookieId)) return { ok: false, error: 'invalid' }
+  return { ok: true, cookieId }
+}

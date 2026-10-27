@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSettingsService, type SettingsStore } from '../src/main/appearance'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { applySettingsPatch, DEFAULT_SETTINGS, nextZoomFactor, resolveAppearance, settingsFromStored, type AppSettings } from '../src/shared/settings'
+import { COOKIE_COLORS } from '../src/shared/cookieColors'
 import {
+  cookieColorToken,
+  TEXT_CONTRAST_PAIRS,
   BUILTIN_PALETTES,
   contrastRatio,
   customPalette,
@@ -67,6 +70,18 @@ describe('contrast', () => {
   it('keeps every ordinary text color of both built-in themes at 4.5:1 or more', () => {
     expect(paletteContrastFailures(BUILTIN_PALETTES.light)).toEqual([])
     expect(paletteContrastFailures(BUILTIN_PALETTES.dark)).toEqual([])
+  })
+
+  it('checks every 饼干标色 on the surfaces a 饼干 ID is drawn on, selected rows included, for built-in and custom themes', () => {
+    for (const name of COOKIE_COLORS) {
+      const surfaces = TEXT_CONTRAST_PAIRS.find((pair) => pair.foreground === cookieColorToken(name))?.surfaces ?? []
+      // Quote cards (translucent glass) open over the reading paper and over the list pane alike.
+      expect(surfaces).toEqual(expect.arrayContaining([['paper'], ['pane'], ['pane', 'selected'], ['paper', 'selected'], ['paper', 'glass-strong'], ['pane', 'glass-strong']]))
+    }
+    // A custom theme's 饼干标色 are its own, pulled toward the text color only as far as contrast needs.
+    const palette = customPalette(sepia, 'light')
+    expect(paletteContrastFailures(palette)).toEqual([])
+    expect(new Set(COOKIE_COLORS.map((name) => palette[cookieColorToken(name)])).size).toBe(COOKIE_COLORS.length)
   })
 
   it('checks translucent glass as composited over the window, not the solid surface alone', () => {

@@ -7,6 +7,7 @@ import type { ImageView } from '../image/imageView'
 import { PostThumbnail } from '../image/PostThumbnail'
 import { QuoteRef } from '../quote/QuoteRef'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
+import { CookieId } from '../../components/CookieId'
 import { setBlocked } from './useBlocks'
 import { useCover } from '../../lib/appCovered'
 
@@ -74,7 +75,7 @@ export function PostView({
       onKeyDown={openMenu === undefined ? undefined : (event) => { if (isContextMenuKey(event)) openMenu(event) }}>
       <header className="post-head">
         <div className="post-meta">
-          {post.userHash !== null && <span className={post.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{post.userHash}</span>}
+          {post.userHash !== null && <CookieId cookieId={post.userHash} admin={post.isAdmin === true} />}
           {isPo && <span className="tag tag-po">PO</span>}
           {post.isSage === true && <span className="tag tag-sage">SAGE</span>}
           {post.createdAt !== null && <span className="post-time">{formatForumTime(post.createdAt)}</span>}

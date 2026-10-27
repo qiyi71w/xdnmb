@@ -417,7 +417,7 @@ it('asks about the PO cookie only when the stored main post 饼干 ID matches an
   await sent(await s.service.submit(reply(s.b, '902')))
   await sent(await s.service.submit(reply(s.b, '903')))
   // An ID filled in or changed in settings applies to the next send; an unknown ID matches nothing.
-  s.db.setCredentialCookieId(s.a, 'Stranger')
+  s.db.setCredentialCookieId(s.a, 'Stranger', new Date().toISOString())
   expect(await s.service.submit(reply(s.b, '901'))).toMatchObject({ kind: 'prompt', prompt: { poName: 'A' } })
   s.service.releasePrompts()
   const raw = new Database(join(s.dir, 'db.sqlite'))
@@ -605,7 +605,7 @@ it('keeps the 饼干 ID a send was made with after that cookie’s ID changes or
   const s = await setup()
   const sent = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: payload(s.a) }))
   expect(await finished(s.service, sent.id)).toMatchObject({ state: 'confirmed', cookieId: 'IdA' })
-  s.db.setCredentialCookieId(s.a, 'Changed')
+  s.db.setCredentialCookieId(s.a, 'Changed', new Date().toISOString())
   expect(s.db.getPublication(sent.id)).toMatchObject({ cookieId: 'IdA' })
   s.db.deleteCredential(s.a)
   await s.restart()

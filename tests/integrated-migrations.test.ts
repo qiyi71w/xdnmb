@@ -459,8 +459,8 @@ describe('schema v15: 饼干 IDs replace the own-post record', () => {
     expect(db.loadRoleSelections()['web-sync']).toEqual({ state: 'selected', credentialId: '7' })
     expect(db.reminderCookieIds()).toEqual([])
     expect(db.listPublications().find((item) => item.requestId === 'confirmed-send')).toMatchObject({ state: 'confirmed', postId: '700', threadId: '700' })
-    expect(db.fillCredentialCookieId('7', 'Filled1')).toBe(true)
-    expect(db.fillCredentialCookieId('7', 'Other22')).toBe(false)
+    expect(db.fillCredentialCookieId('7', 'Filled1', later)).toBe(true)
+    expect(db.fillCredentialCookieId('7', 'Other22', later)).toBe(false)
     expect(db.listCredentials()[0]).toMatchObject({ name: '旧同步饼干', cookieId: 'Filled1' })
   })
 
@@ -741,5 +741,53 @@ describe('schema v19: sends keep their 饼干 ID and may fail as unverified', ()
     db.close()
     expect(readFileSync(path)).toEqual(original)
     expect(open(path).getPublication('101')).toMatchObject({ state: 'confirmed', postId: '700' })
+  })
+})
+
+describe('schema v20: 饼干标色', () => {
+  /** A v19 database with several imported cookies: two share a 饼干 ID, one ID is unknown (the predecessor's). */
+  function v19(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 19)).close()
+    const raw = new Database(path)
+    try {
+      expect(raw.pragma('user_version', { simple: true })).toBe(19)
+      const insert = raw.prepare(`INSERT INTO credentials (name, cookie_id, source, imported_at, ciphertext, position)
+        VALUES (?, ?, 'export', ?, ?, (SELECT MAX(position) + 1 FROM credentials))`)
+      insert.run('甲', 'MineA', later, Buffer.from('synthetic-a'))
+      insert.run('乙', 'mineb', at, Buffer.from('synthetic-b'))
+      insert.run('甲的副本', 'MineA', at, Buffer.from('synthetic-c'))
+      expect(raw.prepare('SELECT count(*) AS n FROM credentials WHERE cookie_id IS NULL').get()).toEqual({ n: 1 })
+    } finally { raw.close() }
+    return path
+  }
+
+  it('gives each known imported 饼干 ID the default color once, dated by its first import, and none to unknown IDs', () => {
+    const db = open(v19())
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(db.listCookieColors()).toEqual([
+      { cookieId: 'MineA', color: 'blue', createdAt: at },
+      { cookieId: 'mineb', color: 'blue', createdAt: at }
+    ])
+    // Upgraded IDs count as colored once: clearing is not undone by a later ID change to the same ID.
+    db.setCookieColor('MineA', null, later)
+    expect(db.setCredentialCookieId(db.listCredentials().find((item) => item.name === '甲')!.id, 'MineA', later)).toBe(true)
+    expect(db.listCookieColors().map((item) => item.cookieId)).toEqual(['mineb'])
+    // The predecessor's cookie gets its color when its ID becomes known.
+    expect(db.fillCredentialCookieId('7', 'Old7', later)).toBe(true)
+    expect(db.listCookieColors()).toContainEqual({ cookieId: 'Old7', color: 'blue', createdAt: later })
+  })
+
+  it('rolls back an interrupted upgrade without changing the v19 file', () => {
+    const path = v19()
+    const original = readFileSync(path)
+    const db = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 19), { version: 20, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 20)!.up(connection)
+      throw new Error('injected cookie color upgrade failure')
+    } }])
+    expect(db.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    db.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(open(path).listCookieColors()).toHaveLength(2)
   })
 })

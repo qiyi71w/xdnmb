@@ -2,7 +2,8 @@ import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeE
 import { IpcChannel, type AppStatus, type DirectoryStrategy, type ReadOutcome, type LocateHint } from '../shared/api'
 import type { FeedRef, ReadingMode } from '../shared/forum'
 import type { ImageFormat, ImageKind } from '../shared/images'
-import { IDENTITY_ROLES, type CredentialId, type IdentityRole } from '../shared/identity'
+import { IDENTITY_ROLES, validateCookieId, type CredentialId, type IdentityRole } from '../shared/identity'
+import { isCookieColorName } from '../shared/cookieColors'
 import {
   MAX_DRAFT_CONTENT_LENGTH, MAX_DRAFT_FIELD_LENGTH, type DraftSaveInput, type PostFields, type PostTarget
 } from '../shared/drafts'
@@ -336,6 +337,17 @@ export function registerIpc({
     const value = input.kind === 'post' ? forumId(input.value) : input.value
     const { kind, blocked } = input
     return { saved: await attempt(() => store.setBlock(kind, value, blocked, new Date().toISOString())) }
+  })
+  handle(IpcChannel.listCookieColors, async () => store.listCookieColors())
+  handle(IpcChannel.setCookieColor, async (_event, raw) => {
+    const input = searchRecord(raw, ['cookieId', 'color'])
+    const { cookieId, color } = input
+    if (typeof cookieId !== 'string') throw new InvalidRequestError()
+    const checked = validateCookieId(cookieId)
+    // Matched verbatim, so the ID must already be in the form stored: trimmed and within the 饼干 ID rules.
+    if (!checked.ok || checked.cookieId !== cookieId) throw new InvalidRequestError()
+    if (color !== null && !isCookieColorName(color)) throw new InvalidRequestError()
+    return { saved: await attempt(() => store.setCookieColor(cookieId, color, new Date().toISOString())) }
   })
 
   handle(IpcChannel.searchStart, async (event, raw) => {

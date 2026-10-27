@@ -18,6 +18,7 @@ import {
 import type { Post, PostId, ThreadId } from '../../../../shared/forum'
 import { isSent, isUnsettled, type PublicationAttempt } from '../../../../shared/publication'
 import { ContextMenu, contextMenuPoint, type ContextMenuPoint } from '../../components/ContextMenu'
+import { CookieId } from '../../components/CookieId'
 import { Icon, Spinner } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
 import { formatRecordTime } from '../../lib/time'
@@ -334,7 +335,7 @@ function RecordSummary({ attempt, metaEnd }: { attempt: PublicationAttempt; meta
     <span className="row-text">
       <span className="row-byline">
         <span className="row-author">
-          {cookie?.kind === 'id' && <span className="user-hash">{cookie.text}</span>}
+          {cookie?.kind === 'id' && <CookieId cookieId={cookie.text} />}
           {cookie?.kind === 'fallback' && <span className="row-cookie-fallback">{cookie.text}</span>}
         </span>
         <span className="row-time">{formatRecordTime(attempt.createdAt)}</span>

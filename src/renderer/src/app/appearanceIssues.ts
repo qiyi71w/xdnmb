@@ -1,5 +1,7 @@
 // Plain-Chinese descriptions of appearance issues (theme editor, theme import, refused settings).
-import { THEME_LIMITS, type AppearanceIssue, type ColorToken } from '../../../shared/theme'
+import { COOKIE_COLORS } from '../../../shared/cookieColors'
+import { THEME_LIMITS, cookieColorToken, type AppearanceIssue, type ColorToken } from '../../../shared/theme'
+import { COOKIE_COLOR_LABELS } from '../features/cookieColors/cookieColorNames'
 
 /** Text colors as the user knows them. Custom themes draw both secondary tokens with 次要文字. */
 const TEXT_LABELS: Partial<Record<ColorToken, string>> = {
@@ -11,7 +13,8 @@ const TEXT_LABELS: Partial<Record<ColorToken, string>> = {
   greentext: '绿字引用',
   'quote-ref-ink': '引用编号',
   'warn-ink': '提醒文字',
-  'danger-ink': '错误提示文字'
+  'danger-ink': '错误提示文字',
+  ...Object.fromEntries(COOKIE_COLORS.map((name) => [cookieColorToken(name), `饼干颜色“${COOKIE_COLOR_LABELS[name]}”`]))
 }
 
 const SURFACE_LABELS: Partial<Record<ColorToken, string>> = {

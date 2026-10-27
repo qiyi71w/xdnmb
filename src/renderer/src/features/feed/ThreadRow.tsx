@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { ThreadId, ThreadSummary } from '../../../../shared/forum'
 import { Content } from '../../components/Content'
+import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
@@ -78,7 +79,7 @@ export function ThreadRow({
           {head !== null && (
             <span className="row-byline">
               <span className="row-author">
-                {head.userHash !== null && <span className={head.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{head.userHash}</span>}
+                {head.userHash !== null && <CookieId cookieId={head.userHash} admin={head.isAdmin === true} />}
                 {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
               </span>
               {head.createdAt !== null && <span className="row-time">{formatForumTime(head.createdAt)}</span>}

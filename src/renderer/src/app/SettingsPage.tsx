@@ -26,6 +26,7 @@ import type { SettingsSectionId } from '../lib/settingsOpener'
 import { usePopover } from '../lib/usePopover'
 import { CacheSection } from '../features/content/CacheSection'
 import { CookieSection } from '../features/identity/CookieSection'
+import { CookieColorsSection } from '../features/cookieColors/CookieColorsSection'
 import type { IdentitiesState } from '../features/identity/useIdentities'
 import { SubscriptionSection } from '../features/subscriptions/SubscriptionSection'
 import type { SubscriptionsState } from '../features/subscriptions/useSubscriptions'
@@ -56,7 +57,8 @@ const CATEGORIES: readonly { id: string; title: string; sections: readonly { id:
       { id: 'boards', title: '版块管理' },
       { id: 'tabs', title: '标签' },
       { id: 'reminders', title: '提醒' },
-      { id: 'blocks', title: '屏蔽' }
+      { id: 'blocks', title: '屏蔽' },
+      { id: 'cookieColors', title: '饼干颜色' }
     ]
   },
   {
@@ -406,6 +408,8 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
       return <ReminderSection settings={settings} write={write} />
     case 'blocks':
       return <BlocksSection />
+    case 'cookieColors':
+      return <CookieColorsSection />
     case 'cookies':
       return <CookieSection identities={identities} />
     case 'subscriptions':

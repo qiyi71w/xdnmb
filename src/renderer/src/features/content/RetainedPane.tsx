@@ -5,6 +5,7 @@
 import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import type { ForumId, Post, ThreadId } from '../../../../shared/forum'
 import { ContextMenu, contextMenuPoint, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
+import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
 import { formatForumTime, formatRecordTime } from '../../lib/time'
@@ -307,7 +308,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
                     <span className="row-text">
                       {head !== null && <span className="row-byline">
                         <span className="row-author">
-                          {head.userHash !== null && <span className={head.isAdmin === true ? 'user-hash is-admin' : 'user-hash'}>{head.userHash}</span>}
+                          {head.userHash !== null && <CookieId cookieId={head.userHash} admin={head.isAdmin === true} />}
                           {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
                         </span>
                         {head.createdAt !== null && <span className="row-time">{formatForumTime(head.createdAt)}</span>}

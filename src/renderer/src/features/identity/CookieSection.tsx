@@ -12,6 +12,7 @@ import {
   type IdentityOverview,
   type IdentityRole
 } from '../../../../shared/identity'
+import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
 import { FailureNotice } from '../../components/Notices'
 import { formatForumTime, formatRecordTime } from '../../lib/time'
@@ -38,6 +39,7 @@ import {
   type ImportEntry
 } from './identityText'
 import type { IdentitiesState } from './useIdentities'
+import { reloadCookieColors } from '../cookieColors/cookieColorsStore'
 import './identity.css'
 
 type Tone = 'success' | 'error'
@@ -88,6 +90,11 @@ export function CookieSection({ identities }: { identities: IdentitiesState }) {
 function CookieSettings({ overview, onChanged }: { overview: IdentityOverview; onChanged: () => Promise<void> }) {
   const protectionOk = overview.protection === 'available'
   const importBlocked = !protectionOk || !overview.writable
+  // An import may give the new 饼干 ID the default 饼干颜色 (main process): show it at once.
+  const onImported = useCallback(async () => {
+    void reloadCookieColors()
+    await onChanged()
+  }, [onChanged])
 
   return (
     <>
@@ -107,9 +114,9 @@ function CookieSettings({ overview, onChanged }: { overview: IdentityOverview; o
 
       <CredentialList overview={overview} onChanged={onChanged} />
 
-      <ImportArea disabled={importBlocked} onImported={onChanged} />
+      <ImportArea disabled={importBlocked} onImported={onImported} />
 
-      <AccountImport onImported={onChanged} />
+      <AccountImport onImported={onImported} />
 
       <div className="settings-group">
         <h4 className="settings-group-title">用途</h4>
@@ -447,6 +454,7 @@ function CredentialItem({
       const result = await window.xidao.identities.setCookieId({ credentialId: credential.id, cookieId })
       if (result.ok) {
         onAnnounce({ tone: 'success', text: `「${credential.name}」的饼干 ID 已${credential.cookieId === null ? '填写' : '改'}为 ${cookieId}` })
+        void reloadCookieColors()
         await onChanged()
         leave(cookieIdButton)
       } else if (result.reason === 'cookie-id') {
@@ -581,7 +589,9 @@ function CredentialItem({
               )}
             </p>
             <p className="credential-meta">
-              <span className="credential-cookie-id">{cookieIdLabel(credential.cookieId)}</span>
+              <span className="credential-cookie-id">
+                {credential.cookieId === null ? cookieIdLabel(null) : <>饼干 ID <CookieId cookieId={credential.cookieId} /></>}
+              </span>
               {' · '}
               {SOURCE_LABEL[credential.source]} · 导入于 {formatRecordTime(credential.importedAt)}
             </p>

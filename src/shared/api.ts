@@ -1,4 +1,5 @@
 import type { BlocksApi } from './blocks'
+import type { CookieColorsApi } from './cookieColors'
 import type { AccountApi } from './account'
 import type { ContentApi } from './content'
 import type { BoardDirectory, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
@@ -195,6 +196,7 @@ export type ThemeExportResult = { status: 'exported' } | { status: 'cancelled' }
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
   blocks: BlocksApi
+  cookieColors: CookieColorsApi
   content: ContentApi
   subscriptions: SubscriptionsApi
   search: SearchApi
@@ -365,6 +367,8 @@ export interface XidaoApi {
 export const IpcChannel = {
   listBlocks: 'blocks:list',
   setBlock: 'blocks:set',
+  listCookieColors: 'cookie-colors:list',
+  setCookieColor: 'cookie-colors:set',
   searchStart: 'search:start',
   searchNext: 'search:next',
   searchCancel: 'search:cancel',

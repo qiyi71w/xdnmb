@@ -1,0 +1,82 @@
+/* 设置 › 饼干颜色. A row keeps the ID first; its swatches and 删除 wrap below it when narrow. */
+.cookie-color-row {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+.cookie-color-row .shell-manage-label {
+  flex: 1 1 8em;
+}
+
+.cookie-color-row .shell-manage-actions {
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.cookie-color-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.cookie-color-add-input {
+  flex: 1 1 10em;
+  width: auto;
+  max-width: 16rem;
+}
+
+/* The eight colors: 24px targets around an 18px dot. The chosen one has a ring and a check mark,
+   not color alone; keyboard focus is the accent outline outside the ring. */
+.cookie-swatches {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.cookie-swatch {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+}
+
+.cookie-swatch-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.cookie-swatch-dot {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--swatch);
+  color: var(--paper);
+  pointer-events: none;
+}
+
+.cookie-swatch:hover .cookie-swatch-dot {
+  box-shadow: 0 0 0 2px var(--paper), 0 0 0 3px var(--line);
+}
+
+.cookie-swatch-input:checked + .cookie-swatch-dot {
+  box-shadow: 0 0 0 2px var(--paper), 0 0 0 3.5px var(--swatch);
+}
+
+.cookie-swatch-input:focus-visible {
+  outline: none;
+}
+
+.cookie-swatch-input:focus-visible + .cookie-swatch-dot {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}

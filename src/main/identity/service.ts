@@ -4,7 +4,8 @@ import type {
 } from '../../shared/identity'
 import { ForumReadError } from '../forum/contract'
 import { StorageWriteRefusedError, type IdentityStore } from '../storage/contract'
-import { parseExportPayload, parseRawUserhash, validateCookieId, validateName, type ParsedCredential } from './parse'
+import { validateCookieId } from '../../shared/identity'
+import { parseExportPayload, parseRawUserhash, validateName, type ParsedCredential } from './parse'
 import type { SecretProtector } from './protection'
 
 /** Stored credentials and role selections cannot be read; distinct from a stored `none`. */
@@ -101,7 +102,7 @@ export function createIdentityService(deps: {
             let filled = false
             if (summary.cookieId === null) {
               try {
-                filled = await store.fillCredentialCookieId(summary.id, cookieId)
+                filled = await store.fillCredentialCookieId(summary.id, cookieId, now().toISOString())
               } catch (error) {
                 if (error instanceof StorageWriteRefusedError) return { ok: false, failure: { reason: 'storage' } }
                 throw error
@@ -158,7 +159,7 @@ export function createIdentityService(deps: {
       if (!checked.ok) return Promise.resolve({ ok: false, reason: 'cookie-id', cookieIdError: checked.error })
       return serialized(async () => {
         try {
-          return (await store.setCredentialCookieId(id, checked.cookieId)) ? { ok: true } : { ok: false, reason: 'not-found' }
+          return (await store.setCredentialCookieId(id, checked.cookieId, now().toISOString())) ? { ok: true } : { ok: false, reason: 'not-found' }
         } catch (error) {
           return storageFailure(error)
         }

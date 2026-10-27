@@ -658,6 +658,23 @@ export const MIGRATIONS: readonly Migration[] = [
         db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('publication_attempts', ?)").run(sequence.seq)
       }
     }
+  },
+  {
+    // 饼干标色: a color name per 饼干 ID (exact text), and the IDs that were ever given the default
+    // color automatically, so that a cleared or changed color is never given back. Imported cookies
+    // whose 饼干 ID is known get the default color ('blue') once, dated by their earliest import.
+    version: 20,
+    up(db) {
+      db.exec(`CREATE TABLE cookie_colors (
+          cookie_id TEXT PRIMARY KEY,
+          color TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE cookie_color_auto (cookie_id TEXT PRIMARY KEY);
+        INSERT INTO cookie_colors (cookie_id, color, created_at)
+          SELECT cookie_id, 'blue', MIN(imported_at) FROM credentials WHERE cookie_id IS NOT NULL GROUP BY cookie_id;
+        INSERT INTO cookie_color_auto (cookie_id) SELECT cookie_id FROM cookie_colors;`)
+    }
   }
 ]
 

@@ -5,6 +5,8 @@
 // what is drawn. Theme data never carries CSS text or scripts: colors are #rrggbb, font families
 // are quoted as CSS strings, and numeric parameters have explicit bounds.
 
+import { COOKIE_COLORS, type CookieColorName } from './cookieColors'
+
 /** Color tokens used by the stylesheets as `var(--<token>)`. */
 export const COLOR_TOKENS = [
   'window',
@@ -35,10 +37,24 @@ export const COLOR_TOKENS = [
   'danger-ink',
   'danger-bg',
   'info-bg',
-  'skeleton'
+  'skeleton',
+  // 饼干标色: one text color per palette name (`cookie-<name>`, see cookieColors.ts).
+  'cookie-blue',
+  'cookie-teal',
+  'cookie-green',
+  'cookie-olive',
+  'cookie-amber',
+  'cookie-brown',
+  'cookie-indigo',
+  'cookie-violet'
 ] as const
 
 export type ColorToken = (typeof COLOR_TOKENS)[number]
+
+/** The color token of a 饼干标色 name. */
+export function cookieColorToken(name: CookieColorName): ColorToken {
+  return `cookie-${name}`
+}
 
 /** Palette: CSS color per token plus the two shadow values that depend on the scheme. */
 export type Palette = Record<ColorToken, string> & { 'shadow-nav': string; 'shadow-bar': string }
@@ -76,6 +92,15 @@ export const BUILTIN_PALETTES: Record<SchemeBase, Palette> = {
     'danger-bg': 'oklch(0.97 0.018 27)',
     'info-bg': 'oklch(0.965 0.015 225)',
     skeleton: 'oklch(0.45 0.02 240 / 0.08)',
+    // 饼干标色: muted, mid-dark hues that keep 4.5:1 on selected rows and the highlighted post.
+    'cookie-blue': 'oklch(0.5 0.13 248)',
+    'cookie-teal': 'oklch(0.48 0.082 190)',
+    'cookie-green': 'oklch(0.47 0.12 150)',
+    'cookie-olive': 'oklch(0.49 0.1 118)',
+    'cookie-amber': 'oklch(0.5 0.105 82)',
+    'cookie-brown': 'oklch(0.45 0.06 62)',
+    'cookie-indigo': 'oklch(0.45 0.17 285)',
+    'cookie-violet': 'oklch(0.49 0.16 328)',
     'shadow-nav': '0 18px 40px -22px oklch(0.3 0.05 230 / 0.35), 0 1px 2px oklch(0.3 0.03 230 / 0.06)',
     'shadow-bar': '0 8px 20px -16px oklch(0.25 0.03 240 / 0.35)'
   },
@@ -109,6 +134,14 @@ export const BUILTIN_PALETTES: Record<SchemeBase, Palette> = {
     'danger-bg': 'oklch(0.27 0.04 27)',
     'info-bg': 'oklch(0.25 0.02 225)',
     skeleton: 'oklch(0.9 0.01 240 / 0.08)',
+    'cookie-blue': 'oklch(0.78 0.1 248)',
+    'cookie-teal': 'oklch(0.77 0.09 188)',
+    'cookie-green': 'oklch(0.77 0.13 150)',
+    'cookie-olive': 'oklch(0.79 0.11 118)',
+    'cookie-amber': 'oklch(0.82 0.12 82)',
+    'cookie-brown': 'oklch(0.73 0.055 62)',
+    'cookie-indigo': 'oklch(0.72 0.14 285)',
+    'cookie-violet': 'oklch(0.76 0.13 328)',
     'shadow-nav': '0 18px 40px -20px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.05)',
     'shadow-bar': '0 8px 20px -14px oklch(0 0 0 / 0.6)'
   }
@@ -227,6 +260,25 @@ const GLASS_BACKDROPS: Surface[] = [['window', 'glass'], ['window-tint-a', 'glas
 /** The top bar (tabs, history and toggle buttons) is transparent: its text sits on the window and its tints. */
 const WINDOW_BACKDROPS: Surface[] = [['window'], ['window-tint-a'], ['window-tint-b'], ['window', 'hover'], ['window-tint-a', 'hover']]
 
+/**
+ * Where a 饼干 ID is drawn: post headers on the paper (and the highlighted post's accent tint),
+ * thread rows of every list on the pane or the paper (hovered, selected), the history pages and
+ * settings rows on the paper, and quote cards' frosted sheet over the reading paper, the list pane
+ * (rules and timeline notes in lists have quotes too) or the window.
+ */
+const COOKIE_ID_SURFACES: Surface[] = [
+  ['paper'],
+  ['pane'],
+  ['paper', 'hover'],
+  ['pane', 'hover'],
+  ['paper', 'selected'],
+  ['pane', 'selected'],
+  ['paper', 'accent-soft'],
+  ['paper', 'glass-strong'],
+  ['pane', 'glass-strong'],
+  ['window', 'glass-strong']
+]
+
 /** Ordinary text tokens and every surface the stylesheets draw them on. */
 export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: readonly Surface[] }[] = [
   ...(['ink', 'ink-2', 'ink-3'] as const).map((foreground) => ({
@@ -262,7 +314,8 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
   { foreground: 'greentext', surfaces: [['paper']] },
   { foreground: 'quote-ref-ink', surfaces: [['paper', 'quote-ref-bg']] },
   { foreground: 'warn-ink', surfaces: [['warn-bg'], ['paper'], ['pane'], ['window', 'glass-strong']] },
-  { foreground: 'danger-ink', surfaces: [['danger-bg'], ['paper']] }
+  { foreground: 'danger-ink', surfaces: [['danger-bg'], ['paper']] },
+  ...COOKIE_COLORS.map((name) => ({ foreground: cookieColorToken(name), surfaces: COOKIE_ID_SURFACES }))
 ]
 
 export interface ContrastFailure {
@@ -346,6 +399,8 @@ export interface CustomTheme {
 }
 
 const STATUS_TOKENS = ['greentext', 'quote-ref-ink', 'warn-ink', 'danger-ink'] as const
+/** App-owned text colors of a custom theme: status colors and the 饼干标色 palette. */
+const DERIVED_TEXT_TOKENS: readonly ColorToken[] = [...STATUS_TOKENS, ...COOKIE_COLORS.map(cookieColorToken)]
 
 function must(text: string): Rgba {
   const color = parseColor(text)
@@ -355,8 +410,8 @@ function must(text: string): Rgba {
 
 /**
  * Palette of a custom theme. The five user colors are used as given and never adjusted to pass the
- * checks. Status text colors are the app's own: each starts from the base scheme's hue and is pulled
- * toward the user's text color only as far as needed for contrast.
+ * checks. Status and 饼干标色 text colors are the app's own: each starts from the base scheme's hue
+ * and is pulled toward the user's text color only as far as needed for contrast.
  */
 export function customPalette(theme: CustomTheme, base: SchemeBase): Palette {
   const colors = theme.colors[base]
@@ -398,11 +453,19 @@ export function customPalette(theme: CustomTheme, base: SchemeBase): Palette {
     'danger-bg': toHex(mix(seed('danger-ink'), surface, 0.08)),
     'info-bg': toHex(mix(accent, surface, 0.07)),
     skeleton: rgbaCss(text, 0.08),
+    'cookie-blue': toHex(text),
+    'cookie-teal': toHex(text),
+    'cookie-green': toHex(text),
+    'cookie-olive': toHex(text),
+    'cookie-amber': toHex(text),
+    'cookie-brown': toHex(text),
+    'cookie-indigo': toHex(text),
+    'cookie-violet': toHex(text),
     'shadow-nav': builtin['shadow-nav'],
     'shadow-bar': builtin['shadow-bar']
   }
 
-  for (const token of STATUS_TOKENS) {
+  for (const token of DERIVED_TEXT_TOKENS) {
     const surfaces = TEXT_CONTRAST_PAIRS.find((pair) => pair.foreground === token)!.surfaces
     // From the pure status hue (step 0) toward the text color (step 10); the first legible step wins.
     for (let step = 0; step <= 10; step++) {

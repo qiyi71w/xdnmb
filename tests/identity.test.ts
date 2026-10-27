@@ -60,8 +60,8 @@ function asyncStore(db: ReadingDatabase): IdentityStore {
     loadCredentialCiphertext: async (id) => db.loadCredentialCiphertext(id),
     insertCredential: async (input) => db.insertCredential(input),
     renameCredential: async (id, name) => db.renameCredential(id, name),
-    fillCredentialCookieId: async (id, cookieId) => db.fillCredentialCookieId(id, cookieId),
-    setCredentialCookieId: async (id, cookieId) => db.setCredentialCookieId(id, cookieId),
+    fillCredentialCookieId: async (id, cookieId, at) => db.fillCredentialCookieId(id, cookieId, at),
+    setCredentialCookieId: async (id, cookieId, at) => db.setCredentialCookieId(id, cookieId, at),
     deleteCredential: async (id) => db.deleteCredential(id),
     reorderCredentials: async (ids) => db.reorderCredentials(ids),
     loadRoleSelections: async () => db.loadRoleSelections(),
@@ -347,6 +347,42 @@ describe('identity service with real SQLite', () => {
     const raw = new Database(path, { readonly: true })
     expect(raw.pragma('user_version', { simple: true })).toBe(Math.max(...MIGRATIONS.map((migration) => migration.version)))
     raw.close()
+  })
+})
+
+describe('饼干标色 for imported cookies', () => {
+  const colors = (db: ReadingDatabase) => Object.fromEntries(db.listCookieColors().map(({ cookieId, color }) => [cookieId, color]))
+
+  it('colors a cookie once on import, on filling in its 饼干 ID and on changing it, never over an existing color', async () => {
+    const { db, service, path } = setup()
+    db.setCookieColor('Mine2', 'violet', '2026-10-26T00:00:00.000Z')
+    const a = await imported(service, SECRET_A, 'A', 'Mine1')
+    expect(colors(db)).toEqual({ Mine1: 'blue', Mine2: 'violet' })
+    // Changing the ID colors the new one (unless it has a color) and leaves the old one's color.
+    expect(await service.setCookieId(a.id, 'Mine2')).toEqual({ ok: true })
+    expect(await service.setCookieId(a.id, 'Mine3')).toEqual({ ok: true })
+    expect(colors(db)).toEqual({ Mine1: 'blue', Mine2: 'violet', Mine3: 'blue' })
+
+    // A cookie from before 饼干 IDs were kept gets its ID (and color) when re-imported as an export.
+    const b = await imported(service, SECRET_B, 'B', 'Temp')
+    const raw = new Database(path)
+    try { raw.prepare('UPDATE credentials SET cookie_id = NULL WHERE id = ?').run(b.id) } finally { raw.close() }
+    expect(await service.importExport(exportPayload(SECRET_B, 'Filled'), null)).toMatchObject({ ok: false, failure: { reason: 'duplicate', cookieId: 'filled' } })
+    expect(colors(db)).toMatchObject({ Filled: 'blue' })
+  })
+
+  it('never gives back a cleared or changed automatic color, and keeps colors of removed cookies', async () => {
+    const { db, service } = setup()
+    const a = await imported(service, SECRET_A, 'A', 'Mine1')
+    const b = await imported(service, SECRET_B, 'B', 'Mine2')
+    db.setCookieColor('Mine1', null, '2026-10-26T00:00:00.000Z')
+    db.setCookieColor('Mine2', 'amber', '2026-10-26T00:00:00.000Z')
+    expect(await service.remove(a.id)).toEqual({ ok: true })
+    await imported(service, SECRET_A, 'A again', 'Mine1')
+    expect(await service.setCookieId(b.id, 'Mine2')).toEqual({ ok: true })
+    expect(colors(db)).toEqual({ Mine2: 'amber' })
+    expect(await service.remove(b.id)).toEqual({ ok: true })
+    expect(colors(db)).toEqual({ Mine2: 'amber' })
   })
 })
 

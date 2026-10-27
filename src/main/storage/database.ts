@@ -1,4 +1,5 @@
 import type { LocalBlock } from '../../shared/blocks'
+import { DEFAULT_COOKIE_COLOR, isCookieColorName, type CookieColor, type CookieColorName } from '../../shared/cookieColors'
 import Database from 'better-sqlite3'
 import type { StorageStatus } from '../../shared/api'
 import type {
@@ -864,25 +865,63 @@ class SqliteReadingDatabase implements ReadingDatabase {
 
   insertCredential(input: { name: string; cookieId: string; source: CredentialSource; importedAt: string; ciphertext: Uint8Array }): CredentialSummary {
     const db = this.writable()
-    const row = db.prepare<[string, string, string, string, Buffer], CredentialRow>(`
-      INSERT INTO credentials (name, cookie_id, source, imported_at, ciphertext, position)
-      VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM credentials))
-      RETURNING id, name, cookie_id, source, imported_at
-    `).get(input.name, input.cookieId, input.source, input.importedAt, Buffer.from(input.ciphertext))
-    if (!row) throw new Error('credential insert returned no row')
-    return credentialSummary(row)
+    return db.transaction(() => {
+      const row = db.prepare<[string, string, string, string, Buffer], CredentialRow>(`
+        INSERT INTO credentials (name, cookie_id, source, imported_at, ciphertext, position)
+        VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM credentials))
+        RETURNING id, name, cookie_id, source, imported_at
+      `).get(input.name, input.cookieId, input.source, input.importedAt, Buffer.from(input.ciphertext))
+      if (!row) throw new Error('credential insert returned no row')
+      this.colorOwnCookieId(input.cookieId, input.importedAt)
+      return credentialSummary(row)
+    }).immediate()
   }
 
   renameCredential(id: CredentialId, name: string): boolean {
     return this.writable().prepare('UPDATE credentials SET name = ? WHERE id = ?').run(name, id).changes === 1
   }
 
-  fillCredentialCookieId(id: CredentialId, cookieId: string): boolean {
-    return this.writable().prepare('UPDATE credentials SET cookie_id = ? WHERE id = ? AND cookie_id IS NULL').run(cookieId, id).changes === 1
+  fillCredentialCookieId(id: CredentialId, cookieId: string, at: string): boolean {
+    const db = this.writable()
+    return db.transaction(() => {
+      const filled = db.prepare('UPDATE credentials SET cookie_id = ? WHERE id = ? AND cookie_id IS NULL').run(cookieId, id).changes === 1
+      if (filled) this.colorOwnCookieId(cookieId, at)
+      return filled
+    }).immediate()
   }
 
-  setCredentialCookieId(id: CredentialId, cookieId: string): boolean {
-    return this.writable().prepare('UPDATE credentials SET cookie_id = ? WHERE id = ?').run(cookieId, id).changes === 1
+  setCredentialCookieId(id: CredentialId, cookieId: string, at: string): boolean {
+    const db = this.writable()
+    return db.transaction(() => {
+      const set = db.prepare('UPDATE credentials SET cookie_id = ? WHERE id = ?').run(cookieId, id).changes === 1
+      if (set) this.colorOwnCookieId(cookieId, at)
+      return set
+    }).immediate()
+  }
+
+  /**
+   * Gives an imported cookie's 饼干 ID the default color, once per ID ever: an ID that already has a
+   * color keeps it, and one whose automatic color was later changed or cleared is not colored again.
+   */
+  private colorOwnCookieId(cookieId: string, at: string): void {
+    const db = this.writable()
+    if (db.prepare('INSERT OR IGNORE INTO cookie_color_auto (cookie_id) VALUES (?)').run(cookieId).changes === 0) return
+    db.prepare('INSERT OR IGNORE INTO cookie_colors (cookie_id, color, created_at) VALUES (?, ?, ?)').run(cookieId, DEFAULT_COOKIE_COLOR, at)
+  }
+
+  listCookieColors(): CookieColor[] {
+    if (!this.db) return []
+    return this.db.prepare<[], { cookieId: string; color: string; createdAt: string }>(
+      'SELECT cookie_id AS cookieId, color, created_at AS createdAt FROM cookie_colors ORDER BY created_at, cookie_id'
+    ).all().filter((row): row is CookieColor => isCookieColorName(row.color))
+  }
+
+  /** Colors a 饼干 ID (an existing one keeps its date and changes color) or, with `null`, clears it. */
+  setCookieColor(cookieId: string, color: CookieColorName | null, at: string): void {
+    const db = this.writable()
+    if (color === null) db.prepare('DELETE FROM cookie_colors WHERE cookie_id = ?').run(cookieId)
+    else db.prepare(`INSERT INTO cookie_colors (cookie_id, color, created_at) VALUES (?, ?, ?)
+      ON CONFLICT (cookie_id) DO UPDATE SET color = excluded.color`).run(cookieId, color, at)
   }
 
   deleteCredential(id: CredentialId): boolean {

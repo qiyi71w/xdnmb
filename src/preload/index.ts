@@ -23,6 +23,10 @@ const api: XidaoApi = {
     list: () => ipcRenderer.invoke(IpcChannel.listBlocks),
     set: (input) => ipcRenderer.invoke(IpcChannel.setBlock, input)
   },
+  cookieColors: {
+    list: () => ipcRenderer.invoke(IpcChannel.listCookieColors),
+    set: (input) => ipcRenderer.invoke(IpcChannel.setCookieColor, input)
+  },
   reminders: {
     getRules: (input) => ipcRenderer.invoke(IpcChannel.reminderGetRules, input),
     setRule: (input) => ipcRenderer.invoke(IpcChannel.reminderSetRule, input),
