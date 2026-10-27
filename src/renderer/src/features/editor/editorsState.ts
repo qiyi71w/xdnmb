@@ -365,6 +365,15 @@ export function editorFor(state: EditorsState, target: PostTarget): Editor | nul
   return state.editors.find((editor) => sameTarget(editor.target, target)) ?? null
 }
 
+/**
+ * Whether the editor is on screen: expanded, and its target among those the active tab displays
+ * now (`displayed`, empty while the settings page covers the tabs).
+ */
+export function editorOnScreen(state: EditorsState, editorId: EditorId, displayed: readonly PostTarget[]): boolean {
+  const editor = state.editors.find((item) => item.id === editorId)
+  return editor !== undefined && editor.expanded && displayed.some((target) => sameTarget(target, editor.target))
+}
+
 export function editorForDraft(state: EditorsState, draftId: string): Editor | null {
   return state.editors.find((editor) => editor.draft?.id === draftId) ?? null
 }

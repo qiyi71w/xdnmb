@@ -18,7 +18,7 @@ export interface InFlightPublication {
   done: Promise<PublicationAttempt | null>
 }
 
-export interface PublicationService extends PublicationApi {
+export interface PublicationService extends Omit<PublicationApi, 'onFailureNotice' | 'onOpenDraft'> {
   recover(): Promise<void>
   /** Discard only uncommitted prompts when the renderer goes away; in-flight writes continue. */
   releasePrompts(): void
@@ -58,6 +58,11 @@ export function createPublicationService(deps: {
   now?: () => Date
   /** Publish limit of one send from its intent; the adapter's POST limit. */
   deadlineMs?: number
+  /**
+   * A send's result was recorded while a window may show it (not while finishing a quit, which
+   * keeps a launch notice instead). Called once per send, after storage accepted the result.
+   */
+  onRecorded?: (attempt: PublicationAttempt) => void
 }): PublicationService {
   const { store, drafts, files, protector, adapter } = deps
   const now = deps.now ?? (() => new Date())
@@ -189,6 +194,10 @@ export function createPublicationService(deps: {
       const result: PublicationAttempt = stored ?? { ...attempt, state: 'unknown', problem: 'storage', updatedAt: at }
       editorAttempts.set(attempt.editorId, result)
       if (result.state === 'confirmed' || result.state === 'failed') editorAttempts.delete(attempt.editorId)
+      // A notification problem must never change the recorded result.
+      if (stored !== null && !unattended) {
+        try { deps.onRecorded?.(stored) } catch { console.error('[publication] result notification failed') }
+      }
       return result
     } catch {
       const result: PublicationAttempt = { ...attempt, state: 'unknown', problem: 'network', updatedAt: now().toISOString() }
