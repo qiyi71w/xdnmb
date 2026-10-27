@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { MAX_CLIPBOARD_TEXT_LENGTH, type ClipboardEditCommand } from '../../../shared/api'
+import type { ClipboardEditCommand } from '../../../shared/api'
 import { useCover } from '../lib/appCovered'
-import { copyText, runEditCommand } from '../lib/clipboard'
+import { runEditCommand } from '../lib/clipboard'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from './ContextMenu'
+import { selectionCopyItem } from './copyMenuItems'
 
 /** Input types holding text the edit menu serves; checkboxes, ranges, buttons and the like have none. */
 const TEXT_INPUT_TYPES: Record<string, true> = { text: true, search: true, url: true, tel: true, email: true, password: true, number: true }
@@ -13,23 +14,6 @@ function textField(target: EventTarget | null): TextField | null {
   if (target instanceof HTMLTextAreaElement) return target
   if (target instanceof HTMLInputElement && Object.hasOwn(TEXT_INPUT_TYPES, target.type)) return target
   return null
-}
-
-/**
- * 复制选中文字 for a context menu opening now: null without a selection that has visible text.
- * The text is taken as the menu opens, so focus moving into the menu cannot lose it.
- */
-export function selectionCopyItem(label = '复制选中文字'): ContextMenuItem | null {
-  const text = window.getSelection()?.toString() ?? ''
-  if (text.trim() === '') return null
-  return {
-    type: 'action',
-    key: 'copy-selection',
-    label,
-    disabled: text.length > MAX_CLIPBOARD_TEXT_LENGTH,
-    title: text.length > MAX_CLIPBOARD_TEXT_LENGTH ? '选中的文字太长' : undefined,
-    onSelect: () => void copyText(text).catch(() => undefined)
-  }
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { Post, ThreadId } from '../../../../shared/forum'
 import { REMINDER_KINDS, type ReminderKind, type ReminderRule, type ThreadReminders } from '../../../../shared/reminders'
 import { ContextMenu, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
+import { copyNumberItem, withSelectionCopy } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
 import { useReminderToggle } from '../reminders/ReminderMenu'
 import { KIND_NAME } from '../reminders/reminderText'
@@ -8,15 +9,17 @@ import { failureText, type LoadFailure } from '../reminders/useReminders'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 
 /**
- * Context menu of one subscription row: 在新标签页打开, then the three 提醒 kinds as checkable items
- * (saved like the 提醒 panel: one rule at a time, never starting a check) and 取消订阅, which sends
- * the write at once (no confirmation; the thread's reminders stay as they are). While the rules are
- * unknown the kinds cannot be toggled; a failed read offers a retry.
+ * Context menu of one subscription row: 在新标签页打开, 复制串号, then the three 提醒 kinds as
+ * checkable items (saved like the 提醒 panel: one rule at a time, never starting a check) and
+ * 取消订阅, which sends the write at once (no confirmation; the thread's reminders stay as they
+ * are). While the rules are unknown the kinds cannot be toggled; a failed read offers a retry.
+ * 复制选中文字 (taken when the menu opened) comes first.
  */
 export function SubscriptionRowMenu({
   point,
   threadId,
   head,
+  selection,
   label,
   rules,
   failure,
@@ -30,6 +33,7 @@ export function SubscriptionRowMenu({
   threadId: ThreadId
   /** Main post already on screen, shown in the new tab until page 1 arrives. */
   head: Post
+  selection: ContextMenuItem | null
   /** Thread title or `No.x`. */
   label: string
   rules: Record<ReminderKind, ReminderRule> | undefined
@@ -44,13 +48,12 @@ export function SubscriptionRowMenu({
   const saving = useReminderToggle(threadId, onUpdated, true)
   const openInTab = useOpenThreadInTab()
   const unknownFailed = rules === undefined && failure !== null
-  const items: ContextMenuItem[] = [
+  const items: ContextMenuItem[] = withSelectionCopy(selection, [
     ...(openInTab === null
       ? []
-      : [
-          { type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => openInTab(threadId, head) } satisfies ContextMenuItem,
-          { type: 'separator', key: 'open-separator' } satisfies ContextMenuItem
-        ]),
+      : [{ type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => openInTab(threadId, head) } satisfies ContextMenuItem]),
+    copyNumberItem(threadId),
+    { type: 'separator', key: 'open-separator' },
     ...REMINDER_KINDS.map((kind): ContextMenuItem => ({
       type: 'check',
       key: kind,
@@ -72,7 +75,7 @@ export function SubscriptionRowMenu({
       title: removeBlocked ?? undefined,
       onSelect: onRemove
     }
-  ]
+  ])
   const message = saving.error ?? (rules === undefined && failure !== null ? `提醒状态读取失败：${failureText(failure)}` : null)
   return (
     <ContextMenu

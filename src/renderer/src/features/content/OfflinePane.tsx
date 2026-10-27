@@ -6,7 +6,8 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import type { OfflineEntry } from '../../../../shared/content'
 import type { ForumId, Post, ThreadId } from '../../../../shared/forum'
-import { contextMenuPoint, isContextMenuKey, type ContextMenuPoint } from '../../components/ContextMenu'
+import { contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
+import { selectionCopyItem } from '../../components/copyMenuItems'
 import { Icon, Spinner } from '../../components/Icon'
 import { meaningfulTitle } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
@@ -92,16 +93,17 @@ export function OfflinePane({
 
   // ---------- Row context menu and 离线详情… ----------
   /** The row whose context menu is open, where it opened and the row control focus returns to. */
-  const [rowMenu, setRowMenu] = useState<{ threadId: ThreadId; point: ContextMenuPoint; row: HTMLElement } | null>(null)
+  const [rowMenu, setRowMenu] = useState<{ threadId: ThreadId; point: ContextMenuPoint; row: HTMLElement; selection: ContextMenuItem | null } | null>(null)
   /** The row whose 离线副本 dialog is open; focus goes back to its row control. */
   const [details, setDetails] = useState<{ threadId: ThreadId; label: string; row: HTMLElement } | null>(null)
   const openRowMenu = (threadId: ThreadId, event: ReactMouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
     const row = event.currentTarget.querySelector<HTMLElement>('[data-roving-item]')
     if (row === null) return
     event.preventDefault()
+    const selection = selectionCopyItem(undefined, event.currentTarget)
     // No scrolling into view: a scroll closes the menu that is about to open.
     row.focus({ preventScroll: true })
-    setRowMenu({ threadId, point: contextMenuPoint(event, row), row })
+    setRowMenu({ threadId, point: contextMenuPoint(event, row), row, selection })
   }
   const closeRowMenu = (returnFocus: boolean) => {
     const row = rowMenu?.row
@@ -264,6 +266,7 @@ export function OfflinePane({
           point={rowMenu.point}
           threadId={rowMenu.threadId}
           head={menuEntry.head}
+          selection={rowMenu.selection}
           label={menuLabel}
           updateBlocked={
             isDeleting(menuEntry.threadId)

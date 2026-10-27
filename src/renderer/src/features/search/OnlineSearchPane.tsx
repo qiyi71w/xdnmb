@@ -678,6 +678,8 @@ function HitRow({
   const target = hit.target
   const unusable = target === null && hit.url === null
   const tabThread = knownThreadOf(target, status)
+  // A reply link names its thread before being located: 复制串号 copies that number; opening waits for the location.
+  const linkThreadId = target?.kind === 'thread' ? target.threadId : null
   // The row's own controls are reachable with Tab from the row that holds the list's tab stop.
   const tabIndex = itemProps.tabIndex
   const statusId = `online-search-hit-status-${hitKey}`
@@ -693,7 +695,7 @@ function HitRow({
           if (unusable || inTab.openFromClick(event, tabThread?.threadId ?? null, tabThread?.head)) return
           onActivate()
         }}
-        {...inTab.rowProps(tabThread?.threadId ?? null, tabThread?.head)}
+        {...inTab.rowProps(tabThread?.threadId ?? linkThreadId, tabThread?.head, tabThread !== null)}
         {...itemProps}
       >
         <span className="online-search-hit-top">

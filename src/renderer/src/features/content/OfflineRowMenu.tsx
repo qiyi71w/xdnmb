@@ -1,16 +1,19 @@
 import type { Post, ThreadId } from '../../../../shared/forum'
 import { ContextMenu, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
+import { copyNumberItem, withSelectionCopy } from '../../components/copyMenuItems'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 
 /**
- * Context menu of one 离线 row: 在新标签页打开, 更新离线副本 (the 离线副本 dialog's update, started
- * at once; unavailable while the copy is saving, the start is on its way or it is being deleted),
- * 离线详情…, which opens that dialog, and 删除离线副本…, which asks for confirmation first.
+ * Context menu of one 离线 row: 在新标签页打开, 复制串号, 更新离线副本 (the 离线副本 dialog's update,
+ * started at once; unavailable while the copy is saving, the start is on its way or it is being
+ * deleted), 离线详情…, which opens that dialog, and 删除离线副本…, which asks for confirmation first.
+ * 复制选中文字 (taken when the menu opened) comes first.
  */
 export function OfflineRowMenu({
   point,
   threadId,
   head,
+  selection,
   label,
   updateBlocked,
   deleting,
@@ -23,6 +26,7 @@ export function OfflineRowMenu({
   threadId: ThreadId
   /** Main post held here, shown in the new tab until page 1 arrives; null when not held. */
   head: Post | null
+  selection: ContextMenuItem | null
   /** Thread title or `No.x`. */
   label: string
   /** Why 更新离线副本 cannot start now; null when it can. */
@@ -35,13 +39,12 @@ export function OfflineRowMenu({
   onClose: (returnFocus: boolean) => void
 }) {
   const openInTab = useOpenThreadInTab()
-  const items: ContextMenuItem[] = [
+  const items: ContextMenuItem[] = withSelectionCopy(selection, [
     ...(openInTab === null
       ? []
-      : [
-          { type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => openInTab(threadId, head) } satisfies ContextMenuItem,
-          { type: 'separator', key: 'open-separator' } satisfies ContextMenuItem
-        ]),
+      : [{ type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => openInTab(threadId, head) } satisfies ContextMenuItem]),
+    copyNumberItem(threadId),
+    { type: 'separator', key: 'open-separator' },
     {
       type: 'action',
       key: 'update',
@@ -60,6 +63,6 @@ export function OfflineRowMenu({
       title: deleting ? '正在删除' : undefined,
       onSelect: onDelete
     }
-  ]
+  ])
   return <ContextMenu point={point} label={`离线副本操作：${label}`} items={items} onClose={onClose} />
 }

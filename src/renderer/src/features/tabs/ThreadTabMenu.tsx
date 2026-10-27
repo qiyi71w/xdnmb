@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import type { Post, ThreadId } from '../../../../shared/forum'
-import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuPoint } from '../../components/ContextMenu'
+import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
+import { copyNumberItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
 import { useOpenThreadInTab } from './openThreadInTab'
 
 export interface ThreadRowHandlers {
@@ -13,9 +14,10 @@ export interface ThreadRowHandlers {
 export interface ThreadTabMenu {
   /**
    * Spread on the focusable row of `threadId`: right-click / ContextMenu / Shift+F10 menu and
-   * middle-click. Empty for an unknown thread (`null`) or outside the app shell.
+   * middle-click. Empty for an unknown thread (`null`); no new-tab gestures outside the app shell
+   * or when not `openable` (the number is known but the thread cannot be opened yet: 复制串号 only).
    */
-  rowProps: (threadId: ThreadId | null, head?: Post | null) => ThreadRowHandlers
+  rowProps: (threadId: ThreadId | null, head?: Post | null, openable?: boolean) => ThreadRowHandlers
   /** Call first in the row's click handler: true when Ctrl/Cmd+click opened the thread in a new tab. */
   openFromClick: (event: MouseEvent, threadId: ThreadId | null, head?: Post | null) => boolean
   /**
@@ -58,13 +60,13 @@ export function listRowGestures(
 }
 
 /**
- * 在新标签页打开 for the thread rows of one list: one context menu at a time (right-click,
- * ContextMenu key, Shift+F10 on the focused row), middle-click and Ctrl/Cmd+click. Closing the
- * menu returns focus to its row.
+ * 在新标签页打开 and 复制串号 for the thread rows of one list: one context menu at a time
+ * (right-click, ContextMenu key, Shift+F10 on the focused row; 复制选中文字 on top while text in
+ * the row is selected), middle-click and Ctrl/Cmd+click. Closing the menu returns focus to its row.
  */
 export function useThreadTabMenu(): ThreadTabMenu {
   const openInTab = useOpenThreadInTab()
-  const [open, setOpen] = useState<{ threadId: ThreadId; head: Post | null; point: ContextMenuPoint; row: HTMLElement } | null>(null)
+  const [open, setOpen] = useState<{ threadId: ThreadId; head: Post | null; openable: boolean; point: ContextMenuPoint; row: HTMLElement; selection: ContextMenuItem | null } | null>(null)
 
   const close = (returnFocus: boolean) => {
     const row = open?.row
@@ -73,14 +75,16 @@ export function useThreadTabMenu(): ThreadTabMenu {
   }
 
   return {
-    rowProps: (threadId, head = null) => {
-      if (openInTab === null || threadId === null) return {}
+    rowProps: (threadId, head = null, openable = true) => {
+      if (threadId === null) return {}
+      const inTab = openable ? openInTab : null
       const show = (event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
         event.preventDefault()
         const row = event.currentTarget
+        const selection = selectionCopyItem(undefined, row)
         // No scrolling into view: a scroll closes the menu that is about to open.
         row.focus({ preventScroll: true })
-        setOpen({ threadId, head, point: contextMenuPoint(event, row), row })
+        setOpen({ threadId, head, openable, point: contextMenuPoint(event, row), row, selection })
       }
       return {
         onContextMenu: show,
@@ -89,12 +93,12 @@ export function useThreadTabMenu(): ThreadTabMenu {
         },
         // Middle press: no autoscroll; the release opens the tab.
         onMouseDown: (event) => {
-          if (event.button === 1) event.preventDefault()
+          if (inTab !== null && event.button === 1) event.preventDefault()
         },
         onAuxClick: (event) => {
-          if (event.button !== 1) return
+          if (inTab === null || event.button !== 1) return
           event.preventDefault()
-          openInTab(threadId, head)
+          inTab(threadId, head)
         }
       }
     },
@@ -105,11 +109,14 @@ export function useThreadTabMenu(): ThreadTabMenu {
       return true
     },
     menu:
-      open === null || openInTab === null ? null : (
+      open === null ? null : (
         <ContextMenu
           point={open.point}
           label={`串操作：No.${open.threadId}`}
-          items={[{ type: 'action', key: 'open-in-tab', label: '在新标签页打开', onSelect: () => openInTab(open.threadId, open.head) }]}
+          items={withSelectionCopy(open.selection, [
+            ...(openInTab === null || !open.openable ? [] : [{ type: 'action', key: 'open-in-tab', label: '在新标签页打开', onSelect: () => openInTab(open.threadId, open.head) } satisfies ContextMenuItem]),
+            copyNumberItem(open.threadId)
+          ])}
           onClose={close}
         />
       )
