@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { parseContent } from '../../src/main/forum/content'
-import { Content, type RenderQuote } from '../../src/renderer/src/components/Content'
+import { Content, TextExcerpt, type RenderQuote } from '../../src/renderer/src/components/Content'
 import { withSpoilers } from '../../src/renderer/src/components/spoilers'
 
 const display = (html: string) => withSpoilers(parseContent(html).nodes)
@@ -87,5 +87,14 @@ describe('spoiler segments', () => {
     const excerpt = renderToStaticMarkup(createElement(Content, { nodes, mode: 'excerpt' }))
     expect(excerpt).not.toMatch(/role="button"|tabindex|<button/i)
     expect(excerpt).not.toContain('[h]')
+  })
+
+  it('masks segments in plain-text row excerpts (history, offline, sent records) across lines', () => {
+    const excerpt = renderToStaticMarkup(createElement(TextExcerpt, { text: '回复[1,5]\n[h]自己的\n秘密[/h]完', className: 'row-excerpt' }))
+    expect(excerpt).toContain('class="spoiler is-masked"')
+    expect(excerpt).toContain('隐藏内容')
+    expect(excerpt).not.toContain('[h]')
+    expect(excerpt).not.toMatch(/role="button"|tabindex/i)
+    expect(excerpt).toContain('回复[1,5]\n')
   })
 })

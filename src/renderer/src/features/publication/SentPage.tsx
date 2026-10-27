@@ -20,6 +20,7 @@ import { isSent, isUnsettled, type PublicationAttempt } from '../../../../shared
 import { ContextMenu, contextMenuPoint, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { CookieId } from '../../components/CookieId'
 import { copyNumberItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
+import { TextExcerpt } from '../../components/Content'
 import { Icon, Spinner } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
 import { formatRecordTime } from '../../lib/time'
@@ -361,7 +362,7 @@ function RecordSummary({ attempt, metaEnd }: { attempt: PublicationAttempt; meta
       </span>
       {title !== null && <span className="row-title">{title}</span>}
       {name !== null && <span className="row-name">{name}</span>}
-      {content !== '' && <span className="row-excerpt is-plain">{content}</span>}
+      {content !== '' && <TextExcerpt text={content} className="row-excerpt is-plain" />}
       <span className="row-meta">
         <span className="row-forum">{target.kind === 'thread' ? forumLabel(target.forumId, forumName) : `回复 No.${target.threadId}`}</span>
         {payload.attachmentId !== null && (

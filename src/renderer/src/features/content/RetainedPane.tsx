@@ -8,6 +8,7 @@ import { ContextMenu, contextMenuPoint, type ContextMenuItem, type ContextMenuPo
 import { CookieId } from '../../components/CookieId'
 import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { copyNumberItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
+import { TextExcerpt } from '../../components/Content'
 import { Icon } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
 import { formatForumTime, formatRecordTime } from '../../lib/time'
@@ -318,7 +319,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
                       </span>}
                       {title !== null && <span className="row-title">{title}</span>}
                       {name !== null && <span className="row-name">{name}</span>}
-                      {excerpt !== null && <span className="row-excerpt is-plain">{excerpt}</span>}
+                      {excerpt !== null && <TextExcerpt text={excerpt} className="row-excerpt is-plain" />}
                       <span className="row-meta">
                         <span>No.{entry.threadId}</span>
                         <span>{PAGE.at} {formatRecordTime(entry.at)}</span>

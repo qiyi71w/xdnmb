@@ -120,6 +120,15 @@ export function Content({
   return <div className={classes}>{renderNodes(display, ctx, 'n')}</div>
 }
 
+/**
+ * A list row's excerpt kept as plain text (history and offline rows, sent records): line breaks
+ * kept, 防剧透 segments shown as the same non-interactive placeholder as other list excerpts.
+ */
+export function TextExcerpt({ text, className }: { text: string; className?: string }) {
+  const nodes = useMemo<ContentNode[]>(() => [{ type: 'text', text }], [text])
+  return <Content nodes={nodes} mode="excerpt" className={className} />
+}
+
 /** Plain text of a content tree, for short summaries. */
 export function contentText(nodes: readonly ContentNode[]): string {
   let text = ''
