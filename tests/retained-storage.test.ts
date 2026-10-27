@@ -82,6 +82,23 @@ describe('retained content storage', () => {
     expect(db.listHistory()[0]).toMatchObject({ threadId: '100', title: '标题100', head: null, excerpt: null })
   })
 
+  it('keeps a 防剧透 segment closed when the history excerpt limit cuts through it', () => {
+    const { db } = fixture()
+    const secret = '秘'.repeat(500)
+    const heads: Array<[string, string]> = [['100', `前文[h]${secret}[/h]后文`], ['300', `前文[h]${secret}`], ['400', `${'前'.repeat(396)}[/h]x`]]
+    for (const [id, text] of heads) {
+      db.saveThreadPage({ ...page(id, []), head: post(id, false, text) }, t0)
+      db.recordVisit(id, t1)
+    }
+    const excerpts = new Map(db.listHistory().map((entry) => [entry.threadId, entry.excerpt]))
+    // Paired in the full text: the cut segment is closed, so the row masks it.
+    expect(excerpts.get('100')).toBe(`前文[h]${secret.slice(0, 395)}[/h]`)
+    // Never closed in the full text: stays as typed, as the reader shows it.
+    expect(excerpts.get('300')).toBe(`前文[h]${secret.slice(0, 395)}`)
+    // A closing marker with no opening one before the cut changes nothing.
+    expect(excerpts.get('400')).toBe(`${'前'.repeat(396)}[/h]`)
+  })
+
   it('lists offline copies by first save from local content only, and updating a copy keeps its place', () => {
     const { db } = fixture()
     db.beginOfflineCopy('100', false, t0)

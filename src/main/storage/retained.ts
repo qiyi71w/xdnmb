@@ -15,6 +15,18 @@ export function touchThread(db: Database.Database, threadId: string): void {
   db.prepare('UPDATE posts SET last_used = ? WHERE id IN (SELECT post_id FROM post_threads WHERE thread_id = ?)').run(tick, threadId)
 }
 
+/**
+ * A history row's excerpt: the head's first 400 characters. When that limit cuts through a 防剧透
+ * segment the full text closes later (`closesLater`: a `[/h]` ends past the cut), the excerpt closes
+ * it, so the row masks the segment as the reader does; markers never closed stay as typed.
+ */
+function historyExcerpt(text: string | null, closesLater: number | null): string | null {
+  if (text === null || text.trim() === '') return null
+  const open = text.lastIndexOf('[h]')
+  if (open === -1 || text.includes('[/h]', open) || closesLater !== 1) return text
+  return `${text}[/h]`
+}
+
 interface CopyRow {
   thread_id: string; created_at: string; updated_at: string; include_images: number
   state: OfflineCopy['state']; end_candidate_page: number | null; failed_page: number | null
@@ -34,18 +46,19 @@ export class RetainedContentDatabase {
     const db = this.database()
     // Read only the retained head fields needed by list rows; never fetch missing content.
     return db.transaction(() => db.prepare<[], {
-      thread_id: string; at: string; title: string | null; excerpt: string | null
+      thread_id: string; at: string; title: string | null; excerpt: string | null; closes_later: number | null
       head_id: string | null; forum_id: string | null; created_at: string | null; user_hash: string | null
       name: string | null; head_title: string | null; is_admin: number | null; is_sage: number | null
       image_path: string | null; image_ext: string | null
     }>(`
       SELECT e.thread_id, e.last_visited_at AS at, t.title, substr(p.plain_text, 1, 400) AS excerpt,
+        instr(substr(p.plain_text, 398), '[/h]') > 0 AS closes_later,
         p.id AS head_id, p.forum_id, p.created_at, p.user_hash, p.name, p.title AS head_title,
         p.is_admin, p.is_sage, p.image_path, p.image_ext
       FROM thread_visits e LEFT JOIN retained_titles t USING(thread_id) LEFT JOIN posts p ON p.id = e.thread_id
       ORDER BY e.last_visited_at DESC, e.thread_id
     `).all().map((row) => ({ threadId: row.thread_id, at: row.at, title: row.title ?? null,
-      excerpt: row.excerpt === null || row.excerpt.trim() === '' ? null : row.excerpt,
+      excerpt: historyExcerpt(row.excerpt, row.closes_later),
       head: row.head_id === null ? null : {
         forumId: row.forum_id, createdAt: row.created_at, userHash: row.user_hash, name: row.name, title: row.head_title,
         isAdmin: row.is_admin === null ? null : row.is_admin !== 0,
