@@ -1226,7 +1226,7 @@ export function App() {
   // ---------- Navigation: the icon rail and its board panel ----------
   /** Lists opened from inside content (e.g. the reminders empty state): focus goes to the list. */
   const openList = useCallback((ref: ListRef) => selectFeed(ref, 'list'), [selectFeed])
-  /** Lists of the tab (订阅的串, 提醒, 历史, 离线) and 搜索 are pages; 草稿 is a dialog. */
+  /** Lists of the tab (订阅, 提醒, 历史, 离线) and 搜索 are pages; 草稿 is a dialog. */
   const openFeature = useCallback(
     (id: FeatureId, focusTarget = false) => {
       if (id === 'history') openHistoryView('browsing')

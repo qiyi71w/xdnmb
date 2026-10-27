@@ -224,12 +224,55 @@
   color: var(--accent-ink);
 }
 
+/* One head row: 历史 and its page switch on the left, never broken; the shown page's actions at the
+   end. Only the actions wrap, below, when the column is too narrow. */
 .history-page-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px 16px;
+  gap: 6px 12px;
   flex: none;
+}
+
+.history-page-header > .list-title {
+  flex: none;
+}
+
+.history-page-header > .history-view-switch {
+  flex: none;
+}
+
+/* Holds one icon button's height even when empty, so switching pages never moves the row. */
+.history-page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  min-height: 30px;
+  margin-left: auto;
+}
+
+:root[data-density='compact'] .history-page-actions {
+  min-height: 26px;
+}
+
+/* 清空历史…: a danger icon button; it asks before clearing. */
+.history-clear {
+  color: var(--danger-ink);
+}
+
+.history-clear:hover:not([aria-disabled='true']) {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+
+.history-clear[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.history-clear[aria-disabled='true']:hover {
+  background: transparent;
 }
 
 .history-view-switch {
@@ -276,14 +319,6 @@
 }
 
 .history-page-view[hidden] {
-  display: none;
-}
-
-.history-page-view .list-title-row {
-  justify-content: flex-end;
-}
-
-.history-page-view .list-header:has(.list-title-row:empty) {
   display: none;
 }
 

@@ -290,6 +290,8 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
       ['info-bg'],
       ['pane', 'selected'],
       ['pane', 'hover'],
+      // Hovered page buttons (`.btn-page`) on the paper of pages and settings.
+      ['paper', 'hover'],
       ['window', 'glass-strong'],
       ...GLASS_BACKDROPS,
       ['window', 'glass', 'nav-current']
@@ -301,6 +303,9 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
       ['paper'],
       ['pane'],
       ['info-bg'],
+      // The writing entries (回复 on the paper-coloured thread toolbar, 发新串 in the pane-coloured list
+      // head) rest on accent-soft at 55% and hover on all of it. The list holds the full layer: in
+      // both schemes the stronger tint is the less favourable case for accent-ink.
       ['paper', 'accent-soft'],
       ['pane', 'accent-soft'],
       ['window', 'accent-soft'],

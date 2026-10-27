@@ -218,21 +218,6 @@
   cursor: progress;
 }
 
-/* 回复, the one emphasised action: a soft tide tint and tide ink, not a filled primary. */
-.thread-bar .tb-btn.is-primary {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-  font-weight: 600;
-}
-
-.thread-bar .tb-btn.is-primary .icon {
-  color: var(--accent-ink);
-}
-
-.thread-bar .tb-btn.is-primary:hover:not(:disabled, [aria-disabled='true']) {
-  background: color-mix(in oklch, var(--accent-soft), var(--accent) 14%);
-}
-
 /* The page control: quiet secondary ink, numerals in fixed width, a small chevron. */
 .position-page {
   position: relative;

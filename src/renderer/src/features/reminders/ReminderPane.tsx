@@ -318,7 +318,7 @@ export function ReminderPane({
             <p className="list-empty-title">还没有开启提醒的串</p>
             {openList !== null && (
               <button type="button" className="btn btn-page reminder-empty-action" onClick={() => openList({ kind: 'subscriptions' })}>
-                去订阅的串
+                去订阅
               </button>
             )}
           </div>

@@ -465,7 +465,7 @@ export function SubscriptionPane({
               {threads.length > 0 && <ListFilterToggle filter={filter} />}
               <button
                 type="button"
-                className="icon-btn list-head-btn"
+                className="icon-btn"
                 onClick={() => {
                   if (!refreshTurn.turning) refresh()
                 }}
@@ -490,7 +490,7 @@ export function SubscriptionPane({
           <ListFilterPanel
             filter={filter}
             forums={forumNames}
-            noun="订阅的串"
+            noun="串"
             total={threads.length}
             result={filtered}
             metadata={null}
@@ -582,7 +582,7 @@ export function SubscriptionPane({
         )}
 
         {threads.length > 0 && (
-          <ul className="thread-list sub-thread-list" aria-label={filtering ? '订阅的串（已筛选）' : '订阅的串'} onKeyDown={roving.onKeyDown}>
+          <ul className="thread-list sub-thread-list" aria-label={filtering ? '订阅（已筛选）' : '订阅'} onKeyDown={roving.onKeyDown}>
             {filtered.shown.map(({ item: thread }) => {
               const itemProps = roving.itemProps(thread.head.id)
               const entry = unsettled.rows.get(thread.head.id)

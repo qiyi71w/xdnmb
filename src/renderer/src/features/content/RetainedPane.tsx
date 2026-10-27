@@ -3,6 +3,7 @@
 // pages: 浏览, and the sent records of 新串 and of 回复 (SentPage); 离线 is its own pane (OfflinePane).
 
 import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { createPortal } from 'react-dom'
 import type { ForumId, Post, ThreadId } from '../../../../shared/forum'
 import { ContextMenu, contextMenuPoint, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { CookieId } from '../../components/CookieId'
@@ -77,6 +78,8 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
   const registry = useContext(ContentRegistryContext)
   const headingId = useId()
   const headingRef = useRef<HTMLHeadingElement>(null)
+  /** Where the shown page puts its actions, at the end of the one head row. */
+  const [actionsSlot, setActionsSlot] = useState<HTMLDivElement | null>(null)
   const request = host.request?.tabId === props.tabId ? host.request : null
   const [view, setView] = useState<HistoryView>(() => {
     if (request !== null && request.seq > appliedRequest) return request.view
@@ -114,11 +117,13 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
             </button>
           ))}
         </div>
+        {/* The shown page's actions (浏览: 筛选, 清空历史…); empty elsewhere, nothing moves. */}
+        <div className="history-page-actions" ref={setActionsSlot} />
       </header>
       <div className="history-page-view" hidden={view !== 'browsing'}>
         <BrowsingPane
           {...props}
-          showHeading={false}
+          actionsSlot={actionsSlot}
           displayed={view === 'browsing'}
           refreshOverride={view === 'browsing' ? undefined : () => setSentRefresh((value) => value + 1)}
         />
@@ -149,14 +154,17 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
 
 /**
  * 浏览: visited threads, most recent first. A row's actions live in its context menu (right-click,
- * ContextMenu key, Shift+F10): 在新标签页打开 and 删除…, which asks first; 清空历史… is in the header.
+ * ContextMenu key, Shift+F10): 在新标签页打开 and 删除…, which asks first; 筛选 and 清空历史… are in
+ * the head: its own, or the 历史 page's (`actionsSlot`) while that page shows 浏览.
  * Middle-click or Ctrl/Cmd+click opens a new tab, as in the thread lists.
  */
-function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, showHeading = true, displayed = true, refreshOverride }: RetainedPaneProps & {
-  showHeading?: boolean
+function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, actionsSlot, displayed = true, refreshOverride }: RetainedPaneProps & {
+  /** The 历史 page's head holds the actions; without it this pane shows its own head. */
+  actionsSlot?: HTMLElement | null
   displayed?: boolean
   refreshOverride?: () => void
 }) {
+  const showHeading = actionsSlot === undefined
   const headingId = useId()
   const registry = useContext(ContentRegistryContext)
   // Outside the shell (no registry) nothing else clears reading data: a private store never resets.
@@ -207,32 +215,42 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
   const menuEntry = rowMenu === null ? undefined : entries.find((entry) => entry.threadId === rowMenu.threadId)
   const confirmingEntry = confirming?.threadId == null ? undefined : entries.find((entry) => entry.threadId === confirming.threadId)
 
+  const actions = entries.length > 0 && (
+    <>
+      <ListFilterToggle filter={filter} />
+      <button
+        type="button"
+        className="icon-btn history-clear"
+        aria-label="清空历史…"
+        title="清空历史…"
+        aria-haspopup="dialog"
+        aria-disabled={busy || undefined}
+        onClick={(event) => {
+          if (busy) return
+          askedFrom.current = event.currentTarget
+          ask(null)
+        }}
+      >
+        <Icon name="trash" />
+      </button>
+    </>
+  )
+
   return (
     <section className="list-pane retained-page" aria-labelledby={showHeading ? headingId : undefined} aria-label={showHeading ? undefined : '浏览'} aria-busy={list.status === 'loading' || undefined}>
       <div className="list-scroll" ref={bodyRef} onScroll={onScroll} tabIndex={-1} data-pane-focus={showHeading ? '' : undefined}>
-        <header className="list-header">
-          <div className="list-title-row">
-            {showHeading && <h2 className="list-title" id={headingId}>
-              <span className="list-name">{PAGE.title}</span>
-            </h2>}
-            {entries.length > 0 && <ListFilterToggle filter={filter} />}
-            {entries.length > 0 && (
-              <button
-                type="button"
-                className="btn btn-small btn-danger btn-page"
-                aria-disabled={busy || undefined}
-                onClick={(event) => {
-                  if (busy) return
-                  askedFrom.current = event.currentTarget
-                  ask(null)
-                }}
-              >
-                <Icon name="trash" size={14} />
-                清空历史…
-              </button>
-            )}
-          </div>
-        </header>
+        {showHeading ? (
+          <header className="list-header">
+            <div className="list-title-row">
+              <h2 className="list-title" id={headingId}>
+                <span className="list-name">{PAGE.title}</span>
+              </h2>
+              {actions}
+            </div>
+          </header>
+        ) : (
+          displayed && actionsSlot !== null && actionsSlot !== undefined && createPortal(actions, actionsSlot)
+        )}
 
         {entries.length > 0 && (
           <ListFilterPanel

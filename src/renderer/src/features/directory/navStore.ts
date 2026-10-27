@@ -143,7 +143,7 @@ export const ListHostContext = createContext<ListHost | null>(null)
 export type FeatureId = RailFeature
 
 export const FEATURES: readonly { id: FeatureId; label: string; icon: IconName }[] = [
-  { id: 'subscriptions', label: '订阅的串', icon: 'bookmark' },
+  { id: 'subscriptions', label: '订阅', icon: 'bookmark' },
   { id: 'reminders', label: '提醒', icon: 'bell' },
   { id: 'search', label: '搜索', icon: 'search' },
   { id: 'history', label: '历史', icon: 'history' },

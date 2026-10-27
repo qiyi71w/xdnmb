@@ -26,7 +26,6 @@ import {
   type ThemeColors
 } from '../../../shared/theme'
 import { Icon } from '../components/Icon'
-import { applyButtonStyle, BUTTON_STYLE_OPTIONS, BUTTON_STYLE_TRIAL, currentButtonStyle, type ButtonStyle } from '../lib/buttonStyle'
 import { previewTheme, systemPrefersDark, systemReducesMotion } from '../lib/useAppearance'
 import { describeIssues, invalidFields } from './appearanceIssues'
 import type { SettingsWriteStatus } from './useSettingsWriter'
@@ -247,26 +246,7 @@ export function AppearanceSection({ settings, write }: { settings: AppSettings; 
           </span>
         )}
       </SettingRow>
-      {BUTTON_STYLE_TRIAL && <ButtonStyleTrial />}
     </Section>
-  )
-}
-
-/** Trial builds only: page secondary buttons in one candidate look, for this run (lib/buttonStyle.ts). */
-function ButtonStyleTrial() {
-  const [style, setStyle] = useState<ButtonStyle>(currentButtonStyle)
-  return (
-    <SettingRow labelId="setting-button-style" label="按钮样式（试用）" help="重启后回到现状">
-      <Choice<ButtonStyle>
-        labelledBy="setting-button-style"
-        options={BUTTON_STYLE_OPTIONS}
-        value={style}
-        onChange={(next) => {
-          applyButtonStyle(next)
-          setStyle(next)
-        }}
-      />
-    </SettingRow>
   )
 }
 

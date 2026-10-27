@@ -147,7 +147,7 @@ export function ListFilterToggle({ filter }: { filter: ListFilter }) {
     <button
       ref={toggleRef}
       type="button"
-      className={count > 0 ? 'icon-btn list-head-btn filter-toggle is-active' : 'icon-btn list-head-btn filter-toggle'}
+      className={count > 0 ? 'icon-btn filter-toggle is-active' : 'icon-btn filter-toggle'}
       aria-expanded={open}
       aria-controls={panelId}
       aria-label={name}

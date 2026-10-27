@@ -34,7 +34,7 @@ export interface FeatureHost {
    * the 更多 panel); dialogs always take focus themselves.
    */
   open: (id: FeatureId, focusTarget?: boolean) => void
-  /** The feature the active tab shows (订阅的串, 提醒, 搜索, 历史, 离线 pages), if any. */
+  /** The feature the active tab shows (订阅, 提醒, 搜索, 历史, 离线 pages), if any. */
   current: FeatureId | null
   reminderBadge: ReminderBadge | null
   searchShortcut: string

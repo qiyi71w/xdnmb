@@ -14,26 +14,32 @@
   background: var(--glass-strong);
   backdrop-filter: blur(28px) saturate(1.6);
   box-shadow: var(--shadow-nav), inset 0 0 0 1px var(--glass-edge);
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
 }
 
-.quote-card-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.quote-card-no {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--text-sm);
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
-
+/* 关闭 ends the card's first line (meta line, first notice or loading skeleton), same size in each;
+   the line's own text wraps beside it, never under it. It sits inside the card's scroller, which
+   clips: its focus ring is drawn inward. */
 .quote-card-close {
+  flex: none;
   width: 26px;
   height: 26px;
+  margin-left: auto;
+}
+
+.quote-card-close:focus-visible {
+  outline-offset: -2px;
+}
+
+.quote-card-lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.quote-card-skeleton {
+  flex: 1;
+  min-width: 0;
 }
 
 .quote-card-scroll {
@@ -49,10 +55,18 @@
 
 .quote-card-meta {
   display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.quote-card-meta-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 8px;
-  margin-bottom: 4px;
   font-size: var(--text-xs);
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;

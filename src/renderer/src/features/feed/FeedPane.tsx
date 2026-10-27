@@ -255,7 +255,7 @@ export function FeedPane({
             {filterable && <ListFilterToggle filter={filter} />}
             <button
               type="button"
-              className="icon-btn list-head-btn"
+              className="icon-btn"
               onClick={() => {
                 if (!refreshTurn.turning) refreshList()
               }}
