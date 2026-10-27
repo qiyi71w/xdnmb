@@ -157,6 +157,8 @@ function formatErrorText(detail: ImportFormatError, entry: ImportEntry): string 
       return `内容过长（超过 ${IMPORT_INPUT_MAX_LENGTH} 个字符）`
     case 'not-base64':
       return '格式无法识别：不是官网导出的 Base64 或 JSON 内容'
+    case 'not-export-url':
+      return '链接无法识别：请复制官网饼干导出页上二维码图片的地址'
     case 'not-json':
       return '格式无法识别：Base64 解码后不是 JSON'
     case 'missing-cookie':

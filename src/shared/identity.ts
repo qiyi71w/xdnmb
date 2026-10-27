@@ -67,8 +67,10 @@ export type ImportFormatError =
   | 'empty'
   /** Input exceeds the accepted size. */
   | 'too-long'
-  /** Export entry: neither Base64 nor JSON. */
+  /** Export entry: neither Base64 (plain or percent-encoded) nor JSON. */
   | 'not-base64'
+  /** Export entry: an address that is not the official export QR image, or carries no `text`. */
+  | 'not-export-url'
   /** Export entry: Base64 decoded, but not UTF-8 JSON. */
   | 'not-json'
   /** Export entry: JSON lacks a non-empty string `cookie`. */

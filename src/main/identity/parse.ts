@@ -40,15 +40,46 @@ function decodeBase64(text: string): string | null {
 }
 
 /**
+ * The `text` parameter of an official export QR image address (`publicapi.ovear.info/qrcode.php`),
+ * percent-decoded. Read from the raw query and decoded with `decodeURIComponent` rather than
+ * `URLSearchParams`, which would turn the Base64 `+` into a space. `null`: not such an address, no
+ * non-empty `text`, or broken percent encoding. The address is only read, never requested.
+ */
+export function qrCodeText(url: URL): string | null {
+  if (url.hostname !== 'publicapi.ovear.info' || url.pathname !== '/qrcode.php' || !['http:', 'https:'].includes(url.protocol)) return null
+  const part = url.search.slice(1).split('&').find((item) => item.startsWith('text='))
+  if (part === undefined) return null
+  try {
+    const value = decodeURIComponent(part.slice('text='.length)).trim()
+    return value === '' ? null : value
+  } catch {
+    return null
+  }
+}
+
+/**
  * 官网导出内容: the export page's QR text is JSON `{"cookie": "<userhash>", "name": "…"}`, carried
  * Base64-encoded in the export image URL (orzogc/xdnmb_api `getCookie`; orzogc/xdnmb QR scanner reads
- * the JSON directly). Both forms are accepted; the cookie value is used verbatim. `name` is the
- * cookie's public 饼干 ID; an export without a usable one is refused rather than stored unmatched.
+ * the JSON directly). Accepted: that JSON, its Base64 (also percent-encoded, as copied out of the
+ * address, e.g. padding as `%3D`), or the whole image address. The cookie value is used verbatim.
+ * `name` is the cookie's public 饼干 ID; an export without a usable one is refused rather than
+ * stored unmatched.
  */
 export function parseExportPayload(input: string): ParsedCredential {
   if (input.length > IMPORT_INPUT_MAX_LENGTH) return { ok: false, error: 'too-long' }
-  const text = input.trim()
+  let text = input.trim()
   if (text === '') return { ok: false, error: 'empty' }
+  if (/^https?:\/\//i.test(text)) {
+    let url: URL | null = null
+    try { url = new URL(text) } catch { /* not an address */ }
+    const value = url === null ? null : qrCodeText(url)
+    if (value === null) return { ok: false, error: 'not-export-url' }
+    text = value
+  } else if (!text.startsWith('{') && text.includes('%')) {
+    // Base64 never contains `%`, so one there is URL encoding (copied out of the address). JSON is
+    // left alone: its cookie value is itself percent-encoded bytes.
+    try { text = decodeURIComponent(text).trim() } catch { return { ok: false, error: 'not-base64' } }
+  }
   let json: string
   if (text.startsWith('{')) {
     json = text

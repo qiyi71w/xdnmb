@@ -684,9 +684,9 @@ function CredentialItem({
 
 /* ---------- Import entries ---------- */
 
-const IMPORT_COPY: Record<ImportEntry, { tab: string; title: string; secretLabel: string }> = {
-  export: { tab: '官网导出', title: '粘贴官网导出内容', secretLabel: '官网导出内容' },
-  raw: { tab: 'userhash', title: '粘贴原始 userhash', secretLabel: 'userhash' }
+const IMPORT_COPY: Record<ImportEntry, { tab: string; title: string; secretLabel: string; placeholder: string }> = {
+  export: { tab: '官网导出', title: '粘贴官网导出内容', secretLabel: '官网导出内容', placeholder: '二维码图片地址或导出内容' },
+  raw: { tab: 'userhash', title: '粘贴原始 userhash', secretLabel: 'userhash', placeholder: '粘贴到这里' }
 }
 
 const IMPORT_ENTRIES: readonly ImportEntry[] = ['export', 'raw']
@@ -828,7 +828,7 @@ function ImportForm({
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            placeholder="粘贴到这里"
+            placeholder={copy.placeholder}
             aria-describedby={invalid === 'secret' ? messageId : undefined}
             aria-invalid={invalid === 'secret' ? true : undefined}
             onInput={() => {

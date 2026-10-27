@@ -1,6 +1,6 @@
 import { Parser } from 'htmlparser2'
 import type { AccountCookie, AccountFailure } from '../../shared/account'
-import { parseExportPayload } from '../identity/parse'
+import { parseExportPayload, qrCodeText } from '../identity/parse'
 
 export const ACCOUNT_ORIGIN = 'https://www.nmbxd1.com'
 export class AccountError extends Error {
@@ -116,8 +116,7 @@ export function parseAccountExport(html: string): string {
   for (const node of descendants(document(html))) {
     if (node.tag !== 'img' || !node.attrs.src) continue
     const url = link(node.attrs.src, new URL(ACCOUNT_ORIGIN))
-    if (url?.hostname !== 'publicapi.ovear.info' || url.pathname !== '/qrcode.php' || !['http:', 'https:'].includes(url.protocol)) continue
-    const payload = url.searchParams.get('text')
+    const payload = url === null ? null : qrCodeText(url)
     if (payload !== null && parseExportPayload(payload).ok) payloads.push(payload)
   }
   if (payloads.length !== 1) throw new AccountError('unknown-structure')
