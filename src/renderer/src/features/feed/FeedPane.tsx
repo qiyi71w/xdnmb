@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ForumId, ThreadSummary } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import { Content, contentText } from '../../components/Content'
@@ -80,7 +80,7 @@ export function FeedPane({
   // Otherwise restore the last quit's loaded page count and reading position.
   const [saved] = useState(() => (remembered === null ? (registry?.savedLists.get(entryKey) ?? null) : null))
   const restorePages = saved === null ? null : Math.min(saved.pages, info.maxPage ?? saved.pages)
-  const { state, hasMore, canAppend, loadMore, refresh, retry } = useFeed(info.ref, info.maxPage, remembered?.state ?? null, restorePages)
+  const { state, hasMore, canAppend, loadMore, refresh, refreshAfterSend: refreshFeedAfterSend, retry } = useFeed(info.ref, info.maxPage, remembered?.state ?? null, restorePages)
   const refreshTurn = useRefreshTurn(state.activity === 'refresh')
   const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtering = contentFilterCount(filters) > 0
@@ -133,7 +133,22 @@ export function FeedPane({
     registry?.savedLists.delete(entryKey)
     refresh()
   }, [registry, entryKey, refresh])
-  useRegisterContent('lists', entryKey, { refresh: refreshList })
+
+  /** Calls of `refreshAfterSend` waiting for the commit that writes the refreshed list to memory. */
+  const memoryWaiters = useRef<Array<() => void>>([])
+  const [, setMemoryTick] = useState(0)
+  const refreshAfterSend = useCallback(async () => {
+    pendingRestore.current = null
+    registry?.savedLists.delete(entryKey)
+    await refreshFeedAfterSend()
+    // The shell copies this entry's memory when it opens the new thread: settle only after a commit
+    // (forced here, as the read's own one may already be past) has written the result to it.
+    const { promise, resolve } = Promise.withResolvers<void>()
+    memoryWaiters.current.push(resolve)
+    setMemoryTick((tick) => tick + 1)
+    await promise
+  }, [registry, entryKey, refreshFeedAfterSend])
+  useRegisterContent('lists', entryKey, { refresh: refreshList, refreshAfterSend })
 
   // The memory is kept current, not written on unmount: when the split toggles, the list that
   // replaces this one renders (and reads the memory) before this one's cleanup would run. A restored
@@ -145,6 +160,14 @@ export function FeedPane({
     if (scroller !== null && settleRestore(scroller)) return
     if (pendingRestore.current === null) remember()
   })
+  // After the memory above: a waiting `refreshAfterSend` sees the list it just read remembered.
+  useLayoutEffect(() => {
+    for (const resolve of memoryWaiters.current.splice(0)) resolve()
+  })
+  // Unmounted while waiting: nothing will commit any more; the follow-up finds the tab moved on.
+  useEffect(() => () => {
+    for (const resolve of memoryWaiters.current.splice(0)) resolve()
+  }, [])
 
   // Put the remembered position back whenever the list becomes displayed: on mount, and after the
   // pane was hidden (single pane, inactive tab), where the browser may drop scrollTop. A restored

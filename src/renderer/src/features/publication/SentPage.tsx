@@ -50,9 +50,9 @@ const PAGE_TEXT: Record<SentKind, { title: string; empty: string }> = {
 
 /**
  * Every attempt of this machine, newest first, for the 新串／回复 pages: read once `enabled` (one of
- * them was shown), again on each publication change of this window and each `refreshRevision`, and
- * every second while one is still sending or its result is being checked. A failed re-read keeps
- * the list (`readFailed`).
+ * them was shown), again on each publication change (a send of this window, or the automatic check
+ * naming or settling a stored send) and each `refreshRevision`, and every second while one is still
+ * sending or its result is being checked. A failed re-read keeps the list (`readFailed`).
  */
 export function useSentAttempts(enabled: boolean, refreshRevision: number) {
   const { store } = useEditorWorkspace()

@@ -3,7 +3,7 @@ import { IpcChannel, LIFECYCLE_REQUEST_CHANNEL, type XidaoApi } from '../shared/
 import type { LifecycleRequest } from '../shared/lifecycle'
 import { REMINDERS_CHANGED_CHANNEL, REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
 import { OFFLINE_CHANGED_CHANNEL } from '../shared/content'
-import { PUBLICATION_FAILURE_CHANNEL, PUBLICATION_OPEN_DRAFT_CHANNEL, type SendFailureNotice } from '../shared/publication'
+import { PUBLICATION_CHANGED_CHANNEL, PUBLICATION_FAILURE_CHANNEL, PUBLICATION_OPEN_DRAFT_CHANNEL, type SendFailureNotice } from '../shared/publication'
 import type { ThreadId } from '../shared/forum'
 
 // A notification can create a window before React has mounted its listener. Keep the intent in
@@ -207,7 +207,12 @@ const api: XidaoApi = {
     getPoWarning: () => ipcRenderer.invoke(IpcChannel.getPoWarning),
     setPoWarning: (input) => ipcRenderer.invoke(IpcChannel.setPoWarning, input),
     onFailureNotice,
-    onOpenDraft
+    onOpenDraft,
+    onChanged(listener) {
+      const receive = () => listener()
+      ipcRenderer.on(PUBLICATION_CHANGED_CHANNEL, receive)
+      return () => { ipcRenderer.removeListener(PUBLICATION_CHANGED_CHANNEL, receive) }
+    }
   },
   lifecycle: {
     onRequest(listener) {

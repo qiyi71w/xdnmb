@@ -9,8 +9,8 @@ import type { ThreadSnapshot } from '../tabs/tabsState'
  * - `reply`: the tab still shows the thread: refresh it; with a confirmed post ID, then locate that
  *   reply like a quote jump, a new back step to `source` (where the reader was when the send
  *   started; null when the tab shows another entry of the thread now: read when jumping).
- * - `thread`: the tab still shows the forum list: with a confirmed post ID, open the new thread
- *   there as a new step (back returns to the list as it was); without one, refresh the list.
+ * - `thread`: the tab still shows the forum list: refresh it so it lists the new thread; then, with
+ *   a confirmed post ID, open the new thread there as a new step (back returns to that list).
  */
 export type SendFollowUp =
   | { kind: 'reply'; tabId: number; entryKey: number; threadId: ThreadId; postId: PostId | null; source: ThreadSnapshot | null }
@@ -53,7 +53,8 @@ export interface SendFollowUpDeps {
   stillShown: (plan: SendFollowUp) => boolean
   /** Refreshes the reader of the entry; settles when that refresh has ended (or there is none). */
   refreshThread: (entryKey: number) => Promise<void>
-  refreshList: (entryKey: number) => void
+  /** Refreshes the forum list of the entry, superseding one running; settles once the list shows the result (or there is none). */
+  refreshList: (entryKey: number) => Promise<void>
   /** Quote locate of a post, from local records. */
   locate: (postId: PostId) => Promise<QuoteLocation>
   /** Reads the thread's last page (full listing), recording its replies for a later locate. */
@@ -70,8 +71,9 @@ export interface SendFollowUpDeps {
  */
 export async function runSendFollowUp(plan: SendFollowUp, deps: SendFollowUpDeps): Promise<void> {
   if (plan.kind === 'thread') {
-    if (plan.threadId === null) deps.refreshList(plan.entryKey)
-    else deps.openThread(plan, plan.threadId)
+    // First, so both the list beside the new thread (split) and the one back returns to show it.
+    await deps.refreshList(plan.entryKey)
+    if (plan.threadId !== null && deps.stillShown(plan)) deps.openThread(plan, plan.threadId)
     return
   }
   await deps.refreshThread(plan.entryKey)

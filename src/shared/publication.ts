@@ -130,9 +130,10 @@ export function sendFailureTitle(problem: PublicationProblem): string {
   return `发送失败：${ATTEMPT_PROBLEM_TEXT[problem]}`
 }
 
-/** Main → renderer event channels of `PublicationApi.onFailureNotice` / `onOpenDraft`. */
+/** Main → renderer event channels of `PublicationApi.onFailureNotice` / `onOpenDraft` / `onChanged`. */
 export const PUBLICATION_FAILURE_CHANNEL = 'publication:failure-notice'
 export const PUBLICATION_OPEN_DRAFT_CHANNEL = 'publication:open-draft'
+export const PUBLICATION_CHANGED_CHANNEL = 'publication:changed'
 
 export interface PublicationApi {
   submit(input: SubmitInput): Promise<SubmitResult>
@@ -149,4 +150,9 @@ export interface PublicationApi {
   onFailureNotice(listener: (notice: SendFailureNotice, missed: boolean) => void): () => void
   /** A failure's system notification was clicked (the window is already shown): open its draft. */
   onOpenDraft(listener: (notice: SendFailureNotice) => void): () => void
+  /**
+   * A stored send changed without this window asking (the automatic check named its post, or ended
+   * an unknown one): read sends and drafts again. Returns an unsubscribe function.
+   */
+  onChanged(listener: () => void): () => void
 }

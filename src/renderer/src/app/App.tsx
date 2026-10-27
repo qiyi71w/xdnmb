@@ -645,7 +645,7 @@ export function App() {
       void runSendFollowUp(plan, {
         stillShown,
         refreshThread: (entryKey) => registry.readers.get(entryKey)?.current.refreshAfterSend() ?? Promise.resolve(),
-        refreshList: (entryKey) => registry.lists.get(entryKey)?.current.refresh(),
+        refreshList: (entryKey) => registry.lists.get(entryKey)?.current.refreshAfterSend?.() ?? Promise.resolve(),
         locate: (postId) => window.xidao.quotes.locate({ operationId: operationId(), postId }),
         readThreadEnd: async (threadId) => {
           await window.xidao.reading.locateThreadEnd({ operationId: operationId(), threadId, mode: 'all' })
@@ -666,7 +666,8 @@ export function App() {
           const thread: ThreadOpen = { threadId: location.threadId, head: location.head, target, snapshot: null, unlocatedPostId: null }
           dispatch({ type: 'quote-navigate', tabId: tab.id, entryKey: entry.key, source, thread })
         },
-        // A new step either way: back returns to the list as it was before the send.
+        // A new step either way; the list was refreshed first, so it lists the new thread beside it
+        // (split) and when back returns to it.
         openThread: (step, threadId) => {
           const state = stateRef.current.tabs
           const tab = state?.tabs.find((item) => item.id === step.tabId)

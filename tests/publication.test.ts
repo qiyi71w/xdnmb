@@ -122,7 +122,7 @@ async function forum() {
 
 type Checks = { afterSendMs?: number | null; onRecover?: boolean; gapMs?: number }
 /** Automatic checks stay off unless a test is about them. */
-async function setup(checks: Checks = { afterSendMs: null, onRecover: false }, options: { onRecorded?: (attempt: PublicationAttempt) => void } = {}) {
+async function setup(checks: Checks = { afterSendMs: null, onRecover: false }, options: { onRecorded?: (attempt: PublicationAttempt) => void; onChecked?: (attempt: PublicationAttempt) => void } = {}) {
   const remote = await forum()
   const dir = mkdtempSync(join(tmpdir(), 'xidao-publication-'))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
@@ -142,7 +142,7 @@ async function setup(checks: Checks = { afterSendMs: null, onRecover: false }, o
     const service = createPublicationService({ store, drafts, files, protector,
       clientFor: userhash => createForumClient({ transport: createForumTransport({ allowedOrigins: [remote.origin], credentialOrigins: [remote.origin] }), baseUrl: remote.origin, browseIdentity: async () => userhash }),
       adapter: createPublicationAdapter({ origin: remote.origin, apiOrigin: remote.origin, publishTimeoutMs: 1500 }), deadlineMs: 1500, checks: { gapMs: 0, ...active },
-      onRecorded: options.onRecorded })
+      onRecorded: options.onRecorded, onChecked: options.onChecked })
     await service.recover(); await drafts.recover()
     return { service, drafts }
   }
@@ -793,17 +793,22 @@ it('confirms a lost new thread and a lost reply by reading the forum after the s
 })
 
 it('names the post of a send whose number was unconfirmed when the later check finds it, and leaves it sent when not', async () => {
-  const s = await setup({ afterSendMs: 0, onRecover: false })
+  const checked: PublicationAttempt[] = []
+  const s = await setup({ afterSendMs: 0, onRecover: false }, { onChecked: value => { checked.push(value) } })
   s.remote.setMode('empty')
   const found = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'found', payload: payload(s.a, '没拿到串号') }))
   await expect.poll(() => s.db.getPublication(found.id)?.state).toBe('confirmed')
   expect(s.db.getPublication(found.id)).toMatchObject({ postId: postOf(s, '没拿到串号') })
+  // Windows are told, so an open 发送记录 shows the number without being read again by hand.
+  expect(checked).toEqual([expect.objectContaining({ id: found.id, state: 'confirmed', postId: postOf(s, '没拿到串号') })])
 
   s.remote.lag()
   const hidden = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'hidden', payload: payload(s.b, '论坛还没显示') }))
   await expect.poll(() => s.remote.seen.filter(r => r.path.startsWith('/api/showf')).length).toBe(4)
   expect(s.db.getPublication(hidden.id)).toMatchObject({ state: 'unconfirmed', postId: null })
   expect(posts(s)).toBe(2)
+  // Nothing changed: no notice, and nothing reads it again.
+  expect(checked.map(item => item.id)).toEqual([found.id])
 })
 
 it.each([

@@ -99,6 +99,30 @@ describe('real SQLite retained search', () => {
     expect(search(db, 'ab')[0]?.threadId).toBeNull()
   })
 
+  it('closes a 防剧透 segment the excerpt window cuts, as the full text pairs it', () => {
+    const { db } = fixture()
+    const secret = '秘'.repeat(300)
+    const bodies: Array<[string, string]> = [
+      // Starts inside a segment: the excerpt opens it again.
+      ['100', `前文[h]${'秘'.repeat(100)}needle${'秘'.repeat(10)}[/h]后文`],
+      // Ends inside a segment: the excerpt closes it.
+      ['101', `needle[h]${secret}[/h]`],
+      // Ends inside an opening marker: the half marker is left out.
+      ['102', `needle${'y'.repeat(233)}[h]秘密[/h]`],
+      // Starts inside a closing marker: the half marker is left out.
+      ['103', `[h]${'秘'.repeat(10)}[/h]${'z'.repeat(58)}needle`],
+      // Never closed in the full text: stays as typed, as the reader shows it.
+      ['104', `needle[h]${secret}`]
+    ]
+    for (const [id, body] of bodies) db.savePost(post(id, body), at)
+    const excerpts = new Map(search(db, 'needle').map((hit) => [hit.postId, hit.excerpt]))
+    expect(excerpts.get('100')).toBe(`[h]${'秘'.repeat(60)}needle${'秘'.repeat(10)}[/h]后文`)
+    expect(excerpts.get('101')).toBe(`needle[h]${secret.slice(0, 231)}[/h]`)
+    expect(excerpts.get('102')).toBe(`needle${'y'.repeat(233)}`)
+    expect(excerpts.get('103')).toBe(`${'z'.repeat(58)}needle`)
+    expect(excerpts.get('104')).toBe(`needle[h]${secret.slice(0, 231)}`)
+  })
+
   it('uses a fixed upper cursor and bounded batches without repeats, including empty short-query batches', () => {
     const { db } = fixture()
     for (let index = 1; index <= 150; index++) db.savePost(post(String(index), index < 70 ? '无' : '中'), at)

@@ -26,7 +26,7 @@ export interface InFlightPublication {
   done: Promise<PublicationAttempt | null>
 }
 
-export interface PublicationService extends Omit<PublicationApi, 'onFailureNotice' | 'onOpenDraft'> {
+export interface PublicationService extends Omit<PublicationApi, 'onFailureNotice' | 'onOpenDraft' | 'onChanged'> {
   recover(): Promise<void>
   /** Discard only uncommitted prompts when the renderer goes away; in-flight writes continue. */
   releasePrompts(): void
@@ -73,6 +73,11 @@ export function createPublicationService(deps: {
    * keeps a launch notice instead). Called once per send, after storage accepted the result.
    */
   onRecorded?: (attempt: PublicationAttempt) => void
+  /**
+   * The automatic check changed a stored send without any window asking: it named an unconfirmed
+   * send's post, or settled an unknown one. Not called when the check left the record as it was.
+   */
+  onChecked?: (attempt: PublicationAttempt) => void
 }): PublicationService {
   const { store, drafts, files, protector, adapter } = deps
   const now = deps.now ?? (() => new Date())
@@ -169,6 +174,9 @@ export function createPublicationService(deps: {
         ? await store.finishPublication({ id: attemptId, state: 'confirmed', problem: null, postId: found.postId, threadId: found.threadId, at, launchNotice: false })
         : attempt.state === 'unknown' ? await store.failUnverifiedPublication({ id: attemptId, at }) : attempt
       if (!isUnsettled(stored)) for (const [editorId, held] of editorAttempts) if (held.id === attemptId) editorAttempts.delete(editorId)
+      if (stored.state !== attempt.state || stored.postId !== attempt.postId) {
+        try { deps.onChecked?.(stored) } catch { console.error('[publication] check notification failed') }
+      }
       return { attempt: stored, read }
     } catch {
       // Storage refused: it stays as it was and is checked again at the next start.

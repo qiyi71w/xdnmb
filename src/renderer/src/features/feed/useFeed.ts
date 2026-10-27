@@ -107,6 +107,17 @@ export function useFeed(feed: FeedRef, maxPage: number | null, remembered: FeedS
     void read('refresh', 1)
   }, [read])
 
+  /**
+   * After the user's own send: supersedes whatever is loading (a refresh too, which may have started
+   * before the send) and reads page 1 again; settles when that read has ended.
+   */
+  const refreshAfterSend = useCallback(() => {
+    restoring.current = null
+    restoreRun.current = null
+    scope.current.cancelAll()
+    return read('refresh', 1)
+  }, [read])
+
   /** A restore that could not read page 1 is tried again whole. */
   const retry = useCallback(() => {
     const error = stateRef.current.error
@@ -116,5 +127,5 @@ export function useFeed(feed: FeedRef, maxPage: number | null, remembered: FeedS
     else void read(error.action, error.page)
   }, [read, restore])
 
-  return { state, hasMore, canAppend, loadMore, refresh, retry }
+  return { state, hasMore, canAppend, loadMore, refresh, refreshAfterSend, retry }
 }

@@ -7,8 +7,65 @@ import { createSearchFts } from './search-schema'
 
 export const normalizeSearchText = (text: string): string => text.normalize('NFC').toLowerCase()
 interface DocumentRow {
-  rowid: number; post_id: string; owner: string; thread_id: string | null; title: string; excerpt: string
+  rowid: number; post_id: string; owner: string; thread_id: string | null; title: string; excerpt_source: string
   forum_id: string | null; created_at: string | null; has_image: number | null; fetched_at: string
+}
+
+const SPOILER_MARKER = /\[(\/?)h\]/g
+const OPEN_LENGTH = '[h]'.length
+const CLOSE_LENGTH = '[/h]'.length
+
+/**
+ * 防剧透 segments of `text` as the reader pairs them: each `[h]` with the next `[/h]` (markers
+ * between stay text); a pair with only blanks between, and markers never paired, stay as typed.
+ * Each is `[index of its [h], index of its [/h]]`.
+ */
+function spoilerSegments(text: string): Array<[number, number]> {
+  const markers = [...text.matchAll(SPOILER_MARKER)]
+  const segments: Array<[number, number]> = []
+  for (let index = 0; index < markers.length; index++) {
+    if (markers[index]![1] !== '') continue
+    const close = markers.findIndex((marker, at) => at > index && marker[1] === '/')
+    if (close === -1) break
+    const open = markers[index]!.index
+    const end = markers[close]!.index
+    if (text.slice(open + OPEN_LENGTH, end).trim() === '') continue
+    segments.push([open, end])
+    index = close
+  }
+  return segments
+}
+
+/**
+ * A hit's excerpt: 240 characters (code points) from 60 before the first match of `query`. A
+ * segment the window cuts gets its marker back on the cut side, so the row masks the part it
+ * shows as other list excerpts do; a marker cut in two is left out.
+ */
+function searchExcerpt(text: string, query: string): string {
+  const points = Array.from(text)
+  const first = Array.from(text.slice(0, Math.max(0, text.indexOf(query)))).length
+  const from = Math.max(0, first - 60)
+  let start = points.slice(0, from).join('').length
+  let end = start + points.slice(from, from + 240).join('').length
+  let opening = ''
+  let closing = ''
+  for (const [open, close] of spoilerSegments(text)) {
+    if (start > open && start < close + CLOSE_LENGTH) {
+      if (start >= close) start = close + CLOSE_LENGTH
+      else {
+        start = Math.max(start, open + OPEN_LENGTH)
+        opening = '[h]'
+      }
+    }
+    if (end > open && end < close + CLOSE_LENGTH) {
+      if (end <= open + OPEN_LENGTH) end = open
+      else {
+        end = Math.min(end, close)
+        closing = '[/h]'
+      }
+    }
+  }
+  return `${opening}${text.slice(start, Math.max(start, end))}${closing}`
 }
 type SearchPost = Pick<Post, 'id' | 'title' | 'plainText' | 'forumId' | 'createdAt' | 'image' | 'imageKnown'>
 
@@ -73,8 +130,7 @@ export class SearchDatabase {
     const cursor = candidates.at(-1)?.rowid ?? upper
     const rows = db.prepare<Record<string, string | number | null>, DocumentRow>(`
       SELECT d.rowid,d.post_id,d.owner,d.thread_id,substr(d.title,1,180) AS title,d.forum_id,d.created_at,d.has_image,d.fetched_at,
-        CASE WHEN instr(d.body,@query)>0 THEN substr(d.body,max(1,instr(d.body,@query)-60),240)
-          ELSE substr(d.title,max(1,instr(d.title,@query)-60),240) END AS excerpt
+        CASE WHEN instr(d.body,@query)>0 THEN d.body ELSE d.title END AS excerpt_source
       FROM search_documents d WHERE d.rowid>@after AND d.rowid<=@cursor
         ${long ? 'AND d.rowid IN (SELECT rowid FROM search_fts WHERE search_fts MATCH @phrase AND rowid>@after AND rowid<=@cursor)' : ''}
         AND (instr(d.title,@query)>0 OR instr(d.body,@query)>0)
@@ -102,7 +158,7 @@ export class SearchDatabase {
         (SELECT nullif(title,'') FROM search_documents WHERE post_id=@thread),
         (SELECT title FROM retained_titles WHERE thread_id=@thread)),1,180) AS title`).get({ thread: row.thread_id })?.title ?? null
       hits.push({ postId: row.post_id, threadId: row.thread_id, threadTitle: title, title: row.title || null,
-        excerpt: row.excerpt, ...metadata, uncertainFilters: match.uncertain,
+        excerpt: searchExcerpt(row.excerpt_source, query), ...metadata, uncertainFilters: match.uncertain,
         retention: row.owner !== 'cache' ? 'subscription' : offline ? 'offline' : 'cache',
         location: location ? { page: location.page, mode: location.mode, fetchedAt: location.fetched_at, source: location.source } : null })
     }

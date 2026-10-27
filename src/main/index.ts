@@ -31,7 +31,7 @@ import { createSubscriptionService } from './subscriptions/service'
 import { createPublicationAdapter } from './publication/adapter'
 import { createPublicationService } from './publication/service'
 import { createFailureNotifier } from './publication/failureNotifier'
-import { PUBLICATION_FAILURE_CHANNEL, PUBLICATION_OPEN_DRAFT_CHANNEL } from '../shared/publication'
+import { PUBLICATION_CHANGED_CHANNEL, PUBLICATION_FAILURE_CHANNEL, PUBLICATION_OPEN_DRAFT_CHANNEL } from '../shared/publication'
 import trayIconPath from '../../resources/tray-icon.png?asset'
 import { REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
 import { createReminderService } from './reminders/service'
@@ -328,7 +328,12 @@ async function start(): Promise<void> {
       baseUrl: FORUM_API_ORIGIN, browseIdentity: async () => userhash
     }),
     adapter: createPublicationAdapter(),
-    onRecorded: (attempt) => { void failures.recorded(attempt).catch(() => console.error('[publication] failure notice unavailable')) }
+    onRecorded: (attempt) => { void failures.recorded(attempt).catch(() => console.error('[publication] failure notice unavailable')) },
+    onChecked: () => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.webContents.isDestroyed()) window.webContents.send(PUBLICATION_CHANGED_CHANNEL)
+      }
+    }
   })
   await publication.recover().catch(() => console.error('[publication] recovery failed'))
   // No editor exists yet: copies no saved draft references, and leftover files, are removed.

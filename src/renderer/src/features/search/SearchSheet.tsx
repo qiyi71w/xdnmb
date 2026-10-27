@@ -4,6 +4,8 @@ import type { SearchHit } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { Loading } from '../../components/Notices'
+import { SpoilerPlaceholder } from '../../components/Spoiler'
+import { withSpoilers } from '../../components/spoilers'
 import { meaningfulTitle } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
@@ -484,6 +486,22 @@ function Highlighted({ text, query }: { text: string; query: string }) {
   )
 }
 
+/** A hit's excerpt as other list excerpts show it: 防剧透 segments masked, matches marked elsewhere. */
+function HitExcerpt({ text, query }: { text: string; query: string }) {
+  const nodes = useMemo(() => withSpoilers([{ type: 'text', text }]), [text])
+  return (
+    <>
+      {nodes.map((node, index) =>
+        node.type === 'spoiler' ? (
+          <SpoilerPlaceholder key={index} masked={node.children.map((child) => (child.type === 'text' ? child.text : '')).join('')} />
+        ) : node.type === 'text' ? (
+          <Highlighted key={index} text={node.text} query={query} />
+        ) : null
+      )}
+    </>
+  )
+}
+
 function HitRow({
   hit,
   query,
@@ -541,7 +559,7 @@ function HitRow({
           </span>
         )}
         <span className="search-hit-excerpt">
-          <Highlighted text={hit.excerpt} query={query} />
+          <HitExcerpt text={hit.excerpt} query={query} />
         </span>
         <span className="search-hit-meta">
           {forumName !== null && <span>{forumName}</span>}

@@ -79,7 +79,7 @@ export interface EditorsStore {
   /** Sent sends with their post known, by `focusKey`, until a new editor opens there or the tab closes. */
   published: ReadonlyMap<string, PublishedNote>
   clearPublished: (key: string) => void
-  /** Grows whenever a send created or changed an attempt, saved a draft or ended an editor. */
+  /** Grows whenever a send created or changed an attempt, saved a draft or ended an editor, and when the automatic check changed a stored send. */
   publicationRevision: number
   /** Panel to focus once it is displayed (see `focusKey`). */
   focusRequest: string | null
@@ -245,6 +245,7 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
     hooksRef.current = hooks
   })
   const bump = useCallback(() => setPublicationRevision((revision) => revision + 1), [])
+  useEffect(() => window.xidao.publication.onChanged(bump), [bump])
   const find = useCallback((editorId: EditorId) => stateRef.current.editors.find((item) => item.id === editorId), [])
 
   /** Hands a send's result to `hooks.settled` once, then forgets where the send started. */

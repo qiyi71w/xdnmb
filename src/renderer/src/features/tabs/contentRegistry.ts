@@ -40,6 +40,11 @@ export interface ReaderHandle {
 
 export interface ListHandle {
   refresh(): void
+  /**
+   * A forum list, the target of a new thread: refresh after the user's own send, superseding one
+   * running; settles once the list (and its memory) shows the result.
+   */
+  refreshAfterSend?(): Promise<void>
 }
 
 /** What the shell can ask of a mounted online search page. */

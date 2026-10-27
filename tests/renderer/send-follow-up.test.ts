@@ -57,8 +57,9 @@ function world(options: { shown: ShownEntry; replyPage?: number; rangeEnd?: numb
       options.during?.()
       record(options.rangeEnd ?? replyPage)
     },
-    refreshList: () => {
+    refreshList: async () => {
       log.listRefreshed = true
+      options.during?.()
     },
     locate: async (postId: string): Promise<QuoteLocation> =>
       recorded.has(postId)
@@ -154,11 +155,21 @@ describe('after a send: reply', () => {
 })
 
 describe('after a send: new thread', () => {
-  it('confirmed: opens the new thread from the forum list', async () => {
-    const w = world({ shown: showsForum })
+  it('confirmed: refreshes the forum list, then opens the new thread from it', async () => {
+    let listedFirst = false
+    const w: World = world({ shown: showsForum, during: () => { listedFirst = w.log.opened.length === 0 } })
     await follow(attempt(newThread, 'confirmed', '50000100', '50000100'), w)
+    expect(w.log.listRefreshed).toBe(true)
+    expect(listedFirst).toBe(true)
     expect(w.log.opened).toEqual(['50000100'])
-    expect(w.log.listRefreshed).toBe(false)
+  })
+
+  it('the tab moves on while the list refreshes: the new thread is not opened', async () => {
+    let w: World | null = null
+    w = world({ shown: showsForum, during: () => { w!.tab.current = { tabId: 1, entryKey: 23, targets: [] } } })
+    await follow(attempt(newThread, 'confirmed', '50000100', '50000100'), w)
+    expect(w.log.listRefreshed).toBe(true)
+    expect(w.log.opened).toEqual([])
   })
 
   it('ID unconfirmed: only refreshes the list', async () => {
