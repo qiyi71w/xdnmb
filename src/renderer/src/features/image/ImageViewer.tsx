@@ -12,7 +12,7 @@ import './image.css'
 const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'
 
 /**
- * Viewer of one post image over the reader that opened it (modal within that reader). Fetches the
+ * Viewer of one post image over the reader or thread list that opened it (modal within that view). Fetches the
  * original on open and shows the thumbnail meanwhile; a failed original keeps the thumbnail with the
  * reason and a manual 重试. Zoom and pan by toolbar, wheel, drag and keys; saving is possible only
  * once the original is shown, and always saves the stored original. Unmounting cancels the load.
@@ -27,7 +27,7 @@ export function ImageViewer({
   viewId: ImageViewId
   postId: PostId
   initialThumb: LoadedImage | null
-  /** The reader is displayed (its tab active, its pane shown). */
+  /** The opening view is displayed (its tab active, its pane shown). */
   displayed: boolean
   onClose: () => void
 }) {

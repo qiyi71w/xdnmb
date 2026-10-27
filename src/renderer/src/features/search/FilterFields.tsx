@@ -1,6 +1,6 @@
 import { useId, useState, type ReactNode } from 'react'
 import type { ForumId } from '../../../../shared/forum'
-import type { ContentFilters } from '../../../../shared/search'
+import type { ContentFilters, PostKind, SearchFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
 import { contentFilterCount, type FilteredList } from './listFilters'
 import { NO_CONTENT_FILTERS } from './searchState'
@@ -14,26 +14,73 @@ const IMAGE_CHOICES: { value: ContentFilters['image']; label: string }[] = [
   { value: 'without', label: '无图' }
 ]
 
+const POST_KIND_CHOICES: { value: PostKind; label: string }[] = [
+  { value: 'any', label: '不限' },
+  { value: 'head', label: '主帖' },
+  { value: 'reply', label: '回复' }
+]
+
 /** A `type=date` value, or null for an empty or incomplete one. */
 function dateValue(value: string): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null
 }
 
+/** One exclusive filter choice as pressed buttons (`.segmented`) under a visible label. */
+function ChoiceField<T extends string>({
+  label,
+  choices,
+  value,
+  onChange,
+  disabled
+}: {
+  label: string
+  choices: readonly { value: T; label: string }[]
+  value: T
+  onChange: (next: T) => void
+  disabled: boolean
+}) {
+  const labelId = useId()
+  return (
+    <div className="filter-field">
+      <span className="filter-label" id={labelId}>
+        {label}
+      </span>
+      <div className="segmented" role="group" aria-labelledby={labelId}>
+        {choices.map((choice) => (
+          <button
+            key={choice.value}
+            type="button"
+            className="segmented-item"
+            aria-pressed={value === choice.value}
+            disabled={disabled}
+            onClick={() => onChange(choice.value)}
+          >
+            {choice.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /**
- * 版面／日期／图片 controls shared by the search sheet and the list filter bars. `forums` null hides
+ * 版面／日期／图片 controls shared by the search page and the list filter bars. `forums` null hides
  * the forum choice (a single forum's own list). A forum that is filtered on but no longer in the
- * directory stays selectable by its ID.
+ * directory stays selectable by its ID. `children` are further fields of one surface, laid out
+ * with these.
  */
-export function FilterFields({
+function FilterFields({
   value,
   onChange,
   forums,
-  disabled = false
+  disabled = false,
+  children
 }: {
   value: ContentFilters
   onChange: (next: ContentFilters) => void
   forums: ReadonlyMap<ForumId, string> | null
   disabled?: boolean
+  children?: ReactNode
 }) {
   const id = useId()
   const reversed = value.fromDate !== null && value.toDate !== null && value.fromDate > value.toDate
@@ -90,25 +137,14 @@ export function FilterFields({
           />
         </div>
       </div>
-      <div className="filter-field">
-        <span className="filter-label" id={`${id}-image`}>
-          图片
-        </span>
-        <div className="segmented" role="group" aria-labelledby={`${id}-image`}>
-          {IMAGE_CHOICES.map((choice) => (
-            <button
-              key={choice.value}
-              type="button"
-              className="segmented-item"
-              aria-pressed={value.image === choice.value}
-              disabled={disabled}
-              onClick={() => onChange({ ...value, image: choice.value })}
-            >
-              {choice.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <ChoiceField
+        label="图片"
+        choices={IMAGE_CHOICES}
+        value={value.image}
+        disabled={disabled}
+        onChange={(image) => onChange({ ...value, image })}
+      />
+      {children}
       {reversed && (
         <p className="field-warning filter-wide">
           <Icon name="alert" size={14} />
@@ -116,6 +152,37 @@ export function FilterFields({
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * Filters of a search. The 搜索 page's local search adds 发言 (main post or reply); the in-thread
+ * search keeps its 发言类型 at 不限 and does not offer it.
+ */
+export function SearchFilterFields({
+  value,
+  onChange,
+  forums,
+  postKind
+}: {
+  value: SearchFilters
+  onChange: (next: SearchFilters) => void
+  forums: ReadonlyMap<ForumId, string>
+  /** Whether 发言 is offered. */
+  postKind: boolean
+}) {
+  return (
+    <FilterFields value={value} onChange={(next) => onChange({ ...next, postKind: value.postKind })} forums={forums}>
+      {postKind && (
+        <ChoiceField
+          label="发言"
+          choices={POST_KIND_CHOICES}
+          value={value.postKind}
+          disabled={false}
+          onChange={(kind) => onChange({ ...value, postKind: kind })}
+        />
+      )}
+    </FilterFields>
   )
 }
 

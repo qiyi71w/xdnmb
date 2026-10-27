@@ -56,8 +56,9 @@ function renderNodes(nodes: readonly DisplayNode[], ctx: RenderContext, path: st
         return <Tag key={key}>{renderNodes(node.children, ctx, key)}</Tag>
       }
       case 'greentext':
+      case 'redtext':
         return (
-          <span key={key} className="greentext">
+          <span key={key} className={node.type}>
             {renderNodes(node.children, ctx, key)}
           </span>
         )

@@ -205,7 +205,7 @@ describe('combined predecessor migration', () => {
     for (let batch = 0; batch < 100 && !rebuilt; batch++) rebuilt = db.rebuildSearchBatch()
     expect(rebuilt).toBe(true)
     const result = db.searchBatch({ query: '旧正文', scope: { kind: 'local' },
-      filters: { forumId: null, fromDate: null, toDate: null, image: 'any' }, after: 0, upper: db.searchBoundary() })
+      filters: { forumId: null, fromDate: null, toDate: null, image: 'any', postKind: 'any' }, after: 0, upper: db.searchBoundary() })
     expect(result.batch.hits.map((hit) => hit.postId)).toEqual(['100', '101'])
     expect(db.getContentUsage().protectedTextBytes).toBeGreaterThan(0)
     const raw = new Database(path, { readonly: true })

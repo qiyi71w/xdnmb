@@ -2,7 +2,7 @@
 // The main process owns requests, pagination tokens and normalization; the renderer only sees the
 // normalized pages below and never a service URL, query URL or pagination token.
 
-import type { PostId, ThreadId } from './forum'
+import type { PostId, ThreadId, TimelineId } from './forum'
 
 /** The search website itself, opened only in the system browser by an explicit user action. */
 export const SEARCH_SITE_URL = 'https://nmb-search.166666666.xyz/'
@@ -24,10 +24,13 @@ export type SearchSessionId = string
  *   post; it equals `threadId` when the link names the main post. `page` is where the search index
  *   saw the target in the full (`all`) listing, possibly outdated.
  * - `board`: `/f/<版面名>` or `/m/f/<版面名>`; the name still has to match the board directory.
+ * - `timeline`: `/Home/Forum/timeline/id/<编号>.html` or `/Forum/timeline/id/<编号>.html`; the
+ *   number still has to exist in the local timeline directory.
  */
 export type ForumLinkTarget =
   | { kind: 'thread'; threadId: ThreadId; replyId: PostId | null; page: number | null; poHint: boolean }
   | { kind: 'board'; boardName: string }
+  | { kind: 'timeline'; timelineId: TimelineId }
 
 /** One search hit. All text is untrusted plain text from the service and must be shown as text. */
 export interface SearchHit {
@@ -109,8 +112,8 @@ function decodedSegment(value: string): string | null {
 }
 
 /**
- * Recognizes a forum thread/board link. Only the verified hosts and path forms above are accepted;
- * any other URL (other hosts, ports, credentials, unknown paths, non-decimal IDs) gives `null`.
+ * Recognizes a forum thread/board/timeline link. Only the verified hosts and path forms above are
+ * accepted; any other URL (other hosts, ports, credentials, unknown paths, non-decimal IDs) gives `null`.
  */
 export function parseForumLink(raw: string): ForumLinkTarget | null {
   if (!URL.canParse(raw)) return null
@@ -132,6 +135,12 @@ export function parseForumLink(raw: string): ForumLinkTarget | null {
   if (po) {
     const threadId = po[1] as string
     return DECIMAL_ID.test(threadId) ? { kind: 'thread', threadId, replyId: null, page: null, poHint: true } : null
+  }
+
+  const timeline = /^(?:\/home)?\/forum\/timeline\/id\/(\d+)\.html$/i.exec(path)
+  if (timeline) {
+    const timelineId = timeline[1] as string
+    return DECIMAL_ID.test(timelineId) ? { kind: 'timeline', timelineId } : null
   }
 
   const board = /^(?:\/m)?\/f\/([^/]+)$/.exec(path)

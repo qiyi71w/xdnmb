@@ -180,6 +180,17 @@
   background: transparent;
 }
 
+/* A recognized link's web page: an icon at the row's end, beside the kind and date line. */
+.online-search-hit.has-browser .online-search-hit-main {
+  padding-right: 46px;
+}
+
+.online-search-hit-browser {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+
 .online-search-hit-top {
   display: flex;
   flex-wrap: wrap;
@@ -351,6 +362,15 @@
 
 :root[data-density='compact'] .online-search-hit-main {
   padding: 6px 10px;
+}
+
+:root[data-density='compact'] .online-search-hit.has-browser .online-search-hit-main {
+  padding-right: 40px;
+}
+
+:root[data-density='compact'] .online-search-hit-browser {
+  top: 2px;
+  right: 4px;
 }
 
 :root[data-density='compact'] .online-search-hit-extra {

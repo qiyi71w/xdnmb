@@ -30,7 +30,7 @@ import { REMINDERS_CHANGED_CHANNEL } from '../shared/reminders'
 import type { ReminderService } from './reminders/service'
 import { applyZoom, currentZoom } from './zoom'
 import type { SearchService } from './search/service'
-import type { ContentFilters, SearchScope } from '../shared/search'
+import type { SearchFilters, SearchScope } from '../shared/search'
 import { serverCalendarDate } from '../shared/search-filters'
 import { MAX_SEARCH_QUERY_LENGTH, SEARCH_SITE_URL } from '../shared/online-search'
 import type { OnlineSearchService } from './online-search/service'
@@ -96,18 +96,19 @@ function searchRecord(raw: unknown, keys: string[]): Record<string, unknown> {
   return input
 }
 
-function searchFilters(raw: unknown): ContentFilters {
-  const input = searchRecord(raw, ['forumId', 'fromDate', 'toDate', 'image'])
+function searchFilters(raw: unknown): SearchFilters {
+  const input = searchRecord(raw, ['forumId', 'fromDate', 'toDate', 'image', 'postKind'])
   const date = (value: unknown): string | null => {
     if (value === null) return null
     if (typeof value !== 'string' || value.length !== 10 || serverCalendarDate(value) !== value) throw new InvalidRequestError()
     return value
   }
   if (input.image !== 'any' && input.image !== 'with' && input.image !== 'without') throw new InvalidRequestError()
+  if (input.postKind !== 'any' && input.postKind !== 'head' && input.postKind !== 'reply') throw new InvalidRequestError()
   const fromDate = date(input.fromDate)
   const toDate = date(input.toDate)
   if (fromDate !== null && toDate !== null && fromDate > toDate) throw new InvalidRequestError()
-  return { forumId: input.forumId === null ? null : forumId(input.forumId), fromDate, toDate, image: input.image }
+  return { forumId: input.forumId === null ? null : forumId(input.forumId), fromDate, toDate, image: input.image, postKind: input.postKind }
 }
 
 function searchScope(raw: unknown): SearchScope {

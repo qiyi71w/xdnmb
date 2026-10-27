@@ -279,6 +279,11 @@
   display: none;
 }
 
+/* 浏览's image viewer covers the whole history page (header included), not only the browsing list. */
+.history-page-view .list-pane {
+  position: static;
+}
+
 .history-page-view .list-title-row {
   justify-content: flex-end;
 }

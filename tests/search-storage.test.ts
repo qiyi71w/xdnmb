@@ -5,7 +5,7 @@ import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { normalizeSearchText } from '../src/main/storage/search'
-import type { ContentFilters, SearchHit, SearchScope } from '../src/shared/search'
+import type { SearchFilters, SearchHit, SearchScope } from '../src/shared/search'
 import type { Post, ThreadPage } from '../src/shared/forum'
 import type { SubscriptionObservation, SubscriptionOperation } from '../src/shared/subscriptions'
 import { matchContentFilters } from '../src/shared/search-filters'
@@ -13,7 +13,7 @@ import { MIGRATIONS } from '../src/main/storage/migrations'
 
 const at = '2026-10-24T00:00:00.000Z'
 const later = '2026-10-24T01:00:00.000Z'
-const filters: ContentFilters = { forumId: null, fromDate: null, toDate: null, image: 'any' }
+const filters: SearchFilters = { forumId: null, fromDate: null, toDate: null, image: 'any', postKind: 'any' }
 const resources: Array<{ folder: string; db: ReadingDatabase }> = []
 function fixture() {
   const folder = mkdtempSync(join(tmpdir(), 'xidao-search-'))
@@ -175,11 +175,29 @@ describe('real SQLite retained search', () => {
     db.saveThreadPage(page(head, [post('101', 'matching', { forumId: '2', userHash: 'other', createdAt: null, imageKnown: undefined }),
       post('102', 'matching', { forumId: '2', userHash: 'po', image: { path: 'img', ext: '.png' } })]), at)
     expect(search(db, 'matching', { kind: 'thread', threadId: '100', mode: 'po' }).map((hit) => hit.postId)).toEqual(['100', '102'])
-    const hits = search(db, 'matching', { kind: 'local' }, { forumId: '2', fromDate: '2026-10-24', toDate: '2026-10-24', image: 'with' })
+    const hits = search(db, 'matching', { kind: 'local' }, { forumId: '2', fromDate: '2026-10-24', toDate: '2026-10-24', image: 'with', postKind: 'any' })
     expect(hits.map((hit) => [hit.postId, hit.uncertainFilters])).toEqual([['101', true], ['102', false]])
     expect(db.getReadingState('100').mode).toBe('all')
     expect(db.searchMetadata(['100', '999'])).toEqual([{ threadId: '100', forumId: '1', createdAt: expect.anything(), hasImage: false },
       { threadId: '999', forumId: null, createdAt: null, hasImage: null }])
+  })
+
+  it('filters by 发言类型, keeping posts of an unknown thread marked, combined with board, date and image', () => {
+    const { db } = fixture()
+    db.saveThreadPage(page(post('100', 'kind', { forumId: '1', image: { path: 'a', ext: '.png' } }), [
+      post('101', 'kind', { forumId: '1' }),
+      post('102', 'kind', { forumId: '2', image: { path: 'b', ext: '.png' } })
+    ]), at)
+    db.saveThreadPage(page(post('200', 'kind', { forumId: '2', createdAt: '2026-10-25(日)12:00:00' }), []), at)
+    db.savePost(post('300', 'kind', { forumId: '1' }), at)
+    const ids = (applied: Partial<SearchFilters>) =>
+      search(db, 'kind', { kind: 'local' }, { ...filters, ...applied }).map((hit) => [hit.postId, hit.threadId, hit.uncertainFilters])
+    expect(ids({})).toEqual([['100', '100', false], ['101', '100', false], ['102', '100', false], ['200', '200', false], ['300', null, false]])
+    expect(ids({ postKind: 'head' })).toEqual([['100', '100', false], ['200', '200', false], ['300', null, true]])
+    expect(ids({ postKind: 'reply' })).toEqual([['101', '100', false], ['102', '100', false], ['300', null, true]])
+    expect(ids({ postKind: 'head', forumId: '2' })).toEqual([['200', '200', false]])
+    expect(ids({ postKind: 'head', image: 'with' })).toEqual([['100', '100', false]])
+    expect(ids({ postKind: 'reply', image: 'with', fromDate: '2026-10-24', toDate: '2026-10-24' })).toEqual([['102', '100', false]])
   })
 
   it('updates transactionally, refuses stale observations, and removes cache-only hits but preserves offline and journal ownership', () => {

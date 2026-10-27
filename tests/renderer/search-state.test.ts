@@ -5,7 +5,7 @@ import {
   commitsJump,
   HITS_PER_STEP,
   initialSearchState,
-  NO_CONTENT_FILTERS,
+  NO_SEARCH_FILTERS,
   pruneReturns,
   searchReducer,
   shouldContinue,
@@ -46,7 +46,7 @@ const start = (operationId: string, query = 'abc'): SearchAction => ({
   operationId,
   query,
   scope: { kind: 'local' },
-  filters: NO_CONTENT_FILTERS
+  filters: NO_SEARCH_FILTERS
 })
 
 const localRun = (state: SearchState) => state.tabs[1]?.local.run ?? null
@@ -94,7 +94,7 @@ describe('search sessions', () => {
 
   it('keeps a thread search for the same thread, and starts afresh for another one without losing text or filters', () => {
     const scope = { threadId: '100', mode: 'po' as const, title: null }
-    const filters = { ...NO_CONTENT_FILTERS, image: 'with' as const }
+    const filters = { ...NO_SEARCH_FILTERS, image: 'with' as const, postKind: 'reply' as const }
     let state = run(
       initialSearchState,
       { type: 'open', tabId: 1, view: 'thread', scope },

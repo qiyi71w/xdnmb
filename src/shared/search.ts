@@ -8,6 +8,12 @@ export interface ContentFilters {
   toDate: string | null
   image: 'any' | 'with' | 'without'
 }
+/** 发言类型: 主帖 is the post whose number is its thread's number; 回复 is every other post. */
+export type PostKind = 'any' | 'head' | 'reply'
+/** Filters of the search page only; list views filter threads with `ContentFilters` alone. */
+export interface SearchFilters extends ContentFilters {
+  postKind: PostKind
+}
 export type SearchScope = { kind: 'local' } | { kind: 'thread'; threadId: ThreadId; mode: ReadingMode }
 export interface SearchHit {
   retention: 'cache' | 'offline' | 'subscription'
@@ -51,7 +57,7 @@ export interface ThreadFilterMetadata {
 }
 export interface SearchApi {
   /** Starts a session and returns one bounded worker batch, even if the batch has no hits. No network. */
-  start(input: { operationId: OperationId; query: string; scope: SearchScope; filters: ContentFilters }): Promise<SearchResult<SearchBatch>>
+  start(input: { operationId: OperationId; query: string; scope: SearchScope; filters: SearchFilters }): Promise<SearchResult<SearchBatch>>
   /** Advances this fixed query/filter/scope session; parallel next calls return busy. */
   next(input: { operationId: OperationId }): Promise<SearchResult<SearchBatch>>
   /** Cancels search, fetch or rebuild; preserves already saved contents. */

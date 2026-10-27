@@ -1,9 +1,9 @@
-import type { SearchBatch, SearchScope, ContentFilters, ThreadFilterMetadata } from '../../shared/search'
+import type { SearchBatch, SearchScope, SearchFilters, ThreadFilterMetadata } from '../../shared/search'
 
 export interface SearchScan {
   query: string
   scope: SearchScope
-  filters: ContentFilters
+  filters: SearchFilters
   after: number
   upper: number
 }

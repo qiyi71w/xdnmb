@@ -5,7 +5,7 @@ import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
-import type { ImageScope } from '../image/imageView'
+import type { ImageView } from '../image/imageView'
 import { RowThumbnail } from '../image/RowThumbnail'
 import { UncertainTag } from '../search/FilterFields'
 import { useThreadTabMenu } from '../tabs/ThreadTabMenu'
@@ -27,6 +27,9 @@ export interface HeadlessThread {
  * then its title and its name in bold (each only when it has a real one), its excerpt and the
  * thread's meta line. An image thread shows the head post's thumbnail on the right in a fixed box.
  * A headless thread shows its title (when kept) and its meta line only.
+ * The row is a container of two controls: the row button (the list's item, opening the thread,
+ * clickable over the whole row) and, on image threads, the thumbnail's 查看原图 button, which opens
+ * the list's image viewer. Menus, middle-click and Ctrl/Cmd+click act for the whole row.
  * With `tabMenu`, the row offers 在新标签页打开 (context menu, middle-click, Ctrl/Cmd+click), 复制串号
  * and 饼干颜色… for the head post's 饼干 ID.
  * A `pinned` row (置顶串, forum and timeline lists only) is compact: a shorter, faded excerpt and a
@@ -52,13 +55,13 @@ export function ThreadRow({
   uncertain?: boolean
   /** The list's 置顶串: shown compact. */
   pinned?: boolean
-  /** Where the list's thumbnails load. */
-  images: ImageScope
+  /** Where the list's thumbnails load, and its image viewer. */
+  images: ImageView
   onOpen: () => void
   itemProps: { 'data-roving-item': string; tabIndex: number; onFocus: () => void }
   /** Off where the list's own row menu holds the item instead (订阅). */
   tabMenu?: boolean
-  /** What the list adds at the end of the meta line (non-interactive: the row is a button). */
+  /** What the list adds at the end of the meta line (non-interactive: it is inside the row button). */
   metaEnd?: ReactNode
 }) {
   const head = thread.head
@@ -71,46 +74,46 @@ export function ThreadRow({
   const tabThread = tabMenu ? id : null
   return (
     <>
-      <button
-        type="button"
+      <div
         className={classes}
-        aria-current={selected ? 'true' : undefined}
-        onClick={(event) => {
-          if (!inTab.openFromClick(event, tabThread, head)) onOpen()
+        // Ctrl/Cmd+click anywhere on the row, the thumbnail included, opens the thread in a new tab.
+        onClickCapture={(event) => {
+          if (inTab.openFromClick(event, tabThread, head)) event.stopPropagation()
         }}
         {...inTab.rowProps(tabThread, head)}
-        {...itemProps}
       >
-        <span className="row-text">
-          {head !== null && (
-            <span className="row-byline">
-              <span className="row-author">
-                {head.userHash !== null && <CookieId cookieId={head.userHash} admin={head.isAdmin === true} />}
-                {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
-              </span>
-              {head.createdAt !== null && <span className="row-time">{formatForumTime(head.createdAt)}</span>}
-            </span>
-          )}
-          {title !== null && <span className="row-title">{title}</span>}
-          {name !== null && <span className="row-name">{name}</span>}
-          {head !== null && <Content nodes={head.content} mode="excerpt" className="row-excerpt" />}
-          <span className="row-meta">
-            {forumName !== null && <span className="row-forum">{forumName}</span>}
-            <span className="row-no">No.{id}</span>
-            {thread.replyCount !== null && (
-              <span className="row-replies">
-                <Icon name="reply" size={13} />
-                {thread.replyCount} 回复
+        <button type="button" className="row-open" aria-current={selected ? 'true' : undefined} onClick={onOpen} {...itemProps}>
+          <span className="row-text">
+            {head !== null && (
+              <span className="row-byline">
+                <span className="row-author">
+                  {head.userHash !== null && <CookieId cookieId={head.userHash} admin={head.isAdmin === true} />}
+                  {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
+                </span>
+                {head.createdAt !== null && <span className="row-time">{formatForumTime(head.createdAt)}</span>}
               </span>
             )}
-            {/* The thumbnail is decorative; this names the image for assistive technology. */}
-            {hasImage && <span className="visually-hidden">附图</span>}
-            {uncertain && <UncertainTag />}
-            {metaEnd}
+            {title !== null && <span className="row-title">{title}</span>}
+            {name !== null && <span className="row-name">{name}</span>}
+            {head !== null && <Content nodes={head.content} mode="excerpt" className="row-excerpt" />}
+            <span className="row-meta">
+              {forumName !== null && <span className="row-forum">{forumName}</span>}
+              <span className="row-no">No.{id}</span>
+              {thread.replyCount !== null && (
+                <span className="row-replies">
+                  <Icon name="reply" size={13} />
+                  {thread.replyCount} 回复
+                </span>
+              )}
+              {/* Arrow keys move between row buttons only: this tells them the thread has an image. */}
+              {hasImage && <span className="visually-hidden">附图</span>}
+              {uncertain && <UncertainTag />}
+              {metaEnd}
+            </span>
           </span>
-        </span>
-        {hasImage && <RowThumbnail postId={id} scope={images} />}
-      </button>
+        </button>
+        {hasImage && <RowThumbnail postId={id} images={images} tabIndex={itemProps.tabIndex} />}
+      </div>
       {/* Outside the row: clicks in the menu's portal still bubble through React to its owner. */}
       {inTab.menu}
     </>

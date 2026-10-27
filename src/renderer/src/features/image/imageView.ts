@@ -53,7 +53,7 @@ export interface ImageScope {
   near: NearViewport
 }
 
-/** Images of one mounted reader: its scope and the viewer it owns. */
+/** Images of one mounted reader or thread list: its scope and the viewer it owns. */
 export interface ImageView extends ImageScope {
   openViewer: (request: ViewerRequest) => void
 }

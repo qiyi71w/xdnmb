@@ -1,5 +1,6 @@
-/* A column: the scroller takes the pane's height. */
+/* A column: the scroller takes the pane's height. Positioned: a list's image viewer covers it. */
 .list-pane {
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -185,6 +186,42 @@
   min-width: 0;
 }
 
+/* A thread list row is a container of the row button (text column) and the thumbnail's 查看原图
+   button. The row button reaches over the whole row (padding and the thumbnail column included)
+   through a layer under its text and the thumbnail, so a click anywhere but the thumbnail opens
+   the thread, and the text (status icons with tips) still receives the pointer. */
+.row-open {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-open::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-m);
+}
+
+.row-open > .row-text {
+  position: relative;
+  z-index: 1;
+}
+
+/* The focus ring outlines the whole row, as when the row was one button. */
+.row-open:focus-visible {
+  outline: none;
+}
+
+.row-open:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .thread-list li + li > .thread-row::before {
   content: '';
   position: absolute;
@@ -208,6 +245,11 @@
 .thread-row.is-selected .row-byline {
   font-weight: 600;
   color: var(--ink);
+}
+
+/* The 饼干 ID joins the bold line (monospaced: the same width at either weight). */
+.thread-row.is-selected .user-hash {
+  font-weight: 600;
 }
 
 .thread-row.is-selected .row-name,
@@ -308,18 +350,27 @@
   mask-image: linear-gradient(to bottom, #000 2.2lh, transparent 3lh);
 }
 
-/* Head post thumbnail: fixed box, cropped to fill; a placeholder while loading or after a failure. */
+/* Head post thumbnail: fixed box, cropped to fill; a placeholder while loading or after a failure.
+   It is the row's 查看原图 button, above the row button's layer. */
 .row-thumb {
   position: relative;
+  z-index: 1;
   display: grid;
   place-items: center;
   width: var(--row-thumb);
   height: var(--row-thumb);
+  padding: 0;
   overflow: hidden;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-s);
   background: var(--pane);
   color: var(--ink-3);
+  cursor: zoom-in;
+  transition: border-color 0.15s var(--ease-out);
+}
+
+.row-thumb:hover {
+  border-color: var(--line);
 }
 
 .row-thumb[data-state='loading'] {
@@ -414,7 +465,8 @@
 }
 
 .row-status:hover > .row-status-tip,
-.thread-row:focus-visible .row-status-tip {
+.thread-row:focus-visible .row-status-tip,
+.row-open:focus-visible .row-status-tip {
   opacity: 1;
   visibility: visible;
   transition:
@@ -425,7 +477,9 @@
 @media (prefers-reduced-motion: reduce) {
   .row-status-tip,
   .row-status:hover > .row-status-tip,
-  .thread-row:focus-visible .row-status-tip {
+  .thread-row:focus-visible .row-status-tip,
+  .row-open:focus-visible .row-status-tip,
+  .row-thumb {
     transition: none;
   }
 }

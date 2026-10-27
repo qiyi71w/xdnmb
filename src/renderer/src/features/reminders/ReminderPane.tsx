@@ -16,6 +16,7 @@ import { SettingsContext } from '../../lib/settingsContext'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
 import { useImageScope } from '../image/useImageLoad'
+import { useListImageViewer } from '../image/useListImageViewer'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 import type { ThreadOpen } from '../tabs/tabsState'
@@ -80,7 +81,7 @@ export function ReminderPane({
 
   // ---------- Scroll memory (runtime and restored after a quit) ----------
   const scrollRef = useRef<HTMLDivElement>(null)
-  const images = useImageScope(scrollRef)
+  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(scrollRef), scrollRef)
   const [initialScroll] = useState(() => {
     const memory = registry?.listMemory.get(entryKey)
     if (memory?.kind === 'reminders') return memory.scrollTop
@@ -255,7 +256,7 @@ export function ReminderPane({
 
   return (
     <section className="list-pane reminder-pane" aria-labelledby={headingId}>
-      <div className="list-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1} data-pane-focus="">
+      <div className="list-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1} data-pane-focus="" inert={viewerOpen}>
         <header className="list-header">
           <div className="list-title-row">
             <h2 className="list-title" id={headingId}>
@@ -389,6 +390,7 @@ export function ReminderPane({
         )}
         <div className="list-footer" />
       </div>
+      {viewer}
       {rowMenu !== null && menuRow !== undefined && (
         <ReminderRowMenu
           key={rowMenu.threadId}

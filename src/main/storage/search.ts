@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import type { Post, ThreadCoverage } from '../../shared/forum'
 import type { SearchBatch, SearchHit, ThreadFilterMetadata } from '../../shared/search'
-import { matchContentFilters } from '../../shared/search-filters'
+import { matchSearchFilters } from '../../shared/search-filters'
 import type { SearchScan } from './search-contract'
 import { createSearchFts } from './search-schema'
 
@@ -163,7 +163,7 @@ export class SearchDatabase {
     const hits: SearchHit[] = []
     for (const row of rows) {
       const metadata = { forumId: row.forum_id, createdAt: row.created_at, hasImage: row.has_image === null ? null : row.has_image === 1 }
-      const match = matchContentFilters(metadata, filters)
+      const match = matchSearchFilters({ postId: row.post_id, threadId: row.thread_id, ...metadata }, filters)
       if (!match.matches) continue
       const location = db.prepare<{ post: string; thread: string | null }, { page: number; mode: 'all' | 'po'; fetched_at: string; source: 'page' | 'offline' }>(`
         SELECT page,mode,fetched_at,'page' AS source FROM thread_pages p WHERE p.thread_id=@thread AND

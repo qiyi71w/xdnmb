@@ -218,7 +218,10 @@ describe('forum link recognition', () => {
     ['https://www.nmbxd1.com/t/50000001?r=50000001', { kind: 'thread', threadId: '50000001', replyId: '50000001', page: null, poHint: false }],
     ['https://www.nmbxd1.com/Forum/po/id/50000001.html', { kind: 'thread', threadId: '50000001', replyId: null, page: null, poHint: true }],
     ['https://www.nmbxd1.com/f/%E7%BB%BC%E5%90%88%E7%89%881', { kind: 'board', boardName: '综合版1' }],
-    ['https://www.nmbxd.com/m/f/%E6%B8%B8%E6%88%8F', { kind: 'board', boardName: '游戏' }]
+    ['https://www.nmbxd.com/m/f/%E6%B8%B8%E6%88%8F', { kind: 'board', boardName: '游戏' }],
+    ['https://www.nmbxd1.com/Home/Forum/timeline/id/1.html', { kind: 'timeline', timelineId: '1' }],
+    ['https://nmbxd.com/Forum/timeline/id/2.html', { kind: 'timeline', timelineId: '2' }],
+    ['https://www.nmbxd1.com/home/forum/TIMELINE/ID/3.HTML', { kind: 'timeline', timelineId: '3' }]
   ])('recognizes %s', (url, target) => {
     expect(parseForumLink(url)).toEqual(target)
   })
@@ -233,7 +236,13 @@ describe('forum link recognition', () => {
     'https://www.nmbxd1.com/t/abc',
     'https://www.nmbxd1.com/Home/Forum/ref?id=1',
     'https://www.nmbxd1.com/f/',
-    'https://www.nmbxd1.com/f/%E0%A4%A'
+    'https://www.nmbxd1.com/f/%E0%A4%A',
+    'https://www.nmbxd1.com/Home/Forum/timeline/id/abc.html',
+    'https://www.nmbxd1.com/Home/Forum/timeline/id/0.html',
+    'https://www.nmbxd1.com/Home/Forum/timeline/id/1.html/extra',
+    'https://www.nmbxd1.com/Home/Forum/timeline/id/1/2.html',
+    'https://www.nmbxd1.com/x/Forum/timeline/id/1.html',
+    'https://www.nmbxd1.com:8080/Home/Forum/timeline/id/1.html'
   ])('does not recognize %s', (url) => {
     expect(parseForumLink(url)).toBeNull()
   })

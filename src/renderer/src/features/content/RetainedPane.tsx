@@ -15,6 +15,7 @@ import { formatForumTime, formatRecordTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { RowThumbnail } from '../image/RowThumbnail'
 import { useImageScope } from '../image/useImageLoad'
+import { useListImageViewer } from '../image/useListImageViewer'
 import { SentPage, useSentAttempts } from '../publication/SentPage'
 import type { SentKind } from '../publication/sentRecords'
 import { ListFilterBar, UncertainTag } from '../search/FilterFields'
@@ -86,6 +87,8 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
   const [sentShown, setSentShown] = useState(view !== 'browsing')
   const [sentRefresh, setSentRefresh] = useState(0)
   const sent = useSentAttempts(sentShown, sentRefresh)
+  /** 浏览's original-image viewer covers the whole page, header included; nothing behind it is operable. */
+  const [viewerOpen, setViewerOpen] = useState(false)
 
   const show = (next: HistoryView) => {
     setView(next)
@@ -103,7 +106,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
 
   return (
     <section className="list-pane history-page" aria-labelledby={headingId}>
-      <header className="list-header history-page-header">
+      <header className="list-header history-page-header" inert={viewerOpen}>
         <h2 className="list-title" id={headingId} ref={headingRef} tabIndex={-1} data-history-heading="" data-pane-focus="">
           <span className="list-name">{PAGE.title}</span>
         </h2>
@@ -121,6 +124,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
           showHeading={false}
           displayed={view === 'browsing'}
           refreshOverride={view === 'browsing' ? undefined : () => setSentRefresh((value) => value + 1)}
+          onViewerOpenChange={setViewerOpen}
         />
       </div>
       {sentShown &&
@@ -152,10 +156,12 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
  * ContextMenu key, Shift+F10): 在新标签页打开 and 删除…, which asks first; 清空历史… is in the header.
  * Middle-click or Ctrl/Cmd+click opens a new tab, as in the thread lists.
  */
-function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, showHeading = true, displayed = true, refreshOverride }: RetainedPaneProps & {
+function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, showHeading = true, displayed = true, refreshOverride, onViewerOpenChange }: RetainedPaneProps & {
   showHeading?: boolean
   displayed?: boolean
   refreshOverride?: () => void
+  /** Inside the history page: told when the image viewer opens or closes, so the page header can be made inert. */
+  onViewerOpenChange?: (open: boolean) => void
 }) {
   const headingId = useId()
   const registry = useContext(ContentRegistryContext)
@@ -163,7 +169,8 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
   const [ownResets] = useState(createReadingResets)
   const { list, entries, load, confirming, setConfirming, busy, failure, setFailure, done, listRef, bodyRef, ask, clearHistory } =
     useRetainedList(registry?.readingResets ?? ownResets)
-  const images = useImageScope(bodyRef)
+  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(bodyRef), bodyRef)
+  useLayoutEffect(() => onViewerOpenChange?.(viewerOpen), [onViewerOpenChange, viewerOpen])
   const openInTab = useOpenThreadInTab()
   useRegisterContent('lists', entryKey, { refresh: refreshOverride ?? (() => void load()) })
   const onScroll = useRetainedScroll(entryKey, bodyRef, list.status === 'ready', displayed)
@@ -208,7 +215,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
 
   return (
     <section className="list-pane retained-page" aria-labelledby={showHeading ? headingId : undefined} aria-label={showHeading ? undefined : '浏览'} aria-busy={list.status === 'loading' || undefined}>
-      <div className="list-scroll" ref={bodyRef} onScroll={onScroll} tabIndex={-1} data-pane-focus={showHeading ? '' : undefined}>
+      <div className="list-scroll" ref={bodyRef} onScroll={onScroll} tabIndex={-1} data-pane-focus={showHeading ? '' : undefined} inert={viewerOpen}>
         <header className="list-header">
           <div className="list-title-row">
             {showHeading && <h2 className="list-title" id={headingId}>
@@ -292,6 +299,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
               const excerpt = entry.excerpt?.trim() || null
               const selected = entry.threadId === selectedThreadId
               const rowClass = ['thread-row', hasImage && 'has-thumb', selected && 'is-selected'].filter(Boolean).join(' ')
+              const itemProps = roving.itemProps(entry.threadId)
               return (
                 <li
                   key={entry.threadId}
@@ -302,36 +310,39 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
                     openInTab === null ? null : () => openInTab(entry.threadId, null)
                   )}
                 >
-                  <button
-                    type="button"
-                    className={rowClass}
-                    aria-current={selected ? 'true' : undefined}
-                    onClick={() => onOpenThread(entry.threadId, null)}
-                    {...roving.itemProps(entry.threadId)}
-                  >
-                    <span className="row-text">
-                      {head !== null && <span className="row-byline">
-                        <span className="row-author">
-                          {head.userHash !== null && <CookieId cookieId={head.userHash} admin={head.isAdmin === true} />}
-                          {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
+                  {/* The row button and the thumbnail's 查看原图 button side by side, as in ThreadRow. */}
+                  <div className={rowClass}>
+                    <button
+                      type="button"
+                      className="row-open"
+                      aria-current={selected ? 'true' : undefined}
+                      onClick={() => onOpenThread(entry.threadId, null)}
+                      {...itemProps}
+                    >
+                      <span className="row-text">
+                        {head !== null && <span className="row-byline">
+                          <span className="row-author">
+                            {head.userHash !== null && <CookieId cookieId={head.userHash} admin={head.isAdmin === true} />}
+                            {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
+                          </span>
+                          {head.createdAt !== null && <span className="row-time">{formatForumTime(head.createdAt)}</span>}
+                        </span>}
+                        {title !== null && <span className="row-title">{title}</span>}
+                        {name !== null && <span className="row-name">{name}</span>}
+                        {excerpt !== null && <TextExcerpt text={excerpt} className="row-excerpt is-plain" />}
+                        <span className="row-meta">
+                          <span>No.{entry.threadId}</span>
+                          <span>{PAGE.at} {formatRecordTime(entry.at)}</span>
+                          {entry.offline !== null && (
+                            <span className="retained-tag"><Icon name="download" size={13} />有离线副本</span>
+                          )}
+                          {hasImage && <span className="visually-hidden">附图</span>}
+                          {uncertain && <UncertainTag />}
                         </span>
-                        {head.createdAt !== null && <span className="row-time">{formatForumTime(head.createdAt)}</span>}
-                      </span>}
-                      {title !== null && <span className="row-title">{title}</span>}
-                      {name !== null && <span className="row-name">{name}</span>}
-                      {excerpt !== null && <TextExcerpt text={excerpt} className="row-excerpt is-plain" />}
-                      <span className="row-meta">
-                        <span>No.{entry.threadId}</span>
-                        <span>{PAGE.at} {formatRecordTime(entry.at)}</span>
-                        {entry.offline !== null && (
-                          <span className="retained-tag"><Icon name="download" size={13} />有离线副本</span>
-                        )}
-                        {hasImage && <span className="visually-hidden">附图</span>}
-                        {uncertain && <UncertainTag />}
                       </span>
-                    </span>
-                    {hasImage && <RowThumbnail postId={entry.threadId} scope={images} />}
-                  </button>
+                    </button>
+                    {hasImage && <RowThumbnail postId={entry.threadId} images={images} tabIndex={itemProps.tabIndex} />}
+                  </div>
                 </li>
               )
             })}
@@ -339,6 +350,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
         )}
         <div className="list-footer" />
       </div>
+      {viewer}
       {rowMenu !== null && menuEntry !== undefined && (
         <ContextMenu
           key={`menu:${rowMenu.threadId}`}

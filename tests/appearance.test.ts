@@ -84,6 +84,14 @@ describe('contrast', () => {
     expect(new Set(COOKIE_COLORS.map((name) => palette[cookieColorToken(name)])).size).toBe(COOKIE_COLORS.length)
   })
 
+  it('checks official red text on every surface a body, excerpt or board notice draws it on', () => {
+    const surfaces = TEXT_CONTRAST_PAIRS.find((pair) => pair.foreground === 'danger-ink')?.surfaces ?? []
+    expect(surfaces).toEqual(expect.arrayContaining([['paper'], ['pane'], ['info-bg'], ['paper', 'glass-strong'], ['pane', 'glass-strong'],
+      ['paper', 'accent-soft'], ['pane', 'hover'], ['pane', 'selected'], ['paper', 'hover'], ['paper', 'selected']]))
+    expect(paletteContrastFailures(customPalette(sepia, 'light'))).toEqual([])
+    expect(paletteContrastFailures(customPalette(sepia, 'dark'))).toEqual([])
+  })
+
   it('checks translucent glass as composited over the window, not the solid surface alone', () => {
     // Secondary text passes on the solid surface but not on 50% glass over a dark window.
     const theme: CustomTheme = { ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, background: '#5c5c5c', secondaryText: '#6e6e6e' } }, opacity: 0.5 }

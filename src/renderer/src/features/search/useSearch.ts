@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { QuoteLocation } from '../../../../shared/api'
 import type { ReadingMode } from '../../../../shared/forum'
-import type { ContentFilters, SearchHit, SearchScope } from '../../../../shared/search'
+import type { SearchFilters, SearchHit, SearchScope } from '../../../../shared/search'
 import type { ContentRegistry } from '../tabs/contentRegistry'
 import { currentEntry, type Tab, type TabEntry, type TabsAction, type TabsState, type ThreadOpen } from '../tabs/tabsState'
 import { savedStart, startPage } from '../thread/readingStart'
@@ -43,7 +43,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Dates the service would refuse: a start after the end matches nothing anyway. */
-export function filtersSearchable(filters: ContentFilters): boolean {
+export function filtersSearchable(filters: SearchFilters): boolean {
   return filters.fromDate === null || filters.toDate === null || filters.fromDate <= filters.toDate
 }
 
@@ -171,7 +171,7 @@ export function useSearch(options: Options) {
 
   /** New filters apply to the shown search at once (a new session with the same query). */
   const setFilters = useCallback(
-    (tabId: number, view: SearchView, filters: ContentFilters) => {
+    (tabId: number, view: SearchView, filters: SearchFilters) => {
       apply({ type: 'filters', tabId, view, filters })
       if (filtersSearchable(filters)) rerun(tabId, view)
     },
@@ -528,7 +528,7 @@ export interface SearchCommands {
   setView(tabId: number, view: SearchView): void
   /** `restoreSeq`: the text belongs to the search shown before that restore, else it is dropped. */
   setInput(tabId: number, view: SearchView, input: string, restoreSeq?: number): void
-  setFilters(tabId: number, view: SearchView, filters: ContentFilters): void
+  setFilters(tabId: number, view: SearchView, filters: SearchFilters): void
   setThreadMode(tabId: number, mode: ReadingMode): void
   /** New session with the view's text, or with `query` (re-running a shown search). */
   submit(tabId: number, view: SearchView, query?: string): void

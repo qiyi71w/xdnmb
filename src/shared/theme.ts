@@ -315,7 +315,15 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
   { foreground: 'quote-ref-ink', surfaces: [['paper', 'quote-ref-bg']] },
   { foreground: 'warn-ink', surfaces: [['warn-bg'], ['paper'], ['pane'], ['window', 'glass-strong']] },
   // Context-menu footers (reminder and subscription menus, the 饼干颜色 palette) show errors on the glass sheet.
-  { foreground: 'danger-ink', surfaces: [['danger-bg'], ['paper'], ['paper', 'glass-strong'], ['pane', 'glass-strong'], ['window', 'glass-strong']] },
+  // Official red text in bodies, excerpts and board/timeline notices: paper, pane, the notice band, the quote card,
+  // a jump-highlighted post, hovered/selected rows (rows sit on the pane in the split layout, on paper in one column).
+  {
+    foreground: 'danger-ink',
+    surfaces: [
+      ['danger-bg'], ['paper'], ['pane'], ['info-bg'], ['paper', 'glass-strong'], ['pane', 'glass-strong'], ['window', 'glass-strong'],
+      ['paper', 'accent-soft'], ['pane', 'hover'], ['pane', 'selected'], ['paper', 'hover'], ['paper', 'selected']
+    ]
+  },
   ...COOKIE_COLORS.map((name) => ({ foreground: cookieColorToken(name), surfaces: COOKIE_ID_SURFACES }))
 ]
 

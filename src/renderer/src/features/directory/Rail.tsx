@@ -1,12 +1,14 @@
-// The icon rail: 版块 on top (it opens the board panel) with up to five favorite boards under it,
-// the shown features in the saved order (drag one to move it; Esc or leaving the window cancels),
-// then 更多 (only the hidden features, absent when none are hidden) and 设置 at the bottom. Every
-// button names itself in a tooltip shortly after a hover or keyboard focus; the name of the current
-// item is announced when it changes. Order and visibility are app settings (`rail`).
+// The icon rail: 版块 on top (it opens the board panel) with every favorite board under it, the
+// shown features in the saved order (drag one to move it; Esc or leaving the window cancels), then
+// 更多 (only the hidden features, absent when none are hidden) and 设置 at the bottom. When the rail
+// is short the favorites scroll on their own, fading at an edge with more beyond it; the rest stay
+// in view. Every button names itself in a tooltip shortly after a hover or keyboard focus; the name
+// of the current item is announced when it changes. Order and visibility are app settings (`rail`).
 
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type FocusEvent,
@@ -26,9 +28,6 @@ import { orderedFeatures, useNavActions, type Board, type FeatureId } from './na
 /** Width of the rail, CSS pixels (App widens the navigation column by it). */
 export const RAIL_WIDTH = 52
 
-/** Favorite boards shown in the rail; the rest stay in the board panel's 收藏. */
-const RAIL_FAVORITES = 5
-
 const BOARDS_KEY = 'boards'
 const MORE_KEY = 'more'
 const SETTINGS_KEY = 'settings'
@@ -43,7 +42,7 @@ export interface RailBoards {
 
 /** Favorite boards under the 版块 button. */
 export interface RailFavorites {
-  /** Favorites in their order, hidden boards left out; the first five are shown. */
+  /** Favorites in their order, hidden boards left out; all are shown. */
   boards: readonly Board[]
   selectedKey: string | null
   onSelect: (ref: ListRef) => void
@@ -74,10 +73,10 @@ export function Rail({
   const ordered = orderedFeatures(prefs.order)
   const shown = ordered.filter((feature) => !prefs.hidden.includes(feature.id))
   const hidden = ordered.filter((feature) => prefs.hidden.includes(feature.id))
-  const railFavorites = favorites.boards.slice(0, RAIL_FAVORITES)
-  const marks = favoriteMarks(railFavorites)
+  const marks = favoriteMarks(favorites.boards)
 
   const railRef = useRef<HTMLDivElement>(null)
+  const favoritesRef = useRef<HTMLDivElement>(null)
   const moreTriggerRef = useRef<HTMLButtonElement>(null)
   const morePanelRef = useRef<HTMLDivElement>(null)
   const morePopover = usePopover(moreTriggerRef, morePanelRef)
@@ -91,12 +90,12 @@ export function Rail({
 
   const railIds = [
     BOARDS_KEY,
-    ...railFavorites.map((item) => favoriteKey(item.key)),
+    ...favorites.boards.map((item) => favoriteKey(item.key)),
     ...shown.map((feature) => feature.id),
     ...(hasMore ? [MORE_KEY] : []),
     SETTINGS_KEY
   ]
-  const selectedFavorite = railFavorites.find((item) => item.key === favorites.selectedKey)
+  const selectedFavorite = favorites.boards.find((item) => item.key === favorites.selectedKey)
   const railCurrent = settingsCurrent
     ? SETTINGS_KEY
     : (features.current ?? (selectedFavorite === undefined ? null : favoriteKey(selectedFavorite.key)))
@@ -109,6 +108,12 @@ export function Rail({
 
   const tip = useRailTip()
   const drag = useRailDrag(railRef, tip.hide, actions.placeFeature)
+  const favoriteEdges = useScrollEdges(favoritesRef, favorites.boards.length)
+
+  // The current favorite is brought into view in the favorites' region, at once (no smooth scroll).
+  useLayoutEffect(() => {
+    favoritesRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView({ behavior: 'instant', block: 'nearest' })
+  }, [favorites.selectedKey, favorites.boards.length])
 
   return (
     <>
@@ -143,27 +148,40 @@ export function Rail({
         >
           <Icon name="forum" size={18} />
         </button>
-        {railFavorites.map((item, index) => {
-          const current = item.key === favorites.selectedKey
-          const mark = marks[index]!
-          return (
-            <button
-              key={item.key}
-              type="button"
-              className={['shell-rail-btn', 'shell-rail-fav', current ? 'is-current' : '', Array.from(mark).length > 1 ? 'is-pair' : '']
-                .filter(Boolean)
-                .join(' ')}
-              aria-label={item.label}
-              aria-current={current ? 'page' : undefined}
-              data-rail-tip={item.label}
-              data-rail-board=""
-              onClick={() => favorites.onSelect(item.ref)}
-              {...rail.itemProps(favoriteKey(item.key))}
-            >
-              <span aria-hidden="true">{mark}</span>
-            </button>
-          )
-        })}
+        {favorites.boards.length > 0 && (
+          <div
+            ref={favoritesRef}
+            className={['shell-rail-favs', favoriteEdges.above ? 'is-above' : '', favoriteEdges.below ? 'is-below' : ''].filter(Boolean).join(' ')}
+            role="group"
+            aria-label="收藏的版块"
+            onScroll={() => {
+              tip.hide()
+              favoriteEdges.update()
+            }}
+          >
+            {favorites.boards.map((item, index) => {
+              const current = item.key === favorites.selectedKey
+              const mark = marks[index]!
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={['shell-rail-btn', 'shell-rail-fav', current ? 'is-current' : '', Array.from(mark).length > 1 ? 'is-pair' : '']
+                    .filter(Boolean)
+                    .join(' ')}
+                  aria-label={item.label}
+                  aria-current={current ? 'page' : undefined}
+                  data-rail-tip={item.label}
+                  data-rail-board=""
+                  onClick={() => favorites.onSelect(item.ref)}
+                  {...rail.itemProps(favoriteKey(item.key))}
+                >
+                  <span aria-hidden="true">{mark}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
         <span className="shell-rail-sep" aria-hidden="true" />
         {shown.map((feature) => {
           const current = features.current === feature.id
@@ -272,6 +290,35 @@ export function Rail({
         )}
     </>
   )
+}
+
+// ---------- Favorites' scroll edges ----------
+
+/**
+ * Whether the scroller `ref` has more content above and below what it shows, for the edge fades.
+ * Follows its size; call `update` on scroll. `contentKey` changes when its content does.
+ */
+function useScrollEdges(ref: RefObject<HTMLElement | null>, contentKey: unknown) {
+  const [edges, setEdges] = useState({ above: false, below: false })
+
+  const update = useCallback(() => {
+    const element = ref.current
+    if (element === null) return
+    const above = element.scrollTop > 1
+    const below = element.scrollTop + element.clientHeight < element.scrollHeight - 1
+    setEdges((last) => (last.above === above && last.below === below ? last : { above, below }))
+  }, [ref])
+
+  useLayoutEffect(() => {
+    const element = ref.current
+    if (element === null) return
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ref, update, contentKey])
+
+  return { ...edges, update }
 }
 
 // ---------- Tooltip ----------
