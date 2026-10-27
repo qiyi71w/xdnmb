@@ -99,11 +99,27 @@ function emphasized(node: ContentNode | undefined, style: EmphasisStyle, pattern
 }
 
 /**
- * Visible text as it was submitted: the forum stores a dice expression `[n]` / `[n,m]` rendered as
- * `<b>result</b><small>[expr]</small>`, so that pair reads back as the expression alone. For
- * publication verification only; reading keeps the rendered result.
+ * Colour and inline-style bold only decorate text: for publication verification their children
+ * read as if they sat directly in the surrounding sequence (a bold that only wraps another
+ * emphasis is such a style wrapper too).
  */
-export function submittedText(nodes: readonly ContentNode[]): string {
+function withoutStyling(nodes: readonly ContentNode[]): ContentNode[] {
+  return nodes.flatMap((node): ContentNode[] => {
+    if (node.type === 'redtext' || node.type === 'greentext') return withoutStyling(node.children)
+    if (node.type === 'emphasis' && node.style === 'bold' && node.children.length === 1 && node.children[0]!.type === 'emphasis') {
+      return withoutStyling(node.children)
+    }
+    return [node]
+  })
+}
+
+/**
+ * Visible text as it was submitted: the forum stores a dice expression `[n]` / `[n,m]` rendered as
+ * `<b>result</b><small>[expr]</small>`, so that pair reads back as the expression alone, whatever
+ * official colour or bold wraps it. For publication verification only; reading keeps the rendered result.
+ */
+export function submittedText(input: readonly ContentNode[]): string {
+  const nodes = withoutStyling(input)
   let text = ''
   for (let index = 0; index < nodes.length; index++) {
     const node = nodes[index]!

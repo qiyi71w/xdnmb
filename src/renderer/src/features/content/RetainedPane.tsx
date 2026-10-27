@@ -87,6 +87,8 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
   const [sentShown, setSentShown] = useState(view !== 'browsing')
   const [sentRefresh, setSentRefresh] = useState(0)
   const sent = useSentAttempts(sentShown, sentRefresh)
+  /** 浏览's original-image viewer covers the whole page, header included; nothing behind it is operable. */
+  const [viewerOpen, setViewerOpen] = useState(false)
 
   const show = (next: HistoryView) => {
     setView(next)
@@ -104,7 +106,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
 
   return (
     <section className="list-pane history-page" aria-labelledby={headingId}>
-      <header className="list-header history-page-header">
+      <header className="list-header history-page-header" inert={viewerOpen}>
         <h2 className="list-title" id={headingId} ref={headingRef} tabIndex={-1} data-history-heading="" data-pane-focus="">
           <span className="list-name">{PAGE.title}</span>
         </h2>
@@ -122,6 +124,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
           showHeading={false}
           displayed={view === 'browsing'}
           refreshOverride={view === 'browsing' ? undefined : () => setSentRefresh((value) => value + 1)}
+          onViewerOpenChange={setViewerOpen}
         />
       </div>
       {sentShown &&
@@ -153,10 +156,12 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
  * ContextMenu key, Shift+F10): 在新标签页打开 and 删除…, which asks first; 清空历史… is in the header.
  * Middle-click or Ctrl/Cmd+click opens a new tab, as in the thread lists.
  */
-function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, showHeading = true, displayed = true, refreshOverride }: RetainedPaneProps & {
+function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, showHeading = true, displayed = true, refreshOverride, onViewerOpenChange }: RetainedPaneProps & {
   showHeading?: boolean
   displayed?: boolean
   refreshOverride?: () => void
+  /** Inside the history page: told when the image viewer opens or closes, so the page header can be made inert. */
+  onViewerOpenChange?: (open: boolean) => void
 }) {
   const headingId = useId()
   const registry = useContext(ContentRegistryContext)
@@ -165,6 +170,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
   const { list, entries, load, confirming, setConfirming, busy, failure, setFailure, done, listRef, bodyRef, ask, clearHistory } =
     useRetainedList(registry?.readingResets ?? ownResets)
   const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(bodyRef), bodyRef)
+  useLayoutEffect(() => onViewerOpenChange?.(viewerOpen), [onViewerOpenChange, viewerOpen])
   const openInTab = useOpenThreadInTab()
   useRegisterContent('lists', entryKey, { refresh: refreshOverride ?? (() => void load()) })
   const onScroll = useRetainedScroll(entryKey, bodyRef, list.status === 'ready', displayed)

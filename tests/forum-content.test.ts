@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseContent } from '../src/main/forum/content'
+import { parseContent, submittedText } from '../src/main/forum/content'
 
 describe('safe forum content', () => {
   it('uses br elements, not source line terminators, for visible breaks', () => {
@@ -167,5 +167,15 @@ describe('safe forum content', () => {
       '<small>E</small><sup>F</sup><sub>G</sub><br>').plainText).toBe('AB\nCDEFG')
     expect(parseContent('<a href="https://example.com">outer<a href="http://example.org">inner</a></a>').plainText)
       .toBe('outerinner')
+  })
+
+  it('reads a dice result back as its expression even inside official colour formatting', () => {
+    const plain = parseContent('<b>2</b><small>[1,5]</small>后').nodes
+    for (const html of ['<span style="color:red"><b>2</b></span><small>[1,5]</small>后', '<font color="#789922"><b>2</b><small>[1,5]</small></font>后',
+      '<span style="color:red"><b>2</b><small>[1,5]</small></span>后', '<span style="font-weight:bold"><b>2</b></span><small>[1,5]</small>后']) {
+      expect(submittedText(parseContent(html).nodes)).toBe(submittedText(plain))
+    }
+    expect(submittedText(plain)).toBe('[1,5]后')
+    expect(submittedText(parseContent('<span style="color:red"><b>2</b></span>后').nodes)).toBe('2后')
   })
 })
