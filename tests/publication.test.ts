@@ -37,7 +37,7 @@ const COOKIE_IDS: Record<string, string> = { 'cookie-A': 'IdA', 'cookie-B': 'IdB
 
 async function forum() {
   const seen: Array<{ path: string; cookie: string; body: string }> = []
-  let mode: 'success' | 'reject' | 'drop' | 'unrelated' | 'empty' | 'hold' | 'hold-lookup' | 'preflight-rate' | 'stale' | 'read-rate' = 'success'
+  let mode: 'success' | 'reject' | 'drop' | 'unrelated' | 'empty' | 'hold' | 'hold-lookup' | 'preflight-rate' | 'stale' | 'read-rate' | 'readback-differs' = 'success'
   let release: (() => void) | null = null
   let last: Record<string, string> | null = null
   let number = 700
@@ -49,6 +49,8 @@ async function forum() {
   const unseen = new Set<string>()
   const listed = () => [...posts.values()].filter(post => !unseen.has(post.id!))
   const page = (path: string) => Number(new URL(path, 'http://local').searchParams.get('page') ?? '1')
+  /** Public read-back of a stored post; `readback-differs` changes one character outside the dice. */
+  const readback = (id: string) => mode === 'readback-differs' && posts.has(id) ? { content: `${posts.get(id)!.content}。` } : {}
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = []
     for await (const chunk of req) chunks.push(Buffer.from(chunk))
@@ -61,7 +63,9 @@ async function forum() {
       for (const match of body.matchAll(/name="(\w+)"\r\n\r\n([\s\S]*?)\r\n--/g)) fields[match[1]!] = match[2]!
       const id = String(++number)
       const author = COOKIE_IDS[/userhash=([^;]+)/.exec(req.headers.cookie ?? '')?.[1] ?? ''] ?? ''
-      last = { id, resto: fields.resto ?? '0', fid: fields.fid ?? '1', content: fields.content!.replace(/\r\n?/g, '\n').replace(/\n/g, '<br />\n'), title: fields.title!, name: fields.name!, email: fields.email!, img: body.includes('name="image"') ? 'test/image' : '', ext: body.includes('name="image"') ? '.png' : '', user_hash: author, now: forumNow(Date.now()) }
+      // Stored as the forum renders it: line breaks as <br />, dice `[1,5]` as `<b>2</b><small>[1,5]</small>` (No.69687055).
+      const content = fields.content!.replace(/\r\n?/g, '\n').replace(/\n/g, '<br />\n').replace(/\[\d+(?:,\d+)?\]/g, dice => `<b>2</b><small>${dice}</small>`)
+      last = { id, resto: fields.resto ?? '0', fid: fields.fid ?? '1', content, title: fields.title!, name: fields.name!, img: body.includes('name="image"') ? 'test/image' : '', ext: body.includes('name="image"') ? '.png' : '', user_hash: author, now: forumNow(Date.now()) }
       posts.set(id, last)
       if (lagging) unseen.add(id)
       if (mode === 'stale') last = posts.get('701')!
@@ -85,13 +89,15 @@ async function forum() {
       const id = new URL(path, 'http://local').searchParams.get('id')!
       const replies = listed().filter(post => post.resto === id)
       const n = page(path)
-      send({ ...(posts.get(id) ?? { id, fid: '1', content: '主帖', title: '', name: '', img: '', ext: '', user_hash: 'Po', now: forumNow(0) }),
+      send({ ...(posts.get(id) ?? { id, fid: '1', content: '主帖', title: '', name: '', img: '', ext: '', user_hash: 'Po', now: forumNow(0) }), ...readback(id),
         Replies: replies.slice((n - 1) * 19, n * 19), ReplyCount: replies.length - countLag })
     } else if (path.startsWith('/api/showf')) {
       const threads = listed().filter(post => post.resto === '0').reverse()
       send(page(path) === 1 ? threads.map(thread => ({ ...thread, Replies: [], ReplyCount: 0 })) : [])
-    } else if (path.startsWith('/api/ref')) send(posts.get(new URL(path, 'http://local').searchParams.get('id')!) ?? null)
-    else { res.statusCode = 404; res.end() }
+    } else if (path.startsWith('/api/ref')) {
+      const id = new URL(path, 'http://local').searchParams.get('id')!
+      send(posts.has(id) ? { ...posts.get(id), ...readback(id) } : null)
+    } else { res.statusCode = 404; res.end() }
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   cleanups.push(() => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()) }))
@@ -187,6 +193,43 @@ it('confirms rendered multiline content including a final editor newline without
   const content = '第一行\n第二行\n'
   const sent = attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'multiline', payload: payload(s.a, content) }))
   expect(await finished(s.service, sent.id)).toMatchObject({ state: 'confirmed', payload: { fields: { content } } })
+})
+
+/** A reply goes to `701`, the first post the controlled forum numbers; replies send that head first. */
+function postFor(kind: 'thread' | 'reply', credentialId: string, content: string): DraftSaveInput {
+  return kind === 'thread' ? payload(credentialId, content) : { ...payload(credentialId, content), target: { kind: 'reply', threadId: '701' } }
+}
+
+it.each([['thread', '[3]'], ['thread', '[1,5]'], ['reply', '[3]'], ['reply', '[1,5]']] as const)(
+  'confirms a %s whose dice %s the forum stored with its rolled result', async (kind, dice) => {
+    const s = await setup()
+    if (kind === 'reply') await finished(s.service, attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'head', payload: payload(s.a) })).id)
+    const content = `掷 ${dice} 看看\n再来${dice}`
+    const sent = attempt(await s.service.submit({ requestId: randomUUID(), editorId: kind, payload: postFor(kind, s.a, content) }))
+    expect(await finished(s.service, sent.id)).toMatchObject({ state: 'confirmed', payload: { fields: { content } } })
+    expect(s.remote.seen.filter(r => r.path.startsWith(kind === 'thread' ? '/api/thread' : '/api/ref'))).not.toHaveLength(0)
+  })
+
+it.each(['thread', 'reply'] as const)('keeps a %s with dice unconfirmed when its public read-back differs elsewhere in the text', async kind => {
+  const s = await setup()
+  if (kind === 'reply') await finished(s.service, attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'head', payload: payload(s.a) })).id)
+  s.remote.setMode('readback-differs')
+  const sent = attempt(await s.service.submit({ requestId: randomUUID(), editorId: kind, payload: postFor(kind, s.a, '掷 [1,5] 看看') }))
+  expect(await finished(s.service, sent.id)).toMatchObject({ state: 'unconfirmed' })
+})
+
+it('sends new threads and replies without an email field, keeping the other fields and the watermark switch', async () => {
+  const s = await setup()
+  const thread = { ...postFor('thread', s.a, '新串正文'), fields: { ...EMPTY_FIELDS, content: '新串正文', title: '标题', name: '名称' } }
+  await finished(s.service, attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'thread', payload: thread })).id)
+  const reply = { ...postFor('reply', s.a, '回复正文'), fields: { ...EMPTY_FIELDS, content: '回复正文', watermark: true } }
+  await finished(s.service, attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'reply', payload: reply })).id)
+  const sent = s.remote.seen.filter(r => r.path.startsWith('/Home/'))
+    .map(r => Object.fromEntries([...r.body.matchAll(/name="(\w+)"\r\n\r\n([\s\S]*?)\r\n--/g)].map(m => [m[1], m[2]])))
+  expect(sent).toEqual([
+    { fid: '1', content: '新串正文', title: '标题', name: '名称' },
+    { resto: '701', content: '回复正文', title: '', name: '', water: 'true' }
+  ])
 })
 
 it('releases a refused PO choice so an edited retry cannot submit the old frozen prompt', async () => {
@@ -687,6 +730,16 @@ it('checks sends an earlier run left without a result once at start; a throttled
   expect(await checkedAtStart(s, unfinished.id)).toMatchObject({ state: 'failed', problem: 'unverified' })
   expect(s.db.listLaunchNotices()).toMatchObject([{ id: unfinished.id, state: 'failed', problem: 'unverified' }])
   expect(posts(s)).toBe(2)
+})
+
+it('finds a lost send with dice by the same comparison as the read-back, for a new thread and a reply', async () => {
+  const s = await setup()
+  const thread = await lose(s, payload(s.a, '掷骰[1,5]'))
+  const reply = await lose(s, { ...payload(s.b, '再掷[3]'), target: { kind: 'reply', threadId: '500' } })
+  await s.restart({ afterSendMs: null, onRecover: true })
+  await expect.poll(() => [thread.id, reply.id].map(id => s.db.getPublication(id)?.state)).toEqual(['confirmed', 'confirmed'])
+  expect(s.db.getPublication(thread.id)!.postId).toBe(postOf(s, '掷骰<b>2</b><small>[1,5]</small>'))
+  expect(s.db.getPublication(reply.id)!.postId).toBe(postOf(s, '再掷<b>2</b><small>[3]</small>'))
 })
 
 it('reads at most three trailing pages of a reply’s thread, counting a page the reply count does not show yet', async () => {

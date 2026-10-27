@@ -598,16 +598,24 @@ export const MIGRATIONS: readonly Migration[] = [
     }
   },
   {
+    // Drafts no longer keep an E-mail field; every other draft column and its attachment stay.
+    // Send attempts keep their stored payload_json unchanged; a leftover email there is ignored.
+    version: 18,
+    up(db) {
+      db.exec('ALTER TABLE drafts DROP COLUMN email;')
+    }
+  },
+  {
     // Each attempt keeps the sending cookie's 饼干 ID (existing attempts take the ID their never
     // reused credential has now, if any), and a send whose result was lost and could not be found
     // fails as `unverified`. Only `sending` / `unknown` attempts lock their source draft now: an
     // `unconfirmed` one was sent, so, as for a send recorded so from now on, its source draft goes
     // and it no longer holds its image. SQLite cannot change a CHECK in place, so the table is
     // rebuilt; every row, ID and the ID counter are kept.
-    version: 18,
+    version: 19,
     up(db) {
       const sequence = db.prepare<[], { seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'publication_attempts'").get()
-      db.exec(`CREATE TABLE publication_attempts_v18 (
+      db.exec(`CREATE TABLE publication_attempts_v19 (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           request_id TEXT NOT NULL UNIQUE,
           editor_id TEXT NOT NULL,
@@ -630,7 +638,7 @@ export const MIGRATIONS: readonly Migration[] = [
           cookie_id TEXT,
           CHECK (state != 'confirmed' OR (post_id IS NOT NULL AND thread_id IS NOT NULL))
         );
-        INSERT INTO publication_attempts_v18 (
+        INSERT INTO publication_attempts_v19 (
           id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem,
           created_at, updated_at, post_id, thread_id, saved_draft_id, launch_notice, cookie_id
         ) SELECT id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem,
@@ -638,7 +646,7 @@ export const MIGRATIONS: readonly Migration[] = [
           (SELECT cookie_id FROM credentials WHERE credentials.id = publication_attempts.credential_id)
         FROM publication_attempts;
         DROP TABLE publication_attempts;
-        ALTER TABLE publication_attempts_v18 RENAME TO publication_attempts;
+        ALTER TABLE publication_attempts_v19 RENAME TO publication_attempts;
         CREATE UNIQUE INDEX publication_locked_draft ON publication_attempts(draft_id)
           WHERE draft_id IS NOT NULL AND state IN ('sending', 'unknown');
         CREATE INDEX publication_attachment_id ON publication_attempts(attachment_id);

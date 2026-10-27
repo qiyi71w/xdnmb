@@ -31,9 +31,12 @@ type Predecessor = 'subscriptions-v5' | 'retained-v6' | typeof heads[number]
 const hasSubscriptions = (kind: Predecessor) => kind === 'subscriptions-v5' || kind === 'integrated-v7' || kind === 'reconciliation-v6' || kind === 'integrated-v8' || kind === 'reminders-v9'
 const hasDrafts = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'lifecycle-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
 const hasRetained = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
-/** Publication columns every version keeps; v18 adds `cookie_id`, so snapshots taken before it compare these. */
+/** Publication columns every version keeps; v19 adds `cookie_id`, so snapshots taken before it compare these. */
 const publicationColumns = 'id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem, created_at, updated_at, post_id, thread_id, saved_draft_id, launch_notice'
-const keptColumns = (table: string) => table === 'publication_attempts' ? `SELECT ${publicationColumns} FROM publication_attempts` : `SELECT * FROM ${table}`
+/** Draft columns every version keeps; v18 drops `email`, so snapshots taken before it compare these. */
+const draftColumns = 'id, target_kind, target_id, credential_id, content, title, name, watermark, attachment_id, version, created_at, saved_at'
+const keptColumns = (table: string) => table === 'publication_attempts' ? `SELECT ${publicationColumns} FROM publication_attempts`
+  : table === 'drafts' ? `SELECT ${draftColumns} FROM drafts` : `SELECT * FROM ${table}`
 
 function plan(): SubscriptionPlan {
   return { id: 'historical-plan', preview: { id: 'historical-preview', mode: 'sync', context, createdAt: at,
@@ -288,7 +291,7 @@ describe('combined predecessor migration', () => {
     expect(requests).toEqual(['/Api/feed'])
     expect(db.getReadingState('100').positions.all?.anchor.postId).toBe('101')
     expect(db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: '7',
-      fields: { content: '新草稿', title: '', name: '', email: '', watermark: false }, attachmentId: null }, later)).toMatchObject({ ok: true })
+      fields: { content: '新草稿', title: '', name: '', watermark: false }, attachmentId: null }, later)).toMatchObject({ ok: true })
     db.close()
     const reopened = open(path)
     expect(reopened.loadSubscriptionOperations()[0]).toMatchObject({ state: 'settled', verification: 'present' })
@@ -370,7 +373,7 @@ describe('schema v14: thread favourites and read state removed', () => {
     const raw = new Database(path, { readonly: true })
     try {
       const tables = new Set((raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name))
-      // Later versions add columns (credentials.cookie_id in v15, publication_attempts.cookie_id in v18); compare the columns kept throughout.
+      // Later versions add columns (credentials.cookie_id in v15, publication_attempts.cookie_id in v19) or drop them (drafts.email in v18); compare the columns kept throughout.
       const query = (table: string) => table === 'credentials' ? 'SELECT id, name, source, imported_at, ciphertext, position FROM credentials' : keptColumns(table)
       const rows = Object.fromEntries(kept.map((table) => [table, (raw.prepare(query(table)).all() as object[]).map((row) => JSON.stringify(row)).sort()]))
       return { version: raw.pragma('user_version', { simple: true }), tables, rows }
@@ -603,17 +606,73 @@ describe('reminder scheduling upgrade', () => {
   })
 })
 
-describe('schema v18: sends keep their 饼干 ID and may fail as unverified', () => {
-  const payload = (content: string) => JSON.stringify({ draftId: null, target: { kind: 'reply', threadId: '500' }, credentialId: '7',
-    fields: { content, title: '', name: '', email: '', watermark: false }, attachmentId: null })
-
-  /** A v17 database with a checked, an unresolved and a failed send; a deleted row raised the ID counter. */
+describe('schema v18: drafts drop the E-mail field', () => {
+  /** A v17 database whose saved draft has a title, name, E-mail, identity and attached image. */
   function v17(): string {
     const path = predecessor('reminders-v9')
     openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 17)).close()
     const raw = new Database(path)
     try {
       expect(raw.pragma('user_version', { simple: true })).toBe(17)
+      raw.prepare("UPDATE drafts SET name = '旧名称', email = 'sage' WHERE id = 8").run()
+    } finally { raw.close() }
+    return path
+  }
+  function draftTable(path: string) {
+    const raw = new Database(path, { readonly: true })
+    try {
+      const columns = (raw.prepare('PRAGMA table_info(drafts)').all() as { name: string }[]).map((column) => column.name)
+      const kept = columns.filter((column) => column !== 'email').join(', ')
+      return { columns, rows: raw.prepare(`SELECT ${kept} FROM drafts`).all(), attempts: raw.prepare(`SELECT ${publicationColumns} FROM publication_attempts`).all() }
+    } finally { raw.close() }
+  }
+
+  it('removes only the E-mail column and keeps every draft field, its identity, target and image', () => {
+    const path = v17()
+    const before = draftTable(path)
+    expect(before.columns).toContain('email')
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    const after = draftTable(path)
+    expect(after.columns).not.toContain('email')
+    expect(after.columns).toEqual(before.columns.filter((column) => column !== 'email'))
+    expect(after.rows).toEqual(before.rows)
+    // Stored send payloads are not rewritten, even where they still name an E-mail.
+    expect(after.attempts).toEqual(before.attempts)
+    expect(db.listDrafts()).toEqual([expect.objectContaining({ id: '8', version: 3, target: { kind: 'reply', threadId: '100' }, credentialId: '7',
+      fields: { content: '未发送草稿', title: '草稿标题', name: '旧名称', watermark: true },
+      attachment: expect.objectContaining({ id: '4', fileName: 'old-copy.png', originalName: 'original.png' }) })])
+    expect(db.saveDraft({ draftId: '8', target: { kind: 'reply', threadId: '100' }, credentialId: '7',
+      fields: { content: '升级后改写', title: '草稿标题', name: '旧名称', watermark: true }, attachmentId: '4' }, later)).toMatchObject({ ok: true, draft: { version: 4 } })
+  })
+
+  it('leaves the v17 file byte-for-byte unchanged when the v18 migration fails', () => {
+    const path = v17()
+    const original = readFileSync(path)
+    const failing = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 17), { version: 18, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 18)!.up(connection)
+      throw new Error('injected failure after dropping the column')
+    } }])
+    connections.push(failing)
+    expect(failing.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failing.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(draftTable(path).columns).toContain('email')
+    expect(open(path).listDrafts()[0]?.fields).toEqual({ content: '未发送草稿', title: '草稿标题', name: '旧名称', watermark: true })
+  })
+})
+
+describe('schema v19: sends keep their 饼干 ID and may fail as unverified', () => {
+  const payload = (content: string) => JSON.stringify({ draftId: null, target: { kind: 'reply', threadId: '500' }, credentialId: '7',
+    fields: { content, title: '', name: '', watermark: false }, attachmentId: null })
+
+  /** A v18 database with a checked, an unresolved and a failed send; a deleted row raised the ID counter. */
+  function v18(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 18)).close()
+    const raw = new Database(path)
+    try {
+      expect(raw.pragma('user_version', { simple: true })).toBe(18)
       const insert = raw.prepare(`INSERT INTO publication_attempts(id, request_id, editor_id, payload_json, credential_id, forum_id, state, problem,
         created_at, updated_at, post_id, thread_id, launch_notice) VALUES (?, ?, 'editor', ?, 7, '4', ?, ?, ?, ?, ?, ?, ?)`)
       insert.run(101, 'checked', payload('已确认'), 'confirmed', null, at, later, '700', '500', 0)
@@ -627,7 +686,7 @@ describe('schema v18: sends keep their 饼干 ID and may fail as unverified', ()
   }
 
   it('keeps every send and its ID, fills the 饼干 ID, and lets an unknown send fail as unverified into a draft', () => {
-    const db = open(v17())
+    const db = open(v18())
     expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
     const mine = (id: string) => ['101', '102', '103'].includes(id)
     expect(db.listPublications().filter((item) => mine(item.id)).map(({ id, state, problem, postId, threadId, cookieId, createdAt, updatedAt }) =>
@@ -642,20 +701,20 @@ describe('schema v18: sends keep their 饼干 ID and may fail as unverified', ()
     expect(db.listLaunchNotices().map((item) => item.id).filter(mine)).toEqual(['102'])
     // IDs are never reused: the counter survives the rebuild.
     const created = db.createPublication({ requestId: 'after-upgrade', editorId: 'editor', forumId: '4', at: later,
-      payload: { draftId: null, target: { kind: 'thread', forumId: '4' }, credentialId: '7', fields: { content: '新', title: '', name: '', email: '', watermark: false }, attachmentId: null } })
+      payload: { draftId: null, target: { kind: 'thread', forumId: '4' }, credentialId: '7', fields: { content: '新', title: '', name: '', watermark: false }, attachmentId: null } })
     expect(created.id).toBe('141')
   })
 
-  it('treats a v17 send left unconfirmed as sent: its source draft goes and its image is no longer held', () => {
-    const path = v17()
+  it('treats a v18 send left unconfirmed as sent: its source draft goes and its image is no longer held', () => {
+    const path = v18()
     const raw = new Database(path)
     try {
       const image = Number(raw.prepare(`INSERT INTO draft_attachments(file_name, format, bytes, width, height, original_name, created_at)
         VALUES ('kept.png', 'png', 64, 2, 1, 'kept.png', ?)`).run(at).lastInsertRowid)
-      const draft = Number(raw.prepare(`INSERT INTO drafts(target_kind, target_id, credential_id, content, title, name, email, watermark, attachment_id, version, created_at, saved_at)
-        VALUES ('reply', '500', 7, '已发出未确认', '', '', '', 0, ?, 1, ?, ?)`).run(image, at, at).lastInsertRowid)
-      const unknownDraft = Number(raw.prepare(`INSERT INTO drafts(target_kind, target_id, credential_id, content, title, name, email, watermark, attachment_id, version, created_at, saved_at)
-        VALUES ('reply', '500', 7, '结果不明', '', '', '', 0, NULL, 1, ?, ?)`).run(at, at).lastInsertRowid)
+      const draft = Number(raw.prepare(`INSERT INTO drafts(target_kind, target_id, credential_id, content, title, name, watermark, attachment_id, version, created_at, saved_at)
+        VALUES ('reply', '500', 7, '已发出未确认', '', '', 0, ?, 1, ?, ?)`).run(image, at, at).lastInsertRowid)
+      const unknownDraft = Number(raw.prepare(`INSERT INTO drafts(target_kind, target_id, credential_id, content, title, name, watermark, attachment_id, version, created_at, saved_at)
+        VALUES ('reply', '500', 7, '结果不明', '', '', 0, NULL, 1, ?, ?)`).run(at, at).lastInsertRowid)
       const insert = raw.prepare(`INSERT INTO publication_attempts(id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem,
         created_at, updated_at) VALUES (?, ?, 'editor', ?, ?, 7, '4', ?, ?, ?, ?, ?)`)
       insert.run(150, 'sent-unnamed', draft, payload('已发出未确认'), image, 'unconfirmed', null, at, later)
@@ -671,11 +730,11 @@ describe('schema v18: sends keep their 饼干 ID and may fail as unverified', ()
     } finally { check.close() }
   })
 
-  it('rolls back an interrupted rebuild without changing the v17 file', () => {
-    const path = v17()
+  it('rolls back an interrupted rebuild without changing the v18 file', () => {
+    const path = v18()
     const original = readFileSync(path)
-    const db = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 17), { version: 18, up(connection) {
-      MIGRATIONS.find((migration) => migration.version === 18)!.up(connection)
+    const db = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 18), { version: 19, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 19)!.up(connection)
       throw new Error('injected publication upgrade failure')
     } }])
     expect(db.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })

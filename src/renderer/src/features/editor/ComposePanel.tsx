@@ -171,12 +171,11 @@ function ComposeModal({ label, onCollapse, children }: { label: string; onCollap
 
 /** Holds something worth continuing: text, an image, a saved draft, or a send. */
 function hasContent(editor: Editor): boolean {
-  const { content, title, name, email } = editor.fields
+  const { content, title, name } = editor.fields
   return (
     content !== '' ||
     title !== '' ||
     name !== '' ||
-    email !== '' ||
     editor.attachment !== null ||
     editor.draft !== null ||
     editor.publication !== null

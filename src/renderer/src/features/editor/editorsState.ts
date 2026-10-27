@@ -367,7 +367,7 @@ export function editorForDraft(state: EditorsState, draftId: string): Editor | n
 }
 
 function sameFields(a: PostFields, b: PostFields): boolean {
-  return a.content === b.content && a.title === b.title && a.name === b.name && a.email === b.email && a.watermark === b.watermark
+  return a.content === b.content && a.title === b.title && a.name === b.name && a.watermark === b.watermark
 }
 
 function attachmentId(attachment: DraftAttachment | null): AttachmentId | null {
@@ -382,8 +382,8 @@ function attachmentId(attachment: DraftAttachment | null): AttachmentId | null {
 export function isUnsaved(editor: Editor): boolean {
   const draft = editor.draft
   if (draft === null) {
-    const { content, title, name, email } = editor.fields
-    return content !== '' || title !== '' || name !== '' || email !== '' || editor.attachment !== null
+    const { content, title, name } = editor.fields
+    return content !== '' || title !== '' || name !== '' || editor.attachment !== null
   }
   return (
     !sameTarget(editor.target, draft.target) ||

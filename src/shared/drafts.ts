@@ -25,12 +25,11 @@ export interface PostFields {
   content: string
   title: string
   name: string
-  email: string
   /** 水印; off by default. Sending omits the field when off (publication ticket). */
   watermark: boolean
 }
 
-export const EMPTY_FIELDS: PostFields = { content: '', title: '', name: '', email: '', watermark: false }
+export const EMPTY_FIELDS: PostFields = { content: '', title: '', name: '', watermark: false }
 
 /** Upper bounds accepted over IPC; not forum limits. */
 export const MAX_DRAFT_CONTENT_LENGTH = 100_000

@@ -163,7 +163,7 @@ describe('drafts in editors', () => {
     const editor = only(state, 1, replyA)
     state = run(state, { type: 'set-identity', editorId: editor.id, credentialId: '2' }, { type: 'edit', editorId: editor.id, patch: { watermark: true } })
     expect(isUnsaved(only(state, 1, replyA))).toBe(false)
-    state = run(state, { type: 'edit', editorId: editor.id, patch: { email: 'sage' } })
+    state = run(state, { type: 'edit', editorId: editor.id, patch: { name: '无名氏' } })
     expect(isUnsaved(only(state, 1, replyA))).toBe(true)
   })
 

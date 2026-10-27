@@ -1,7 +1,7 @@
 import type { Post } from '../../shared/forum'
 import type { PublicationAttempt } from '../../shared/publication'
 import type { ForumClient } from '../forum/contract'
-import { comparableText } from './adapter'
+import { carriesText } from './adapter'
 
 /** Replies per thread page: the forum splits `ReplyCount` into pages of 19. */
 const PAGE_SIZE = 19
@@ -34,7 +34,7 @@ export type CheckOutcome =
 function matches(post: Post, attempt: PublicationAttempt, since: number, claimed: ReadonlySet<string>): boolean {
   const { fields, attachmentId, target } = attempt.payload
   if (attempt.cookieId === null || post.userHash !== attempt.cookieId || claimed.has(post.id)) return false
-  if (comparableText(post.plainText) !== comparableText(fields.content)) return false
+  if (!carriesText(post.content, fields.content)) return false
   if ((fields.title !== '' && post.title !== fields.title) || (fields.name !== '' && post.name !== fields.name)) return false
   if ((attachmentId !== null) !== (post.image !== null)) return false
   const time = forumTime(post.createdAt)

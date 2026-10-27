@@ -432,6 +432,7 @@ describe('window lifecycle storage', () => {
       VALUES ('request-1', 'editor-1', ?, ?, '1', 'sending', ?, ?)`).run(JSON.stringify(payload), credentialId, fetchedAt, fetchedAt)
     seed.close()
 
+
     const db = open(path)
     expect(db.status).toEqual({ state: 'ready', schemaVersion: SUPPORTED_VERSION })
     // A cookie without a known 饼干 ID leaves the send's ID unknown; nothing confirmed it.

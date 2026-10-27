@@ -47,7 +47,7 @@ export function useComposeOpen(tabId: number, target: PostTarget, editor: Editor
 
 /**
  * The editor of one target, as the floating panel lays it out: one header line (target as the title
- * that opens 更改目标, the 发言饼干 pill, close), the 举报 reasons, the optional 标题／名称／E-mail row,
+ * that opens 更改目标, the 发言饼干 pill, close), the 举报 reasons, the optional 标题／名称 row,
  * the text as the page, and a bottom toolbar (image, fields, 颜文字, status; 放弃修改, 保存草稿, 发送).
  */
 export function EditorPanel({
@@ -84,8 +84,8 @@ export function EditorPanel({
   const attachmentId = editor.attachment?.id ?? null
   useEffect(() => setPreviewing(false), [attachmentId])
   useComposeTips(panelRef)
-  const hasExtraFields = editor.fields.title !== '' || editor.fields.name !== '' || editor.fields.email !== ''
-  /** The 标题／名称／E-mail row is shown whenever one of its fields holds something. */
+  const hasExtraFields = editor.fields.title !== '' || editor.fields.name !== ''
+  /** The 标题／名称 row is shown whenever one of its fields holds something. */
   const [fieldsOpen, setFieldsOpen] = useState(hasExtraFields)
   useEffect(() => {
     if (hasExtraFields) setFieldsOpen(true)
@@ -290,14 +290,6 @@ export function EditorPanel({
     <div className="compose-fields">
       <FieldInput id={`${ids}-title`} label="标题" value={editor.fields.title} readOnly={locked} onChange={(title) => edit({ title })} />
       <FieldInput id={`${ids}-name`} label="名称" value={editor.fields.name} readOnly={locked} onChange={(name) => edit({ name })} />
-      <FieldInput
-        id={`${ids}-email`}
-        label="E-mail"
-        value={editor.fields.email}
-        readOnly={locked}
-        onChange={(email) => edit({ email })}
-        type="email"
-      />
     </div>
   )
 
@@ -515,9 +507,9 @@ export function EditorPanel({
             <button
               type="button"
               className="icon-btn compose-fields-toggle"
-              aria-label={fieldsHidden ? '标题、名称、E-mail（已填写）' : '标题、名称、E-mail'}
+              aria-label={fieldsHidden ? '标题、名称（已填写）' : '标题、名称'}
               aria-pressed={fieldsOpen}
-              data-tip={fieldsHidden ? '标题 · 名称 · E-mail（已填写）' : '标题 · 名称 · E-mail'}
+              data-tip={fieldsHidden ? '标题 · 名称（已填写）' : '标题 · 名称'}
               data-tip-place="start"
               onClick={() => {
                 focusFields.current = !fieldsOpen
@@ -594,22 +586,20 @@ function FieldInput({
   label,
   value,
   readOnly,
-  onChange,
-  type = 'text'
+  onChange
 }: {
   id: string
   label: string
   value: string
   readOnly: boolean
   onChange: (value: string) => void
-  type?: 'text' | 'email'
 }) {
   return (
     <div className="editor-field">
       <label htmlFor={id}>{label}</label>
       <input
         id={id}
-        type={type}
+        type="text"
         autoComplete="off"
         value={value}
         readOnly={readOnly}

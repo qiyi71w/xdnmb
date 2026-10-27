@@ -64,6 +64,31 @@ function visibleText(nodes: readonly ContentNode[]): string {
   }).join('')
 }
 
+function emphasized(node: ContentNode | undefined, style: EmphasisStyle, pattern: RegExp): node is Container {
+  return node?.type === 'emphasis' && node.style === style && pattern.test(visibleText(node.children))
+}
+
+/**
+ * Visible text as it was submitted: the forum stores a dice expression `[n]` / `[n,m]` rendered as
+ * `<b>result</b><small>[expr]</small>`, so that pair reads back as the expression alone. For
+ * publication verification only; reading keeps the rendered result.
+ */
+export function submittedText(nodes: readonly ContentNode[]): string {
+  let text = ''
+  for (let index = 0; index < nodes.length; index++) {
+    const node = nodes[index]!
+    const next = nodes[index + 1]
+    if (emphasized(node, 'bold', /^\d+$/) && emphasized(next, 'small', /^\[\d+(?:,\d+)?\]$/)) {
+      text += visibleText(next.children)
+      index++
+    } else if (node.type === 'text') text += node.text
+    else if (node.type === 'quoteRef') text += node.raw
+    else if (node.type === 'lineBreak') text += '\n'
+    else text += submittedText(node.children)
+  }
+  return text
+}
+
 /** Convert untrusted forum HTML into the closed, attribute-free content vocabulary. */
 export function parseContent(html: string): { nodes: ContentNode[]; plainText: string } {
   const nodes: ContentNode[] = []
