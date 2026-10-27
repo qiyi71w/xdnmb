@@ -449,7 +449,7 @@ export function OnlineSearchPane({
               value={state.draft}
               onChange={(event) => session.setDraft(event.target.value)}
             />
-            <button type="submit" className="btn online-search-submit" disabled={!canSubmit}>
+            <button type="submit" className="btn btn-page online-search-submit" disabled={!canSubmit}>
               <Icon name="search" />
               搜索
             </button>

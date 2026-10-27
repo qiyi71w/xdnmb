@@ -223,7 +223,7 @@ export function CacheSection() {
               <p className="history-confirm-title">清理普通缓存？</p>
               <p className="history-confirm-impact">将删除约 {formatBytes(cacheBytes)} 普通缓存。</p>
               <div className="history-confirm-actions">
-                <button ref={confirmRef} type="button" className="btn btn-small btn-danger" aria-busy={busy === 'clear' || undefined} onClick={() => void clear()}>
+                <button ref={confirmRef} type="button" className="btn btn-small btn-danger btn-page" aria-busy={busy === 'clear' || undefined} onClick={() => void clear()}>
                   {busy === 'clear' ? '正在清理…' : '确认清理'}
                 </button>
                 <button type="button" className="btn btn-small btn-page" disabled={busy === 'clear'} onClick={() => setConfirming(false)}>
@@ -236,7 +236,7 @@ export function CacheSection() {
               <button
                 ref={clearRef}
                 type="button"
-                className="btn btn-danger"
+                className="btn btn-danger btn-page"
                 disabled={busy !== null}
                 onClick={() => {
                   setMessage(null)

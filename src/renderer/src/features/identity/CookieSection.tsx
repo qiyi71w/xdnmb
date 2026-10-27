@@ -537,7 +537,7 @@ function CredentialItem({
             <button
               type="button"
               ref={removeButton}
-              className="btn btn-small btn-danger"
+              className="btn btn-small btn-danger btn-page"
               onClick={() => {
                 setError(null)
                 setMode('confirm-remove')
@@ -561,7 +561,7 @@ function CredentialItem({
             {browsing && count > 1 && '浏览将改用下一个饼干。'}
           </p>
           <div className="credential-confirm-actions">
-            <button type="button" className="btn btn-small btn-danger" onClick={() => void confirmRemove()} disabled={pending}>
+            <button type="button" className="btn btn-small btn-danger btn-page" onClick={() => void confirmRemove()} disabled={pending}>
               {pending ? '正在移除…' : '确认移除'}
             </button>
             <button type="button" ref={cancelRemove} className="btn btn-small btn-page" onClick={() => leave(removeButton)} disabled={pending}>

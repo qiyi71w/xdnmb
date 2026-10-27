@@ -279,7 +279,7 @@ function AppUuidForm({
             <div className="credential-confirm-actions">
               <button
                 type="button"
-                className="btn btn-small btn-danger"
+                className="btn btn-small btn-danger btn-page"
                 disabled={pending !== null}
                 onClick={() => {
                   setConfirmGenerate(false)

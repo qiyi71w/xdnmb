@@ -32,7 +32,7 @@ import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
 import { useImageScope } from '../image/useImageLoad'
-import { ListFilterBar } from '../search/FilterFields'
+import { ListFilterPanel, ListFilterToggle, useListFilter } from '../search/FilterFields'
 import { contentFilterCount, filterList, headMeta } from '../search/listFilters'
 import { NO_CONTENT_FILTERS } from '../search/searchState'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
@@ -126,6 +126,7 @@ export function SubscriptionPane({
   /** This view's filters; kept across source switches, never resetting the thread being read. */
   const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtersRef = useRef(filters)
+  const filter = useListFilter(filters, setFilters)
 
   const selection = overview === null ? null : selectionKey(overview)
   const overviewRef = useRef(overview)
@@ -461,6 +462,7 @@ export function SubscriptionPane({
                   </button>
                 ))}
               </div>
+              {threads.length > 0 && <ListFilterToggle filter={filter} />}
               <button
                 type="button"
                 className="icon-btn list-head-btn"
@@ -483,6 +485,18 @@ export function SubscriptionPane({
             </p>
           )}
         </header>
+
+        {threads.length > 0 && (
+          <ListFilterPanel
+            filter={filter}
+            forums={forumNames}
+            noun="订阅的串"
+            total={threads.length}
+            result={filtered}
+            metadata={null}
+            coverage="已读取的订阅页"
+          />
+        )}
 
         <div className="sub-tools">
           {blocker !== null && (
@@ -565,19 +579,6 @@ export function SubscriptionPane({
           <div className="list-empty" role="status">
             <p className="list-empty-title">没有订阅</p>
           </div>
-        )}
-
-        {threads.length > 0 && (
-          <ListFilterBar
-            filters={filters}
-            onChange={setFilters}
-            forums={forumNames}
-            noun="订阅的串"
-            total={threads.length}
-            result={filtered}
-            metadata={null}
-            coverage="已读取的订阅页"
-          />
         )}
 
         {threads.length > 0 && (

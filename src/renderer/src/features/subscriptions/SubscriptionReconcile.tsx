@@ -529,7 +529,7 @@ function ExecuteConfirm({
         <p>开始前会重新读取两端，有变化就不执行。</p>
       </div>
       <div className="credential-confirm-actions">
-        <button type="button" className={removes ? 'btn btn-small btn-danger' : 'btn btn-small btn-primary'} onClick={onConfirm}>
+        <button type="button" className={removes ? 'btn btn-small btn-danger btn-page' : 'btn btn-small btn-primary'} onClick={onConfirm}>
           {empty ? '确认记录' : '确认执行'}
         </button>
         <button type="button" ref={cancelRef} className="btn btn-small btn-page" onClick={onCancel}>

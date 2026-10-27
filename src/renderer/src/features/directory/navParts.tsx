@@ -149,7 +149,7 @@ export function DirectoryStatus({ state, onRetry }: { state: DirectoryState; onR
           目录未更新，显示 {formatRecordTime(source.fetchedAt)} 的缓存
         </p>
         <span className="nav-foot-actions">
-          <button type="button" className="btn btn-small" onClick={onRetry}>
+          <button type="button" className="btn btn-small btn-page" onClick={onRetry}>
             重试
           </button>
           <IdentitySettingsAction error={refreshFailure} />

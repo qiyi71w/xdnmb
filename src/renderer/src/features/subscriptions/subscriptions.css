@@ -4,7 +4,7 @@
 
 /* ---------- Header ---------- */
 
-/* The title row: title, 同步与合并, the source switch, 刷新. When the column is too narrow for all
+/* The title row: title, 同步与合并, the source switch, 筛选, 刷新. When the column is too narrow for all
    of them, the controls wrap below the title as one group, never squeezing it. */
 .sub-pane .list-title-row {
   flex-wrap: wrap;

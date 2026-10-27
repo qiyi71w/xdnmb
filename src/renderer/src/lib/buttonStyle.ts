@@ -5,14 +5,15 @@
 
 export const BUTTON_STYLE_TRIAL = import.meta.env.VITE_XIDAO_PROTOTYPE === '1'
 
-export type ButtonStyle = 'current' | 'a' | 'b' | 'c' | 'd'
+export type ButtonStyle = 'current' | 'a' | 'b' | 'c' | 'd' | 'e'
 
 export const BUTTON_STYLE_OPTIONS: readonly { value: ButtonStyle; label: string }[] = [
   { value: 'current', label: '现状' },
   { value: 'a', label: 'A 安静墨字' },
   { value: 'b', label: 'B 浅灰实底' },
   { value: 'c', label: 'C 细线幽灵' },
-  { value: 'd', label: 'D 图标优先' }
+  { value: 'd', label: 'D 图标优先' },
+  { value: 'e', label: 'E 推荐' }
 ]
 
 export function currentButtonStyle(): ButtonStyle {

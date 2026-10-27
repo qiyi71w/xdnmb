@@ -17,7 +17,7 @@ import { RowThumbnail } from '../image/RowThumbnail'
 import { useImageScope } from '../image/useImageLoad'
 import { SentPage, useSentAttempts } from '../publication/SentPage'
 import type { SentKind } from '../publication/sentRecords'
-import { ListFilterBar, UncertainTag } from '../search/FilterFields'
+import { ListFilterPanel, ListFilterToggle, UncertainTag, useListFilter } from '../search/FilterFields'
 import { contentFilterCount, filterList } from '../search/listFilters'
 import { useThreadMetadata } from '../search/useThreadMetadata'
 import { ContentRegistryContext, useRegisterContent, type HistoryView } from '../tabs/contentRegistry'
@@ -171,6 +171,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
   // ---------- Filters ----------
   const [listFilters, changeFilters] = useRetainedFilters('history')
   const filtering = contentFilterCount(listFilters) > 0
+  const filter = useListFilter(listFilters, changeFilters)
   const entryIds = useMemo(() => entries.map((entry) => entry.threadId), [entries])
   const metadata = useThreadMetadata(entryIds, filtering)
   const filtered = useMemo(
@@ -214,10 +215,11 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
             {showHeading && <h2 className="list-title" id={headingId}>
               <span className="list-name">{PAGE.title}</span>
             </h2>}
+            {entries.length > 0 && <ListFilterToggle filter={filter} />}
             {entries.length > 0 && (
               <button
                 type="button"
-                className="btn btn-small btn-danger"
+                className="btn btn-small btn-danger btn-page"
                 aria-disabled={busy || undefined}
                 onClick={(event) => {
                   if (busy) return
@@ -231,6 +233,18 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
             )}
           </div>
         </header>
+
+        {entries.length > 0 && (
+          <ListFilterPanel
+            filter={filter}
+            forums={forumNames}
+            noun="串"
+            total={entries.length}
+            result={filtered}
+            metadata={filtering ? metadata : null}
+            coverage={`本机的${PAGE.title}列表`}
+          />
+        )}
 
         <div className="list-status">
           {done !== null && (
@@ -258,19 +272,6 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
           </div>
         )}
 
-        {entries.length > 0 && (
-          <ListFilterBar
-            key="history"
-            filters={listFilters}
-            onChange={changeFilters}
-            forums={forumNames}
-            noun="串"
-            total={entries.length}
-            result={filtered}
-            metadata={filtering ? metadata : null}
-            coverage={`本机的${PAGE.title}列表`}
-          />
-        )}
         {filtering && entries.length > 0 && filtered.shown.length === 0 && (
           <p className="list-filters-empty" role="status">
             {PAGE.title}中没有符合筛选的串。

@@ -8,7 +8,7 @@ import { FailureNotice, PartialNotice, SourceNotice } from '../../components/Not
 import { formatPageList } from '../../lib/format'
 import { useNearEnd } from '../../lib/useNearEnd'
 import { useRovingFocus } from '../../lib/useRovingFocus'
-import { ListFilterBar } from '../search/FilterFields'
+import { ListFilterPanel, ListFilterToggle, useListFilter } from '../search/FilterFields'
 import { contentFilterCount, filterList, headMeta } from '../search/listFilters'
 import { NO_CONTENT_FILTERS } from '../search/searchState'
 import type { FeedInfo } from '../directory/feeds'
@@ -84,6 +84,7 @@ export function FeedPane({
   const refreshTurn = useRefreshTurn(state.activity === 'refresh')
   const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtering = contentFilterCount(filters) > 0
+  const filter = useListFilter(filters, setFilters)
   const scrollRef = useRef<HTMLDivElement>(null)
   const images = useImageScope(scrollRef)
   const sentinelRef = useRef<HTMLDivElement>(null)
@@ -220,6 +221,7 @@ export function FeedPane({
   const descriptionLabel = isTimeline ? '说明' : '版规'
   const lastPage = state.pages.at(-1)?.page ?? 0
   const firstLoad = state.pages.length === 0
+  const filterable = !firstLoad && state.threads.length > 0
   const error = state.error
 
   const noticesByIndex = useMemo(() => {
@@ -250,6 +252,7 @@ export function FeedPane({
               <span className="list-name">{listHost?.boardTitle != null ? listHost.boardTitle(info.name) : info.name}</span>
             </h2>
             {compose !== null && compose.entry}
+            {filterable && <ListFilterToggle filter={filter} />}
             <button
               type="button"
               className="icon-btn list-head-btn"
@@ -270,6 +273,18 @@ export function FeedPane({
           )}
         </header>
 
+        {filterable && (
+          <ListFilterPanel
+            filter={filter}
+            forums={isTimeline ? forumNames : null}
+            noun="串"
+            total={visibleThreads.length}
+            result={filtered}
+            metadata={null}
+            coverage={`已加载的第 ${formatPageList(state.pages.map((record) => record.page))} 页`}
+          />
+        )}
+
         {info.description.length > 0 && (
           <details className="feed-description">
             <summary>
@@ -287,19 +302,6 @@ export function FeedPane({
               />
             </QuoteEntryContext.Provider>
           </details>
-        )}
-
-        {!firstLoad && state.threads.length > 0 && (
-          <ListFilterBar
-            filters={filters}
-            onChange={setFilters}
-            forums={isTimeline ? forumNames : null}
-            noun="串"
-            total={visibleThreads.length}
-            result={filtered}
-            metadata={null}
-            coverage={`已加载的第 ${formatPageList(state.pages.map((record) => record.page))} 页`}
-          />
         )}
 
         <div className="list-status" aria-busy={state.activity === 'refresh' || undefined}>
