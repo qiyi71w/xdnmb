@@ -26,6 +26,7 @@ import {
   type ThemeColors
 } from '../../../shared/theme'
 import { Icon } from '../components/Icon'
+import { applyButtonStyle, BUTTON_STYLE_OPTIONS, BUTTON_STYLE_TRIAL, currentButtonStyle, type ButtonStyle } from '../lib/buttonStyle'
 import { previewTheme, systemPrefersDark, systemReducesMotion } from '../lib/useAppearance'
 import { describeIssues, invalidFields } from './appearanceIssues'
 import type { SettingsWriteStatus } from './useSettingsWriter'
@@ -246,7 +247,26 @@ export function AppearanceSection({ settings, write }: { settings: AppSettings; 
           </span>
         )}
       </SettingRow>
+      {BUTTON_STYLE_TRIAL && <ButtonStyleTrial />}
     </Section>
+  )
+}
+
+/** Trial builds only: page secondary buttons in one candidate look, for this run (lib/buttonStyle.ts). */
+function ButtonStyleTrial() {
+  const [style, setStyle] = useState<ButtonStyle>(currentButtonStyle)
+  return (
+    <SettingRow labelId="setting-button-style" label="按钮样式（试用）" help="重启后回到现状">
+      <Choice<ButtonStyle>
+        labelledBy="setting-button-style"
+        options={BUTTON_STYLE_OPTIONS}
+        value={style}
+        onChange={(next) => {
+          applyButtonStyle(next)
+          setStyle(next)
+        }}
+      />
+    </SettingRow>
   )
 }
 
@@ -328,7 +348,7 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
       <div id="theme-editor-body" hidden={!expanded}>
         {draft === null ? (
           <div className="theme-empty">
-            <button type="button" className="btn" onClick={create}>
+            <button type="button" className="btn btn-page" onClick={create}>
               <Icon name="plus" />
               创建主题
             </button>
@@ -438,7 +458,7 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
             <button type="button" className="btn btn-primary" aria-disabled={issues.length > 0 || undefined} onClick={save}>
               保存
             </button>
-            <button type="button" className="btn" onClick={discard}>
+            <button type="button" className="btn btn-page" onClick={discard}>
               放弃修改
             </button>
             <span className="setting-help" role="status">
@@ -501,10 +521,10 @@ function ThemeTransfer({ adopt }: { adopt: (settings: AppSettings) => void }) {
   return (
     <div className="theme-transfer">
       <div className="theme-transfer-buttons">
-        <button type="button" className="btn" aria-disabled={busy ? true : undefined} onClick={() => void run('import')}>
+        <button type="button" className="btn btn-page" aria-disabled={busy ? true : undefined} onClick={() => void run('import')}>
           导入主题…
         </button>
-        <button type="button" className="btn" aria-disabled={busy ? true : undefined} onClick={() => void run('export')}>
+        <button type="button" className="btn btn-page" aria-disabled={busy ? true : undefined} onClick={() => void run('export')}>
           导出主题…
         </button>
       </div>
@@ -794,7 +814,7 @@ export function ZoomSection({ platform }: { platform: AppPlatform | null }) {
         <div className="zoom-controls" role="group" aria-labelledby="setting-zoom">
           <button
             type="button"
-            className="btn zoom-step"
+            className="btn btn-page zoom-step"
             aria-label="缩小界面"
             title={titleOf('缩小', 'out')}
             aria-disabled={blocked.out ? true : undefined}
@@ -807,7 +827,7 @@ export function ZoomSection({ platform }: { platform: AppPlatform | null }) {
           </output>
           <button
             type="button"
-            className="btn zoom-step"
+            className="btn btn-page zoom-step"
             aria-label="放大界面"
             title={titleOf('放大', 'in')}
             aria-disabled={blocked.in ? true : undefined}
@@ -817,7 +837,7 @@ export function ZoomSection({ platform }: { platform: AppPlatform | null }) {
           </button>
           <button
             type="button"
-            className="btn"
+            className="btn btn-page"
             title={titleOf('还原为 100%', 'reset')}
             aria-disabled={blocked.reset ? true : undefined}
             onClick={() => run('reset')}
@@ -889,7 +909,7 @@ export function PublicationSection() {
         <p className="notice-inline is-warning" role="status">
           <Icon name="alert" size={14} />
           未能读取这项设置
-          <button type="button" className="btn btn-small" onClick={() => read(() => true)}>
+          <button type="button" className="btn btn-small btn-page" onClick={() => read(() => true)}>
             重试
           </button>
         </p>

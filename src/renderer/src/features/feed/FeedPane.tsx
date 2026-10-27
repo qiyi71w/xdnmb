@@ -252,7 +252,7 @@ export function FeedPane({
             {compose !== null && compose.entry}
             <button
               type="button"
-              className="icon-btn"
+              className="icon-btn list-head-btn"
               onClick={() => {
                 if (!refreshTurn.turning) refreshList()
               }}

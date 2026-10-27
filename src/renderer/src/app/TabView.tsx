@@ -208,7 +208,7 @@ export function TabView({
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}
           onOpenThread={(summary) => onSelectThread(tab.id, summary.head.id, summary.head)}
-          compose={forumTarget !== null ? composeEntry(tab.id, forumTarget, 'btn btn-small') : null}
+          compose={forumTarget !== null ? composeEntry(tab.id, forumTarget, 'btn btn-small btn-page list-head-btn list-head-compose') : null}
         />
       )
     } else {

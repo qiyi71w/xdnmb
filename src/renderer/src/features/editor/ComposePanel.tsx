@@ -6,6 +6,7 @@ import { useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from 'rea
 import { targetKey, targetText, type EditorId, type PostTarget } from '../../../../shared/drafts'
 import { Icon } from '../../components/Icon'
 import { useCover } from '../../lib/appCovered'
+import { BUTTON_STYLE_TRIAL } from '../../lib/buttonStyle'
 import { openLayer, type Layer } from '../../lib/layers'
 import { rememberComposeOpener, returnComposeFocus } from '../directory/navStore'
 import { EditorPanel, useComposeOpen } from './EditorPanel'
@@ -194,6 +195,8 @@ export function ComposeButton({ tabId, target, className = 'btn' }: { tabId: num
       type="button"
       className={className}
       title={text}
+      // Trial builds may show the list head's 发新串 as an icon only (styles/button-styles.css, D).
+      aria-label={BUTTON_STYLE_TRIAL ? text : undefined}
       data-compose-key={key}
       aria-haspopup="dialog"
       aria-expanded={editor?.expanded === true}
@@ -204,6 +207,7 @@ export function ComposeButton({ tabId, target, className = 'btn' }: { tabId: num
       }}
     >
       <Icon name={resume ? 'draft' : target.kind === 'reply' ? 'reply' : 'plus'} />
+      {BUTTON_STYLE_TRIAL && target.kind !== 'reply' && <Icon name="draft" className="compose-icon-write" />}
       <span className="btn-label">{text}</span>
     </button>
   )

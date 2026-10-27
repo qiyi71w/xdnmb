@@ -15,7 +15,7 @@ export function IdentitySettingsAction({ error }: { error: Failure | ReadError |
   const openSettings = useSettingsOpener()
   if (openSettings === null || identityErrorOf(error) === null) return null
   return (
-    <button type="button" className="btn btn-small" onClick={() => openSettings('cookies')}>
+    <button type="button" className="btn btn-small btn-page" onClick={() => openSettings('cookies')}>
       打开设置
     </button>
   )
@@ -57,7 +57,7 @@ export function FailureNotice({
       </div>
       <IdentitySettingsAction error={failure} />
       {onRetry !== undefined && (
-        <button type="button" className="btn btn-small" onClick={onRetry}>
+        <button type="button" className="btn btn-small btn-page" onClick={onRetry}>
           {retryLabel}
         </button>
       )}

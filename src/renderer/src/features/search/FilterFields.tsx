@@ -2,6 +2,7 @@ import { useId, useState, type ReactNode } from 'react'
 import type { ForumId } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
+import { BUTTON_STYLE_TRIAL } from '../../lib/buttonStyle'
 import { contentFilterCount, type FilteredList } from './listFilters'
 import { NO_CONTENT_FILTERS } from './searchState'
 import type { MetadataState } from './useThreadMetadata'
@@ -145,6 +146,7 @@ export function ListFilterBar({
   coverage: ReactNode
 }) {
   const count = contentFilterCount(filters)
+  const name = count > 0 ? `筛选（已启用 ${count} 项）` : '筛选'
   const [open, setOpen] = useState(count > 0)
   const panelId = useId()
   return (
@@ -152,14 +154,16 @@ export function ListFilterBar({
       <div className="list-filters-row">
         <button
           type="button"
-          className={count > 0 ? 'btn btn-small filter-toggle is-active' : 'btn btn-small filter-toggle'}
+          className={count > 0 ? 'btn btn-small btn-page list-head-btn filter-toggle is-active' : 'btn btn-small btn-page list-head-btn filter-toggle'}
           aria-expanded={open}
           aria-controls={panelId}
-          aria-label={count > 0 ? `筛选（已启用 ${count} 项）` : '筛选'}
+          aria-label={name}
+          // Trial builds may show it as an icon only (styles/button-styles.css, D): its name as the tooltip.
+          title={BUTTON_STYLE_TRIAL ? name : undefined}
           onClick={() => setOpen((value) => !value)}
         >
           <Icon name="filter" size={14} />
-          筛选
+          <span className="btn-label">筛选</span>
           {count > 0 && <span className="btn-count">{count}</span>}
         </button>
         {count > 0 && (

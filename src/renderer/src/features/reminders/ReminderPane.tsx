@@ -306,7 +306,7 @@ export function ReminderPane({
               <p className="notice-text">
                 {overview === null ? '提醒读取失败' : '提醒更新失败'}：{failureText(failure)}
               </p>
-              <button type="button" className="btn btn-small" onClick={() => void reload()}>
+              <button type="button" className="btn btn-small btn-page" onClick={() => void reload()}>
                 重试
               </button>
             </div>
@@ -317,7 +317,7 @@ export function ReminderPane({
           <div className="list-empty" role="status">
             <p className="list-empty-title">还没有开启提醒的串</p>
             {openList !== null && (
-              <button type="button" className="btn reminder-empty-action" onClick={() => openList({ kind: 'subscriptions' })}>
+              <button type="button" className="btn btn-page reminder-empty-action" onClick={() => openList({ kind: 'subscriptions' })}>
                 去订阅的串
               </button>
             )}

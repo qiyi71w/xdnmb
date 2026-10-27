@@ -483,7 +483,7 @@ export function OnlineSearchPane({
               <Loading>正在搜索「{pending.query}」…（Esc 取消）</Loading>
               <button
                 type="button"
-                className="btn btn-small"
+                className="btn btn-small btn-page"
                 onClick={() => {
                   inputRef.current?.focus()
                   session.cancel()
@@ -500,7 +500,7 @@ export function OnlineSearchPane({
                 <Icon name="info" size={14} />
                 「{results.query}」不能再取新页
               </p>
-              <button type="button" className="btn btn-small" onClick={() => rerun(results.query)}>
+              <button type="button" className="btn btn-small btn-page" onClick={() => rerun(results.query)}>
                 <Icon name="refresh" size={14} />
                 重新搜索
               </button>
@@ -567,7 +567,7 @@ export function OnlineSearchPane({
               <div className="online-search-chain-end">
                 <p className="list-end">{CHAIN_END_TEXT[results.next]}</p>
                 {results.next !== 'end' && (
-                  <button type="button" className="btn btn-small" onClick={() => rerun(results.query)}>
+                  <button type="button" className="btn btn-small btn-page" onClick={() => rerun(results.query)}>
                     <Icon name="refresh" size={14} />
                     重新搜索「{results.query}」
                   </button>
@@ -611,7 +611,7 @@ function RequestNotice({ notice, onRetry }: { notice: Exclude<OnlineSearchNotice
         ))}
       </div>
       {request.kind === 'run' && onRetry !== null && (
-        <button type="button" className="btn btn-small" onClick={() => onRetry(request.query)}>
+        <button type="button" className="btn btn-small btn-page" onClick={() => onRetry(request.query)}>
           重试
         </button>
       )}
@@ -627,21 +627,21 @@ function Pager({ results, session, pendingPage }: { results: OnlineSearchResults
   const fetchingNext = pendingPage !== null && pendingPage > results.pages.length
   return (
     <nav className="online-search-pager" aria-label="搜索结果页">
-      <button type="button" className="btn btn-small" aria-disabled={!canPrevious} onClick={() => canPrevious && session.goToPage(previous)}>
+      <button type="button" className="btn btn-small btn-page" aria-disabled={!canPrevious} onClick={() => canPrevious && session.goToPage(previous)}>
         <Icon name="arrowLeft" size={14} />
         上一页
       </button>
       <span className="online-search-pager-current" aria-current="page">
         第 {results.current} 页
       </span>
-      <button type="button" className="btn btn-small" aria-disabled={!canNext} onClick={() => canNext && session.goToPage(next)}>
+      <button type="button" className="btn btn-small btn-page" aria-disabled={!canNext} onClick={() => canNext && session.goToPage(next)}>
         下一页
         <Icon name="arrowRight" size={14} />
       </button>
       {fetchingNext && (
         <div className="online-search-loading">
           <Loading>正在读取第 {pendingPage} 页…（Esc 取消）</Loading>
-          <button type="button" className="btn btn-small" onClick={() => session.cancel()}>
+          <button type="button" className="btn btn-small btn-page" onClick={() => session.cancel()}>
             取消
           </button>
         </div>
@@ -754,7 +754,7 @@ function RowStatusView({
       </button>
     )
   const retry = (
-    <button type="button" className="btn btn-small" tabIndex={tabIndex} onClick={onRetry}>
+    <button type="button" className="btn btn-small btn-page" tabIndex={tabIndex} onClick={onRetry}>
       <Icon name="refresh" size={14} />
       重试
     </button>
@@ -765,7 +765,7 @@ function RowStatusView({
     case 'locating':
       body = <Loading live={false}>{status.intent === 'open' ? `正在定位${status.subject}…（Esc 取消）` : `正在重新定位${status.subject}…（Esc 取消）`}</Loading>
       actions = (
-        <button type="button" className="btn btn-small" tabIndex={tabIndex} onClick={onCancel}>
+        <button type="button" className="btn btn-small btn-page" tabIndex={tabIndex} onClick={onCancel}>
           取消
         </button>
       )
@@ -783,7 +783,7 @@ function RowStatusView({
       )
       actions = (
         <>
-          <button type="button" className="btn btn-small" tabIndex={tabIndex} onClick={() => onOpenLocated(status.location)}>
+          <button type="button" className="btn btn-small btn-page" tabIndex={tabIndex} onClick={() => onOpenLocated(status.location)}>
             <Icon name="arrowRight" size={14} />
             打开
           </button>
@@ -799,7 +799,7 @@ function RowStatusView({
       )
       actions = (
         <>
-          <button type="button" className="btn btn-small" tabIndex={tabIndex} onClick={() => onOpenThread(status.known)}>
+          <button type="button" className="btn btn-small btn-page" tabIndex={tabIndex} onClick={() => onOpenThread(status.known)}>
             打开原串
           </button>
           {browser}
@@ -809,7 +809,7 @@ function RowStatusView({
     case 'opening':
       body = <Loading live={false}>正在打开原串 No.{status.known.threadId}…（Esc 取消）</Loading>
       actions = (
-        <button type="button" className="btn btn-small" tabIndex={tabIndex} onClick={onCancel}>
+        <button type="button" className="btn btn-small btn-page" tabIndex={tabIndex} onClick={onCancel}>
           取消
         </button>
       )

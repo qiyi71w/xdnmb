@@ -245,7 +245,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, sh
               <p className="notice-text">
                 {PAGE.title}读取失败：{contentFailureText(list.refused)}
               </p>
-              <button type="button" className="btn btn-small" onClick={() => void load()}>
+              <button type="button" className="btn btn-small btn-page" onClick={() => void load()}>
                 重试
               </button>
             </div>

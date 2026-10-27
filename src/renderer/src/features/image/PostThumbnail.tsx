@@ -56,7 +56,7 @@ export function PostThumbnail({ postId, images: view }: { postId: PostId; images
           <p id={statusId}>缩略图未取得：{failure}</p>
           <button
             type="button"
-            className="btn btn-small"
+            className="btn btn-small btn-page"
             onClick={() => {
               // This button unmounts as the retry starts: focus stays on the post's thumbnail.
               buttonRef.current?.focus({ preventScroll: true })

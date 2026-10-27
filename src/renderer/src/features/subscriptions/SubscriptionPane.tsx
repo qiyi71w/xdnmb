@@ -463,7 +463,7 @@ export function SubscriptionPane({
               </div>
               <button
                 type="button"
-                className="icon-btn"
+                className="icon-btn list-head-btn"
                 onClick={() => {
                   if (!refreshTurn.turning) refresh()
                 }}
@@ -490,7 +490,7 @@ export function SubscriptionPane({
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">{blocker}</p>
               {openSettings !== null && (
-                <button type="button" className="btn btn-small" onClick={() => openSettings('subscriptions')}>
+                <button type="button" className="btn btn-small btn-page" onClick={() => openSettings('subscriptions')}>
                   打开设置
                 </button>
               )}
@@ -544,7 +544,7 @@ export function SubscriptionPane({
                 第 {shown.error.page} 页读取失败：{describeReadError(shown.error.detail)}
               </span>
               {blocker === null && !readInFlight && (
-                <button type="button" className="btn btn-small" onClick={() => void readOn(shown.id)}>
+                <button type="button" className="btn btn-small btn-page" onClick={() => void readOn(shown.id)}>
                   重试
                 </button>
               )}
@@ -555,7 +555,7 @@ export function SubscriptionPane({
         {displayed === null && state.activity === 'idle' && blocker === null && (
           <div className="list-empty">
             <p className="list-empty-title">{shown !== null || state.refusal !== null || state.internalError !== null ? '还没有取得列表' : '还没有读取这份订阅'}</p>
-            <button type="button" className="btn sub-empty-action" onClick={refresh}>
+            <button type="button" className="btn btn-page sub-empty-action" onClick={refresh}>
               读取
             </button>
           </div>
@@ -731,13 +731,13 @@ function AddForm({
           aria-invalid={error !== null ? true : undefined}
           aria-describedby={describedBy}
         />
-        <button type="submit" className="btn btn-small" disabled={disabled}>
+        <button type="submit" className="btn btn-small btn-page" disabled={disabled}>
           加入
         </button>
         {currentThreadId !== null && (
           <button
             type="button"
-            className="btn btn-small"
+            className="btn btn-small btn-page"
             disabled={disabled}
             onClick={() => {
               const blocked = onAdd(currentThreadId)

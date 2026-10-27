@@ -236,7 +236,7 @@ export function SearchBody({
           />
         </div>
         {running ? (
-          <button type="button" className="btn" onClick={() => commands.stop(tabId, view)}>
+          <button type="button" className="btn btn-page" onClick={() => commands.stop(tabId, view)}>
             <Icon name="close" size={14} />
             停止
           </button>
@@ -247,7 +247,7 @@ export function SearchBody({
         )}
         <button
           type="button"
-          className={filterCount > 0 ? 'btn filter-toggle is-active' : 'btn filter-toggle'}
+          className={filterCount > 0 ? 'btn btn-page filter-toggle is-active' : 'btn btn-page filter-toggle'}
           aria-expanded={filtersOpen}
           aria-controls={filtersId}
           aria-label={filterCount > 0 ? `筛选（已启用 ${filterCount} 项）` : '筛选'}
@@ -347,7 +347,7 @@ function RunStatus({ run, onMore, onRerun }: { run: SearchRun; onMore: () => voi
       body = (
         <>
           <span>已找到 {count} 条，还有没搜索到的内容</span>
-          <button type="button" className="btn btn-small" onClick={onMore}>
+          <button type="button" className="btn btn-small btn-page" onClick={onMore}>
             继续搜索
           </button>
         </>
@@ -367,7 +367,7 @@ function RunStatus({ run, onMore, onRerun }: { run: SearchRun; onMore: () => voi
       body = (
         <>
           <span>已停止，显示停止前找到的 {count} 条</span>
-          <button type="button" className="btn btn-small" onClick={onRerun}>
+          <button type="button" className="btn btn-small btn-page" onClick={onRerun}>
             重新搜索
           </button>
         </>
@@ -382,7 +382,7 @@ function RunStatus({ run, onMore, onRerun }: { run: SearchRun; onMore: () => voi
             {run.failure === null ? '搜索失败' : failureText(run.failure)}
             {count > 0 && `，保留已找到的 ${count} 条`}
           </span>
-          <button type="button" className="btn btn-small" onClick={onRerun}>
+          <button type="button" className="btn btn-small btn-page" onClick={onRerun}>
             {run.failure === 'expired' ? '重新搜索' : '重试'}
           </button>
         </span>
@@ -406,11 +406,11 @@ function RebuildBlock({ rebuild, indexMissing, commands }: { rebuild: RebuildSta
         {running && <Loading>{rebuild.cancelling ? '正在取消重建…' : '正在重建索引…'}</Loading>}
       </div>
       {running ? (
-        <button type="button" className="btn btn-small" onClick={commands.cancelRebuild} disabled={rebuild.cancelling}>
+        <button type="button" className="btn btn-small btn-page" onClick={commands.cancelRebuild} disabled={rebuild.cancelling}>
           取消重建
         </button>
       ) : (
-        <button type="button" className="btn btn-small" onClick={commands.rebuild}>
+        <button type="button" className="btn btn-small btn-page" onClick={commands.rebuild}>
           重建索引
         </button>
       )}
@@ -460,11 +460,11 @@ function FetchBlock({ tab, tabId, commands }: { tab: TabSearch; tabId: number; c
       )}
       <div className="search-fetch-actions">
         {running ? (
-          <button type="button" className="btn btn-small" onClick={() => commands.cancelFetch(tabId)} disabled={fetch.cancelling}>
+          <button type="button" className="btn btn-small btn-page" onClick={() => commands.cancelFetch(tabId)} disabled={fetch.cancelling}>
             取消获取
           </button>
         ) : (
-          <button type="button" className="btn btn-small" onClick={() => commands.fetchThread(tabId)}>
+          <button type="button" className="btn btn-small btn-page" onClick={() => commands.fetchThread(tabId)}>
             <Icon name="download" size={14} />
             {fetch === null ? '获取完整串并搜索' : '再次获取'}
           </button>
@@ -638,7 +638,7 @@ function LocateStatus({
         <span className="search-locate-text">
           现在可以定位：串 No.{result.threadId} {mode}第 {result.target.page} 页{result.source === 'cached' ? '（按本地缓存核对）' : ''}
         </span>
-        <button type="button" className="btn btn-small" onClick={onOpen}>
+        <button type="button" className="btn btn-small btn-page" onClick={onOpen}>
           打开
         </button>
         <button type="button" className="btn btn-small btn-quiet" onClick={onDismiss}>
@@ -662,7 +662,7 @@ function LocateStatus({
       <Icon name="alert" size={14} className="search-locate-icon" />
       <span className="search-locate-text">{text}</span>
       {action !== null && (
-        <button type="button" className="btn btn-small" onClick={action.run}>
+        <button type="button" className="btn btn-small btn-page" onClick={action.run}>
           {action.label}
         </button>
       )}

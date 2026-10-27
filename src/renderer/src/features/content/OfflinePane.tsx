@@ -171,7 +171,7 @@ export function OfflinePane({
               <p className="notice-text">
                 {TITLE}读取失败：{contentFailureText(list.refused)}
               </p>
-              <button type="button" className="btn btn-small" onClick={() => void load()}>
+              <button type="button" className="btn btn-small btn-page" onClick={() => void load()}>
                 重试
               </button>
             </div>

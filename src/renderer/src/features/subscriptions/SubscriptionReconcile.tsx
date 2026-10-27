@@ -93,7 +93,7 @@ export function ReconcileView({ headingRef, onBack }: { headingRef: RefObject<HT
             <span className="list-kind">订阅</span>
             <span className="list-name">同步与合并</span>
           </h2>
-          <button type="button" className="btn btn-small" onClick={onBack}>
+          <button type="button" className="btn btn-small btn-page" onClick={onBack}>
             <Icon name="arrowLeft" size={14} />
             返回列表
           </button>
@@ -194,7 +194,7 @@ function StartPanel({ overview, task }: { overview: SubscriptionOverview; task: 
             <div className="notice notice-error is-compact" role="alert">
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">用过的 App UUID 读取失败</p>
-              <button type="button" className="btn btn-small" onClick={() => void refreshMergeSources()}>
+              <button type="button" className="btn btn-small btn-page" onClick={() => void refreshMergeSources()}>
                 重试
               </button>
             </div>
@@ -239,7 +239,7 @@ function StartPanel({ overview, task }: { overview: SubscriptionOverview; task: 
           {mode === 'sync' ? '预览同步' : '预览合并'}
         </button>
         {blockers.length > 0 && openSettings !== null && (
-          <button type="button" className="btn" onClick={() => openSettings('subscriptions')}>
+          <button type="button" className="btn btn-page" onClick={() => openSettings('subscriptions')}>
             打开设置
           </button>
         )}
@@ -289,7 +289,7 @@ function PreviewProgress({ task }: { task: Extract<ReconcileTask, { phase: 'prev
         <p className="sub-recon-progress-text">正在读取{what}…</p>
       </div>
       <div className="sub-recon-actions">
-        <button type="button" className="btn" onClick={stopTask} disabled={task.stopRequested}>
+        <button type="button" className="btn btn-page" onClick={stopTask} disabled={task.stopRequested}>
           {task.stopRequested ? '正在停止…' : '停止预览'}
         </button>
       </div>
@@ -391,7 +391,7 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
           <p className="notice-text">这份预览已失效</p>
           <button
             type="button"
-            className="btn btn-small"
+            className="btn btn-small btn-page"
             onClick={() => {
               dismissTask()
               void startPreview(preview.mode, task.mergeSource)
@@ -463,7 +463,7 @@ function PreviewPanel({ overview, task }: { overview: SubscriptionOverview; task
           >
             {total === 0 ? '记录这次比较…' : `执行所选 ${total} 项…`}
           </button>
-          <button type="button" className="btn" onClick={dismissTask}>
+          <button type="button" className="btn btn-page" onClick={dismissTask}>
             放弃预览
           </button>
         </div>
@@ -532,7 +532,7 @@ function ExecuteConfirm({
         <button type="button" className={removes ? 'btn btn-small btn-danger' : 'btn btn-small btn-primary'} onClick={onConfirm}>
           {empty ? '确认记录' : '确认执行'}
         </button>
-        <button type="button" ref={cancelRef} className="btn btn-small" onClick={onCancel}>
+        <button type="button" ref={cancelRef} className="btn btn-small btn-page" onClick={onCancel}>
           返回
         </button>
       </div>
@@ -564,7 +564,7 @@ function PlanProgress({ task }: { task: Extract<ReconcileTask, { phase: 'executi
         </div>
       </div>
       <div className="sub-recon-actions">
-        <button type="button" className="btn" onClick={stopTask} disabled={task.stopRequested}>
+        <button type="button" className="btn btn-page" onClick={stopTask} disabled={task.stopRequested}>
           {task.stopRequested ? '正在停止…' : '停止后续步骤'}
         </button>
       </div>
@@ -632,7 +632,7 @@ function PlanOutcome({ task }: { task: Extract<ReconcileTask, { phase: 'finished
           {inPlace && unsettled.length === 0 && (
             <button
               type="button"
-              className="btn btn-small"
+              className="btn btn-small btn-page"
               onClick={() => {
                 void refreshPlans()
                 void refreshOperations()
@@ -673,7 +673,7 @@ function PlanOutcome({ task }: { task: Extract<ReconcileTask, { phase: 'finished
         >
           重新预览
         </button>
-        <button type="button" className="btn" onClick={dismissTask}>
+        <button type="button" className="btn btn-page" onClick={dismissTask}>
           完成
         </button>
       </div>
@@ -791,7 +791,7 @@ function PlanHistory() {
           <div className="notice notice-cached is-compact" role="status">
             <Icon name="alert" className="notice-icon" />
             <p className="notice-text">记录读取失败，下面可能不是最新状态</p>
-            <button type="button" className="btn btn-small" onClick={() => void refreshPlans()}>
+            <button type="button" className="btn btn-small btn-page" onClick={() => void refreshPlans()}>
               重试
             </button>
           </div>
