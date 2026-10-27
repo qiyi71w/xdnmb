@@ -17,8 +17,9 @@ import {
 } from 'react'
 import type { Post, PostId, ThreadId } from '../../../../shared/forum'
 import { isSent, isUnsettled, type PublicationAttempt } from '../../../../shared/publication'
-import { ContextMenu, contextMenuPoint, type ContextMenuPoint } from '../../components/ContextMenu'
+import { ContextMenu, contextMenuPoint, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { CookieId } from '../../components/CookieId'
+import { copyNumberItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
 import { Icon, Spinner } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
 import { formatRecordTime } from '../../lib/time'
@@ -228,15 +229,24 @@ export function SentPage({
     )
   }
 
-  // ---------- Row context menu: 在新标签页打开 ----------
-  const [rowMenu, setRowMenu] = useState<{ attemptId: string; point: ContextMenuPoint; row: HTMLElement } | null>(null)
-  const openRowMenu = (attemptId: string, event: ReactMouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
+  // ---------- Row context menu: 在新标签页打开, 复制串号 ----------
+  /**
+   * The record's own items: 复制串号 copies the number of the post it created (a reply's own, a new
+   * thread's), only when that number is known; nothing is guessed or fetched.
+   */
+  const recordItems = (attempt: PublicationAttempt): ContextMenuItem[] => [
+    ...(openInTab === null ? [] : [{ type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => open(attempt, true) } satisfies ContextMenuItem]),
+    ...(attempt.postId === null ? [] : [copyNumberItem(attempt.postId)])
+  ]
+  const [rowMenu, setRowMenu] = useState<{ attemptId: string; point: ContextMenuPoint; row: HTMLElement; selection: ContextMenuItem | null } | null>(null)
+  const openRowMenu = (attempt: PublicationAttempt, event: ReactMouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
     const row = event.currentTarget.querySelector<HTMLElement>('[data-roving-item]')
-    if (row === null || openInTab === null) return
+    const selection = selectionCopyItem(undefined, event.currentTarget)
+    if (row === null || (selection === null && recordItems(attempt).length === 0)) return
     event.preventDefault()
     // No scrolling into view: a scroll closes the menu that is about to open.
     row.focus({ preventScroll: true })
-    setRowMenu({ attemptId, point: contextMenuPoint(event, row), row })
+    setRowMenu({ attemptId: attempt.id, point: contextMenuPoint(event, row), row, selection })
   }
   const closeRowMenu = (returnFocus: boolean) => {
     const row = rowMenu?.row
@@ -272,7 +282,7 @@ export function SentPage({
               <li
                 key={attempt.id}
                 className={rowMenu?.attemptId === attempt.id ? 'history-row is-menu-open' : 'history-row'}
-                {...listRowGestures((event) => openRowMenu(attempt.id, event), openInTab === null ? null : () => open(attempt, true))}
+                {...listRowGestures((event) => openRowMenu(attempt, event), openInTab === null ? null : () => open(attempt, true))}
               >
                 <button
                   type="button"
@@ -299,12 +309,12 @@ export function SentPage({
         )}
         <div className="list-footer" />
       </div>
-      {rowMenu !== null && menuAttempt !== undefined && openInTab !== null && (
+      {rowMenu !== null && menuAttempt !== undefined && (
         <ContextMenu
           key={`menu:${rowMenu.attemptId}`}
           point={rowMenu.point}
           label={`发送记录操作：${recordLabel(menuAttempt)}`}
-          items={[{ type: 'action', key: 'open-tab', label: '在新标签页打开', onSelect: () => open(menuAttempt, true) }]}
+          items={withSelectionCopy(rowMenu.selection, recordItems(menuAttempt))}
           onClose={closeRowMenu}
         />
       )}

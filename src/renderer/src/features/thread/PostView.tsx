@@ -8,11 +8,12 @@ import { PostThumbnail } from '../image/PostThumbnail'
 import { QuoteRef } from '../quote/QuoteRef'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { CookieId } from '../../components/CookieId'
+import { copyNumberItem, copyTextItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
 import { setBlocked } from './useBlocks'
 import { useCover } from '../../lib/appCovered'
 
 export interface PostActions {
-  /** The post's cookie ID matches an imported cookie: only 回复 is offered. */
+  /** The post's cookie ID matches an imported cookie: no 屏蔽 items. */
   own: boolean
   reply: (opener: HTMLElement | null) => void
   report: (opener: HTMLElement | null) => void
@@ -22,7 +23,8 @@ export interface PostActions {
  * One post: the meta line (cookie ID, PO, SAGE, time, No.), then the title and the name in bold on
  * their own lines, the image and the body. The head's title is the reader's one h1; an untitled
  * thread keeps a hidden one. The context menu (right click, ContextMenu key, Shift+F10) offers
- * 回复／举报／屏蔽串号／屏蔽饼干, only 回复 on the user's own posts.
+ * 回复／举报／屏蔽串号／屏蔽饼干 (no 屏蔽 on the user's own posts), then 复制内容／复制串号／复制饼干,
+ * under 复制选中文字 when text in the post is selected.
  */
 export function PostView({
   post,
@@ -42,7 +44,7 @@ export function PostView({
   actions?: PostActions
 }) {
   const articleRef = useRef<HTMLElement>(null)
-  const [menu, setMenu] = useState<ContextMenuPoint | null>(null)
+  const [menu, setMenu] = useState<{ point: ContextMenuPoint; selection: ContextMenuItem | null } | null>(null)
   useCover(menu !== null)
   const block = (kind: 'post' | 'cookie', value: string) => {
     const reader = articleRef.current?.closest('.reader')
@@ -50,15 +52,19 @@ export function PostView({
       reader?.querySelector<HTMLElement>(`[data-blocked-post-id="${CSS.escape(post.id)}"]`)?.focus({ preventScroll: true })
     }))
   }
-  const userHash = post.userHash
-  const items: ContextMenuItem[] = actions === undefined ? [] : [
+  const userHash = post.userHash !== null && post.userHash !== '' ? post.userHash : null
+  const items: ContextMenuItem[] = actions === undefined || menu === null ? [] : withSelectionCopy(menu.selection, [
     { type: 'action', key: 'reply', label: '回复', onSelect: () => actions.reply(articleRef.current) },
+    { type: 'action', key: 'report', label: '举报', onSelect: () => actions.report(articleRef.current) },
     ...(!actions.own ? [
-      { type: 'action' as const, key: 'report', label: '举报', onSelect: () => actions.report(articleRef.current) },
       { type: 'action' as const, key: 'block-post', label: '屏蔽串号', onSelect: () => block('post', post.id) },
-      ...(userHash !== null && userHash !== '' ? [{ type: 'action' as const, key: 'block-cookie', label: '屏蔽饼干', onSelect: () => block('cookie', userHash) }] : [])
-    ] : [])
-  ]
+      ...(userHash !== null ? [{ type: 'action' as const, key: 'block-cookie', label: '屏蔽饼干', onSelect: () => block('cookie', userHash) }] : [])
+    ] : []),
+    { type: 'separator', key: 'copy-separator' },
+    copyTextItem('copy-content', '复制内容', post.plainText, '这条发言没有正文'),
+    copyNumberItem(post.id),
+    ...(userHash !== null ? [copyTextItem('copy-cookie', '复制饼干', userHash, '')] : [])
+  ])
   const name = meaningfulName(post.name)
   const title = meaningfulTitle(post.title)
   const isPo = !isHead && poHash !== null && post.userHash === poHash
@@ -66,7 +72,7 @@ export function PostView({
   const openMenu = actions === undefined ? undefined : (event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
     event.preventDefault()
     event.stopPropagation()
-    setMenu(contextMenuPoint(event, event.currentTarget))
+    setMenu({ point: contextMenuPoint(event, event.currentTarget), selection: selectionCopyItem(undefined, event.currentTarget) })
   }
 
   return (
@@ -94,7 +100,7 @@ export function PostView({
         className="post-body"
         renderQuote={(node, quoteIndex) => <QuoteRef host={{ postId: post.id }} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} />}
       />
-      {menu !== null && <ContextMenu point={menu} label={`No.${post.id} 操作`} items={items} onClose={(restore) => { setMenu(null); if (restore) articleRef.current?.focus({ preventScroll: true }) }} />}
+      {menu !== null && <ContextMenu point={menu.point} label={`No.${post.id} 操作`} items={items} onClose={(restore) => { setMenu(null); if (restore) articleRef.current?.focus({ preventScroll: true }) }} />}
     </article>
   )
 }

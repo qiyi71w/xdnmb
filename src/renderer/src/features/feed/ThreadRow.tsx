@@ -27,7 +27,7 @@ export interface HeadlessThread {
  * then its title and its name in bold (each only when it has a real one), its excerpt and the
  * thread's meta line. An image thread shows the head post's thumbnail on the right in a fixed box.
  * A headless thread shows its title (when kept) and its meta line only.
- * With `tabMenu`, the row offers 在新标签页打开 (context menu, middle-click, Ctrl/Cmd+click).
+ * With `tabMenu`, the row offers 在新标签页打开 (context menu, middle-click, Ctrl/Cmd+click) and 复制串号.
  */
 export function ThreadRow({
   thread,

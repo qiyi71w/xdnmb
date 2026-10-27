@@ -22,7 +22,8 @@ import type {
   SubscriptionResult,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
-import { contextMenuPoint, isContextMenuKey, type ContextMenuPoint } from '../../components/ContextMenu'
+import { contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
+import { selectionCopyItem } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
 import { FailureNotice } from '../../components/Notices'
 import { describeReadError } from '../../lib/format'
@@ -374,14 +375,15 @@ export function SubscriptionPane({
 
   // ---------- Row context menu ----------
   /** The row whose context menu is open, where it opened and the row control focus returns to. */
-  const [rowMenu, setRowMenu] = useState<{ threadId: ThreadId; point: ContextMenuPoint; row: HTMLElement } | null>(null)
+  const [rowMenu, setRowMenu] = useState<{ threadId: ThreadId; point: ContextMenuPoint; row: HTMLElement; selection: ContextMenuItem | null } | null>(null)
   const openRowMenu = (threadId: ThreadId, event: ReactMouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
     const row = event.currentTarget.querySelector<HTMLElement>('[data-roving-item]')
     if (row === null) return
     event.preventDefault()
+    const selection = selectionCopyItem(undefined, event.currentTarget)
     // No scrolling into view: a scroll closes the menu that is about to open.
     row.focus({ preventScroll: true })
-    setRowMenu({ threadId, point: contextMenuPoint(event, row), row })
+    setRowMenu({ threadId, point: contextMenuPoint(event, row), row, selection })
   }
   const closeRowMenu = (returnFocus: boolean) => {
     const row = rowMenu?.row
@@ -648,6 +650,7 @@ export function SubscriptionPane({
           point={rowMenu.point}
           threadId={rowMenu.threadId}
           head={menuThread.head}
+          selection={rowMenu.selection}
           label={threadLabel(menuThread)}
           rules={rules.rulesOf(rowMenu.threadId)}
           failure={rules.failure}

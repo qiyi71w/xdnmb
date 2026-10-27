@@ -19,6 +19,18 @@ import type { AppearanceIssue } from './theme'
 import type { SearchApi } from './search'
 import type { SearchOutcome, SearchSessionId } from './online-search'
 
+/** Edit commands the main process runs on the requesting window, as its Edit menu would. */
+export const CLIPBOARD_EDIT_COMMANDS = ['cut', 'copy', 'paste', 'selectAll'] as const
+export type ClipboardEditCommand = (typeof CLIPBOARD_EDIT_COMMANDS)[number]
+/** Longest plain text the app puts on the clipboard; far beyond a post or a page's selection. */
+export const MAX_CLIPBOARD_TEXT_LENGTH = 1_000_000
+
+/**
+ * One clipboard request: an edit command on the requesting window (paste goes to its focused
+ * field), or non-empty plain text the app writes. Nothing is ever read back from the clipboard.
+ */
+export type ClipboardRequest = { command: ClipboardEditCommand } | { command: 'writeText'; text: string }
+
 /**
  * Classified read failure. Server/body text is never included except a short
  * business message the forum itself returned (e.g. "该串不存在").
@@ -276,6 +288,10 @@ export interface XidaoApi {
     zoom(input: { action: ZoomAction }): Promise<ZoomState>
     updateTitleBar(input: { color: string; symbolColor: string; scheme: 'system' | 'light' | 'dark' }): Promise<void>
   }
+  /** The system clipboard, written only: the renderer never reads its contents. */
+  clipboard: {
+    run(input: ClipboardRequest): Promise<void>
+  }
   /**
    * Post images. The caller names a stored post, never a URL or path; requests go only to the
    * forum image server, without cookies or credentials, and never follow redirects.
@@ -411,6 +427,7 @@ export const IpcChannel = {
   getZoom: 'view:get-zoom',
   zoom: 'view:zoom',
   updateTitleBar: 'view:update-title-bar',
+  clipboard: 'clipboard:run',
   openExternal: 'links:open-external',
   loadImage: 'images:load',
   cancelImage: 'images:cancel',

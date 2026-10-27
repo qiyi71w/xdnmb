@@ -4,6 +4,7 @@ import { Content } from '../../components/Content'
 import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
 import { Loading, SourceNotice } from '../../components/Notices'
+import { copyText } from '../../lib/clipboard'
 import { describeReadError, meaningfulName } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
 import { canLocate } from './quoteState'
@@ -100,7 +101,7 @@ export function QuoteCard({
 
   const copy = () => {
     window.clearTimeout(copyTimer.current)
-    navigator.clipboard.writeText(`No.${postId}`).then(
+    copyText(`No.${postId}`).then(
       () => setCopied('done'),
       () => setCopied('failed')
     )

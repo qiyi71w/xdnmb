@@ -1,5 +1,8 @@
-import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { IpcChannel, type AppStatus, type DirectoryStrategy, type ReadOutcome, type LocateHint } from '../shared/api'
+import { BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import {
+  CLIPBOARD_EDIT_COMMANDS, IpcChannel, MAX_CLIPBOARD_TEXT_LENGTH, type AppStatus, type ClipboardEditCommand, type DirectoryStrategy,
+  type ReadOutcome, type LocateHint
+} from '../shared/api'
 import type { FeedRef, ReadingMode } from '../shared/forum'
 import type { ImageFormat, ImageKind } from '../shared/images'
 import { IDENTITY_ROLES, validateCookieId, type CredentialId, type IdentityRole } from '../shared/identity'
@@ -582,6 +585,22 @@ export function registerIpc({
     nativeTheme.themeSource = input.scheme
     const window = BrowserWindow.fromWebContents(event.sender)
     if (process.platform !== 'darwin') window?.setTitleBarOverlay({ color: input.color, symbolColor: input.symbolColor, height: 44 })
+  })
+
+  // Only on the sender's own window (the trusted main window); the clipboard is never read here.
+  handle(IpcChannel.clipboard, async (event, raw) => {
+    const input = record(raw)
+    if (input.command === 'writeText') {
+      if (typeof input.text !== 'string' || input.text.length === 0 || input.text.length > MAX_CLIPBOARD_TEXT_LENGTH) throw new InvalidRequestError()
+      clipboard.writeText(input.text)
+      return
+    }
+    if (!CLIPBOARD_EDIT_COMMANDS.includes(input.command as ClipboardEditCommand)) throw new InvalidRequestError()
+    const command = input.command as ClipboardEditCommand
+    if (command === 'cut') event.sender.cut()
+    else if (command === 'copy') event.sender.copy()
+    else if (command === 'paste') event.sender.paste()
+    else event.sender.selectAll()
   })
 
   handle(IpcChannel.zoom, async (event, raw) => {

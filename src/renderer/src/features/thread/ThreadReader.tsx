@@ -701,7 +701,7 @@ export function ThreadReader({
                   failure={rules.failure}
                   onRetry={rules.reload}
                   onUpdated={rules.updated}
-                  onReport={head === null || postActions.isOwn(head) ? undefined : (opener) => postActions.report(head.id, opener)}
+                  onReport={head === null ? undefined : (opener) => postActions.report(head.id, opener)}
                   onToStart={toStart}
                   onToEnd={toEnd}
                 />
