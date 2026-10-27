@@ -173,7 +173,7 @@ export function EditorPanel({
   const report = editor.report
   const send = () => {
     if (report !== undefined && reportReason(report) === null) { setReportError(true); return }
-    if (!locked) void store.send(editorId)
+    if (!locked) void store.send(editorId, tabId)
   }
 
   // 编辑器内发送: the same handler as the button, from any of the editor's own controls. Plain

@@ -426,6 +426,7 @@ export function ThreadReader({
       return anchor === null ? null : { mode, anchor, generation, temporaryOf, focus: null }
     },
     refresh: thread.refresh,
+    refreshAfterSend: thread.refreshAfterSend,
     showInPlace: (targetThread, target) => {
       const { postId } = target
       if (postId === null || targetThread !== threadId || target.mode !== mode || !isVisible(postId)) return false

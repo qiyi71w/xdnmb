@@ -24,7 +24,10 @@ export interface HistoryMemory {
 export interface ReaderHandle {
   /** Mode and anchor to come back to; null before the reader has placed its first position. */
   capture(): ThreadSnapshot | null
+  /** 刷新 from the shell (Ctrl/Cmd+R); left alone while a refresh is running. */
   refresh(): void
+  /** Refresh after the user's own send, superseding one running; settles when it has ended. */
+  refreshAfterSend(): Promise<void>
   /**
    * A located quote target: when this reader shows the same thread in the same mode and the target
    * post is visible in its viewport, highlights it and returns true (no navigation needed). A

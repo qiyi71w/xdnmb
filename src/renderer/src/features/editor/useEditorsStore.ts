@@ -12,6 +12,7 @@ import {
   type EditorsAction,
   type EditorsState
 } from './editorsState'
+import type { SendOrigin } from './sendFollowUp'
 
 /**
  * Why a save did not replace the saved version; `locked`: a send holds the editor or the draft
@@ -66,10 +67,11 @@ export interface EditorsStore {
    */
   save: (editorId: EditorId) => Promise<SaveOutcome>
   /**
-   * The one send handler of every entry (button, Ctrl/Cmd+Enter): locks the editor, waits for a
-   * running save, then submits its contents once with a fresh request ID. Ignored while locked.
+   * The one send handler of every entry (button, Ctrl/Cmd+Enter) in tab `tabId`: locks the editor,
+   * waits for a running save, then submits its contents once with a fresh request ID. Ignored
+   * while locked.
    */
-  send: (editorId: EditorId) => Promise<void>
+  send: (editorId: EditorId, tabId: number) => Promise<void>
   /** Answers the PO identity question holding the editor's frozen payload. */
   resolvePrompt: (editorId: EditorId, choice: PromptChoice, suppress: boolean) => Promise<void>
   /** Looks up again, by its request ID, whether an uncertain request left an attempt. */
@@ -85,11 +87,21 @@ export interface EditorsStore {
 }
 
 /**
+ * Where each send starts and what its own result does there: `origin` is read when a send in tab
+ * `tabId` starts; `settled` hears that send's result with it once the attempt is no longer
+ * `sending` (a user's later choice about an ended attempt is not a send result).
+ */
+export interface SendHooks {
+  origin: (tabId: number) => SendOrigin
+  settled: (attempt: PublicationAttempt, origin: SendOrigin) => void
+}
+
+/**
  * The app-level store of all editors. Lives beside the tab state, so editors survive their
  * panels unmounting, thread switches and content refreshes. Holds each editor's attachment copy
  * in the main process while the editor shows it, and releases editors that are gone.
  */
-export function useEditorsStore(): EditorsStore {
+export function useEditorsStore(hooks?: SendHooks): EditorsStore {
   const [state, rawDispatch] = useReducer(editorsReducer, INITIAL_EDITORS)
   const [saving, setSaving] = useState<ReadonlySet<EditorId>>(() => new Set())
   const [saveErrors, setSaveErrors] = useState<ReadonlyMap<EditorId, SaveFailure>>(() => new Map())
@@ -101,6 +113,8 @@ export function useEditorsStore(): EditorsStore {
   const inflight = useRef(new Map<EditorId, Promise<SaveOutcome>>())
   /** Open PO question of each editor, cancelled if the editor goes away. */
   const promptTokens = useRef(new Map<EditorId, string>())
+  /** Where each editor's running send started, until it has a result or the editor goes away. */
+  const sentFrom = useRef(new Map<EditorId, SendOrigin>())
 
   const clearError = useCallback((editorId: EditorId) => {
     setSaveErrors((previous) => {
@@ -203,6 +217,7 @@ export function useEditorsStore(): EditorsStore {
       if (next.has(editorId)) continue
       gone.push(editorId)
       window.xidao.drafts.releaseEditor({ editorId }).catch(() => undefined)
+      sentFrom.current.delete(editorId)
       // A question nobody can answer any more: cancel it (no identity change, no request).
       const token = promptTokens.current.get(editorId)
       if (token !== undefined) {
@@ -225,8 +240,20 @@ export function useEditorsStore(): EditorsStore {
 
   /** Editors whose send or prompt answer is being handled now (state may not show it yet). */
   const handling = useRef(new Set<EditorId>())
+  const hooksRef = useRef(hooks)
+  useLayoutEffect(() => {
+    hooksRef.current = hooks
+  })
   const bump = useCallback(() => setPublicationRevision((revision) => revision + 1), [])
   const find = useCallback((editorId: EditorId) => stateRef.current.editors.find((item) => item.id === editorId), [])
+
+  /** Hands a send's result to `hooks.settled` once, then forgets where the send started. */
+  const settle = useCallback((editorId: EditorId, attempt: PublicationAttempt | null) => {
+    if (attempt?.state === 'sending') return
+    const origin = sentFrom.current.get(editorId)
+    sentFrom.current.delete(editorId)
+    if (attempt !== null && origin !== undefined) hooksRef.current?.settled(attempt, origin)
+  }, [])
 
   /** Applies an attempt of the editor's send; `draft` given when already read with it. */
   const applyAttempt = useCallback(
@@ -234,6 +261,7 @@ export function useEditorsStore(): EditorsStore {
       bump()
       if (isUnsettled(attempt)) {
         rawDispatch({ type: 'publish-attempt', editorId, attempt, readFailed: false })
+        settle(editorId, attempt)
         return
       }
       if (isSent(attempt)) {
@@ -248,8 +276,10 @@ export function useEditorsStore(): EditorsStore {
           })
         }
         rawDispatch({ type: 'publish-ended', editorId })
+        settle(editorId, attempt)
         return
       }
+      settle(editorId, attempt)
       // Explicit failure: continue the automatically saved draft (read it when not given).
       let saved = draft ?? null
       if (draft === undefined && attempt.savedDraftId !== null) {
@@ -263,7 +293,7 @@ export function useEditorsStore(): EditorsStore {
       if (saved !== null) lastSaved.current.set(editorId, saved)
       rawDispatch({ type: 'publish-failed', editorId, problem: attempt.problem, draft: saved })
     },
-    [bump, find]
+    [bump, find, settle]
   )
 
   /** Whether an uncertain request left an attempt: adopt it, or unlock when there is none. */
@@ -275,7 +305,10 @@ export function useEditorsStore(): EditorsStore {
         if (result.ok) {
           const found = result.attempts.find((attempt) => attempt.requestId === requestId)
           if (found !== undefined) await applyAttempt(editorId, found)
-          else rawDispatch({ type: 'publish-released', editorId, notice: { kind: 'not-sent' } })
+          else {
+            settle(editorId, null)
+            rawDispatch({ type: 'publish-released', editorId, notice: { kind: 'not-sent' } })
+          }
           return
         }
       } catch {
@@ -283,7 +316,7 @@ export function useEditorsStore(): EditorsStore {
       }
       rawDispatch({ type: 'publish-uncertain', editorId, requestId, checking: false })
     },
-    [applyAttempt]
+    [applyAttempt, settle]
   )
 
   const handleResult = useCallback(
@@ -295,6 +328,7 @@ export function useEditorsStore(): EditorsStore {
           return
         case 'prompt':
           if (find(editorId) === undefined) {
+            settle(editorId, null)
             window.xidao.publication.resolvePrompt({ token: result.prompt.token, choice: 'cancel', suppress: false }).catch(() => undefined)
             return
           }
@@ -302,21 +336,25 @@ export function useEditorsStore(): EditorsStore {
           rawDispatch({ type: 'publish-prompt', editorId, requestId, prompt: result.prompt })
           return
         case 'refused':
+          settle(editorId, null)
           rawDispatch({ type: 'publish-released', editorId, notice: { kind: 'refused', reason: result.reason } })
           return
         case 'cancelled':
+          settle(editorId, null)
           rawDispatch({ type: 'publish-released', editorId, notice: null })
       }
     },
-    [applyAttempt, find]
+    [applyAttempt, find, settle]
   )
 
   const send = useCallback(
-    async (editorId: EditorId) => {
+    async (editorId: EditorId, tabId: number) => {
       const editor = find(editorId)
       if (editor === undefined || editor.publication !== null || handling.current.has(editorId)) return
       if (editor.report !== undefined && reportContent(editor.report) === null) return
       handling.current.add(editorId)
+      const origin = hooksRef.current?.origin(tabId)
+      if (origin !== undefined) sentFrom.current.set(editorId, origin)
       const requestId = crypto.randomUUID()
       try {
         // Lock first, so nothing typed from now on can miss the payload or change it.
@@ -352,13 +390,15 @@ export function useEditorsStore(): EditorsStore {
         await handleResult(editorId, publication.requestId, result)
       } catch {
         promptTokens.current.delete(editorId)
-        if (choice === 'cancel') rawDispatch({ type: 'publish-released', editorId, notice: null })
-        else await lookup(editorId, publication.requestId)
+        if (choice === 'cancel') {
+          settle(editorId, null)
+          rawDispatch({ type: 'publish-released', editorId, notice: null })
+        } else await lookup(editorId, publication.requestId)
       } finally {
         handling.current.delete(editorId)
       }
     },
-    [find, handleResult, lookup]
+    [find, handleResult, lookup, settle]
   )
 
   const recheck = useCallback(
