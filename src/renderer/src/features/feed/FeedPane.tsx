@@ -135,18 +135,21 @@ export function FeedPane({
   }, [registry, entryKey, refresh])
 
   /** Calls of `refreshAfterSend` waiting for the commit that writes the refreshed list to memory. */
-  const memoryWaiters = useRef<Array<() => void>>([])
+  const memoryWaiters = useRef<Array<(shown: boolean) => void>>([])
+  const mounted = useRef(true)
   const [, setMemoryTick] = useState(0)
   const refreshAfterSend = useCallback(async () => {
     pendingRestore.current = null
     registry?.savedLists.delete(entryKey)
     await refreshFeedAfterSend()
+    // Unmounted meanwhile (split toggled, tab moved on): this list never shows what it read.
+    if (!mounted.current) return false
     // The shell copies this entry's memory when it opens the new thread: settle only after a commit
     // (forced here, as the read's own one may already be past) has written the result to it.
-    const { promise, resolve } = Promise.withResolvers<void>()
+    const { promise, resolve } = Promise.withResolvers<boolean>()
     memoryWaiters.current.push(resolve)
     setMemoryTick((tick) => tick + 1)
-    await promise
+    return promise
   }, [registry, entryKey, refreshFeedAfterSend])
   useRegisterContent('lists', entryKey, { refresh: refreshList, refreshAfterSend })
 
@@ -162,11 +165,14 @@ export function FeedPane({
   })
   // After the memory above: a waiting `refreshAfterSend` sees the list it just read remembered.
   useLayoutEffect(() => {
-    for (const resolve of memoryWaiters.current.splice(0)) resolve()
+    for (const resolve of memoryWaiters.current.splice(0)) resolve(true)
   })
-  // Unmounted while waiting: nothing will commit any more; the follow-up finds the tab moved on.
-  useEffect(() => () => {
-    for (const resolve of memoryWaiters.current.splice(0)) resolve()
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      for (const resolve of memoryWaiters.current.splice(0)) resolve(false)
+    }
   }, [])
 
   // Put the remembered position back whenever the list becomes displayed: on mount, and after the

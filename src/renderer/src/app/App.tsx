@@ -645,7 +645,13 @@ export function App() {
       void runSendFollowUp(plan, {
         stillShown,
         refreshThread: (entryKey) => registry.readers.get(entryKey)?.current.refreshAfterSend() ?? Promise.resolve(),
-        refreshList: (entryKey) => registry.lists.get(entryKey)?.current.refreshAfterSend?.() ?? Promise.resolve(),
+        // A list remounted meanwhile (split toggled) drops what the old one read: refresh the one shown now.
+        refreshList: async (entryKey) => {
+          for (let tries = 0; tries < 3; tries++) {
+            const list = registry.lists.get(entryKey)?.current
+            if (list?.refreshAfterSend === undefined || (await list.refreshAfterSend())) return
+          }
+        },
         locate: (postId) => window.xidao.quotes.locate({ operationId: operationId(), postId }),
         readThreadEnd: async (threadId) => {
           await window.xidao.reading.locateThreadEnd({ operationId: operationId(), threadId, mode: 'all' })

@@ -7,7 +7,7 @@ import { createSearchFts } from './search-schema'
 
 export const normalizeSearchText = (text: string): string => text.normalize('NFC').toLowerCase()
 interface DocumentRow {
-  rowid: number; post_id: string; owner: string; thread_id: string | null; title: string; excerpt_source: string
+  rowid: number; post_id: string; owner: string; thread_id: string | null; title: string; excerpt_source: string; in_body: number
   forum_id: string | null; created_at: string | null; has_image: number | null; fetched_at: string
 }
 
@@ -37,28 +37,31 @@ function spoilerSegments(text: string): Array<[number, number]> {
 }
 
 /**
- * A hit's excerpt: 240 characters (code points) from 60 before the first match of `query`. A
- * segment the window cuts gets its marker back on the cut side, so the row masks the part it
- * shows as other list excerpts do; a marker cut in two is left out.
+ * A hit's excerpt from `text`: 240 characters (code points) from 60 before the first match of
+ * `query` in `indexed` (the normalized form of `text`, position for position). A segment the
+ * window cuts gets its marker back on the cut side, so the row masks the part it shows as other
+ * list excerpts do; a cut part with only blanks, and a marker cut in two, are left out.
  */
-function searchExcerpt(text: string, query: string): string {
+function searchExcerpt(text: string, indexed: string, query: string): string {
   const points = Array.from(text)
-  const first = Array.from(text.slice(0, Math.max(0, text.indexOf(query)))).length
+  const first = Array.from(text.slice(0, Math.max(0, indexed.indexOf(query)))).length
   const from = Math.max(0, first - 60)
   let start = points.slice(0, from).join('').length
   let end = start + points.slice(from, from + 240).join('').length
   let opening = ''
   let closing = ''
   for (const [open, close] of spoilerSegments(text)) {
+    const content = open + OPEN_LENGTH
+    const shownBlank = () => text.slice(Math.max(start, content), Math.min(end, close)).trim() === ''
     if (start > open && start < close + CLOSE_LENGTH) {
-      if (start >= close) start = close + CLOSE_LENGTH
+      if (start >= close || shownBlank()) start = close + CLOSE_LENGTH
       else {
-        start = Math.max(start, open + OPEN_LENGTH)
+        start = Math.max(start, content)
         opening = '[h]'
       }
     }
     if (end > open && end < close + CLOSE_LENGTH) {
-      if (end <= open + OPEN_LENGTH) end = open
+      if (end <= content || shownBlank()) end = open
       else {
         end = Math.min(end, close)
         closing = '[/h]'
@@ -113,6 +116,22 @@ export class SearchDatabase {
     return this.ready().prepare<[], { id: number }>('SELECT coalesce(max(rowid),0) AS id FROM search_documents').get()!.id
   }
 
+  /**
+   * The text a hit's excerpt is cut from: the post's stored original (its case kept, so 防剧透
+   * markers pair as the reader pairs them) when its source still holds it unchanged, else the
+   * indexed text.
+   */
+  private excerptText(db: Database.Database, row: DocumentRow): string {
+    const separator = row.owner.indexOf(':')
+    const original = row.owner === 'cache'
+      ? db.prepare<[string], { body: string; title: string | null }>('SELECT plain_text AS body,title FROM posts WHERE id=?').get(row.post_id)
+      : separator === -1 ? undefined : db.prepare<{ owner: string; source: string; post: string }, { body: string; title: string | null }>(`
+        SELECT json_extract(post,'$.plainText') AS body,json_extract(post,'$.title') AS title FROM (${journalPosts})
+        WHERE owner=@owner AND json_extract(post,'$.id')=@post LIMIT 1`).get({ owner: row.owner, source: row.owner.slice(separator + 1), post: row.post_id })
+    const text = original === undefined ? null : row.in_body === 1 ? original.body : (original.title ?? '')
+    return text !== null && text.length === row.excerpt_source.length && normalizeSearchText(text) === row.excerpt_source ? text : row.excerpt_source
+  }
+
   batch(input: SearchScan): { batch: SearchBatch; cursor: number } {
     const db = this.ready()
     const { query, scope, filters, after, upper } = input
@@ -130,7 +149,7 @@ export class SearchDatabase {
     const cursor = candidates.at(-1)?.rowid ?? upper
     const rows = db.prepare<Record<string, string | number | null>, DocumentRow>(`
       SELECT d.rowid,d.post_id,d.owner,d.thread_id,substr(d.title,1,180) AS title,d.forum_id,d.created_at,d.has_image,d.fetched_at,
-        CASE WHEN instr(d.body,@query)>0 THEN d.body ELSE d.title END AS excerpt_source
+        instr(d.body,@query)>0 AS in_body,CASE WHEN instr(d.body,@query)>0 THEN d.body ELSE d.title END AS excerpt_source
       FROM search_documents d WHERE d.rowid>@after AND d.rowid<=@cursor
         ${long ? 'AND d.rowid IN (SELECT rowid FROM search_fts WHERE search_fts MATCH @phrase AND rowid>@after AND rowid<=@cursor)' : ''}
         AND (instr(d.title,@query)>0 OR instr(d.body,@query)>0)
@@ -158,7 +177,7 @@ export class SearchDatabase {
         (SELECT nullif(title,'') FROM search_documents WHERE post_id=@thread),
         (SELECT title FROM retained_titles WHERE thread_id=@thread)),1,180) AS title`).get({ thread: row.thread_id })?.title ?? null
       hits.push({ postId: row.post_id, threadId: row.thread_id, threadTitle: title, title: row.title || null,
-        excerpt: searchExcerpt(row.excerpt_source, query), ...metadata, uncertainFilters: match.uncertain,
+        excerpt: searchExcerpt(this.excerptText(db, row), row.excerpt_source, query), ...metadata, uncertainFilters: match.uncertain,
         retention: row.owner !== 'cache' ? 'subscription' : offline ? 'offline' : 'cache',
         location: location ? { page: location.page, mode: location.mode, fetchedAt: location.fetched_at, source: location.source } : null })
     }

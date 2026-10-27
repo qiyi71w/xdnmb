@@ -42,9 +42,10 @@ export interface ListHandle {
   refresh(): void
   /**
    * A forum list, the target of a new thread: refresh after the user's own send, superseding one
-   * running; settles once the list (and its memory) shows the result.
+   * running. True once the list (and its memory) shows the result; false when this list unmounted
+   * first (the entry may show a remounted list now).
    */
-  refreshAfterSend?(): Promise<void>
+  refreshAfterSend?(): Promise<boolean>
 }
 
 /** What the shell can ask of a mounted online search page. */

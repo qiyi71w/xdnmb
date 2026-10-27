@@ -123,6 +123,30 @@ describe('real SQLite retained search', () => {
     expect(excerpts.get('104')).toBe(`needle[h]${secret.slice(0, 231)}`)
   })
 
+  it('pairs 防剧透 markers of an excerpt in their original case, as the reader does, for cached and subscription-only posts', () => {
+    const { db } = fixture()
+    // The reader hides `hidden-one[/H]hidden-two` (an uppercase marker is text) and shows `[H]visible[/H]`.
+    const mixed = '[h]Hidden-One[/H]hidden-two[/h] Needle [H]visible[/H]'
+    db.savePost(post('100', mixed), at)
+    const evidence = observation(post('200', mixed, { userHash: 'po-id' }))
+    db.saveSubscriptionObservation(evidence)
+    db.savePost(post('300', 'evicted'), at)
+    expect(search(db, 'needle').find((hit) => hit.postId === '100')?.excerpt).toBe(mixed)
+    clear(db)
+    // Only the subscription evidence holds post 200 now.
+    expect(db.loadPost('200')).toBeNull()
+    expect(search(db, 'needle').find((hit) => hit.postId === '200')?.excerpt).toBe(mixed)
+  })
+
+  it('leaves out a cut part of a 防剧透 segment that holds only blanks, instead of showing its markers', () => {
+    const { db } = fixture()
+    db.savePost(post('100', `[h]秘密${' '.repeat(300)}[/h]needle`), at)
+    db.savePost(post('101', `needle[h]${' '.repeat(300)}秘密[/h]`), at)
+    const excerpts = new Map(search(db, 'needle').map((hit) => [hit.postId, hit.excerpt]))
+    expect(excerpts.get('100')).toBe('needle')
+    expect(excerpts.get('101')).toBe('needle')
+  })
+
   it('uses a fixed upper cursor and bounded batches without repeats, including empty short-query batches', () => {
     const { db } = fixture()
     for (let index = 1; index <= 150; index++) db.savePost(post(String(index), index < 70 ? '无' : '中'), at)
