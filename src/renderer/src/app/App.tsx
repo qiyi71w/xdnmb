@@ -23,13 +23,15 @@ import {
 import { useDirectory } from '../features/directory/useDirectory'
 import { HistoryPageContext, type HistoryPageHost } from '../features/content/RetainedPane'
 import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
-import { editorFor, editorForDraft, editorOnScreen, isUnsaved, unsavedInTab } from '../features/editor/editorsState'
-import { UnsavedEditorsDialog } from '../features/editor/UnsavedEditorsDialog'
+import { editorFor, editorForDraft, editorOnScreen, wantsWrite } from '../features/editor/editorsState'
+import { DraftSaveFailedDialog } from '../features/editor/DraftSaveFailedDialog'
+import { loadFailureText } from '../features/editor/editorText'
 import { planSendFollowUp, runSendFollowUp, type SendFollowUp, type SendOrigin, type ShownEntry } from '../features/editor/sendFollowUp'
-import { focusKey, useEditorsStore, type SendHooks } from '../features/editor/useEditorsStore'
+import { focusKey, useEditorsStore, type SaveFailure, type SendHooks } from '../features/editor/useEditorsStore'
 import { EditorWorkspaceContext, type EditorWorkspace } from '../features/editor/workspace'
 import { PoPromptDialog } from '../features/publication/PoPromptDialog'
-import { LaunchNotice } from '../features/lifecycle/LaunchNotice'
+import { LaunchNotices } from '../features/lifecycle/LaunchNotices'
+import { DraftDeletedNotices } from '../features/drafts/DraftDeletedNotices'
 import { LifecycleHost } from '../features/lifecycle/LifecycleHost'
 import { EditContextMenuHost } from '../components/EditContextMenu'
 import { CookieColorPickerHost } from '../features/cookieColors/CookieColorPicker'
@@ -177,7 +179,7 @@ export function App() {
     origin: (tabId) => sendHooks.current?.origin(tabId) ?? { tabId, entryKey: null, source: null },
     settled: (attempt, origin) => sendHooks.current?.settled(attempt, origin)
   })
-  const { current: currentEditors, dispatch: dispatchEditors, requestFocus, save: saveEditor, resolvePrompt } = editors
+  const { current: currentEditors, dispatch: dispatchEditors, requestFocus, flush: flushEditors, loadDraft, resolvePrompt } = editors
   const subscriptions = useSubscriptions()
   const { refreshOverview: refreshSubscriptions, refreshOperations: refreshSubscriptionJournal } = subscriptions
   const reminders = useReminderOverview()
@@ -189,8 +191,8 @@ export function App() {
   const [draftsOpen, setDraftsOpen] = useState(false)
   const closeDrafts = useCallback(() => setDraftsOpen(false), [])
   const [historyRequest, setHistoryRequest] = useState<HistoryPageHost['request']>(null)
-  /** Tab whose close waits for its unsaved editors to be handled. */
-  const [closing, setClosing] = useState<{ tabId: number; editorIds: EditorId[] } | null>(null)
+  /** Tab whose close waits for an answer: saving some of its editors' drafts failed. */
+  const [closing, setClosing] = useState<{ tabId: number; failures: ReadonlyMap<EditorId, SaveFailure> } | null>(null)
 
   // A web-sync selection (or a removed/renamed credential) changes the subscription overview too.
   const identityOverview = identities.overview
@@ -769,7 +771,7 @@ export function App() {
     })
   }, [])
 
-  /** Closes the tab and drops its editors; their unsaved content has been handled. */
+  /** Closes the tab and drops its editors; their content was saved first (or given up). */
   const finishCloseTab = useCallback(
     (tabId: number) => {
       pendingTabFocus.current = true
@@ -779,15 +781,29 @@ export function App() {
     [dispatchEditors]
   )
 
-  /** Closes at once when the tab has nothing unsaved; otherwise asks about all its unsaved editors. */
+  /** Tabs whose editors are being saved before they close. */
+  const closingTabs = useRef(new Set<number>())
+  /**
+   * Saves the drafts of the editors only this tab has, then closes it; asks only when a save
+   * failed. `flush` decides what each needs, including a save still running when the tab closes.
+   */
   const closeTab = useCallback(
     (tabId: number) => {
-      if (stateRef.current.closing !== null) return
-      const unsaved = unsavedInTab(currentEditors(), tabId)
-      if (unsaved.length === 0) finishCloseTab(tabId)
-      else setClosing({ tabId, editorIds: unsaved.map((editor) => editor.id) })
+      if (stateRef.current.closing !== null || closingTabs.current.has(tabId)) return
+      const owned = currentEditors().editors.filter((editor) => editor.tabIds.length === 1 && editor.tabIds[0] === tabId)
+      if (owned.length === 0) {
+        finishCloseTab(tabId)
+        return
+      }
+      closingTabs.current.add(tabId)
+      void flushEditors(owned.map((editor) => editor.id)).then((failures) => {
+        closingTabs.current.delete(tabId)
+        if (stateRef.current.tabs?.tabs.some((tab) => tab.id === tabId) !== true) return
+        if (failures.size === 0) finishCloseTab(tabId)
+        else setClosing({ tabId, failures })
+      })
     },
-    [currentEditors, finishCloseTab]
+    [currentEditors, finishCloseTab, flushEditors]
   )
 
   /** Activates the tab and makes it show `target` where its editor lives. */
@@ -834,29 +850,36 @@ export function App() {
   )
 
   /**
-   * 继续 from the library: a draft already being edited is shown in its tab; otherwise a new tab
-   * (global split default) opens its target and continues it there.
+   * 继续 a draft (from the library, a failure's 打开草稿, or an undone deletion): the editor
+   * continuing it is shown; an editor already on its target saves its own content and then loads
+   * it; otherwise a new tab (global split default) opens its target and continues it there.
+   * Resolves to why it could not be continued, or null.
    */
   const continueDraft = useCallback(
-    (draft: SavedDraft) => {
+    async (draft: SavedDraft): Promise<string | null> => {
+      const existing = editorForDraft(currentEditors(), draft.id) ?? editorFor(currentEditors(), draft.target)
+      if (existing !== null && existing.draft?.id !== draft.id) {
+        const outcome = await loadDraft(existing.id, draft)
+        if (!outcome.ok) return loadFailureText(outcome.reason)
+      }
       setDraftsOpen(false)
       leaveSettings()
-      const existing = editorForDraft(currentEditors(), draft.id) ?? editorFor(currentEditors(), draft.target)
       if (existing !== null) {
         showTarget(existing.tabId, existing.target)
         dispatchEditors({ type: 'set-expanded', editorId: existing.id, expanded: true })
         requestFocus(focusKey(existing.tabId, existing.target))
-        return
+        return null
       }
       const state = stateRef.current.tabs
-      if (state === null) return
+      if (state === null) return null
       // The new tab takes the next tab ID.
       const tabId = state.nextId
       dispatch({ type: 'open-tab', entry: entryFor(draft.target), split: stateRef.current.settings.newTabSplitDefault })
       dispatchEditors({ type: 'open-draft', tabId, draft })
       requestFocus(focusKey(tabId, draft.target))
+      return null
     },
-    [leaveSettings, currentEditors, showTarget, dispatchEditors, requestFocus]
+    [leaveSettings, currentEditors, loadDraft, showTarget, dispatchEditors, requestFocus]
   )
 
   const openDrafts = useCallback(() => {
@@ -943,16 +966,12 @@ export function App() {
       await whenRestored()
       closeNav(false)
       const editing = editorForDraft(currentEditors(), notice.draftId)?.draft ?? null
-      if (editing !== null) {
-        continueDraft(editing)
-        return null
-      }
+      if (editing !== null) return continueDraft(editing)
       try {
         const result = await window.xidao.publication.getAttempt({ attemptId: notice.attemptId })
         if (!result.ok) return '读取草稿失败：本地存储不可用'
         if (result.draft === null) return '这份自动保存的草稿已不存在（可能已删除或已发出）'
-        continueDraft(result.draft)
-        return null
+        return await continueDraft(result.draft)
       } catch {
         return '读取草稿失败：应用内部请求失败'
       }
@@ -1006,9 +1025,10 @@ export function App() {
   }, [])
 
   /**
-   * Ctrl/Cmd+S: the editor holding focus, else the expanded editor the active tab shows (reader
-   * before list). Nothing while the active tab's image viewer is open (the dispatcher already skips
-   * every shortcut behind a modal dialog).
+   * Ctrl/Cmd+S saves the draft at once instead of after the automatic wait: the editor holding
+   * focus, else the expanded editor the active tab shows (reader before list). Nothing while the
+   * active tab's image viewer is open (the dispatcher already skips every shortcut behind a modal
+   * dialog).
    */
   const saveCurrent = useCallback(() => {
     const state = stateRef.current.tabs
@@ -1022,8 +1042,8 @@ export function App() {
       shownTargets(tab, stateRef.current.singlePane)
         .map((target) => editorFor(editorsState, target))
         .find((item) => item !== null && item.expanded)
-    if (editor !== undefined && editor !== null && isUnsaved(editor)) void saveEditor(editor.id)
-  }, [currentEditors, saveEditor])
+    if (editor !== undefined && editor !== null && wantsWrite(editor)) void flushEditors([editor.id])
+  }, [currentEditors, flushEditors])
 
   /** Refreshes only the current content: the shown thread, otherwise the list. Never the app. */
   const refresh = useCallback(
@@ -1200,8 +1220,8 @@ export function App() {
   } as CSSProperties
 
   const editorWorkspace = useMemo<EditorWorkspace>(
-    () => ({ store: editors, identities, platform, directory: dirData, forumName, retarget, showTarget }),
-    [editors, identities, platform, dirData, forumName, retarget, showTarget]
+    () => ({ store: editors, identities, platform, directory: dirData, forumName, retarget }),
+    [editors, identities, platform, dirData, forumName, retarget]
   )
 
   const tabTitle = useCallback(
@@ -1341,10 +1361,6 @@ export function App() {
       <HistoryPageContext value={historyHost}>
         <div className="app" ref={appRef}>
           <StorageBanner storage={storage} />
-          <LaunchNotice
-            onOpenDrafts={openDrafts}
-            fallbackFocus={() => document.getElementById(`tab-${stateRef.current.tabs?.activeId}`)}
-          />
           <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
           <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
           <ContentRegistryContext.Provider value={registry}>
@@ -1444,6 +1460,8 @@ export function App() {
                   openDraft={openFailedDraft}
                   fallbackFocus={activeTabFocus}
                 />
+                <LaunchNotices openDraft={openFailedDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
+                <DraftDeletedNotices reopen={continueDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
               </BottomNoticeStack>
 
               {navOverlay && navPopover.open && (
@@ -1499,16 +1517,16 @@ export function App() {
               prompt={promptEditor.publication.prompt}
               target={targetText(promptEditor.target, forumName)}
               resolving={promptEditor.publication.resolving}
-              onChoose={(choice, suppress) => void resolvePrompt(promptEditor.id, choice, suppress)}
+              onAnswer={(answer) => void resolvePrompt(promptEditor.id, answer)}
             />
           )}
           {closing !== null && (
-            <UnsavedEditorsDialog
+            <DraftSaveFailedDialog
               label="关闭标签"
-              intro={`「${tabTitle(closing.tabId)}」有未保存的编辑。`}
               verb="关闭"
-              editorIds={closing.editorIds}
-              onFinish={() => {
+              cancelLabel="取消"
+              failures={closing.failures}
+              onConfirm={() => {
                 setClosing(null)
                 finishCloseTab(closing.tabId)
               }}

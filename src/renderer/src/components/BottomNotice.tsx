@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
-import { Icon } from './Icon'
+import { Icon, Spinner, type IconName } from './Icon'
 import './bottom-notice.css'
 
 function subscribeVisibility(onChange: () => void): () => void {
@@ -45,6 +45,8 @@ export function BottomNoticeStack({ children }: { children: ReactNode }) {
 export function BottomNotice({
   open,
   children,
+  icon = 'alert',
+  tone = 'warning',
   note,
   context,
   detail,
@@ -54,6 +56,10 @@ export function BottomNotice({
   open: boolean
   /** The message, one sentence. */
   children: ReactNode
+  /** The leading mark: the warning sign by default; `spinner` while something is being checked. */
+  icon?: IconName | 'spinner'
+  /** `warning` draws the mark in the warning ink; `neutral` (a plain outcome) in the secondary ink. */
+  tone?: 'warning' | 'neutral'
   /**
    * Supporting words of the message, e.g. the forum's own reason, right under it: two lines at
    * most on screen, all of it on hover and for screen readers. Plain text; null for none.
@@ -123,7 +129,13 @@ export function BottomNotice({
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusInside.current = false
       }}
     >
-      <Icon name="alert" className="bottom-notice-icon" />
+      {icon === 'spinner' ? (
+        <span className={`bottom-notice-icon is-${tone}`}>
+          <Spinner />
+        </span>
+      ) : (
+        <Icon name={icon} className={`bottom-notice-icon is-${tone}`} />
+      )}
       <div className="bottom-notice-text">
         <p className="bottom-notice-message">{children}</p>
         {note !== undefined && note !== null && <p className="bottom-notice-note" title={note}>{note}</p>}

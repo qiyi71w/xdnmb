@@ -2,16 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { EMPTY_FIELDS, type IdentityChoice, type PostTarget, type SavedDraft } from '../../src/shared/drafts'
 import type { IdentityOverview } from '../../src/shared/identity'
 import {
-  attachmentHolds,
   editorFor,
   editorOnScreen,
   editorForDraft,
   editorsReducer,
   identityStatus,
   INITIAL_EDITORS,
-  isUnsaved,
   saveInput,
-  unsavedInTab,
+  wantsWrite,
   type Editor,
   type EditorsAction,
   type EditorsState
@@ -66,11 +64,9 @@ describe('editors across threads and tabs', () => {
     state = run(state, { type: 'edit', editorId: only(state, 1, replyA).id, patch: { content: '标签一' } })
     expect(state.editors).toHaveLength(1)
     expect(only(state, 2, replyA).fields.content).toBe('标签一')
-    expect(unsavedInTab(state, 2)).toEqual([])
     state = run(state, { type: 'close-tab', tabId: 2 })
     expect(only(state, 1, replyA).fields.content).toBe('标签一')
     expect(only(state, 1, replyA).tabIds).toEqual([1])
-    expect(unsavedInTab(state, 1)).toHaveLength(1)
     state = run(state, { type: 'close-tab', tabId: 1 })
     expect(state.editors).toEqual([])
   })
@@ -122,53 +118,42 @@ describe('drafts in editors', () => {
     expect(only(state, 5, replyA)).toMatchObject({ draft: { id: '7' }, fields: { content: '已保存' }, credentialId: '1' })
   })
 
-  it('discarding returns a draft editor to its saved version; only a new editor disappears', () => {
-    let state = run(INITIAL_EDITORS, { type: 'open-draft', tabId: 1, draft: draft() })
-    const editor = only(state, 1, replyA)
-    expect(isUnsaved(editor)).toBe(false)
-    state = run(state,
-      { type: 'edit', editorId: editor.id, patch: { content: '改了' } },
-      { type: 'set-identity', editorId: editor.id, credentialId: '9' },
-      { type: 'retarget', editorId: editor.id, target: replyB }
-    )
-    expect(isUnsaved(only(state, 1, replyB))).toBe(true)
-    state = run(state, { type: 'discard', editorId: editor.id })
-    expect(only(state, 1, replyA)).toMatchObject({ id: editor.id, credentialId: '1', fields: { content: '已保存' } })
-
-    state = run(state, { type: 'open', tabId: 1, target: newThread, identity: byDefault('1') })
-    const fresh = only(state, 1, newThread)
-    state = run(state, { type: 'discard', editorId: fresh.id })
-    expect(editorFor(state, newThread)).toBeNull()
-  })
-
-  it('discarding a retargeted draft whose saved target is now edited by another editor keeps both reachable', () => {
-    let state = run(INITIAL_EDITORS, { type: 'open-draft', tabId: 1, draft: draft() })
-    const continued = only(state, 1, replyA)
-    state = run(state,
-      { type: 'retarget', editorId: continued.id, target: replyB },
-      { type: 'open', tabId: 1, target: replyA, identity: byDefault('2') }
-    )
-    const other = only(state, 1, replyA)
-    state = run(state, { type: 'edit', editorId: other.id, patch: { content: '另一份' } }, { type: 'discard', editorId: continued.id })
-
-    expect(state.editors.filter((editor) => editor.tabId === 1 && editor.target.kind === 'reply' && editor.target.threadId === replyA.threadId))
-      .toHaveLength(1)
-    expect(only(state, 1, replyA)).toMatchObject({ id: other.id, fields: { content: '另一份' } })
-    // The saved version is untouched in the library; continuing it again is possible from there.
-    expect(editorForDraft(state, '7')).toBeNull()
-    expect(editorFor(state, replyB)).toBeNull()
-  })
-
-  it('a new editor needs saving once it has text or an image, not for identity or target alone', () => {
+  it('wants a draft once text or an image is there, not for identity, target, watermark or whitespace alone', () => {
     let state = run(INITIAL_EDITORS, { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') })
     const editor = only(state, 1, replyA)
-    state = run(state, { type: 'set-identity', editorId: editor.id, credentialId: '2' }, { type: 'edit', editorId: editor.id, patch: { watermark: true } })
-    expect(isUnsaved(only(state, 1, replyA))).toBe(false)
+    state = run(state,
+      { type: 'set-identity', editorId: editor.id, credentialId: '2' },
+      { type: 'edit', editorId: editor.id, patch: { watermark: true, content: ' \n ', title: '  ' } },
+      { type: 'retarget', editorId: editor.id, target: replyB })
+    expect(wantsWrite(only(state, 1, replyB))).toBe(false)
     state = run(state, { type: 'edit', editorId: editor.id, patch: { name: '无名氏' } })
-    expect(isUnsaved(only(state, 1, replyA))).toBe(true)
+    expect(wantsWrite(only(state, 1, replyB))).toBe(true)
+    const attachment = { id: '12', format: 'png' as const, bytes: 100, width: 10, height: 10, originalName: 'image.png', url: 'xidao-image://draft/image.png' }
+    state = run(state, { type: 'edit', editorId: editor.id, patch: { name: '' } }, { type: 'set-attachment', editorId: editor.id, attachment })
+    expect(wantsWrite(only(state, 1, replyB))).toBe(true)
   })
 
-  it('edits made while a save was in flight stay unsaved after it completes', () => {
+  it('a saved editor wants a write for any change of its draft, and its draft deleted once emptied', () => {
+    let state = run(INITIAL_EDITORS, { type: 'open-draft', tabId: 1, draft: draft() })
+    const editor = only(state, 1, replyA)
+    expect(wantsWrite(editor)).toBe(false)
+    for (const action of [
+      { type: 'set-identity', editorId: editor.id, credentialId: '9' },
+      { type: 'retarget', editorId: editor.id, target: replyB },
+      { type: 'edit', editorId: editor.id, patch: { watermark: true } }
+    ] satisfies EditorsAction[]) expect(wantsWrite(run(state, action).editors[0]!)).toBe(true)
+    // Emptied (whitespace only): its draft is out of date and goes; once cleared, nothing is left to do.
+    state = run(state, { type: 'edit', editorId: editor.id, patch: { content: '   ' } })
+    expect(wantsWrite(only(state, 1, replyA))).toBe(true)
+    state = run(state, { type: 'draft-cleared', editorId: editor.id, draftId: '7' })
+    expect(only(state, 1, replyA).draft).toBeNull()
+    expect(wantsWrite(only(state, 1, replyA))).toBe(false)
+    // Clearing names a draft: a stale clear of another draft changes nothing.
+    const rebound = run(state, { type: 'saved', editorId: editor.id, draft: draft({ id: '8' }) })
+    expect(run(rebound, { type: 'draft-cleared', editorId: editor.id, draftId: '7' })).toBe(rebound)
+  })
+
+  it('edits made while a save was in flight still want a write after it completes, to the same draft', () => {
     let state = run(INITIAL_EDITORS, { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') })
     const editor = only(state, 1, replyA)
     state = run(state, { type: 'edit', editorId: editor.id, patch: { content: '第一版' } })
@@ -178,11 +163,42 @@ describe('drafts in editors', () => {
       { type: 'edit', editorId: editor.id, patch: { content: '第一版又改' } },
       { type: 'saved', editorId: editor.id, draft: draft({ fields: sent.fields, credentialId: '1' }) }
     )
-    expect(isUnsaved(only(state, 1, replyA))).toBe(true)
+    expect(wantsWrite(only(state, 1, replyA))).toBe(true)
     expect(saveInput(only(state, 1, replyA)).draftId).toBe('7')
   })
 
-  it('collects only last-owner unsaved editors, including hidden ones', () => {
+  it('deleting a draft empties and collapses its editor (target and identity stay), or closes it', () => {
+    let state = run(INITIAL_EDITORS, { type: 'open-draft', tabId: 1, draft: draft() })
+    const editor = only(state, 1, replyA)
+    state = run(state, { type: 'edit', editorId: editor.id, patch: { title: '标题' } }, { type: 'draft-deleted', editorId: editor.id })
+    expect(only(state, 1, replyA)).toMatchObject({ id: editor.id, target: replyA, credentialId: '1', fields: EMPTY_FIELDS, attachment: null, draft: null, expanded: false })
+    expect(wantsWrite(only(state, 1, replyA))).toBe(false)
+    expect(editorForDraft(state, '7')).toBeNull()
+    // Opening its target again starts from the emptied editor.
+    state = run(state, { type: 'open', tabId: 1, target: replyA, identity: byDefault('2') })
+    expect(only(state, 1, replyA)).toMatchObject({ id: editor.id, expanded: true, credentialId: '1' })
+
+    const library = run(INITIAL_EDITORS, { type: 'open-draft', tabId: 1, draft: draft() }, { type: 'open', tabId: 1, target: replyB, identity: byDefault('1') })
+    const closed = run(library, { type: 'close-editor', editorId: only(library, 1, replyA).id })
+    expect(closed.editors.map((item) => item.target)).toEqual([replyB])
+  })
+
+  it('continues another draft of the same target in the editor already there, and only there', () => {
+    let state = run(INITIAL_EDITORS,
+      { type: 'open', tabId: 1, target: replyA, identity: byDefault('2') },
+      { type: 'open-draft', tabId: 1, draft: draft({ id: '9', target: replyB }) })
+    const editor = only(state, 1, replyA)
+    state = run(state, { type: 'edit', editorId: editor.id, patch: { content: '先写的' } }, { type: 'set-expanded', editorId: editor.id, expanded: false })
+    const second = draft({ id: '8', credentialId: '3', fields: { ...EMPTY_FIELDS, content: '第二份' } })
+    state = run(state, { type: 'load-draft', editorId: editor.id, draft: second })
+    expect(only(state, 1, replyA)).toMatchObject({ id: editor.id, draft: second, credentialId: '3', fields: { content: '第二份' }, expanded: true })
+    expect(wantsWrite(only(state, 1, replyA))).toBe(false)
+    // Never another target's draft (one editor per target), nor a draft another editor continues.
+    expect(run(state, { type: 'load-draft', editorId: editor.id, draft: draft({ id: '10', target: replyB }) })).toBe(state)
+    expect(run(state, { type: 'load-draft', editorId: editor.id, draft: draft({ id: '9' }) })).toBe(state)
+  })
+
+  it('closing a tab drops only its last-owner editors, including hidden and emptied ones', () => {
     let state = run(INITIAL_EDITORS,
       { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') },
       { type: 'open', tabId: 1, target: replyB, identity: byDefault('1') },
@@ -191,9 +207,9 @@ describe('drafts in editors', () => {
     )
     state = run(state,
       { type: 'edit', editorId: only(state, 1, replyB).id, patch: { content: '隐藏的 B' } },
+      { type: 'edit', editorId: only(state, 1, newThread).id, patch: { content: '' } },
       { type: 'edit', editorId: only(state, 2, replyA).id, patch: { content: '另一标签' } }
     )
-    expect(unsavedInTab(state, 1).map((editor) => editor.target)).toEqual([replyB])
     state = run(state, { type: 'close-tab', tabId: 1 })
     expect(state.editors.map((editor) => editor.tabId)).toEqual([2])
     expect(only(state, 2, replyA).fields.content).toBe('另一标签')
@@ -218,27 +234,6 @@ describe('drafts in editors', () => {
     expect(editorFor(tied, replyA)?.draft?.id).toBe(older.id)
   })
 
-  it('immediately discards and undoes fields of saved and never-saved editors', () => {
-    for (const saved of [true, false]) {
-      let state = run(INITIAL_EDITORS, saved
-        ? { type: 'open-draft', tabId: 1, draft: draft() }
-        : { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') })
-      const id = only(state, 1, replyA).id
-      state = run(state, { type: 'edit', editorId: id, patch: { content: '未保存', title: '标题' } })
-      const fields = only(state, 1, replyA).fields
-      state = run(state, { type: 'discard-undoable', editorId: id })
-      expect(only(state, 1, replyA).fields.content).toBe(saved ? '已保存' : '')
-      expect(only(state, 1, replyA).discarded?.fields).toEqual(fields)
-      state = run(state, { type: 'undo-discard', editorId: id })
-      expect(only(state, 1, replyA).fields).toEqual(fields)
-      expect(only(state, 1, replyA).discarded).toBeUndefined()
-      state = run(state, { type: 'discard-undoable', editorId: id }, { type: 'edit', editorId: id, patch: { content: '接着写' } })
-      expect(only(state, 1, replyA).discarded).toBeUndefined()
-      state = run(state, { type: 'discard-undoable', editorId: id }, { type: 'set-expanded', editorId: id, expanded: false })
-      expect(only(state, 1, replyA).discarded).toBeUndefined()
-    }
-  })
-
   it('shares new-thread boards, keeps other boards independent, and preserves send locks across tabs', () => {
     let state = run(INITIAL_EDITORS,
       { type: 'open', tabId: 1, target: newThread, identity: byDefault('1') },
@@ -251,24 +246,12 @@ describe('drafts in editors', () => {
     const locked = only(state, 1, newThread)
     state = run(state,
       { type: 'edit', editorId: editor.id, patch: { content: '不能改' } },
-      { type: 'discard-undoable', editorId: editor.id },
-      { type: 'undo-discard', editorId: editor.id })
+      { type: 'draft-deleted', editorId: editor.id },
+      { type: 'load-draft', editorId: editor.id, draft: draft({ target: newThread }) },
+      { type: 'close-editor', editorId: editor.id })
     expect(only(state, 2, newThread)).toEqual(locked)
     state = run(state, { type: 'close-tab', tabId: 2 })
     expect(only(state, 1, newThread).publication?.phase).toBe('submitting')
-  })
-
-  it('holds discarded attachments for undo, releasing the undo hold on the next edit', () => {
-    let state = run(INITIAL_EDITORS, { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') })
-    const editor = only(state, 1, replyA)
-    const attachment = { id: '12', format: 'png' as const, bytes: 100, width: 10, height: 10, originalName: 'image.png', url: 'xidao-image://draft/image.png' }
-    state = run(state, { type: 'set-attachment', editorId: editor.id, attachment }, { type: 'discard-undoable', editorId: editor.id })
-    expect([...attachmentHolds(state)]).toEqual([[`${editor.id}-undo`, '12'], [editor.id, null]])
-    state = run(state, { type: 'undo-discard', editorId: editor.id })
-    expect(only(state, 1, replyA).attachment).toEqual(attachment)
-    expect([...attachmentHolds(state)]).toEqual([[editor.id, '12']])
-    state = run(state, { type: 'discard-undoable', editorId: editor.id }, { type: 'edit', editorId: editor.id, patch: { content: '继续' } })
-    expect([...attachmentHolds(state)]).toEqual([[editor.id, null]])
   })
 })
 

@@ -211,7 +211,7 @@ describe('attachment copies', () => {
     // The editor replaces the image without saving: the saved version still references the first copy.
     const replacement = await attached(service, 'e1', original)
     expect(managedNames(imageDirectory)).toHaveLength(2)
-    // Discarding returns the editor to the saved image: the unsaved replacement is reclaimed.
+    // The editor shows the saved image again: the unsaved replacement is reclaimed.
     await service.holdAttachment('renderer', 'e1', shown.id)
     expect(managedNames(imageDirectory)).toHaveLength(1)
     expect(await service.save(input({ attachmentId: replacement.id }))).toEqual({ ok: false, reason: 'attachment-missing' })
@@ -222,6 +222,36 @@ describe('attachment copies', () => {
     await service.delete(draft.id)
     expect(managedNames(imageDirectory)).toEqual([])
     expect(readFileSync(original)).toEqual(pngBytes(1))
+  })
+
+  it('keeps a deleted draft’s image while its undo holds it, restores the draft with it, and reclaims it once the undo is gone', async () => {
+    const { service, imageDirectory } = await setup()
+    const user = folder('xidao-user-')
+    const original = join(user, 'a.png')
+    writeFileSync(original, pngBytes(3))
+    const image = await attached(service, 'e1', original)
+    const draft = await saved(service, input({ attachmentId: image.id, fields: { ...EMPTY_FIELDS, content: '带图' } }))
+
+    // Delete with undo: the undo hold comes first, then the editor lets go of the image.
+    await service.holdAttachment('renderer', 'undo-1', image.id)
+    expect(await service.delete(draft.id)).toEqual({ ok: true })
+    await service.holdAttachment('renderer', 'e1', null)
+    expect(managedNames(imageDirectory)).toHaveLength(1)
+    expect(await list(service)).toEqual([])
+    // 撤销: the content comes back as a draft with the same image; the undo hold can go.
+    const restored = await saved(service, input({ attachmentId: image.id, fields: { ...EMPTY_FIELDS, content: '带图' } }))
+    await service.releaseEditor('renderer', 'undo-1')
+    expect((await list(service)).map((item) => [item.id, item.attachment?.id])).toEqual([[restored.id, image.id]])
+    expect(managedNames(imageDirectory)).toHaveLength(1)
+
+    // Deleted again and the notice goes away without 撤销: the copy is reclaimed, the user file stays.
+    await service.holdAttachment('renderer', 'undo-2', image.id)
+    expect(await service.delete(restored.id)).toEqual({ ok: true })
+    expect(managedNames(imageDirectory)).toHaveLength(1)
+    await service.releaseEditor('renderer', 'undo-2')
+    expect(managedNames(imageDirectory)).toEqual([])
+    expect(await service.save(input({ attachmentId: image.id }))).toEqual({ ok: false, reason: 'attachment-missing' })
+    expect(readFileSync(original)).toEqual(pngBytes(3))
   })
 
   it('a save whose image copy disappeared fails explicitly and keeps the previous version', async () => {

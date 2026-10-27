@@ -105,17 +105,29 @@
   flex-basis: 100%;
 }
 
+/* The toolbar's status: a send's state, or “已存草稿 时间” in the quietest ink. While a save runs
+   the last time stays in place, hidden, so the controls around it do not move. */
 .editor-status {
+  min-width: 0;
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 10px;
+  align-items: center;
+  gap: 2px 4px;
+  margin-left: 8px;
   font-size: var(--text-xs);
+  color: var(--ink-3);
 }
 
-.editor-state {
-  font-weight: 600;
-  color: var(--ink-2);
+.editor-state:empty {
+  display: none;
+}
+
+.editor-saved {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.editor-saved.is-holding {
+  visibility: hidden;
 }
 
 .editor-note {
@@ -133,7 +145,6 @@
   color: var(--ink-3);
 }
 
-.editor-status .notice-inline,
 .editor-send-notice {
   flex-basis: 100%;
   margin: 0;
@@ -162,26 +173,26 @@
   gap: 8px;
 }
 
-/* ---------- Unsaved editors dialog (关闭标签) ---------- */
+/* ---------- 草稿没能保存 (关闭标签, 退出汐岛) ---------- */
 
-.unsaved-dialog {
+.save-failed-dialog {
   width: min(480px, calc(100vw - 32px));
 }
 
-.unsaved-dialog .modal-body {
+.save-failed-dialog .modal-body {
   gap: 10px;
 }
 
-.unsaved-intro {
+.save-failed-intro {
   color: var(--ink-2);
 }
 
-.unsaved-list {
+.save-failed-list {
   display: grid;
   gap: 6px;
 }
 
-.unsaved-item {
+.save-failed-item {
   display: grid;
   gap: 2px;
   padding: 8px 10px;
@@ -190,25 +201,20 @@
   box-shadow: inset 0 0 0 1px var(--line-soft);
 }
 
-.unsaved-target {
+.save-failed-target {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 
-.unsaved-excerpt {
+.save-failed-excerpt {
   color: var(--ink-2);
   overflow-wrap: anywhere;
 }
 
-.unsaved-kind,
-.unsaved-progress {
+.save-failed-reason {
   font-size: var(--text-xs);
-  color: var(--ink-3);
-}
-
-.unsaved-item .notice-inline,
-.unsaved-dialog .modal-body > .notice-inline {
-  margin: 0;
+  color: var(--warn-ink);
+  overflow-wrap: anywhere;
 }
 
 /* ---------- Floating editor panel ---------- */
@@ -1239,18 +1245,6 @@ dialog.compose-image-preview:not([open]) {
   outline: none;
 }
 
-.compose-tools .editor-status {
-  min-width: 0;
-  margin-left: 8px;
-  align-items: center;
-  gap: 2px 4px;
-}
-
-.compose-tools .editor-state {
-  font-weight: 400;
-  color: var(--ink-3);
-}
-
 .compose-foot .editor-actions {
   margin-left: auto;
   align-items: center;
@@ -1261,7 +1255,8 @@ dialog.compose-image-preview:not([open]) {
   padding-inline: 16px;
 }
 
-/* Text-only actions: no frame, a hover tint. */
+/* Text-only actions: no frame, a hover tint. 删除草稿 is the danger one: danger ink, and the danger
+   tint on hover (as the page danger button). */
 .compose-text-btn {
   display: inline-flex;
   align-items: center;
@@ -1281,19 +1276,24 @@ dialog.compose-image-preview:not([open]) {
     color 0.15s var(--ease-out);
 }
 
-.compose-text-btn:hover:not(:disabled, [aria-disabled='true']) {
+.compose-text-btn:hover:not([aria-disabled='true']) {
   background: var(--hover);
   color: var(--ink);
 }
 
-.compose-text-btn:disabled,
-.compose-text-btn[aria-disabled='true'] {
-  color: var(--ink-3);
-  cursor: default;
+.compose-text-btn.is-danger {
+  color: var(--danger-ink);
 }
 
-.compose-text-btn .icon {
-  flex: none;
+.compose-text-btn.is-danger:hover:not([aria-disabled='true']) {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+
+/* Busy (deleting): kept focusable, faded as a whole. */
+.compose-text-btn[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: default;
 }
 
 /* Compact density: tighter header and toolbar; the text keeps its size and minimum. */
@@ -1326,7 +1326,7 @@ dialog.compose-image-preview:not([open]) {
     max-width: 9em;
   }
 
-  .compose-tools .editor-status {
+  .editor-status {
     margin-left: 4px;
   }
 }

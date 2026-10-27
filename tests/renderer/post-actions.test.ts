@@ -63,17 +63,15 @@ describe('post actions editor transitions', () => {
     expect(editor.publication).toBeNull()
   })
 
-  it('resumes and discards a report using the saved reason and text', () => {
+  it('resumes a report from its saved reason and text, and from another report draft loaded into the same editor', () => {
     const fields = { ...report, reason: '串版', text: '已保存的说明' }
     const draft: SavedDraft = { id: '77', version: 1, createdAt: '2026-10-25T00:00:00Z', savedAt: '2026-10-25T00:00:00Z', target: { kind: 'thread', forumId: '18' }, credentialId: '7', attachment: null, fields: { ...EMPTY_FIELDS, content: reportDraftContent(fields) } }
     let state = editorsReducer(INITIAL_EDITORS, { type: 'open-draft', tabId: 1, draft })
     const editor = editorFor(state, draft.target)!
     expect(editor.report).toEqual(fields)
-    state = editorsReducer(state, { type: 'edit-report', editorId: editor.id, patch: { text: '未保存' } })
-    state = editorsReducer(state, { type: 'discard-undoable', editorId: editor.id })
-    expect(editorFor(state, draft.target)?.report).toEqual(fields)
-    state = editorsReducer(state, { type: 'undo-discard', editorId: editor.id })
-    expect(editorFor(state, draft.target)?.report?.text).toBe('未保存')
+    const other = { ...report, reason: '广告q群', text: '另一份说明' }
+    state = editorsReducer(state, { type: 'load-draft', editorId: editor.id, draft: { ...draft, id: '78', fields: { ...EMPTY_FIELDS, content: reportDraftContent(other) } } })
+    expect(editorFor(state, draft.target)).toMatchObject({ id: editor.id, report: other, draft: { id: '78' } })
   })
 
   it('never changes the payload of a sending reply or report', () => {

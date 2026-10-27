@@ -4,7 +4,7 @@
 /* ---------- PO identity question ---------- */
 
 .po-dialog {
-  width: min(500px, calc(100vw - 32px));
+  width: min(480px, calc(100vw - 32px));
 }
 
 .po-body {
@@ -12,45 +12,109 @@
 }
 
 .po-intro {
-  line-height: 1.6;
-}
-
-.po-names {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11em, 1fr));
-  gap: 8px;
-}
-
-.po-name {
-  display: grid;
-  gap: 2px;
-  padding: 10px 12px;
-  border-radius: var(--radius-m);
-  background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--line-soft);
-}
-
-.po-name.is-po {
-  background: color-mix(in oklch, var(--accent-soft) 70%, var(--paper));
-  box-shadow: inset 0 0 0 1px var(--accent-soft);
-}
-
-.po-name dt {
-  font-size: var(--text-xs);
-  font-weight: 600;
   color: var(--ink-2);
-}
-
-.po-name dd {
-  font-weight: 650;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
-.po-body .notice-inline {
-  margin: 0;
+/* The cookies as a radio list: each a paper row (so 饼干 IDs keep their colors' contrast) with the
+   radio, the name and 饼干 ID, then its role. Selected is the checked radio, an accent edge and a
+   bold name, never the color alone. An unavailable one keeps its row but says why inside it. */
+.po-choices {
+  display: grid;
+  gap: 6px;
 }
 
-/* Checkbox at the bottom left, the three choices on the right; stacks when narrow or zoomed. */
+.po-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 10px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+  cursor: pointer;
+  transition: box-shadow 0.15s var(--ease-out);
+}
+
+.po-choice:hover:not(.is-unavailable, .is-selected) {
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.po-choice.is-selected {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+/* The ring goes on the whole row, not the small radio. */
+.po-choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.po-choice input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: inherit;
+}
+
+.po-choice input:focus-visible {
+  outline: none;
+}
+
+.po-choice-who {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
+}
+
+.po-choice-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.po-choice.is-selected .po-choice-name {
+  font-weight: 600;
+}
+
+.po-choice-role {
+  justify-self: end;
+  white-space: nowrap;
+}
+
+.po-choice-role:not(.tag) {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.po-choice.is-unavailable {
+  cursor: default;
+}
+
+.po-choice.is-unavailable .po-choice-name {
+  color: var(--ink-2);
+}
+
+.po-choice-reason {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--warn-ink);
+}
+
+.po-choice-reason .icon {
+  flex: none;
+  margin-top: 0.2em;
+}
+
+/* Checkbox at the bottom left, 取消 and 发送 on the right; stacks when narrow or zoomed. */
 .po-actions {
   justify-content: space-between;
   align-items: center;
@@ -71,6 +135,10 @@
   height: 15px;
   margin: 2px 0 0;
   accent-color: var(--accent);
+}
+
+.po-suppress input[aria-disabled='true'] {
+  cursor: default;
 }
 
 .po-buttons {

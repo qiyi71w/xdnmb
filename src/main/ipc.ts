@@ -810,8 +810,11 @@ export function registerIpc({
   })
   handle(IpcChannel.resolvePoPrompt, async (_event, raw) => {
     const input = record(raw)
-    if (!['switch', 'current', 'cancel'].includes(String(input.choice)) || typeof input.suppress !== 'boolean') throw new InvalidRequestError()
-    return publication.resolvePrompt({ token: viewId(input.token), choice: input.choice as 'switch' | 'current' | 'cancel', suppress: input.suppress })
+    const answer = record(input.answer)
+    const token = viewId(input.token)
+    if (answer.kind === 'cancel') return publication.resolvePrompt({ token, answer: { kind: 'cancel' } })
+    if (answer.kind !== 'send' || typeof answer.suppress !== 'boolean') throw new InvalidRequestError()
+    return publication.resolvePrompt({ token, answer: { kind: 'send', credentialId: localId(answer.credentialId), suppress: answer.suppress } })
   })
   handle(IpcChannel.listPublications, async () => publication.listAttempts())
   handle(IpcChannel.getPublication, async (_event, raw) => publication.getAttempt({ attemptId: localId(record(raw).attemptId) }))

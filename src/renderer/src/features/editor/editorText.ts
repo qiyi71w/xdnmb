@@ -2,7 +2,7 @@ import type { AttachFailure, DraftAttachment, PostFields } from '../../../../sha
 import type { CredentialId, IdentityOverview } from '../../../../shared/identity'
 import { formatRecordTime } from '../../lib/time'
 import { ATTEMPT_STATE_LABEL } from '../publication/publicationText'
-import { isUnsaved, type Editor } from './editorsState'
+import { isBlank, type Editor } from './editorsState'
 import type { SaveFailure } from './useEditorsStore'
 
 /** One-line summary of what an editor or draft holds. */
@@ -27,8 +27,11 @@ export function credentialLine(credentialId: CredentialId | null, overview: Iden
   return credential === undefined ? { text: MISSING_IDENTITY_TEXT, warning: true } : { text: credential.name, warning: false }
 }
 
-/** 未保存 / 草稿·已保存 时间 / 草稿·有未保存修改; a locked editor shows its send instead. */
-export function editorStateText(editor: Editor): string {
+/**
+ * The editor's toolbar status: a locked editor shows its send; otherwise “已存草稿 时间” once it
+ * continues a draft, and nothing while it is blank, not saved yet, or saving (`saving`).
+ */
+export function editorStateText(editor: Editor, saving: boolean): string {
   const publication = editor.publication
   if (publication !== null) {
     switch (publication.phase) {
@@ -42,16 +45,24 @@ export function editorStateText(editor: Editor): string {
         return ATTEMPT_STATE_LABEL[publication.attempt.state]
     }
   }
-  if (editor.draft === null) return '未保存'
-  return isUnsaved(editor) ? '草稿·有未保存修改' : `草稿·已保存 ${formatRecordTime(editor.draft.savedAt)}`
+  if (saving || editor.draft === null || isBlank(editor)) return ''
+  return `已存草稿 ${formatRecordTime(editor.draft.savedAt)}`
 }
 
+/** Why the draft is not up to date, after “草稿没能保存”. */
 export const SAVE_FAILURE_TEXT: Record<SaveFailure, string> = {
-  storage: '未能保存：本地存储不可用',
-  'not-found': '未能保存：原草稿已不存在',
-  'attachment-missing': '未能保存：附图副本已丢失，请重新添加图片',
-  locked: '未能保存：发送结果未定，内容已锁定',
-  internal: '未能保存：应用内部请求失败'
+  storage: '本地存储不可用',
+  'not-found': '原草稿已不存在',
+  'attachment-missing': '附图副本已丢失，请重新添加图片',
+  locked: '发送还没结束，内容已锁定',
+  internal: '应用内部请求失败'
+}
+
+/** Why another draft could not be continued in the editor already on its target. */
+export function loadFailureText(reason: SaveFailure): string {
+  return reason === 'locked'
+    ? '没能载入：这个目标的编辑正在发送，发送结束后再试'
+    : `没能载入：当前编辑没能先存为草稿（${SAVE_FAILURE_TEXT[reason]}）`
 }
 
 export const ATTACH_FAILURE_TEXT: Record<Exclude<AttachFailure, 'cancelled'> | 'internal', string> = {

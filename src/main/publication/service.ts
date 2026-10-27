@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { lstat } from 'node:fs/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { DraftSaveInput } from '../../shared/drafts'
-import { isUnsettled, type PublicationApi, type PublicationAttempt, type PublicationProblem, type SubmitInput, type SubmitResult, type PoPrompt } from '../../shared/publication'
+import { isUnsettled, type PoCandidate, type PublicationApi, type PublicationAttempt, type PublicationProblem, type SubmitInput, type SubmitResult, type PoPrompt } from '../../shared/publication'
 import type { AppStore } from '../storage/contract'
 import type { DraftService } from '../drafts/service'
 import type { ManagedImageFiles } from '../images/files'
@@ -241,9 +241,10 @@ export function createPublicationService(deps: {
   }
 
   /**
-   * The thread's stored main post names its 饼干 ID; when it belongs to another imported cookie than
-   * the one about to send, ask first. Unknown IDs (main post not stored, or no cookie with that ID)
-   * never prompt. This is a hint only, never evidence of who sent anything.
+   * The thread's stored main post names its 饼干 ID; when it belongs to other imported cookies than
+   * the one about to send, ask first, offering the current cookie and every cookie with that ID.
+   * Unknown IDs (main post not stored, or no cookie with that ID) never prompt. This is a hint only,
+   * never evidence of who sent anything.
    */
   async function promptFor(input: SubmitInput): Promise<PoPrompt | null> {
     if (input.payload.target.kind !== 'reply' || suppressed || !(await store.getPoWarningEnabled())) return null
@@ -252,11 +253,20 @@ export function createPublicationService(deps: {
     const credentials = await store.listCredentials()
     const current = credentials.find(credential => credential.id === input.payload.credentialId)
     if (current?.cookieId === poCookieId) return null
-    const po = credentials.find(credential => credential.cookieId === poCookieId)
-    if (po === undefined) return null
-    let canSwitch = false
-    try { await secret(po.id); canSwitch = true } catch { /* Missing/locked PO cookie remains known, but unusable. */ }
-    return { token: randomUUID(), currentName: current?.name ?? '不可用的饼干', poName: po.name, poCredentialId: po.id, canSwitch }
+    const matching = credentials.filter(credential => credential.cookieId === poCookieId)
+    if (matching.length === 0) return null
+    const usable = async (id: string): Promise<PoCandidate['unavailable']> => {
+      try { await secret(id); return null } catch { return 'unreadable' }
+    }
+    const candidates: PoCandidate[] = [
+      current === undefined
+        ? { credentialId: input.payload.credentialId!, name: '不可用的饼干', cookieId: null, role: 'current', unavailable: 'unreadable' }
+        : { credentialId: current.id, name: current.name, cookieId: current.cookieId, role: 'current', unavailable: await usable(current.id) }
+    ]
+    // Missing or locked PO cookies remain listed, but cannot be chosen.
+    for (const po of matching) candidates.push({ credentialId: po.id, name: po.name, cookieId: po.cookieId, role: 'po', unavailable: await usable(po.id) })
+    const initial = candidates.find(candidate => candidate.role === 'po' && candidate.unavailable === null) ?? candidates[0]!
+    return { token: randomUUID(), candidates, initial: initial.credentialId }
   }
 
   async function run(entry: Running, validated: Awaited<ReturnType<typeof validate>>): Promise<PublicationAttempt | null> {
@@ -401,21 +411,23 @@ export function createPublicationService(deps: {
       void work.finally(() => submissions.delete(input.editorId))
       return work
     },
-    async resolvePrompt({ token, choice, suppress }) {
+    async resolvePrompt({ token, answer }) {
       const pending = prompts.get(token)
       if (!pending || resolving.has(token)) return { kind: 'refused', reason: 'busy' }
-      if (choice === 'cancel') {
+      if (answer.kind === 'cancel') {
         prompts.delete(token)
         await drafts.releaseEditor('publication', `prepare-${pending.input.requestId}`)
         return { kind: 'cancelled' }
       }
       resolving.add(token)
       try {
-        if (choice === 'switch' && !pending.prompt.canSwitch) return { kind: 'refused', reason: 'identity' }
+        // Only a usable cookie this question offered; nothing else can become the sending identity here.
+        const chosen = pending.prompt.candidates.find(candidate => candidate.credentialId === answer.credentialId)
+        if (chosen === undefined || chosen.unavailable !== null) return { kind: 'refused', reason: 'identity' }
         const input = structuredClone(pending.input)
-        if (choice === 'switch') input.payload.credentialId = pending.prompt.poCredentialId
-        const result = await start(input, true, choice === 'switch')
-        if (result.kind === 'attempt' && suppress) suppressed = true
+        input.payload.credentialId = chosen.credentialId
+        const result = await start(input, true, chosen.role === 'po')
+        if (result.kind === 'attempt' && answer.suppress) suppressed = true
         return result
       } finally {
         prompts.delete(token)
@@ -434,9 +446,11 @@ export function createPublicationService(deps: {
       try {
         if (store.status.state === 'unavailable') throw new Error('storage')
         const attempt = [...editorAttempts.values()].find(item => item.id === attemptId) ?? await store.getPublication(attemptId)
-        const list = attempt?.state === 'failed' ? await drafts.list() : null
-        const draft = list?.ok ? list.drafts.find(item => item.id === attempt?.savedDraftId) ?? null : null
-        return { ok: true, attempt, draft }
+        if (attempt?.state !== 'failed' || attempt.savedDraftId === null) return { ok: true, attempt, draft: null }
+        // The failure's draft is read with it: answering without it would cost the editor its binding.
+        const list = await drafts.list()
+        if (!list.ok) return { ok: false, reason: 'storage' }
+        return { ok: true, attempt, draft: list.drafts.find(item => item.id === attempt.savedDraftId) ?? null }
       } catch { return { ok: false, reason: 'storage' } }
     },
     async getPoWarning() { return { enabled: await store.getPoWarningEnabled() } },

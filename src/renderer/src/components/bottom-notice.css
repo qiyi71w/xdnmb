@@ -35,11 +35,24 @@
   animation: bottom-notice-in 0.22s var(--ease-out);
 }
 
+/* The leading mark, on the message's first line: the warning ink for something to act on, the
+   secondary ink for a plain outcome (草稿已删除) or a check still running (spinner). */
 .bottom-notice-icon {
   flex: none;
   align-self: flex-start;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
   margin-top: 3px;
+}
+
+.bottom-notice-icon.is-warning {
   color: var(--warn-ink);
+}
+
+.bottom-notice-icon.is-neutral {
+  color: var(--ink-2);
 }
 
 /* Wide enough for one line of the message; when it is not, the action wraps below, at the end. */

@@ -94,12 +94,6 @@ export function shortcutLabel(action: ShortcutAction, platform: AppPlatform | nu
   return platform === 'darwin' ? LABELS[action].mac : LABELS[action].other
 }
 
-/** `aria-keyshortcuts` of 保存草稿; undefined until the platform is known. */
-export function saveAriaShortcut(platform: AppPlatform | null): string | undefined {
-  if (platform === null) return undefined
-  return platform === 'darwin' ? 'Meta+S' : 'Control+S'
-}
-
 /**
  * 编辑器内发送: Cmd+Enter on macOS, Ctrl+Enter elsewhere, with no other modifier. Never while an
  * input method is composing (including the keyCode 229 of IMEs that do not set `isComposing`)

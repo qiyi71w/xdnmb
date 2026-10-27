@@ -57,15 +57,29 @@ export interface SubmitInput {
   payload: DraftSaveInput
 }
 
-/** The thread's main post carries the 饼干 ID of another imported cookie than the one about to send. */
+/** One cookie the PO question offers. */
+export interface PoCandidate {
+  credentialId: CredentialId
+  name: string
+  /** Its 饼干 ID as imported; null when unknown. */
+  cookieId: string | null
+  /** `current`: the cookie the editor was about to send with; `po`: its 饼干 ID is the main post's. */
+  role: 'current' | 'po'
+  /** Why it cannot send now (its secret is missing or cannot be decrypted); null when it can. */
+  unavailable: 'unreadable' | null
+}
+
+/** The thread's main post carries the 饼干 ID of other imported cookies than the one about to send. */
 export interface PoPrompt {
   token: string
-  currentName: string
-  poName: string
-  poCredentialId: CredentialId
-  /** False when the matching cookie's secret is missing or cannot be decrypted. */
-  canSwitch: boolean
+  /** The current cookie first, then every imported cookie with the main post's 饼干 ID, in 饼干管理 order. */
+  candidates: PoCandidate[]
+  /** Selected when the question opens: the first usable PO cookie, else the current cookie. */
+  initial: CredentialId
 }
+
+/** Answer to a PO question: send with one of its usable candidates, or send nothing. */
+export type PoAnswer = { kind: 'cancel' } | { kind: 'send'; credentialId: CredentialId; suppress: boolean }
 
 export type SubmitResult =
   | { kind: 'attempt'; attempt: PublicationAttempt }
@@ -137,8 +151,12 @@ export const PUBLICATION_CHANGED_CHANNEL = 'publication:changed'
 
 export interface PublicationApi {
   submit(input: SubmitInput): Promise<SubmitResult>
-  /** The token owns the frozen payload. Cancel has no identity or suppression side effects. */
-  resolvePrompt(input: { token: string; choice: 'switch' | 'current' | 'cancel'; suppress: boolean }): Promise<SubmitResult | { kind: 'cancelled' }>
+  /**
+   * The token owns the frozen payload. Cancel has no identity or suppression side effects; sending
+   * with a PO candidate also makes it the thread's 发言饼干. Anything but a usable candidate of this
+   * question is refused.
+   */
+  resolvePrompt(input: { token: string; answer: PoAnswer }): Promise<SubmitResult | { kind: 'cancelled' }>
   listAttempts(): Promise<{ ok: true; attempts: PublicationAttempt[] } | { ok: false; reason: 'storage' }>
   getAttempt(input: { attemptId: string }): Promise<{ ok: true; attempt: PublicationAttempt | null; draft: SavedDraft | null } | { ok: false; reason: 'storage' }>
   getPoWarning(): Promise<{ enabled: boolean }>

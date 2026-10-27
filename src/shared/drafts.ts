@@ -3,9 +3,9 @@ import type { CredentialId, RoleSelection } from './identity'
 import type { ImageFormat } from './images'
 
 /**
- * Editing and saved drafts (编辑与草稿). An editor is the renderer's unsaved working copy; a draft
- * is the one saved version kept locally until the user deletes it. Saving replaces a draft's
- * version as a whole; nothing else changes a saved draft.
+ * Editing and saved drafts (编辑与草稿). An editor is the renderer's working copy, saved to its
+ * draft automatically; a draft is the saved version kept locally until it is sent or deleted.
+ * Saving replaces a draft's version as a whole; nothing else changes a saved draft.
  */
 
 /** Local reference to a saved draft: decimal string of a never-reused local ID. */
