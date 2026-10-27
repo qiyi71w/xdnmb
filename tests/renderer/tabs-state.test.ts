@@ -40,7 +40,7 @@ describe('tabs and per-tab history', () => {
 
   it('gives each new tab the global default at creation time only', () => {
     let state = initialTabsState(true)
-    state = run(state, { type: 'open-tab', entry: { kind: 'list', feed: null }, split: false, background: false })
+    state = run(state, { type: 'open-tab', entry: { kind: 'list', feed: null }, split: false })
     expect(state.tabs.map((tab) => tab.split)).toEqual([true, false])
     state = run(state, { type: 'set-split', tabId: state.tabs[0]!.id, split: false })
     expect(state.tabs.map((tab) => tab.split)).toEqual([false, false])
@@ -105,7 +105,7 @@ describe('tabs and per-tab history', () => {
       state,
       { type: 'snapshot', tabId: first, entryKey: left.key, snapshot },
       { type: 'navigate', tabId: first, entry: { kind: 'list', feed: forum5 } },
-      { type: 'open-tab', entry: { kind: 'list', feed: forum4 }, split: false, background: false }
+      { type: 'open-tab', entry: { kind: 'list', feed: forum4 }, split: false }
     )
     const second = state.activeId
     state = run(state, { type: 'back', tabId: second }, { type: 'back', tabId: first })
@@ -118,16 +118,16 @@ describe('tabs and per-tab history', () => {
     let state = initialTabsState(true)
     state = run(
       state,
-      { type: 'open-tab', entry: { kind: 'list', feed: forum4 }, split: true, background: false },
-      { type: 'open-tab', entry: { kind: 'list', feed: forum5 }, split: true, background: true }
+      { type: 'open-tab', entry: { kind: 'list', feed: forum4 }, split: true },
+      { type: 'open-tab', entry: { kind: 'list', feed: forum5 }, split: true }
     )
     const [a, b, c] = state.tabs.map((tab) => tab.id)
     expect(state.tabs.map((tab) => tab.id)).toEqual([a, b, c])
-    expect(state.activeId).toBe(b)
-    state = run(state, { type: 'cycle', delta: 1 })
     expect(state.activeId).toBe(c)
     state = run(state, { type: 'cycle', delta: 1 })
     expect(state.activeId).toBe(a)
+    state = run(state, { type: 'cycle', delta: 1 })
+    expect(state.activeId).toBe(b)
     state = run(state, { type: 'close-tab', tabId: a!, split: true })
     expect(state.activeId).toBe(b)
     state = run(state, { type: 'close-tab', tabId: b!, split: true }, { type: 'close-tab', tabId: c!, split: false })

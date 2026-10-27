@@ -6,7 +6,6 @@ import { Loading, SourceNotice } from '../../components/Notices'
 import { copyText } from '../../lib/clipboard'
 import { describeReadError, meaningfulName } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
-import { canLocate } from './quoteState'
 import { QuoteEntryContext } from './QuoteContext'
 import { QuoteRef } from './QuoteRef'
 import type { QuoteCardProps } from './useQuoteNavigation'
@@ -53,7 +52,6 @@ export function QuoteCard({
   onPointerLeave,
   onBlur,
   onKeyDown,
-  onLocate,
   onRetry,
   onOpenThread,
   onClose
@@ -112,7 +110,6 @@ export function QuoteCard({
   const result = locate?.result ?? null
   const locating = locate !== null && result === null
   const openingThread = locate?.intent === 'open-thread'
-  const locatable = canLocate(card)
 
   // The quoted post loads on its own: a text-free skeleton until it arrives; only a failure is put into words.
   const previewLoading = outcome === null && internal.previewSeq !== card.preview.seq
@@ -271,27 +268,21 @@ export function QuoteCard({
           {located}
         </div>
       )}
-      <footer className="quote-card-actions">
-        <button type="button" className="btn btn-small" disabled={!locatable} onClick={() => onLocate(false)}>
-          <Icon name="arrowRight" size={14} />
-          跳转
-        </button>
-        <button type="button" className="btn btn-small" disabled={!locatable} onClick={() => onLocate(true)}>
-          <Icon name="external" size={14} />
-          在新标签打开
-        </button>
-        {result?.status === 'thread-known' && (
-          <button type="button" className="btn btn-small" onClick={onOpenThread}>
-            打开原串
-          </button>
-        )}
-        {canRetry && (
-          <button type="button" className="btn btn-small" onClick={onRetry}>
-            <Icon name="refresh" size={14} />
-            重试
-          </button>
-        )}
-      </footer>
+      {(result?.status === 'thread-known' || canRetry) && (
+        <footer className="quote-card-actions">
+          {result?.status === 'thread-known' && (
+            <button type="button" className="btn btn-small" onClick={onOpenThread}>
+              打开原串
+            </button>
+          )}
+          {canRetry && (
+            <button type="button" className="btn btn-small" onClick={onRetry}>
+              <Icon name="refresh" size={14} />
+              重试
+            </button>
+          )}
+        </footer>
+      )}
     </div>
   )
 }

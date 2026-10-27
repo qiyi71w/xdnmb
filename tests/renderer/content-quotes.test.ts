@@ -8,7 +8,7 @@ import { QuoteRef } from '../../src/renderer/src/features/quote/QuoteRef'
 
 const controller: QuoteController = {
   pointerEnter: vi.fn(), pointerLeave: vi.fn(), blur: vi.fn(), focus: vi.fn(), preview: vi.fn(),
-  activate: vi.fn(), isBackground: () => false, focusCard: () => false
+  activate: vi.fn(), isNewTab: () => false, contextMenu: vi.fn(), focusCard: () => false
 }
 
 describe('content quote references', () => {

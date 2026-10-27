@@ -6,13 +6,14 @@ import { isEditableTarget } from '../../app/shortcuts'
 import { openLayer } from '../../lib/layers'
 import type { ContentRegistry } from '../tabs/contentRegistry'
 import { clearThreadReminders } from '../reminders/useReminders'
-import { backgroundTabEntry, currentEntry, entryThread, type Tab, type TabEntry, type TabsAction, type TabsState, type ThreadOpen, type ThreadSnapshot } from '../tabs/tabsState'
+import { currentEntry, entryThread, newTabEntry, type Tab, type TabEntry, type TabsAction, type TabsState, type ThreadOpen, type ThreadSnapshot } from '../tabs/tabsState'
 import { readResumePage } from '../thread/readingStart'
 import { findQuoteElement, quoteHostId, quoteKey, type QuoteController, type QuoteRefInfo } from './QuoteContext'
 import {
   initialQuoteState,
   isCurrentLocate,
   isCurrentPreview,
+  locateCommit,
   quoteReducer,
   type LocateIntent,
   type QuoteAction,
@@ -60,7 +61,6 @@ export interface QuoteCardProps {
   onPointerLeave: () => void
   onBlur: () => void
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
-  onLocate: (background: boolean) => void
   onRetry: () => void
   onOpenThread: () => void
   onClose: () => void
@@ -79,7 +79,7 @@ const NO_INTERNAL: QuoteInternalFailure = { previewSeq: null, locate: null }
 
 /**
  * App-level quote cards (spec I6 / I11): one top-level card at a time, previews and locates with
- * stale-result guards, and the navigation a located quote commits (same tab, in place, background
+ * stale-result guards, and the navigation a located quote commits (same tab, in place, a new active
  * tab or 打开原串). Every async result is checked against the latest card state before anything
  * happens; previews never touch reading state.
  */
@@ -192,19 +192,19 @@ export function useQuoteNavigation(options: Options) {
         apply({ type: 'close', cardId })
         return
       }
-      const intent = card.locate?.intent ?? 'resolve'
-      if (result.status !== 'located' || intent === 'resolve') {
+      const commitKind = locateCommit(card.locate?.intent ?? 'resolve', result)
+      if (commitKind === 'card' || result.status !== 'located') {
         apply({ type: 'locate-done', cardId, seq, result })
         return
       }
       const target = { postId: result.target.postId, page: result.target.page, mode: result.target.mode }
       const thread: ThreadOpen = { threadId: result.threadId, head: result.head, target, snapshot: null, unlocatedPostId: null }
-      if (intent === 'background') {
+      if (commitKind === 'new-tab') {
+        // A new tab with its own history becomes the active one; the source tab keeps its place.
         const { dispatch, getSettings } = opts.current
         const split = getSettings().newTabSplitDefault
         apply({ type: 'close', cardId })
-        dispatch({ type: 'open-tab', entry: backgroundTabEntry(shown.entry, split, thread), split, background: true })
-        focusTrigger(card.source)
+        dispatch({ type: 'open-tab', entry: newTabEntry(shown.entry, split, thread), split })
         return
       }
       // Already on screen in the same thread and mode: no new history step, just point at it. The
@@ -217,7 +217,7 @@ export function useQuoteNavigation(options: Options) {
       }
       commit(card, shown, thread)
     },
-    [apply, sourceCurrent, focusTrigger, commit]
+    [apply, sourceCurrent, commit]
   )
 
   const runLocate = useCallback(
@@ -272,7 +272,7 @@ export function useQuoteNavigation(options: Options) {
   )
 
   const startLocate = useCallback(
-    (cardId: number, intent: 'navigate' | 'background') => {
+    (cardId: number, intent: 'navigate' | 'new-tab') => {
       const before = stateRef.current.card
       const card = apply({ type: 'locate-start', cardId, intent }).card
       if (card !== null && card.locate !== null && card.locate.seq !== before?.locate?.seq) runLocate(card)
@@ -346,15 +346,23 @@ export function useQuoteNavigation(options: Options) {
         window.clearTimeout(openTimer.current)
         open(info, 'preview')
       },
-      activate(info, background) {
+      activate(info, newTab) {
         clearTimers()
         const card = open(info, 'activate')
-        if (card !== null) startLocate(card.id, background ? 'background' : 'navigate')
+        if (card !== null) startLocate(card.id, newTab ? 'new-tab' : 'navigate')
       },
-      isBackground(event) {
+      isNewTab(event) {
         const platform = opts.current.platform
         if (platform === null) return event.ctrlKey || event.metaKey
         return platform === 'darwin' ? event.metaKey : event.ctrlKey
+      },
+      contextMenu(info) {
+        window.clearTimeout(openTimer.current)
+        // A quote inside a card: that card stays while its menu is open and the pointer is away.
+        const card = stateRef.current.card
+        if (card !== null && 'previewId' in info.host && info.host.previewId === `${card.id}:${card.source.postId}`) {
+          apply({ type: 'open', source: card.source, trigger: 'activate' })
+        }
       },
       focusCard() {
         const first = cardRef.current === null ? undefined : tabbables(cardRef.current)[0]
@@ -362,7 +370,7 @@ export function useQuoteNavigation(options: Options) {
         return first !== undefined
       }
     }),
-    [open, scheduleLeave, clearTimers, startLocate]
+    [open, scheduleLeave, clearTimers, startLocate, apply]
   )
 
   // A closed or replaced card drops its reads.
@@ -415,6 +423,8 @@ export function useQuoteNavigation(options: Options) {
       closeCard(returnFocus)
     }
     const onPointerDown = (event: PointerEvent) => {
+      // A layer opened over the card (a quote's context menu) owns this press.
+      if (!layer.isTop()) return
       const target = event.target
       if (target instanceof Node && cardRef.current?.contains(target)) return
       // Choosing another quote replaces the card through its own activation.
@@ -471,7 +481,6 @@ export function useQuoteNavigation(options: Options) {
               focusAfterTrigger(card.source)
             }
           },
-          onLocate: (background) => startLocate(card.id, background ? 'background' : 'navigate'),
           onRetry: () => {
             const before = stateRef.current.card
             if (before === null || before.id !== card.id) return

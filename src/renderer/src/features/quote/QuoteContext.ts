@@ -35,10 +35,18 @@ export interface QuoteController {
   blur(): void
   /** Space: opens the preview card at once (not pinned). */
   preview(info: QuoteRefInfo): void
-  /** Click / Enter (`background` false) or Ctrl·Cmd + click / Enter (`background` true). */
-  activate(info: QuoteRefInfo, background: boolean): void
-  /** Whether a click or Enter with these modifiers means “open in a background tab”. */
-  isBackground(event: { ctrlKey: boolean; metaKey: boolean }): boolean
+  /**
+   * Click / Enter (`newTab` false), or 在新标签页打开 and Ctrl·Cmd + click / Enter (`newTab` true):
+   * once located, the target shows in this tab or in a new tab that becomes the active one.
+   */
+  activate(info: QuoteRefInfo, newTab: boolean): void
+  /** Whether a click or Enter with these modifiers means “open in a new tab”. */
+  isNewTab(event: { ctrlKey: boolean; metaKey: boolean }): boolean
+  /**
+   * The quote's context menu opens: no hover preview opens behind it, and a card holding the
+   * quote stays (pinned) so the menu's actions still find it.
+   */
+  contextMenu(info: QuoteRefInfo): void
   /** Tab from the quote reference whose card is open: moves focus into the card. */
   focusCard(): boolean
 }

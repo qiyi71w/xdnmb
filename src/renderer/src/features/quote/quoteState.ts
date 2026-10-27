@@ -3,12 +3,23 @@ import type { PostId } from '../../../../shared/forum'
 import { quoteHostId, type QuoteAnchor } from './QuoteContext'
 
 /**
- * What a locate request is for. `navigate` (click / Enter) and `background` (Ctrl/Cmd + click or
- * Ctrl/Cmd + Enter) act on success; `resolve` only finds out whether the quote can be located
- * (manual retry), so a retry never performs an earlier failed jump. `open-thread` (打开原串) reads the
- * page the thread would resume at and commits only once it was obtained; a failure stays on the card.
+ * What a locate request is for. `navigate` (click / Enter) and `new-tab` (在新标签页打开 in the
+ * quote's menu, Ctrl/Cmd + click, Ctrl/Cmd + Enter) act on success; `resolve` only finds out
+ * whether the quote can be located (manual retry), so a retry never performs an earlier failed
+ * jump. `open-thread` (打开原串) reads the page the thread would resume at and commits only once it
+ * was obtained; a failure stays on the card.
  */
-export type LocateIntent = 'navigate' | 'background' | 'resolve' | 'open-thread'
+export type LocateIntent = 'navigate' | 'new-tab' | 'resolve' | 'open-thread'
+
+/**
+ * What a locate result does: anything but a located post (and every `resolve` result) stays on the
+ * card where the quote is, so a failed 在新标签页打开 never creates a tab. A located post is
+ * shown in the source tab (`navigate`) or in a new tab that becomes the active one (`new-tab`).
+ */
+export function locateCommit(intent: LocateIntent, result: QuoteLocation): 'card' | 'navigate' | 'new-tab' {
+  if (result.status !== 'located' || intent === 'resolve') return 'card'
+  return intent === 'new-tab' ? 'new-tab' : 'navigate'
+}
 
 /**
  * How a quote was chosen. `hover` opens an unpinned preview and never replaces a pinned card;
@@ -103,7 +114,7 @@ export function isCurrentLocate(state: QuoteState, cardId: number, seq: number):
 }
 
 /**
- * Whether the card may start a locate (跳转 / 在新标签打开). Not while one is running, and not after
+ * Whether the card may start a locate (click / Enter, 在新标签页打开). Not while one is running, and not after
  * a result that another attempt would only repeat: owner unknown, only the thread known (打开原串 is
  * the separate action), or the server reported the post or thread missing / inaccessible.
  */
