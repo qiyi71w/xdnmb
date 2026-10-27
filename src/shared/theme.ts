@@ -297,6 +297,9 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
       ['window', 'glass', 'nav-current']
     ] satisfies Surface[]
   })),
+  // Page buttons (`.btn-page`) inside error and cached notices: secondary ink at rest, ink on the hover overlay.
+  { foreground: 'ink-2', surfaces: [['danger-bg'], ['warn-bg']] },
+  { foreground: 'ink', surfaces: [['danger-bg', 'hover'], ['warn-bg', 'hover']] },
   {
     foreground: 'accent-ink',
     surfaces: [
@@ -319,8 +322,9 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
   { foreground: 'greentext', surfaces: [['paper']] },
   { foreground: 'quote-ref-ink', surfaces: [['paper', 'quote-ref-bg']] },
   { foreground: 'warn-ink', surfaces: [['warn-bg'], ['paper'], ['pane'], ['window', 'glass-strong']] },
-  // Context-menu footers (reminder and subscription menus, the 饼干颜色 palette) show errors on the glass sheet.
-  { foreground: 'danger-ink', surfaces: [['danger-bg'], ['paper'], ['paper', 'glass-strong'], ['pane', 'glass-strong'], ['window', 'glass-strong']] },
+  // Context-menu footers (reminder and subscription menus, the 饼干颜色 palette) show errors on the glass sheet;
+  // danger page buttons sit on the reading paper and the list pane, with the danger tint under them on hover.
+  { foreground: 'danger-ink', surfaces: [['danger-bg'], ['paper'], ['pane'], ['paper', 'danger-bg'], ['pane', 'danger-bg'], ['paper', 'glass-strong'], ['pane', 'glass-strong'], ['window', 'glass-strong']] },
   ...COOKIE_COLORS.map((name) => ({ foreground: cookieColorToken(name), surfaces: COOKIE_ID_SURFACES }))
 ]
 
