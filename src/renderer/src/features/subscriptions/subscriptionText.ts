@@ -9,8 +9,7 @@ import type {
   SubscriptionPlanItem,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
-import { describeReadError, formatPageList, meaningfulTitle } from '../../lib/format'
-import { formatRecordTime } from '../../lib/time'
+import { describeReadError, meaningfulTitle } from '../../lib/format'
 
 // Fixed copy only. Nothing here ever includes a UUID, a userhash or any other secret: the
 // renderer only knows local references, names and generations.
@@ -91,6 +90,16 @@ export function failureText(reason: SubscriptionFailure): string {
   }
 }
 
+/** Whether a journal entry should offer the read-only 核对. */
+export function needsReconcile(operation: SubscriptionOperation): boolean {
+  return (
+    operation.state === 'needs-reconciliation' ||
+    operation.verification === 'unknown' ||
+    operation.verification === 'mismatch' ||
+    operation.verification === 'absent-unproven'
+  )
+}
+
 function reportText(operation: SubscriptionOperation): string {
   switch (operation.report) {
     case 'pending':
@@ -104,7 +113,7 @@ function reportText(operation: SubscriptionOperation): string {
   }
 }
 
-/** Report plus its error classification (e.g. 限流或需要验证), so a stopped result never hides why. */
+/** What the server said about one write, kept apart from what the readback observed. */
 export function reportSummary(operation: SubscriptionOperation): string {
   const reason = operation.reportError === null ? '' : `（${describeReadError(operation.reportError)}）`
   return `${reportText(operation)}${reason}`
@@ -123,29 +132,6 @@ export function verificationText(operation: SubscriptionOperation): string {
     case 'unknown':
       return '尚未取得可用的回读'
   }
-}
-
-/** Whether a journal entry should offer the read-only 核对. */
-export function needsReconcile(operation: SubscriptionOperation): boolean {
-  return (
-    operation.state === 'needs-reconciliation' ||
-    operation.verification === 'unknown' ||
-    operation.verification === 'mismatch' ||
-    operation.verification === 'absent-unproven'
-  )
-}
-
-/** One-line page coverage of an observation, e.g. `第 1–3 页 · 10/24 09:12 · 第 3 页为空（结束候选）`. */
-export function coverageText(observation: SubscriptionObservation): string {
-  const pages = observation.pages
-  if (pages.length === 0) return '还没有取得任何一页'
-  const parts = [`已读取第 ${formatPageList(pages.map((page) => page.page))} 页`]
-  const last = pages.at(-1)
-  if (last !== undefined) parts.push(`${formatRecordTime(last.fetchedAt)} 获取`)
-  const end = pages.find((page) => page.endCandidate)
-  if (end !== undefined) parts.push(`第 ${end.page} 页为空（结束候选）`)
-  else if (observation.nextPage !== null) parts.push(`第 ${observation.nextPage} 页起未读取`)
-  return parts.join(' · ')
 }
 
 /** One observation's state for a preview: how far it got and why it may be incomplete. */

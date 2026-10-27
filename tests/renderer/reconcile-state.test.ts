@@ -1,97 +1,152 @@
 import { describe, expect, it } from 'vitest'
+import type { ThreadSummary } from '../../src/shared/forum'
 import type {
-  SubscriptionAction,
-  SubscriptionCandidate,
+  SubscriptionChoice,
   SubscriptionContext,
+  SubscriptionDifference,
   SubscriptionObservation,
+  SubscriptionPlan,
   SubscriptionPreview,
   SubscriptionSource
 } from '../../src/shared/subscriptions'
-import { defaultSelection, groupCandidates, selectedInOrder } from '../../src/renderer/src/features/subscriptions/reconcileState'
+import {
+  defaultChoices,
+  planChoices,
+  planCounts,
+  withChoice,
+  writeCounts
+} from '../../src/renderer/src/features/subscriptions/reconcileState'
 
 const context: SubscriptionContext = { generation: 1, appCredentialId: '7', webCredentialId: '3' }
 
-const candidate = (id: string, action: SubscriptionAction, target: SubscriptionSource): SubscriptionCandidate => ({
-  id,
-  threadId: id,
-  action,
-  target
+const thread = (id: string): ThreadSummary => ({
+  head: {
+    id,
+    forumId: null,
+    createdAt: null,
+    userHash: null,
+    name: null,
+    title: null,
+    isAdmin: null,
+    isSage: null,
+    content: [],
+    plainText: '',
+    image: null
+  },
+  replyCount: null,
+  recentReplies: [],
+  remainReplies: null
 })
 
-const appObservation: SubscriptionObservation = {
-  id: 'obs-app',
-  source: 'app',
+const ALL: SubscriptionChoice[] = ['both', 'none', 'skip']
+
+const difference = (
+  id: string,
+  presentOn: SubscriptionSource,
+  defaultChoice: SubscriptionChoice,
+  choices: SubscriptionChoice[] = ALL
+): SubscriptionDifference => ({
+  id,
+  threadId: id,
+  presentOn,
+  thread: thread(id),
+  baseline: defaultChoice === 'skip',
+  provenance: defaultChoice === 'skip' ? { kind: 'gone' } : null,
+  choices,
+  defaultChoice
+})
+
+const observation = (source: SubscriptionSource): SubscriptionObservation => ({
+  id: `obs-${source}`,
+  source,
   context,
-  startedAt: '2026-10-24T00:00:00.000Z',
+  startedAt: '2026-10-27T00:00:00.000Z',
   pages: [],
   ids: [],
   nextPage: null,
   error: null,
   cancelled: false
-}
+})
 
-const shape = (items: readonly SubscriptionCandidate[]) =>
-  groupCandidates(items).map((group) => [group.action, group.target, group.items.map((item) => item.threadId)])
+const preview = (items: SubscriptionDifference[]): SubscriptionPreview => ({
+  id: 'preview-1',
+  mode: 'sync',
+  context,
+  createdAt: '2026-10-27T00:00:00.000Z',
+  left: observation('app'),
+  right: { ...observation('web'), source: 'web' },
+  leftLabel: 'App 订阅',
+  rightLabel: '网页订阅（饼干）',
+  firstSync: false,
+  items
+})
 
-describe('candidate groups', () => {
-  it('keep the preview order instead of moving additions first', () => {
-    const items = [candidate('10101', 'remove', 'app'), candidate('10201', 'add', 'app')]
-    expect(shape(items)).toEqual([
-      ['remove', 'app', ['10101']],
-      ['add', 'app', ['10201']]
+describe('difference choices', () => {
+  it('start at each difference’s default, and an all-default preview executes only the non-skip ones', () => {
+    const value = preview([difference('1', 'web', 'both'), difference('2', 'web', 'skip'), difference('3', 'app', 'both')])
+    const choices = defaultChoices(value)
+    expect([...choices]).toEqual([
+      ['1', 'both'],
+      ['2', 'skip'],
+      ['3', 'both']
+    ])
+    expect(planChoices(value, choices)).toEqual([
+      { itemId: '1', choice: 'both' },
+      { itemId: '3', choice: 'both' }
+    ])
+    expect(writeCounts(value, choices)).toEqual({ add: 2, remove: 0 })
+  })
+
+  it('send every writing choice in the preview’s order, whatever order they were set in', () => {
+    const value = preview([difference('1', 'app', 'skip'), difference('2', 'web', 'skip'), difference('3', 'app', 'skip')])
+    let choices = defaultChoices(value)
+    choices = withChoice(value, choices, ['3'], 'none')
+    choices = withChoice(value, choices, ['1'], 'both')
+    choices = withChoice(value, choices, ['2'], 'both')
+    expect(planChoices(value, choices)).toEqual([
+      { itemId: '1', choice: 'both' },
+      { itemId: '2', choice: 'both' },
+      { itemId: '3', choice: 'none' }
+    ])
+    expect(writeCounts(value, choices)).toEqual({ add: 2, remove: 1 })
+  })
+
+  it('never set a choice a difference does not offer (no 两端都取消 on a first or incomplete sync)', () => {
+    const value = preview([difference('1', 'web', 'both', ['both', 'skip']), difference('2', 'app', 'skip')])
+    const choices = withChoice(value, defaultChoices(value), ['1', '2'], 'none')
+    expect(choices.get('1')).toBe('both')
+    expect(choices.get('2')).toBe('none')
+    expect(planChoices(value, choices)).toEqual([
+      { itemId: '1', choice: 'both' },
+      { itemId: '2', choice: 'none' }
     ])
   })
 
-  it('repeat an effect for each separate run, with unique keys, reading in execution order', () => {
-    const items = [
-      candidate('1', 'add', 'web'),
-      candidate('2', 'add', 'web'),
-      candidate('3', 'remove', 'app'),
-      candidate('4', 'add', 'web'),
-      candidate('5', 'add', 'app'),
-      candidate('6', 'remove', 'web')
-    ]
-    const groups = groupCandidates(items)
-    expect(shape(items)).toEqual([
-      ['add', 'web', ['1', '2']],
-      ['remove', 'app', ['3']],
-      ['add', 'web', ['4']],
-      ['add', 'app', ['5']],
-      ['remove', 'web', ['6']]
-    ])
-    expect(new Set(groups.map((group) => group.key)).size).toBe(groups.length)
-    expect(groups.flatMap((group) => group.items)).toEqual(items)
+  it('send nothing when every difference is left alone', () => {
+    const value = preview([difference('1', 'web', 'both'), difference('2', 'app', 'both')])
+    const choices = withChoice(value, defaultChoices(value), ['1', '2'], 'skip')
+    expect(planChoices(value, choices)).toEqual([])
+    expect(writeCounts(value, choices)).toEqual({ add: 0, remove: 0 })
   })
+})
 
-  it('summarise only the selected candidates, in the order the plan executes them', () => {
-    const items = [
-      candidate('1', 'add', 'web'),
-      candidate('2', 'remove', 'app'),
-      candidate('3', 'add', 'web'),
-      candidate('4', 'remove', 'web'),
-      candidate('5', 'add', 'app')
-    ]
-    const value: SubscriptionPreview = {
-      id: 'preview-1',
-      mode: 'sync',
-      context,
-      createdAt: '2026-10-24T00:00:00.000Z',
-      left: appObservation,
-      right: { ...appObservation, id: 'obs-web', source: 'web' },
-      leftLabel: 'App 对象 7',
-      rightLabel: '网页 · 本地引用 3',
-      firstSync: false,
-      deletionsAllowed: true,
-      items
+describe('plan counts', () => {
+  it('count confirmed writes by action and everything that did not complete', () => {
+    const plan: SubscriptionPlan = {
+      id: 'plan-1',
+      preview: preview([]),
+      createdAt: '2026-10-27T00:00:00.000Z',
+      finishedAt: '2026-10-27T00:01:00.000Z',
+      state: 'stopped',
+      stopReason: 'item-failed',
+      items: [
+        { candidate: { id: '1', threadId: '1', action: 'add', target: 'app' }, operationId: 'op-1', state: 'confirmed', failure: null },
+        { candidate: { id: '2', threadId: '2', action: 'remove', target: 'web' }, operationId: 'op-2', state: 'confirmed', failure: null },
+        { candidate: { id: '3', threadId: '3', action: 'add', target: 'web' }, operationId: 'op-3', state: 'failed', failure: 'storage' },
+        { candidate: { id: '4', threadId: '4', action: 'add', target: 'web' }, operationId: null, state: 'skipped', failure: null },
+        { candidate: { id: '5', threadId: '5', action: 'add', target: 'web' }, operationId: null, state: 'pending', failure: null }
+      ]
     }
-    const selected = defaultSelection(value)
-    expect(selectedInOrder(value, selected)).toEqual(['1', '3', '5'])
-
-    const chosen = items.filter((item) => selected.has(item.id))
-    expect(shape(chosen)).toEqual([
-      ['add', 'web', ['1', '3']],
-      ['add', 'app', ['5']]
-    ])
-    expect(groupCandidates(chosen).flatMap((group) => group.items.map((item) => item.id))).toEqual(selectedInOrder(value, selected))
+    expect(planCounts(plan)).toEqual({ added: 1, removed: 1, failed: 1, unknown: 0, notRun: 2 })
   })
 })

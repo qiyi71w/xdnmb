@@ -41,7 +41,7 @@ const keptColumns = (table: string) => table === 'publication_attempts' ? `SELEC
 function plan(): SubscriptionPlan {
   return { id: 'historical-plan', preview: { id: 'historical-preview', mode: 'sync', context, createdAt: at,
     left: observation(), right: { ...observation('historical-web'), source: 'web' }, leftLabel: 'App', rightLabel: '网页',
-    firstSync: false, deletionsAllowed: false, items: [] }, createdAt: at, finishedAt: later,
+    firstSync: false, items: [] }, createdAt: at, finishedAt: later,
     state: 'completed', stopReason: null, items: [] }
 }
 

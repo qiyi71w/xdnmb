@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { ReadError } from '../../shared/api'
-import type { SubscriptionCandidate, SubscriptionContext, SubscriptionFailure, SubscriptionObservation, SubscriptionOperation, SubscriptionOverview, SubscriptionPlan, SubscriptionPreview, SubscriptionResult, SubscriptionSource, SubscriptionsApi } from '../../shared/subscriptions'
+import type { SubscriptionCandidate, SubscriptionChoice, SubscriptionContext, SubscriptionDifference, SubscriptionFailure, SubscriptionObservation, SubscriptionOperation, SubscriptionOverview, SubscriptionPlan, SubscriptionPreview, SubscriptionProvenance, SubscriptionResult, SubscriptionSource, SubscriptionsApi } from '../../shared/subscriptions'
 import type { SecretProtector } from '../identity/protection'
 import type { RequestScheduler } from '../reading/scheduler'
 import type { AppStore, SubscriptionBaseline } from '../storage/contract'
@@ -168,7 +168,7 @@ export function createSubscriptionService(deps: {
       }
       const webName = input.source === 'web' ? (await store.listCredentials()).find((entry) => entry.id === context.webCredentialId)?.name : null
       const operation: SubscriptionOperation = { id: randomUUID(), source: input.source, threadId: input.threadId, action: input.action, context,
-        createdAt: now().toISOString(), objectLabel: input.source === 'app' ? `App 对象 ${context.appCredentialId}` : webName ?? '网页订阅对象',
+        createdAt: now().toISOString(), objectLabel: input.source === 'app' ? 'App 订阅' : webName ?? '网页订阅',
         state: 'pending', report: 'pending', reportError: null, before: await store.loadSubscriptionObservation(input.source, context, true), after: null, verification: 'unknown' }
       // Plan correlation and intent are durable together before dispatch.
       if (hooks) await hooks.intent(operation)
@@ -233,26 +233,56 @@ export function createSubscriptionService(deps: {
       if (!sameContext(context, (await store.loadSubscriptionConfiguration()).context)) return { ok: false, reason: 'stale' }
       const baseline = mode === 'sync' ? await store.loadSubscriptionBaseline(context) : null
       const firstSync = baseline === null
-      const deletionsAllowed = mode === 'sync' && !firstSync && sufficient(left) && sufficient(right)
-      const leftIds = new Set(left.ids)
+      // Absence from a confirmed baseline is only judged with both sides fully read; otherwise everything is new.
+      const judged = mode === 'sync' && baseline !== null && sufficient(left) && sufficient(right)
+      const common = new Set(judged ? baseline.ids : [])
+      // When each thread was last written into the baseline. Plans are its only writers: a thread enters when it
+      // is common at a plan's recheck (the frozen preview observations) or when a plan confirms adding it.
+      const confirmedAt = new Map<string, string>()
+      const confirm = (threadId: string, at: string) => { if (at > (confirmedAt.get(threadId) ?? '')) confirmedAt.set(threadId, at) }
+      const removals: SubscriptionOperation[] = []
+      if (judged) {
+        for (const plan of await store.loadSubscriptionPlans()) {
+          if (plan.preview.mode !== 'sync' || !sameContext(plan.preview.context, context)) continue
+          const planRight = new Set(plan.preview.right.ids)
+          for (const id of plan.preview.left.ids) if (planRight.has(id)) confirm(id, plan.createdAt)
+          for (const item of plan.items) {
+            if (item.state === 'confirmed' && item.candidate.action === 'add') confirm(item.candidate.threadId, plan.finishedAt ?? plan.createdAt)
+          }
+        }
+        for (const entry of await store.loadSubscriptionOperations()) {
+          if (entry.action === 'remove' && entry.report === 'success' && entry.verification === 'absent-supported' && sameContext(entry.context, context)) removals.push(entry)
+        }
+      }
+      const provenance = (threadId: string, missing: SubscriptionSource): SubscriptionProvenance => {
+        const after = confirmedAt.get(threadId) ?? ''
+        let at: string | null = null
+        for (const entry of removals) {
+          if (entry.source === missing && entry.threadId === threadId && entry.createdAt > after && (at === null || entry.createdAt > at)) at = entry.createdAt
+        }
+        return at === null ? { kind: 'gone' } : { kind: 'local-removal', at }
+      }
+      const choices: SubscriptionChoice[] = judged ? ['both', 'none', 'skip'] : ['both', 'skip']
       const rightIds = new Set(right.ids)
-      const common = new Set(baseline?.ids ?? [])
-      const items: SubscriptionCandidate[] = []
-      const add = (threadId: string, action: 'add' | 'remove', target: SubscriptionSource) => items.push({ id: randomUUID(), threadId, action, target })
-      for (const id of left.ids) {
-        if (rightIds.has(id)) continue
-        if (mode === 'merge' || !common.has(id)) add(id, 'add', mode === 'merge' ? 'app' : 'web')
-        else if (deletionsAllowed) add(id, 'remove', 'app')
+      const leftIds = new Set(left.ids)
+      const items: SubscriptionDifference[] = []
+      const differ = (present: SubscriptionObservation, presentOn: SubscriptionSource, missing: SubscriptionSource, others: Set<string>) => {
+        const threads = new Map(present.pages.flatMap((page) => page.threads.map((thread) => [thread.head.id, thread] as const)))
+        for (const threadId of present.ids) {
+          const thread = threads.get(threadId)
+          if (others.has(threadId) || thread === undefined) continue
+          const inBaseline = common.has(threadId)
+          items.push({ id: randomUUID(), threadId, presentOn, thread, baseline: inBaseline, provenance: inBaseline ? provenance(threadId, missing) : null,
+            choices: [...choices], defaultChoice: inBaseline ? 'skip' : 'both' })
+        }
       }
-      if (mode === 'sync') for (const id of right.ids) {
-        if (leftIds.has(id)) continue
-        if (!common.has(id)) add(id, 'add', 'app')
-        else if (deletionsAllowed) add(id, 'remove', 'web')
-      }
-      const webName = (await store.listCredentials()).find((entry) => entry.id === context.webCredentialId)?.name ?? '网页对象'
+      differ(left, 'app', mode === 'merge' ? 'app' : 'web', rightIds)
+      if (mode === 'sync') differ(right, 'web', 'app', leftIds)
+      const webName = (await store.listCredentials()).find((entry) => entry.id === context.webCredentialId)?.name
       const value: SubscriptionPreview = { id: randomUUID(), mode, context, createdAt: now().toISOString(), left, right,
-        leftLabel: `App 对象 ${leftContext.appCredentialId}`, rightLabel: mode === 'merge' ? `App 对象 ${context.appCredentialId}` : `${webName} · 本地引用 ${context.webCredentialId}`,
-        firstSync, deletionsAllowed, items }
+        leftLabel: mode === 'merge' ? '之前的 App UUID' : 'App 订阅',
+        rightLabel: mode === 'merge' ? '当前 App UUID' : webName ? `网页订阅（${webName}）` : '网页订阅',
+        firstSync, items }
       previews.set(value.id, structuredClone(value))
       return { ok: true, value }
     } catch (error) { return { ok: false, reason: error instanceof UnavailableIdentity ? error.reason : 'storage' } }
@@ -263,9 +293,13 @@ export function createSubscriptionService(deps: {
     previews.delete(input.previewId)
     if (!value) return { ok: false, reason: 'stale' }
     if (changing) return { ok: false, reason: 'busy' }
-    const selected = new Set(input.selectedItemIds)
-    const candidates = new Set(value.items.map((item) => item.id))
-    if (selected.size !== input.selectedItemIds.length || input.selectedItemIds.some((id) => !candidates.has(id))) return { ok: false, reason: 'invalid-selection' }
+    const differences = new Map(value.items.map((item) => [item.id, item]))
+    const chosen = new Map<string, SubscriptionChoice>()
+    for (const { itemId, choice } of input.choices) {
+      const item = differences.get(itemId)
+      if (item === undefined || chosen.has(itemId) || !item.choices.includes(choice)) return { ok: false, reason: 'invalid-selection' }
+      chosen.set(itemId, choice)
+    }
     changing = true
     let plan: SubscriptionPlan | null = null
     let durable = false
@@ -284,8 +318,16 @@ export function createSubscriptionService(deps: {
       const rightIds = new Set(right.ids)
       const baseline: SubscriptionBaseline | undefined = value.mode === 'sync' ? { context: value.context,
         ids: [...new Set([...(previous?.ids ?? []), ...left.ids.filter((id) => rightIds.has(id))])] } : undefined
+      const writes: SubscriptionCandidate[] = []
+      for (const item of value.items) {
+        const choice = chosen.get(item.id) ?? 'skip'
+        if (choice === 'skip') continue
+        // Merge adds the old UUID's thread to the current App; sync adds to the side that lacks it or removes from the one that has it.
+        const target: SubscriptionSource = choice === 'none' || value.mode === 'merge' ? item.presentOn : item.presentOn === 'app' ? 'web' : 'app'
+        writes.push({ id: item.id, threadId: item.threadId, action: choice === 'none' ? 'remove' : 'add', target })
+      }
       plan = { id: randomUUID(), preview: value, createdAt: now().toISOString(), finishedAt: null, state: 'running', stopReason: null,
-        items: value.items.filter((item) => selected.has(item.id)).map((candidate) => ({ candidate, operationId: null, state: 'pending', failure: null })) }
+        items: writes.map((candidate) => ({ candidate, operationId: null, state: 'pending', failure: null })) }
       await store.saveSubscriptionPlan(plan, undefined, baseline)
       durable = true
       for (const item of plan.items) {
@@ -401,7 +443,7 @@ export function createSubscriptionService(deps: {
       for (const id of await store.listSubscriptionAppCredentials()) {
         if (id === context.appCredentialId) continue
         if (current !== null && (await identity('app', { ...context, appCredentialId: id })).toLowerCase() === current) continue
-        sources.push({ appCredentialId: id, label: `App 对象 ${id}` })
+        sources.push({ appCredentialId: id, label: `之前的 App UUID ${sources.length + 1}` })
       }
       return sources
     },

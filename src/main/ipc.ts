@@ -22,7 +22,7 @@ import { themeFileName, type SettingsService } from './appearance'
 import type { ReadingService } from './reading/service'
 import type { AppStore } from './storage/contract'
 import { emptyReadingState } from './storage/reading-state'
-import type { SubscriptionSource } from '../shared/subscriptions'
+import type { SubscriptionItemChoice, SubscriptionSource } from '../shared/subscriptions'
 import type { SubscriptionService } from './subscriptions/service'
 import type { PublicationService } from './publication/service'
 import type { Lifecycle } from './lifecycle/controller'
@@ -794,9 +794,15 @@ export function registerIpc({
 
   handle(IpcChannel.subscriptionExecutePlan, async (event, raw) => {
     const input = record(raw)
-    if (!Array.isArray(input.selectedItemIds) || input.selectedItemIds.length > 100_000) throw new InvalidRequestError()
+    if (!Array.isArray(input.choices) || input.choices.length > 100_000) throw new InvalidRequestError()
     const request = {
-      previewId: viewId(input.previewId), selectedItemIds: input.selectedItemIds.map(viewId), operationId: operationId(input)
+      previewId: viewId(input.previewId),
+      choices: input.choices.map((value): SubscriptionItemChoice => {
+        const { itemId, choice } = record(value)
+        if (choice !== 'both' && choice !== 'none' && choice !== 'skip') throw new InvalidRequestError()
+        return { itemId: viewId(itemId), choice }
+      }),
+      operationId: operationId(input)
     }
     return subscriptionReads.run(event.sender, request.operationId, (signal) => subscriptions.executePlan(request, signal))
   })

@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { SubscriptionOverview, SubscriptionResult } from '../../../../shared/subscriptions'
+import { ContextMenu, type ContextMenuPoint } from '../../components/ContextMenu'
 import { Icon } from '../../components/Icon'
 import { FailureNotice } from '../../components/Notices'
+import { useListOpener } from '../reminders/openList'
 import { failureText, webObjectText } from './subscriptionText'
 import type { SubscriptionsState } from './useSubscriptions'
 import './subscriptions.css'
@@ -74,12 +76,96 @@ function SubscriptionSettings({ overview, subscriptions }: { overview: Subscript
         </div>
       )}
       <AppUuidForm overview={overview} busy={subscriptions.busy} onApplied={subscriptions.applyOverview} />
+      <MergeEntry overview={overview} subscriptions={subscriptions} />
       <div className="settings-group">
         <h4 className="settings-group-title">网页同步对象</h4>
         <p className="sub-setting-value">{webObjectText(overview)}</p>
         <p className="settings-group-text">在「饼干 › 用途」中更换。</p>
       </div>
     </>
+  )
+}
+
+/**
+ * 从旧 UUID 合并…: choose an App UUID used before; its threads missing from the current App
+ * subscription show in the subscription page's one-page view (加入／不动 only).
+ */
+function MergeEntry({ overview, subscriptions }: { overview: SubscriptionOverview; subscriptions: SubscriptionsState }) {
+  const { busy, mergeSources, mergeSourcesFailed, refreshMergeSources, startPreview, requestReveal } = subscriptions
+  const openList = useListOpener()
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const [menuAt, setMenuAt] = useState<ContextMenuPoint | null>(null)
+  const hintId = useId()
+  const current = overview.context.appCredentialId
+  // The current App UUID is the merge target, never also its source.
+  const sources = (mergeSources ?? []).filter((source) => source.appCredentialId !== current)
+  const hint =
+    overview.protection === 'unavailable' || !overview.writable
+      ? null
+      : !overview.appConfigured
+        ? '先设置 App 订阅 UUID'
+        : busy
+          ? '订阅操作进行中，结束后才能合并'
+          : mergeSources !== null && !mergeSourcesFailed && sources.length === 0
+            ? '还没有用过其他 App UUID'
+            : null
+  const blocked = overview.protection === 'unavailable' || !overview.writable || !overview.appConfigured || busy || sources.length === 0
+  if (openList === null) return null
+
+  return (
+    <div className="settings-group sub-merge">
+      <button
+        type="button"
+        ref={buttonRef}
+        className="btn"
+        aria-haspopup="menu"
+        aria-expanded={menuAt !== null}
+        aria-disabled={blocked || undefined}
+        aria-describedby={hint === null ? undefined : hintId}
+        onClick={(event) => {
+          if (blocked) return
+          const box = event.currentTarget.getBoundingClientRect()
+          setMenuAt({ x: box.left, y: box.bottom + 4 })
+        }}
+      >
+        从旧 UUID 合并…
+      </button>
+      {hint !== null && (
+        <p className="field-hint" id={hintId}>
+          {hint}
+        </p>
+      )}
+      {mergeSourcesFailed && (
+        <div className="notice notice-error is-compact" role="alert">
+          <Icon name="alert" className="notice-icon" />
+          <p className="notice-text">用过的 App UUID 读取失败</p>
+          <button type="button" className="btn btn-small" onClick={() => void refreshMergeSources()}>
+            重试
+          </button>
+        </div>
+      )}
+      {menuAt !== null && (
+        <ContextMenu
+          point={menuAt}
+          label="从哪个旧 UUID 合并"
+          items={sources.map((source) => ({
+            type: 'action' as const,
+            key: source.appCredentialId,
+            label: source.label,
+            onSelect: () => {
+              // Leaves settings for the subscription page, which shows the preview as it is read.
+              void startPreview('merge', source)
+              requestReveal()
+              openList({ kind: 'subscriptions' })
+            }
+          }))}
+          onClose={(returnFocus) => {
+            setMenuAt(null)
+            if (returnFocus) buttonRef.current?.focus()
+          }}
+        />
+      )}
+    </div>
   )
 }
 

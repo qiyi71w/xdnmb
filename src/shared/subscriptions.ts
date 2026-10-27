@@ -90,8 +90,11 @@ export interface SubscriptionsApi {
   /** Fresh, bounded background reads. Previews live only in this process and never execute on restart. */
   previewSync(input: { operationId: OperationId }): Promise<SubscriptionResult<SubscriptionPreview>>
   previewMerge(input: { sourceAppCredentialId: string; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionPreview>>
-  /** Consumes the preview once. Revalidates both observed ranges before any write, then executes serially. */
-  executePlan(input: { previewId: string; selectedItemIds: string[]; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionPlan>>
+  /**
+   * Consumes the preview once. Revalidates both observed ranges before any write, then executes serially.
+   * Items without an entry are `skip`; unknown, duplicate or unavailable choices are `invalid-selection`.
+   */
+  executePlan(input: { previewId: string; choices: SubscriptionItemChoice[]; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionPlan>>
   /** Durable history, including interrupted plans. There is deliberately no resume/replay API. */
   getPlans(): Promise<SubscriptionPlan[]>
   cancel(input: { operationId: OperationId }): Promise<void>
@@ -99,14 +102,47 @@ export interface SubscriptionsApi {
 
 export interface SubscriptionMergeSource {
   appCredentialId: string
+  /** Human name by recency ("之前的 App UUID 1" is the most recent); never the UUID or a local reference. */
   label: string
 }
 
+/** One concrete write of a plan, derived from a difference and its choice. */
 export interface SubscriptionCandidate {
   id: string
   threadId: ThreadId
   action: SubscriptionAction
   target: SubscriptionSource
+}
+
+/** both: add on the side that lacks it; none: remove from the side that has it; skip: no write. Merge offers both/skip only. */
+export type SubscriptionChoice = 'both' | 'none' | 'skip'
+
+/** Why a thread confirmed common at the last sync is now missing on one side. */
+export type SubscriptionProvenance =
+  /** A successful, verified removal in this app from the missing side, after the last baseline write. */
+  | { kind: 'local-removal'; at: string }
+  /** No local evidence: it disappeared there after the last sync. */
+  | { kind: 'gone' }
+
+/** A thread present on exactly one side. */
+export interface SubscriptionDifference {
+  id: string
+  threadId: ThreadId
+  /** Sync: the side that has it. Merge: always 'app', meaning the old App UUID. */
+  presentOn: SubscriptionSource
+  /** From the observation of the side that has it; web summaries carry no image or reply count. */
+  thread: ThreadSummary
+  /** Confirmed common at a previous sync. Always false on first sync, merge, or an incomplete read. */
+  baseline: boolean
+  /** Only for baseline differences. */
+  provenance: SubscriptionProvenance | null
+  choices: SubscriptionChoice[]
+  defaultChoice: SubscriptionChoice
+}
+
+export interface SubscriptionItemChoice {
+  itemId: string
+  choice: SubscriptionChoice
 }
 
 /** For sync left=App/right=web; for merge left=old App/right=current App. */
@@ -117,11 +153,12 @@ export interface SubscriptionPreview {
   createdAt: string
   left: SubscriptionObservation
   right: SubscriptionObservation
+  /** Human names of the two collections, never internal references. */
   leftLabel: string
   rightLabel: string
   firstSync: boolean
-  deletionsAllowed: boolean
-  items: SubscriptionCandidate[]
+  /** In preview order, which is also the execution order. */
+  items: SubscriptionDifference[]
 }
 
 export interface SubscriptionPlanItem {
@@ -131,6 +168,10 @@ export interface SubscriptionPlanItem {
   failure: SubscriptionFailure | null
 }
 
+/**
+ * Durable history. `preview` is frozen at execution time and older plans may carry an earlier preview
+ * shape: history readers use `items`, `preview.mode` and `preview.context` only.
+ */
 export interface SubscriptionPlan {
   id: string
   preview: SubscriptionPreview

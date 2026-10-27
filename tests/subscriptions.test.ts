@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { SubscriptionOperation, SubscriptionPreview, SubscriptionResult, SubscriptionSource } from '../src/shared/subscriptions'
+import type { SubscriptionChoice, SubscriptionItemChoice, SubscriptionOperation, SubscriptionPreview, SubscriptionResult, SubscriptionSource } from '../src/shared/subscriptions'
 import type { SecretProtector } from '../src/main/identity/protection'
 import type { AppStore } from '../src/main/storage/contract'
 import { openReadingDatabase } from '../src/main/storage/database'
@@ -542,59 +542,79 @@ describe('subscription intent, reports, readback and read-only recovery', () => 
 async function syncPreview(service: SubscriptionService) {
   return unwrap(await service.previewSync({ operationId: 'preview' }, signal()))
 }
-async function executePreview(service: SubscriptionService, preview: SubscriptionPreview, ids = preview.items.map((item) => item.id), abortSignal = signal()) {
-  return unwrap(await service.executePlan({ previewId: preview.id, selectedItemIds: ids, operationId: 'execute' }, abortSignal))
+const defaults = (preview: SubscriptionPreview): SubscriptionItemChoice[] => preview.items.map((item) => ({ itemId: item.id, choice: item.defaultChoice }))
+function pick(preview: SubscriptionPreview, choices: Record<string, SubscriptionChoice>): SubscriptionItemChoice[] {
+  return Object.entries(choices).map(([threadId, choice]) => ({ itemId: preview.items.find((item) => item.threadId === threadId)!.id, choice }))
 }
+const differences = (preview: SubscriptionPreview) => preview.items.map(({ threadId, presentOn, baseline, provenance, choices, defaultChoice }) =>
+  ({ threadId, presentOn, baseline, provenance, choices, defaultChoice }))
+async function executePreview(service: SubscriptionService, preview: SubscriptionPreview, choices = defaults(preview), abortSignal = signal()) {
+  return unwrap(await service.executePlan({ previewId: preview.id, choices, operationId: 'execute' }, abortSignal))
+}
+const NEW = { baseline: false, provenance: null, defaultChoice: 'both' } as const
 
 describe('previewed subscription reconciliation', () => {
   it('previews without writing, confirms a first union and consumes the preview once', async () => {
     const { service, remote } = await setup()
     unwrap(await service.configureApp({ uuid: UUID_A }))
     const preview = unwrap(await service.previewSync({ operationId: 'preview' }, signal()))
-    expect(preview).toMatchObject({ mode: 'sync', firstSync: true, deletionsAllowed: false })
-    expect(preview.items.map(({ threadId, action, target }) => ({ threadId, action, target }))).toEqual([
-      { threadId: '1001', action: 'add', target: 'web' },
-      { threadId: '1002', action: 'add', target: 'web' },
-      { threadId: '3001', action: 'add', target: 'app' }
+    expect(preview).toMatchObject({ mode: 'sync', firstSync: true, leftLabel: 'App 订阅', rightLabel: '网页订阅（固定对象甲）' })
+    // First sync never offers removal.
+    expect(differences(preview)).toEqual([
+      { threadId: '1001', presentOn: 'app', ...NEW, choices: ['both', 'skip'] },
+      { threadId: '1002', presentOn: 'app', ...NEW, choices: ['both', 'skip'] },
+      { threadId: '3001', presentOn: 'web', ...NEW, choices: ['both', 'skip'] }
     ])
+    expect(preview.items.map((item) => item.thread.head.id)).toEqual(['1001', '1002', '3001'])
     expect(writes(remote.requests)).toHaveLength(0)
-    const plan = unwrap(await service.executePlan({ previewId: preview.id, selectedItemIds: preview.items.map((item) => item.id), operationId: 'execute' }, signal()))
+    const plan = unwrap(await service.executePlan({ previewId: preview.id, choices: defaults(preview), operationId: 'execute' }, signal()))
     expect(plan.state).toBe('completed')
     expect(plan.items.map((item) => item.state)).toEqual(['confirmed', 'confirmed', 'confirmed'])
     expect(plan.items.every((item) => item.operationId !== null)).toBe(true)
     expect([...remote.app.get(UUID_A)!]).toEqual(['1001', '1002', '3001'])
     expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1001', '1002'])
-    expect(await service.executePlan({ previewId: preview.id, selectedItemIds: [], operationId: 'again' }, signal())).toEqual({ ok: false, reason: 'stale' })
+    expect(await service.executePlan({ previewId: preview.id, choices: [], operationId: 'again' }, signal())).toEqual({ ok: false, reason: 'stale' })
     expect((await service.getPlans())[0]).toEqual(plan)
   })
 
-  it('requires execution to establish common baseline and leaves unselected deletions untouched', async () => {
-    const { service, remote } = await setup()
+  it('keeps a thread removed here from App as a no-op default that can be synced back, and attributes other absences', async () => {
+    const { service, remote, setTime } = await setup()
     unwrap(await service.configureApp({ uuid: UUID_A }))
-    remote.web.set(COOKIE_A, new Set(['1001', '1002']))
-    await syncPreview(service)
-    remote.web.get(COOKIE_A)!.delete('1001')
-    const unconfirmed = await syncPreview(service)
-    expect(unconfirmed.firstSync).toBe(true)
-    expect(unconfirmed.items).toMatchObject([{ threadId: '1001', action: 'add', target: 'web' }])
-    remote.web.get(COOKIE_A)!.add('1001')
-    await executePreview(service, await syncPreview(service), [])
-    remote.web.get(COOKIE_A)!.delete('1001')
-    remote.app.get(UUID_A)!.delete('1002')
-    const deletion = await syncPreview(service)
-    expect(deletion).toMatchObject({ firstSync: false, deletionsAllowed: true })
-    expect(deletion.items.map(({ threadId, action, target }) => ({ threadId, action, target }))).toEqual([
-      { threadId: '1001', action: 'remove', target: 'app' }, { threadId: '1002', action: 'remove', target: 'web' }
-    ])
-    const plan = await executePreview(service, deletion, [deletion.items[0]!.id])
-    expect(plan).toMatchObject({ state: 'completed', items: [{ state: 'confirmed' }] })
-    expect(remote.app.get(UUID_A)!.has('1001')).toBe(false)
-    expect(remote.web.get(COOKIE_A)!.has('1002')).toBe(true)
-    const next = await syncPreview(service)
-    expect(next.items).toMatchObject([{ threadId: '1002', action: 'remove', target: 'web' }])
+    await executePreview(service, await syncPreview(service))
+    expect(differences(await syncPreview(service))).toEqual([])
+    // The user cancels X in the App collection from the subscription page.
+    setTime('2026-10-23T13:00:00.000Z')
+    expect(unwrap(await change(service, 'app', '3001', 'remove'))).toMatchObject({ report: 'success', verification: 'absent-supported' })
+    setTime('2026-10-23T14:00:00.000Z')
+    remote.web.get(COOKIE_A)!.add('5001')
+    const preview = await syncPreview(service)
+    const removedHere = { threadId: '3001', presentOn: 'web', baseline: true, provenance: { kind: 'local-removal', at: '2026-10-23T13:00:00.000Z' },
+      choices: ['both', 'none', 'skip'], defaultChoice: 'skip' }
+    expect(differences(preview)).toEqual([removedHere, { threadId: '5001', presentOn: 'web', ...NEW, choices: ['both', 'none', 'skip'] }])
+    // Skip writes nothing and keeps the baseline evidence.
+    const before = writes(remote.requests).length
+    await executePreview(service, preview, pick(preview, { 5001: 'skip', 3001: 'skip' }))
+    expect(writes(remote.requests)).toHaveLength(before)
+    setTime('2026-10-23T15:00:00.000Z')
+    const again = await syncPreview(service)
+    expect(differences(again)[0]).toEqual(removedHere)
+    // Synced back: App has X again and X stays confirmed common.
+    const plan = await executePreview(service, again, pick(again, { 3001: 'both' }))
+    expect(plan).toMatchObject({ state: 'completed', items: [{ candidate: { threadId: '3001', action: 'add', target: 'app' }, state: 'confirmed' }] })
+    expect(remote.app.get(UUID_A)!.has('3001')).toBe(true)
+    // An external removal with no later local operation reads as "no longer there".
+    setTime('2026-10-23T16:00:00.000Z')
+    remote.app.get(UUID_A)!.delete('3001')
+    const external = await syncPreview(service)
+    expect(external.items.find((item) => item.threadId === '3001')).toMatchObject({ presentOn: 'web', baseline: true, provenance: { kind: 'gone' }, defaultChoice: 'skip' })
+    // Removing from both ends drops it from the baseline.
+    await executePreview(service, external, pick(external, { 3001: 'none', 5001: 'skip' }))
+    expect(remote.web.get(COOKIE_A)!.has('3001')).toBe(false)
+    remote.app.get(UUID_A)!.add('3001')
+    expect((await syncPreview(service)).items.find((item) => item.threadId === '3001')).toMatchObject({ ...NEW, presentOn: 'app' })
   })
 
-  it.each(['missing-page', 'authentication'] as const)('does not infer deletion or restore baseline members after %s', async (failure) => {
+  it.each(['missing-page', 'authentication'] as const)('does not judge baseline absence or offer removal after %s', async (failure) => {
     const { service, remote } = await setup()
     unwrap(await service.configureApp({ uuid: UUID_A }))
     await executePreview(service, await syncPreview(service))
@@ -602,11 +622,13 @@ describe('previewed subscription reconciliation', () => {
     if (failure === 'missing-page') remote.behavior.failPage = 2
     else remote.web.delete(COOKIE_A)
     const preview = await syncPreview(service)
-    expect(preview.deletionsAllowed).toBe(false)
     expect(preview.right.error).not.toBeNull()
-    expect(preview.items).toEqual([])
+    expect(preview.items.length).toBeGreaterThan(0)
+    expect(preview.items.every((item) => !item.baseline && item.provenance === null && item.defaultChoice === 'both' && !item.choices.includes('none'))).toBe(true)
     const count = writes(remote.requests).length
-    await executePreview(service, preview, [])
+    expect(await service.executePlan({ previewId: preview.id, choices: [{ itemId: preview.items[0]!.id, choice: 'none' }], operationId: 'none' }, signal()))
+      .toEqual({ ok: false, reason: 'invalid-selection' })
+    await executePreview(service, await syncPreview(service), [])
     expect(writes(remote.requests)).toHaveLength(count)
   })
 
@@ -618,19 +640,21 @@ describe('previewed subscription reconciliation', () => {
     if (difference === 'coverage') remote.behavior.failPage = 2
     if (difference === 'uuid') unwrap(await service.configureApp({ uuid: UUID_B }))
     if (difference === 'binding') db.setRoleSelection('web-sync', b.id)
-    const input = { previewId: preview.id, selectedItemIds: preview.items.map((item) => item.id), operationId: 'stale' }
+    const input = { previewId: preview.id, choices: defaults(preview), operationId: 'stale' }
     expect(await service.executePlan(input, signal())).toEqual({ ok: false, reason: 'stale' })
     expect(await service.executePlan(input, signal())).toEqual({ ok: false, reason: 'stale' })
     expect(writes(remote.requests)).toHaveLength(0)
     expect(await service.getPlans()).toEqual([])
   })
 
-  it.each(['unknown', 'duplicate'] as const)('rejects %s candidate selection without side effects', async (invalid) => {
+  it.each(['unknown', 'duplicate', 'unavailable'] as const)('rejects %s choices without side effects', async (invalid) => {
     const { service, remote } = await setup()
     unwrap(await service.configureApp({ uuid: UUID_A }))
     const preview = await syncPreview(service)
-    const selectedItemIds = invalid === 'unknown' ? ['unknown'] : [preview.items[0]!.id, preview.items[0]!.id]
-    expect(await service.executePlan({ previewId: preview.id, selectedItemIds, operationId: 'invalid' }, signal())).toEqual({ ok: false, reason: 'invalid-selection' })
+    const item = preview.items[0]!.id
+    const choices: SubscriptionItemChoice[] = invalid === 'unknown' ? [{ itemId: 'unknown', choice: 'both' }]
+      : invalid === 'duplicate' ? [{ itemId: item, choice: 'both' }, { itemId: item, choice: 'skip' }] : [{ itemId: item, choice: 'none' }]
+    expect(await service.executePlan({ previewId: preview.id, choices, operationId: 'invalid' }, signal())).toEqual({ ok: false, reason: 'invalid-selection' })
     expect(writes(remote.requests)).toHaveLength(0)
   })
 
@@ -640,8 +664,8 @@ describe('previewed subscription reconciliation', () => {
     await executePreview(service, await syncPreview(service))
     db.setRoleSelection('web-sync', b.id)
     const preview = await syncPreview(service)
-    expect(preview).toMatchObject({ firstSync: true, deletionsAllowed: false, context: { webCredentialId: b.id } })
-    expect(preview.items.every((item) => item.action === 'add')).toBe(true)
+    expect(preview).toMatchObject({ firstSync: true, context: { webCredentialId: b.id } })
+    expect(preview.items.every((item) => item.defaultChoice === 'both' && !item.choices.includes('none'))).toBe(true)
     await executePreview(service, preview)
     expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1001', '1002'])
     expect([...remote.web.get(COOKIE_B)!]).toEqual(['4001', '1001', '1002', '3001'])
@@ -673,8 +697,8 @@ describe('previewed subscription reconciliation', () => {
     remote.web.get(COOKIE_A)!.delete('1001')
     if (failure !== 'mismatch') remote.web.get(COOKIE_A)!.delete('1002')
     const next = await syncPreview(service)
-    expect(next.items.find((item) => item.threadId === '1001')).toMatchObject({ action: 'remove', target: 'app' })
-    expect(next.items.find((item) => item.threadId === '1002')).toMatchObject({ action: 'add', target: 'web' })
+    expect(next.items.find((item) => item.threadId === '1001')).toMatchObject({ presentOn: 'app', baseline: true, defaultChoice: 'skip', provenance: { kind: 'gone' } })
+    expect(next.items.find((item) => item.threadId === '1002')).toMatchObject({ presentOn: 'app', ...NEW })
   })
 
   it('shares the manual-write lock, exposes durable progress, and never follows a new binding mid-plan', async () => {
@@ -737,7 +761,7 @@ describe('previewed subscription reconciliation', () => {
     const before = remote.requests.length
     await restarted.recover()
     expect(remote.requests).toHaveLength(before)
-    expect(await restarted.executePlan({ previewId: preview.id, selectedItemIds: [], operationId: 'old' }, signal())).toEqual({ ok: false, reason: 'stale' })
+    expect(await restarted.executePlan({ previewId: preview.id, choices: [], operationId: 'old' }, signal())).toEqual({ ok: false, reason: 'stale' })
     const durable = (await restarted.getPlans())[0]!
     expect(durable.items[0]!.operationId).toBe(plan.items[0]!.operationId)
     const journal = (await restarted.getOperations()).find((entry) => entry.id === durable.items[0]!.operationId)!
@@ -746,7 +770,7 @@ describe('previewed subscription reconciliation', () => {
     expect(checked.verification).toBe('present')
     expect(writes(remote.requests)).toHaveLength(1)
     remote.web.get(COOKIE_A)!.delete('1001')
-    expect((await syncPreview(restarted)).items.find((item) => item.threadId === '1001')).toMatchObject({ action: 'add', target: 'web' })
+    expect((await syncPreview(restarted)).items.find((item) => item.threadId === '1001')).toMatchObject({ presentOn: 'app', ...NEW })
   })
 
   it('marks a durable running plan interrupted after storage loss and never resumes it on restart', async () => {
@@ -784,13 +808,13 @@ describe('previewed subscription reconciliation', () => {
     unwrap(await service.configureApp({ uuid: UUID_B }))
     expect(writes(remote.requests)).toHaveLength(0)
     const sources = await service.getMergeSources()
-    expect(sources).toEqual([{ appCredentialId: original.context.appCredentialId, label: expect.any(String) }])
+    expect(sources).toEqual([{ appCredentialId: original.context.appCredentialId, label: '之前的 App UUID 1' }])
     const preview = unwrap(await service.previewMerge({ sourceAppCredentialId: sources[0]!.appCredentialId, operationId: 'merge' }, signal()))
-    expect(preview.leftLabel).not.toBe(preview.rightLabel)
-    expect(preview.items.map(({ threadId, action, target }) => ({ threadId, action, target }))).toEqual([
-      { threadId: '1001', action: 'add', target: 'app' }, { threadId: '1002', action: 'add', target: 'app' }
+    expect(preview).toMatchObject({ leftLabel: '之前的 App UUID', rightLabel: '当前 App UUID' })
+    expect(differences(preview)).toEqual([
+      { threadId: '1001', presentOn: 'app', ...NEW, choices: ['both', 'skip'] }, { threadId: '1002', presentOn: 'app', ...NEW, choices: ['both', 'skip'] }
     ])
-    const plan = await executePreview(service, preview, [preview.items[1]!.id])
+    const plan = await executePreview(service, preview, pick(preview, { 1002: 'both' }))
     expect(plan.state).toBe('completed')
     expect([...remote.app.get(UUID_A)!]).toEqual(['1001', '1002'])
     expect([...remote.app.get(UUID_B)!]).toEqual(['2001', '1002'])
@@ -819,15 +843,15 @@ describe('subscription plan restart boundaries', () => {
     await restarted.recover()
     expect(remote.requests).toHaveLength(before)
     expect((await restarted.getPlans())[0]).toEqual(result)
-    expect(await restarted.executePlan({ previewId: preview.id, selectedItemIds: preview.items.map((item) => item.id), operationId: 'old' }, signal())).toEqual({ ok: false, reason: 'stale' })
+    expect(await restarted.executePlan({ previewId: preview.id, choices: defaults(preview), operationId: 'old' }, signal())).toEqual({ ok: false, reason: 'stale' })
     const journal = (await restarted.getOperations()).find((entry) => entry.id === result.items[1]!.operationId)!
     expect(unwrap(await restarted.reconcile({ id: journal.id, operationId: 'read-only' }, signal()))).toMatchObject({ report: 'unknown', verification: 'present' })
     expect(writes(remote.requests)).toHaveLength(2)
     remote.web.get(COOKIE_A)!.delete('1001')
     remote.web.get(COOKIE_A)!.delete('1002')
     const next = await syncPreview(restarted)
-    expect(next.items.find((item) => item.threadId === '1001')).toMatchObject({ action: 'remove', target: 'app' })
-    expect(next.items.find((item) => item.threadId === '1002')).toMatchObject({ action: 'add', target: 'web' })
+    expect(next.items.find((item) => item.threadId === '1001')).toMatchObject({ presentOn: 'app', baseline: true, defaultChoice: 'skip' })
+    expect(next.items.find((item) => item.threadId === '1002')).toMatchObject({ presentOn: 'app', ...NEW })
   })
 
   it('never dispatches when the linked intent transaction is refused', async () => {
@@ -915,8 +939,8 @@ describe('subscription reconciliation persistence', () => {
     expect(remote.web.get(COOKIE_A)!.has('1002')).toBe(true)
     remote.web.get(COOKIE_A)!.clear()
     const next = await syncPreview(service)
-    expect(next.items.map(({ threadId, action, target }) => ({ threadId, action, target }))).toEqual([
-      { threadId: '1001', action: 'remove', target: 'app' }, { threadId: '1002', action: 'add', target: 'web' }
+    expect(differences(next)).toMatchObject([
+      { threadId: '1001', presentOn: 'app', baseline: true, defaultChoice: 'skip' }, { threadId: '1002', presentOn: 'app', ...NEW }
     ])
   })
 })
