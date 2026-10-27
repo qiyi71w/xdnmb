@@ -77,7 +77,7 @@ export function CookieSection({ identities }: { identities: IdentitiesState }) {
             <div className="notice notice-cached is-compact" role="status">
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">饼干信息刷新失败，下面可能不是最新状态</p>
-              <button type="button" className="btn btn-small" onClick={() => void refresh()}>
+              <button type="button" className="btn btn-small btn-page" onClick={() => void refresh()}>
                 重试
               </button>
             </div>
@@ -144,7 +144,7 @@ function OfficialPageLink() {
   }
   return (
     <div className="cookie-official">
-      <button type="button" className="btn" onClick={open}>
+      <button type="button" className="btn btn-page" onClick={open}>
         <Icon name="external" size={14} />
         打开官网饼干页
       </button>
@@ -475,10 +475,10 @@ function CredentialItem({
               aria-describedby={errorId}
               disabled={pending}
             />
-            <button type="submit" className="btn btn-small" disabled={pending}>
+            <button type="submit" className="btn btn-small btn-page" disabled={pending}>
               {pending ? '正在保存…' : '保存'}
             </button>
-            <button type="button" className="btn btn-small" onClick={() => leave(openerOf(mode))} disabled={pending}>
+            <button type="button" className="btn btn-small btn-page" onClick={() => leave(openerOf(mode))} disabled={pending}>
               取消
             </button>
           </div>
@@ -517,7 +517,7 @@ function CredentialItem({
             <button
               type="button"
               ref={renameButton}
-              className="btn btn-small"
+              className="btn btn-small btn-page"
               onClick={() => startEdit('rename')}
               disabled={!writable || mode !== 'view'}
               aria-label={`重命名「${credential.name}」`}
@@ -527,7 +527,7 @@ function CredentialItem({
             <button
               type="button"
               ref={cookieIdButton}
-              className="btn btn-small"
+              className="btn btn-small btn-page"
               onClick={() => startEdit('cookie-id')}
               disabled={!writable || mode !== 'view'}
               aria-label={`${credential.cookieId === null ? '填写' : '修改'}「${credential.name}」的饼干 ID`}
@@ -537,7 +537,7 @@ function CredentialItem({
             <button
               type="button"
               ref={removeButton}
-              className="btn btn-small btn-danger"
+              className="btn btn-small btn-danger btn-page"
               onClick={() => {
                 setError(null)
                 setMode('confirm-remove')
@@ -561,10 +561,10 @@ function CredentialItem({
             {browsing && count > 1 && '浏览将改用下一个饼干。'}
           </p>
           <div className="credential-confirm-actions">
-            <button type="button" className="btn btn-small btn-danger" onClick={() => void confirmRemove()} disabled={pending}>
+            <button type="button" className="btn btn-small btn-danger btn-page" onClick={() => void confirmRemove()} disabled={pending}>
               {pending ? '正在移除…' : '确认移除'}
             </button>
-            <button type="button" ref={cancelRemove} className="btn btn-small" onClick={() => leave(removeButton)} disabled={pending}>
+            <button type="button" ref={cancelRemove} className="btn btn-small btn-page" onClick={() => leave(removeButton)} disabled={pending}>
               取消
             </button>
           </div>
@@ -738,7 +738,7 @@ function ImportForm({
           />
           <button
             type="button"
-            className="btn btn-small"
+            className="btn btn-small btn-page"
             onClick={() => setShown((value) => !value)}
             aria-controls={secretId}
             aria-label={`${shown ? '隐藏' : '显示'}${copy.secretLabel}`}
@@ -999,7 +999,7 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
               <Icon name="alert" size={14} />
               <span>登录状态读取失败</span>
             </p>
-            <button type="button" className="btn btn-small" onClick={() => void readOverview()}>
+            <button type="button" className="btn btn-small btn-page" onClick={() => void readOverview()}>
               重试
             </button>
           </div>
@@ -1023,7 +1023,7 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
                 <button
                   ref={openRef}
                   type="button"
-                  className={cookies === null ? 'btn btn-primary' : 'btn'}
+                  className={cookies === null ? 'btn btn-primary' : 'btn btn-page'}
                   aria-disabled={!idle || undefined}
                   aria-describedby={messageId}
                   onClick={() => void open()}

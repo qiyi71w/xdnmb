@@ -43,7 +43,7 @@ export function CookieColorsSection() {
         <div className="notice notice-error is-compact" role="alert">
           <Icon name="alert" className="notice-icon" />
           <p className="notice-text">{failure}</p>
-          <button type="button" className="btn btn-small" onClick={() => void retry()}>
+          <button type="button" className="btn btn-small btn-page" onClick={() => void retry()}>
             重试
           </button>
         </div>
@@ -115,7 +115,7 @@ function CookieColorRow({
       </span>
       <span className="shell-manage-actions">
         <ColorChoice label={`${entry.cookieId} 的颜色`} value={choosing ?? entry.color} onChange={(color) => void choose(color)} />
-        <button type="button" className="btn btn-small" data-remove="" aria-label={`删除 ${entry.cookieId} 的颜色`} onClick={onRemove}>
+        <button type="button" className="btn btn-small btn-page" data-remove="" aria-label={`删除 ${entry.cookieId} 的颜色`} onClick={onRemove}>
           删除
         </button>
       </span>
@@ -194,7 +194,7 @@ function AddCookieColor({
           aria-invalid={invalid ? true : undefined}
         />
         <ColorChoice label="颜色" value={color} onChange={setColor} />
-        <button type="submit" className="btn btn-small" aria-disabled={pending ? true : undefined}>
+        <button type="submit" className="btn btn-small btn-page" aria-disabled={pending ? true : undefined}>
           添加
         </button>
       </div>

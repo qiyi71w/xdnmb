@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react'
+import { useId, useRef, useState, type ReactNode, type RefObject } from 'react'
 import type { ForumId } from '../../../../shared/forum'
 import type { ContentFilters, PostKind, SearchFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
@@ -155,6 +155,51 @@ function FilterFields({
   )
 }
 
+/** A list view's filters: its toggle sits in the list head's actions, its panel right under the head. */
+export interface ListFilter {
+  filters: ContentFilters
+  onChange: (next: ContentFilters) => void
+  count: number
+  open: boolean
+  setOpen: (open: boolean) => void
+  panelId: string
+  toggleRef: RefObject<HTMLButtonElement | null>
+}
+
+/** Opens with the list when filters are already in use. */
+export function useListFilter(filters: ContentFilters, onChange: (next: ContentFilters) => void): ListFilter {
+  const count = contentFilterCount(filters)
+  const [open, setOpen] = useState(count > 0)
+  const panelId = useId()
+  const toggleRef = useRef<HTMLButtonElement>(null)
+  return { filters, onChange, count, open, setOpen, panelId, toggleRef }
+}
+
+/** 筛选 among the list head's icon buttons, before 刷新; the count of filters in use on its corner. */
+export function ListFilterToggle({ filter }: { filter: ListFilter }) {
+  const { count, open, setOpen, panelId, toggleRef } = filter
+  const name = count > 0 ? `筛选（已启用 ${count} 项）` : '筛选'
+  return (
+    <button
+      ref={toggleRef}
+      type="button"
+      className={count > 0 ? 'icon-btn filter-toggle is-active' : 'icon-btn filter-toggle'}
+      aria-expanded={open}
+      aria-controls={panelId}
+      aria-label={name}
+      title={name}
+      onClick={() => setOpen(!open)}
+    >
+      <Icon name="filter" />
+      {count > 0 && (
+        <span className="filter-badge" aria-hidden="true">
+          {count}
+        </span>
+      )}
+    </button>
+  )
+}
+
 /**
  * Filters of a search. The 搜索 page's local search adds 发言 (main post or reply); the in-thread
  * search keeps its 发言类型 at 不限 and does not offer it.
@@ -187,12 +232,13 @@ export function SearchFilterFields({
 }
 
 /**
- * Filter bar of a list view. Only threads already on screen are chosen from: no further page is
- * read to fill the list, and the thread being read stays open even when it is filtered out.
+ * The list's first block, under its head: the fields while open, and while filters are in use one
+ * line saying what is shown, with 清除筛选. Only threads already on screen are chosen from: no
+ * further page is read to fill the list, and the thread being read stays open even when it is
+ * filtered out.
  */
-export function ListFilterBar({
-  filters,
-  onChange,
+export function ListFilterPanel({
+  filter,
   forums,
   noun,
   total,
@@ -200,8 +246,7 @@ export function ListFilterBar({
   metadata,
   coverage
 }: {
-  filters: ContentFilters
-  onChange: (next: ContentFilters) => void
+  filter: ListFilter
   forums: ReadonlyMap<ForumId, string> | null
   noun: string
   total: number
@@ -211,47 +256,31 @@ export function ListFilterBar({
   /** What the list covers, e.g. “已加载的第 1–3 页”. */
   coverage: ReactNode
 }) {
-  const count = contentFilterCount(filters)
-  const [open, setOpen] = useState(count > 0)
-  const panelId = useId()
+  const { filters, onChange, count, open, panelId, toggleRef } = filter
   return (
-    <div className="list-filters">
-      <div className="list-filters-row">
-        <button
-          type="button"
-          className={count > 0 ? 'btn btn-small filter-toggle is-active' : 'btn btn-small filter-toggle'}
-          aria-expanded={open}
-          aria-controls={panelId}
-          aria-label={count > 0 ? `筛选（已启用 ${count} 项）` : '筛选'}
-          onClick={() => setOpen((value) => !value)}
-        >
-          <Icon name="filter" size={14} />
-          筛选
-          {count > 0 && <span className="btn-count">{count}</span>}
-        </button>
-        {count > 0 && (
-          <p className="list-filters-summary" role="status">
-            显示 {result.shown.length} / {total} 个{noun}
-            {result.uncertain > 0 && `，其中 ${result.uncertain} 个字段未知`}
-          </p>
-        )}
-        {count > 0 && (
-          <button type="button" className="btn btn-small btn-quiet" onClick={() => onChange(NO_CONTENT_FILTERS)}>
-            清除筛选
-          </button>
-        )}
-      </div>
+    <div className="list-filters" hidden={!open && count === 0}>
       <div className="list-filters-panel" id={panelId} hidden={!open}>
         <FilterFields value={filters} onChange={onChange} forums={forums} />
       </div>
       {count > 0 && (
-        <p className="list-filters-scope">
-          <Icon name="info" size={13} />
-          <span>
-            只在{coverage}中筛选
+        <div className="list-filters-status">
+          <p className="list-filters-summary" role="status">
+            显示 {result.shown.length} / {total} 个{noun}，只在{coverage}中筛选
+            {result.uncertain > 0 && `，其中 ${result.uncertain} 个字段未知`}
             {metadata?.status === 'failed' && '；筛选信息读取失败，按字段未知显示'}
-          </span>
-        </p>
+          </p>
+          <button
+            type="button"
+            className="btn btn-small btn-quiet"
+            onClick={() => {
+              onChange(NO_CONTENT_FILTERS)
+              // This button goes away with the filters: focus stays with 筛选.
+              toggleRef.current?.focus()
+            }}
+          >
+            清除筛选
+          </button>
+        </div>
       )}
     </div>
   )

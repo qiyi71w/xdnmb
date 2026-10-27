@@ -1,0 +1,98 @@
+/* Buttons inside pages (DESIGN.md Buttons). These refine `.btn` (base.css), whose sizes, compact
+   density, focus ring and unavailable fading they keep.
+
+   - `.btn-page`: a page's secondary button, danger ones included (with `.btn-danger`). Not dialogs
+     or overlays, the editor, the thread toolbar, primary or quiet buttons, segmented controls,
+     the top bar or the rail; those keep their own looks.
+   - The writing entries: 回复 in the thread toolbar and 发新串 in a list head (`.list-head-compose`)
+     share one soft tide tint. */
+
+/* ---------- Page secondary buttons: a line of secondary ink; hover lays the hover overlay ---------- */
+
+.btn-page {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.btn-page:hover:not(:disabled, [aria-disabled='true']),
+.btn-page:hover:not(:disabled, [aria-disabled='true']) .icon {
+  color: var(--ink);
+}
+
+.btn-page:hover:not(:disabled, [aria-disabled='true']) {
+  background: var(--hover);
+}
+
+.btn-page:active:not(:disabled, [aria-disabled='true']) {
+  background: color-mix(in oklch, var(--hover), var(--ink) 6%);
+}
+
+/* Danger: the danger ink at rest, the danger tint under it on hover. */
+.btn-page.btn-danger,
+.btn-page.btn-danger .icon,
+.btn-page.btn-danger:hover:not(:disabled, [aria-disabled='true']),
+.btn-page.btn-danger:hover:not(:disabled, [aria-disabled='true']) .icon {
+  color: var(--danger-ink);
+}
+
+.btn-page.btn-danger:hover:not(:disabled, [aria-disabled='true']) {
+  background: var(--danger-bg);
+}
+
+.btn-page.btn-danger:active:not(:disabled, [aria-disabled='true']) {
+  background: color-mix(in oklch, var(--danger-bg), var(--danger-ink) 8%);
+}
+
+/* Filters in use (the search form's 筛选) keep the tide tint of search.css under the pointer. */
+.btn-page.filter-toggle.is-active:hover:not(:disabled, [aria-disabled='true']),
+.btn-page.filter-toggle.is-active:hover:not(:disabled, [aria-disabled='true']) .icon {
+  color: var(--accent-ink);
+}
+
+.btn-page.filter-toggle.is-active:hover:not(:disabled, [aria-disabled='true']) {
+  background: color-mix(in oklch, var(--accent-soft), var(--accent) 14%);
+}
+
+/* 版块管理's pressed 隐藏 keeps its warning tint (shell.css) under the pointer. */
+.shell-manage-actions .btn-page[aria-pressed='true']:hover:not(:disabled, [aria-disabled='true']) {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+/* Unavailable, last so it holds for danger buttons too: faded ink on nothing (base.css keeps the
+   opacity), and hover changes nothing. */
+.btn-page:is(:disabled, [aria-disabled='true']),
+.btn-page:is(:disabled, [aria-disabled='true']):is(:hover, :active) {
+  background: transparent;
+  color: var(--ink-3);
+}
+
+.btn-page:is(:disabled, [aria-disabled='true']) .icon {
+  color: inherit;
+}
+
+/* ---------- Writing entries: 回复 and 发新串, one soft tide tint ---------- */
+
+.thread-bar .tb-btn.is-primary,
+.list-head-compose {
+  border-color: transparent;
+  background: color-mix(in oklch, var(--accent-soft) 55%, transparent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.thread-bar .tb-btn.is-primary .icon,
+.list-head-compose .icon {
+  color: var(--accent-ink);
+}
+
+.thread-bar .tb-btn.is-primary:hover:not(:disabled, [aria-disabled='true']),
+.list-head-compose:hover:not(:disabled, [aria-disabled='true']) {
+  background: var(--accent-soft);
+}
+
+.thread-bar .tb-btn.is-primary:active:not(:disabled, [aria-disabled='true']),
+.list-head-compose:active:not(:disabled, [aria-disabled='true']) {
+  background: color-mix(in oklch, var(--accent-soft), var(--accent) 14%);
+}

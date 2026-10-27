@@ -146,7 +146,7 @@ function PagePopover({
               aria-invalid={invalid ? true : undefined}
               aria-describedby={invalid ? `${inputId}-error` : undefined}
             />
-            <button type="submit" className="btn btn-small" disabled={!valid} aria-label="跳转到输入的页码">
+            <button type="submit" className="btn btn-small btn-page" disabled={!valid} aria-label="跳转到输入的页码">
               跳转
             </button>
             {invalid && (
@@ -596,7 +596,7 @@ export function ThreadReader({
         <div className="toolbar-note" role="status">
           <Icon name="info" size={14} />
           <span>正在临时显示{MODE_NAMES[mode]}</span>
-          <button type="button" className="btn btn-small" onClick={() => onChooseMode(temporaryOf)}>
+          <button type="button" className="btn btn-small btn-page" onClick={() => onChooseMode(temporaryOf)}>
             回到{MODE_NAMES[temporaryOf]}
           </button>
         </div>
@@ -616,7 +616,7 @@ export function ThreadReader({
         {blocks.failure !== null && (
           <span role="alert" className="toolbar-warning">
             {blocks.failure}
-            <button type="button" className="btn btn-small" onClick={() => void blocks.retry()}>重试</button>
+            <button type="button" className="btn btn-small btn-page" onClick={() => void blocks.retry()}>重试</button>
           </span>
         )}
         {task === null && state.endProbe?.status === 'insufficient' && (
@@ -638,7 +638,7 @@ export function ThreadReader({
       </div>
       {task === null && state.endProbe?.status === 'interrupted' && <IdentitySettingsAction error={state.endProbe.error} />}
       {locating && (
-        <button type="button" className="btn btn-small" onClick={thread.cancel}>
+        <button type="button" className="btn btn-small btn-page" onClick={thread.cancel}>
           <Icon name="close" size={14} />
           取消定位
         </button>

@@ -53,7 +53,7 @@ export function ReconcileButton({ operation, tabIndex }: { operation: Subscripti
   return (
     <button
       type="button"
-      className="btn btn-small"
+      className="btn btn-small btn-page"
       tabIndex={tabIndex}
       aria-disabled={busy || undefined}
       aria-busy={running || undefined}
@@ -99,7 +99,7 @@ export function WriteStatus({ placed }: { placed?: (notice: WriteNotice) => bool
             </p>
             {active.stopRequested && <p className="sub-write-detail">已停止回读</p>}
           </div>
-          <button type="button" className="btn btn-small" onClick={stopReadback} disabled={active.stopRequested}>
+          <button type="button" className="btn btn-small btn-page" onClick={stopReadback} disabled={active.stopRequested}>
             {active.kind === 'change' ? '停止回读' : '停止核对'}
           </button>
         </div>

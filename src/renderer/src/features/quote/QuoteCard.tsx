@@ -1,10 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useLayoutEffect, type ReactNode } from 'react'
 import type { ReadError } from '../../../../shared/api'
 import { Content } from '../../components/Content'
 import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
 import { Loading, SourceNotice } from '../../components/Notices'
-import { copyText } from '../../lib/clipboard'
 import { describeReadError, meaningfulName } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
 import { QuoteEntryContext } from './QuoteContext'
@@ -31,18 +30,21 @@ function Reason({ error }: { error: ReadError }) {
   )
 }
 
-function Status({ tone, children }: { tone: 'info' | 'error'; children: ReactNode }) {
+/** A notice of the card; `trailing` (the card's ×) ends its first line when it leads the card. */
+function Status({ tone, trailing, children }: { tone: 'info' | 'error'; trailing?: ReactNode; children: ReactNode }) {
   return (
     <div className={`quote-card-status is-${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
       <Icon name={tone === 'error' ? 'alert' : 'info'} size={14} className="quote-card-status-icon" />
       <div className="quote-card-status-text">{children}</div>
+      {trailing}
     </div>
   )
 }
 
 /**
  * Floating card of one quote. Lives outside every reader's content (no post IDs on its nodes), so
- * it never takes part in a reader's position. Number, 复制编号 and 关闭 are available in every state.
+ * it never takes part in a reader's position. Its >>No. sits right above it, so the card repeats no
+ * number; 关闭 ends its first line in every state (the meta line, else the first notice).
  */
 export function QuoteCard({
   card,
@@ -58,9 +60,6 @@ export function QuoteCard({
   onClose
 }: QuoteCardProps) {
   const postId = card.source.postId
-  const [copied, setCopied] = useState<'done' | 'failed' | null>(null)
-  const copyTimer = useRef<number | undefined>(undefined)
-  useEffect(() => () => window.clearTimeout(copyTimer.current), [])
 
   // Placed below the quote (above when there is no room), kept inside the window, following the
   // quote while the reader scrolls. Fixed positioning: the reading content never moves for it.
@@ -97,14 +96,11 @@ export function QuoteCard({
     }
   }, [card.source, anchor, cardRef])
 
-  const copy = () => {
-    window.clearTimeout(copyTimer.current)
-    copyText(`No.${postId}`).then(
-      () => setCopied('done'),
-      () => setCopied('failed')
-    )
-    copyTimer.current = window.setTimeout(() => setCopied(null), 1600)
-  }
+  const close = (
+    <button type="button" className="icon-btn quote-card-close" aria-label="关闭" title="关闭（Esc）" onClick={onClose}>
+      <Icon name="close" size={14} />
+    </button>
+  )
 
   const outcome = card.preview.outcome
   const locate = card.locate
@@ -117,13 +113,16 @@ export function QuoteCard({
   let preview: ReactNode
   if (outcome === null) {
     preview = previewLoading ? (
-      <div aria-hidden="true">
-        <span className="skeleton-line is-short" />
-        <span className="skeleton-line" />
-        <span className="skeleton-line is-mid" />
+      <div className="quote-card-lead">
+        <div className="quote-card-skeleton" aria-hidden="true">
+          <span className="skeleton-line is-short" />
+          <span className="skeleton-line" />
+          <span className="skeleton-line is-mid" />
+        </div>
+        {close}
       </div>
     ) : (
-      <Status tone="error">
+      <Status tone="error" trailing={close}>
         <p className="quote-card-title">引用内容加载失败</p>
         <p className="quote-card-detail">原因：应用内部请求失败</p>
       </Status>
@@ -131,7 +130,7 @@ export function QuoteCard({
   } else if (outcome.status === 'failed') {
     const unavailable = unavailableText(outcome.error)
     preview = (
-      <Status tone="error">
+      <Status tone="error" trailing={close}>
         <p className="quote-card-title">{unavailable ?? '引用内容加载失败'}</p>
         {unavailable === null && <Reason error={outcome.error} />}
       </Status>
@@ -151,16 +150,19 @@ export function QuoteCard({
           </Status>
         )}
         <div className="quote-card-meta">
-          {post.userHash !== null && <CookieId cookieId={post.userHash} admin={post.isAdmin === true} />}
-          {name !== null && <span className="post-name">{name}</span>}
-          {post.createdAt !== null && <span>{formatForumTime(post.createdAt)}</span>}
-          {post.image !== null && (
-            <span className="tag tag-image">
-              <Icon name="image" size={12} />
-              附图
-            </span>
-          )}
-          {result === null && <span>{outcome.data.threadId !== null ? `所属串 No.${outcome.data.threadId}` : '所属串未知'}</span>}
+          <div className="quote-card-meta-text">
+            {post.userHash !== null && <CookieId cookieId={post.userHash} admin={post.isAdmin === true} />}
+            {name !== null && <span className="post-name">{name}</span>}
+            {post.createdAt !== null && <span>{formatForumTime(post.createdAt)}</span>}
+            {post.image !== null && (
+              <span className="tag tag-image">
+                <Icon name="image" size={12} />
+                附图
+              </span>
+            )}
+            {result === null && <span>{outcome.data.threadId !== null ? `所属串 No.${outcome.data.threadId}` : '所属串未知'}</span>}
+          </div>
+          {close}
         </div>
         <div className="quote-card-content">
           <QuoteEntryContext.Provider value={card.source.entryKey}>
@@ -174,6 +176,9 @@ export function QuoteCard({
         </div>
       </>
     )
+  } else {
+    // Cancelled: nothing to show but the way out.
+    preview = <div className="quote-card-lead is-bare">{close}</div>
   }
 
   let located: ReactNode = null
@@ -251,15 +256,6 @@ export function QuoteCard({
       }}
       onKeyDown={onKeyDown}
     >
-      <header className="quote-card-head">
-        <span className="quote-card-no">No.{postId}</span>
-        <button type="button" className="btn btn-small btn-quiet" onClick={copy}>
-          {copied === 'done' ? '已复制' : copied === 'failed' ? '复制失败' : '复制编号'}
-        </button>
-        <button type="button" className="icon-btn quote-card-close" aria-label="关闭" title="关闭（Esc）" onClick={onClose}>
-          <Icon name="close" size={14} />
-        </button>
-      </header>
       <div className="quote-card-scroll" aria-busy={previewLoading || undefined}>
         {preview}
       </div>

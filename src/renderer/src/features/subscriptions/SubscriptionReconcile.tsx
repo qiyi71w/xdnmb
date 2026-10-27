@@ -15,8 +15,9 @@ import { formatRecordTime } from '../../lib/time'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
-import type { ImageScope } from '../image/imageView'
+import type { ImageView } from '../image/imageView'
 import { useImageScope } from '../image/useImageLoad'
+import { useListImageViewer } from '../image/useListImageViewer'
 import { ReconcileButton, WriteStatus } from './SubscriptionActivity'
 import {
   choiceOf,
@@ -117,7 +118,7 @@ export function ReconcileView({
   const { overview, task, active, execute, stopTask } = useSubscriptionsContext()
   const openSettings = useSettingsOpener()
   const scrollRef = useRef<HTMLDivElement>(null)
-  const images = useImageScope(scrollRef)
+  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(scrollRef), scrollRef)
   const mode: ReconcileMode = task === null ? 'sync' : taskMode(task)
   const mergeSource = task?.mergeSource ?? null
   const preview = task !== null && (task.phase === 'preview' || task.phase === 'executing' || task.phase === 'finished') ? task.preview : null
@@ -204,20 +205,23 @@ export function ReconcileView({
   }
 
   return (
-    <div ref={scrollRef} className="list-scroll sub-recon-root" tabIndex={-1} data-pane-focus="">
-      <header className="list-header">
-        <h2 className="list-title" ref={headingRef} tabIndex={-1}>
-          <span className="list-kind">订阅</span>
-          <span className="list-name">{MODE_TITLE[mode]}</span>
-        </h2>
-        {sides !== null && <p className="sub-recon-meta">{sides}</p>}
-      </header>
-      <div className="sub-recon">
-        <WriteStatus />
-        {body}
+    <>
+      <div ref={scrollRef} className="list-scroll sub-recon-root" tabIndex={-1} data-pane-focus="" inert={viewerOpen}>
+        <header className="list-header">
+          <h2 className="list-title" ref={headingRef} tabIndex={-1}>
+            <span className="list-kind">订阅</span>
+            <span className="list-name">{MODE_TITLE[mode]}</span>
+          </h2>
+          {sides !== null && <p className="sub-recon-meta">{sides}</p>}
+        </header>
+        <div className="sub-recon">
+          <WriteStatus />
+          {body}
+        </div>
+        <ActionBar task={task} plan={plan} overview={overview} onExecute={() => void execute()} onStop={stopTask} onBack={onBack} />
       </div>
-      <ActionBar task={task} plan={plan} overview={overview} onExecute={() => void execute()} onStop={stopTask} onBack={onBack} />
-    </div>
+      {viewer}
+    </>
   )
 }
 
@@ -236,9 +240,10 @@ function Line({
       <Icon name={tone === 'info' ? 'info' : 'alert'} className="notice-icon" />
       <p className="notice-text">{text}</p>
       {action !== null && (
-        <button type="button" className="btn btn-small" aria-disabled={action.disabled || undefined} onClick={() => !action.disabled && action.run()}>
+        <button type="button" className="btn btn-small btn-page" aria-disabled={action.disabled || undefined} onClick={() => !action.disabled && action.run()}>
           {action.label}
         </button>
+
       )}
     </div>
   )
@@ -281,7 +286,7 @@ function Differences({
   overview: SubscriptionOverview
   forumNames: ReadonlyMap<ForumId, string>
   selectedThreadId: string | null
-  images: ImageScope
+  images: ImageView
   onOpenThread: (thread: ThreadSummary) => void
   onRestart: () => void
 }) {
@@ -550,11 +555,11 @@ function ActionBar({
           </button>
         )}
         {task?.phase === 'executing' && (
-          <button type="button" className="btn" aria-disabled={task.stopRequested || undefined} onClick={() => !task.stopRequested && onStop()}>
+          <button type="button" className="btn btn-page" aria-disabled={task.stopRequested || undefined} onClick={() => !task.stopRequested && onStop()}>
             {task.stopRequested ? '正在停止…' : '停止后续写入'}
           </button>
         )}
-        <button type="button" className="btn" onClick={onBack}>
+        <button type="button" className="btn btn-page" onClick={onBack}>
           返回列表
         </button>
       </div>
@@ -615,7 +620,7 @@ export function ReconcileResult({ onView }: { onView: (planId: string | null) =>
             <p className="sub-write-title">{line.text}</p>
           </div>
           {line.view && (
-            <button type="button" className="btn btn-small" onClick={() => onView(plan?.id ?? null)}>
+            <button type="button" className="btn btn-small btn-page" onClick={() => onView(plan?.id ?? null)}>
               查看
             </button>
           )}
@@ -777,3 +782,4 @@ function PlanItems({ plan }: { plan: SubscriptionPlan }) {
     </ol>
   )
 }
+

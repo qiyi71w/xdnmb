@@ -14,7 +14,7 @@ import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
 import { useImageScope } from '../image/useImageLoad'
 import { useListImageViewer } from '../image/useListImageViewer'
-import { ListFilterBar } from '../search/FilterFields'
+import { ListFilterPanel, ListFilterToggle, useListFilter } from '../search/FilterFields'
 import { contentFilterCount, filterList } from '../search/listFilters'
 import { useThreadMetadata } from '../search/useThreadMetadata'
 import { useRegisterContent } from '../tabs/contentRegistry'
@@ -78,6 +78,7 @@ export function OfflinePane({
   // ---------- Filters ----------
   const [listFilters, changeFilters] = useRetainedFilters('offline')
   const filtering = contentFilterCount(listFilters) > 0
+  const filter = useListFilter(listFilters, changeFilters)
   const entryIds = useMemo(() => entries.map((entry) => entry.threadId), [entries])
   const metadata = useThreadMetadata(entryIds, filtering)
   const filtered = useMemo(
@@ -156,8 +157,21 @@ export function OfflinePane({
             <h2 className="list-title" id={headingId} ref={headingRef} tabIndex={-1}>
               <span className="list-name">{TITLE}</span>
             </h2>
+            {entries.length > 0 && <ListFilterToggle filter={filter} />}
           </div>
         </header>
+
+        {entries.length > 0 && (
+          <ListFilterPanel
+            filter={filter}
+            forums={forumNames}
+            noun="串"
+            total={entries.length}
+            result={filtered}
+            metadata={filtering ? metadata : null}
+            coverage={`本机的${TITLE}列表`}
+          />
+        )}
 
         <div className="list-status">
           {done !== null && (
@@ -172,7 +186,7 @@ export function OfflinePane({
               <p className="notice-text">
                 {TITLE}读取失败：{contentFailureText(list.refused)}
               </p>
-              <button type="button" className="btn btn-small" onClick={() => void load()}>
+              <button type="button" className="btn btn-small btn-page" onClick={() => void load()}>
                 重试
               </button>
             </div>
@@ -185,18 +199,6 @@ export function OfflinePane({
           </div>
         )}
 
-        {entries.length > 0 && (
-          <ListFilterBar
-            filters={listFilters}
-            onChange={changeFilters}
-            forums={forumNames}
-            noun="串"
-            total={entries.length}
-            result={filtered}
-            metadata={filtering ? metadata : null}
-            coverage={`本机的${TITLE}列表`}
-          />
-        )}
         {filtering && entries.length > 0 && filtered.shown.length === 0 && (
           <p className="list-filters-empty" role="status">
             {TITLE}中没有符合筛选的串。

@@ -27,7 +27,7 @@ function composeEntry(tabId: number, target: PostTarget, className?: string) {
   }
 }
 
-/** 回复 in the thread toolbar is its one emphasised action (thread.css `.tb-btn.is-primary`). */
+/** 回复 in the thread toolbar is its one emphasised action (styles/page-buttons.css, writing entries). */
 const READER_ENTRY = 'btn tb-btn is-primary'
 
 /**
@@ -208,7 +208,7 @@ export function TabView({
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}
           onOpenThread={(summary) => onSelectThread(tab.id, summary.head.id, summary.head)}
-          compose={forumTarget !== null ? composeEntry(tab.id, forumTarget, 'btn btn-small') : null}
+          compose={forumTarget !== null ? composeEntry(tab.id, forumTarget, 'btn btn-small list-head-compose') : null}
         />
       )
     } else {

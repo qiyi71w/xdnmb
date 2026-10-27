@@ -48,7 +48,7 @@ export function SubscriptionSection({ subscriptions }: { subscriptions: Subscrip
             <div className="notice notice-cached is-compact" role="status">
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">订阅设置刷新失败，下面可能不是最新状态</p>
-              <button type="button" className="btn btn-small" onClick={() => void refreshOverview()}>
+              <button type="button" className="btn btn-small btn-page" onClick={() => void refreshOverview()}>
                 重试
               </button>
             </div>
@@ -117,7 +117,7 @@ function MergeEntry({ overview, subscriptions }: { overview: SubscriptionOvervie
       <button
         type="button"
         ref={buttonRef}
-        className="btn"
+        className="btn btn-page"
         aria-haspopup="menu"
         aria-expanded={menuAt !== null}
         aria-disabled={blocked || undefined}
@@ -139,7 +139,7 @@ function MergeEntry({ overview, subscriptions }: { overview: SubscriptionOvervie
         <div className="notice notice-error is-compact" role="alert">
           <Icon name="alert" className="notice-icon" />
           <p className="notice-text">用过的 App UUID 读取失败</p>
-          <button type="button" className="btn btn-small" onClick={() => void refreshMergeSources()}>
+          <button type="button" className="btn btn-small btn-page" onClick={() => void refreshMergeSources()}>
             重试
           </button>
         </div>
@@ -331,7 +331,7 @@ function AppUuidForm({
           />
           <button
             type="button"
-            className="btn btn-small"
+            className="btn btn-small btn-page"
             onClick={() => setShown((value) => !value)}
             aria-controls={inputId}
             aria-label={shown ? '隐藏 UUID' : '显示 UUID'}
@@ -347,7 +347,7 @@ function AppUuidForm({
           <button
             type="button"
             ref={generateRef}
-            className="btn"
+            className="btn btn-page"
             onClick={generate}
             // Not disabled while busy: focus returns here from the confirmation and must not be dropped.
             aria-disabled={pending !== null || confirmGenerate ? true : undefined}
@@ -365,7 +365,7 @@ function AppUuidForm({
             <div className="credential-confirm-actions">
               <button
                 type="button"
-                className="btn btn-small btn-danger"
+                className="btn btn-small btn-danger btn-page"
                 disabled={pending !== null}
                 onClick={() => {
                   setConfirmGenerate(false)
@@ -375,7 +375,7 @@ function AppUuidForm({
               >
                 确认生成
               </button>
-              <button type="button" ref={cancelGenerateRef} className="btn btn-small" onClick={closeConfirm} disabled={pending !== null}>
+              <button type="button" ref={cancelGenerateRef} className="btn btn-small btn-page" onClick={closeConfirm} disabled={pending !== null}>
                 取消
               </button>
             </div>

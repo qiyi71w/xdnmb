@@ -212,7 +212,7 @@ function ManageRow({
         </button>
         <button
           type="button"
-          className="btn btn-small"
+          className="btn btn-small btn-page"
           aria-pressed={hidden}
           aria-label={`隐藏 ${item.label}`}
           onClick={() => actions.setBoardsHidden([item.key], !hidden)}

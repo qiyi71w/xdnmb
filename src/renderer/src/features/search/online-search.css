@@ -324,10 +324,6 @@
   opacity: 0.7;
 }
 
-.online-search-pager .btn[aria-disabled='true']:hover {
-  background: var(--paper);
-}
-
 .online-search-pager-current {
   font-size: var(--text-sm);
   font-weight: 600;

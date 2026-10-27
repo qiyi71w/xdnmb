@@ -428,11 +428,11 @@ function BlocksSection() {
   const headingId = useId()
   return <section className="settings-section" aria-labelledby={headingId}>
     <h3 className="settings-section-title" id={headingId}>屏蔽</h3>
-    {failure !== null && <p role="alert">{failure} <button type="button" className="btn btn-small" onClick={() => void retry()}>重试</button></p>}
+    {failure !== null && <p role="alert">{failure} <button type="button" className="btn btn-small btn-page" onClick={() => void retry()}>重试</button></p>}
     {blocks.length === 0 && failure === null && <p className="settings-empty">没有屏蔽</p>}
     <ul className="shell-manage-list">{blocks.map((block) => <li className="shell-manage-row" key={`${block.kind}:${block.value}`}>
       <span>{block.kind === 'post' ? `No.${block.value}` : `饼干 ${block.value}`}</span>
-      <span className="shell-manage-actions"><button type="button" className="btn btn-small" aria-label={`取消屏蔽${block.kind === 'post' ? ` No.${block.value}` : `饼干 ${block.value}`}`} onClick={() => void setBlocked(block.kind, block.value, false)}>取消屏蔽</button></span>
+      <span className="shell-manage-actions"><button type="button" className="btn btn-small btn-page" aria-label={`取消屏蔽${block.kind === 'post' ? ` No.${block.value}` : `饼干 ${block.value}`}`} onClick={() => void setBlocked(block.kind, block.value, false)}>取消屏蔽</button></span>
     </li>)}</ul>
   </section>
 }

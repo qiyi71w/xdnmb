@@ -166,7 +166,7 @@ export function BoardPanelEmptyPage({ title = '选择版块', onOpen }: { title?
       <p className="pane-empty-title">{title}</p>
       <button
         type="button"
-        className="btn pane-empty-action"
+        className="btn btn-page pane-empty-action"
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? BOARD_PANEL_ID : undefined}

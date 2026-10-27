@@ -273,7 +273,7 @@ export function SentPage({
             <div className="notice notice-error is-compact" role="alert">
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">发送记录读取失败：本地存储不可用</p>
-              <button type="button" className="btn btn-small" onClick={() => onReload(list.status === 'ready')}>
+              <button type="button" className="btn btn-small btn-page" onClick={() => onReload(list.status === 'ready')}>
                 重试
               </button>
             </div>

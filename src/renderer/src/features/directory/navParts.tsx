@@ -34,7 +34,7 @@ export interface FeatureHost {
    * the 更多 panel); dialogs always take focus themselves.
    */
   open: (id: FeatureId, focusTarget?: boolean) => void
-  /** The feature the active tab shows (订阅的串, 提醒, 搜索, 历史, 离线 pages), if any. */
+  /** The feature the active tab shows (订阅, 提醒, 搜索, 历史, 离线 pages), if any. */
   current: FeatureId | null
   reminderBadge: ReminderBadge | null
   searchShortcut: string
@@ -149,7 +149,7 @@ export function DirectoryStatus({ state, onRetry }: { state: DirectoryState; onR
           目录未更新，显示 {formatRecordTime(source.fetchedAt)} 的缓存
         </p>
         <span className="nav-foot-actions">
-          <button type="button" className="btn btn-small" onClick={onRetry}>
+          <button type="button" className="btn btn-small btn-page" onClick={onRetry}>
             重试
           </button>
           <IdentitySettingsAction error={refreshFailure} />

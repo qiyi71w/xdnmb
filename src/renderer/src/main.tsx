@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { DEFAULT_SETTINGS } from '../../shared/settings'
 import './styles/tokens.css'
 import './styles/base.css'
+import './styles/page-buttons.css'
 import { App } from './app/App'
 import { applyAppearance } from './lib/useAppearance'
 

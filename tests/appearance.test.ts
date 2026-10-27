@@ -92,6 +92,14 @@ describe('contrast', () => {
     expect(paletteContrastFailures(customPalette(sepia, 'dark'))).toEqual([])
   })
 
+  it('checks page buttons on the notices and panes they sit in, at rest and under the pointer', () => {
+    const surfacesOf = (foreground: string) => TEXT_CONTRAST_PAIRS.filter((pair) => pair.foreground === foreground).flatMap((pair) => pair.surfaces)
+    // 重试 inside error and cached notices: transparent at rest, the hover overlay on the notice tint.
+    expect(surfacesOf('ink-2')).toEqual(expect.arrayContaining([['danger-bg'], ['warn-bg']]))
+    expect(surfacesOf('ink')).toEqual(expect.arrayContaining([['danger-bg', 'hover'], ['warn-bg', 'hover']]))
+    // Danger page buttons on the reading paper and the list pane, the danger tint under them on hover.
+    expect(surfacesOf('danger-ink')).toEqual(expect.arrayContaining([['paper'], ['pane'], ['paper', 'danger-bg'], ['pane', 'danger-bg']]))
+  })
   it('checks translucent glass as composited over the window, not the solid surface alone', () => {
     // Secondary text passes on the solid surface but not on 50% glass over a dark window.
     const theme: CustomTheme = { ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, background: '#5c5c5c', secondaryText: '#6e6e6e' } }, opacity: 0.5 }

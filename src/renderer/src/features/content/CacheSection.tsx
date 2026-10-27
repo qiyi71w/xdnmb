@@ -111,7 +111,7 @@ export function CacheSection() {
           <div className="notice-text">
             <p className="notice-title">本地占用读取失败：{contentFailureText(state.refused)}</p>
           </div>
-          <button type="button" className="btn btn-small" onClick={() => void load()}>
+          <button type="button" className="btn btn-small btn-page" onClick={() => void load()}>
             重试
           </button>
         </div>
@@ -195,7 +195,7 @@ export function CacheSection() {
                 aria-invalid={invalid || undefined}
                 aria-describedby={invalid ? `${errorId} ${hintId}` : hintId}
               />
-              <button type="submit" className="btn" disabled={parsed === null || unchanged || busy !== null} aria-busy={busy === 'limit' || undefined}>
+              <button type="submit" className="btn btn-page" disabled={parsed === null || unchanged || busy !== null} aria-busy={busy === 'limit' || undefined}>
                 {busy === 'limit' ? '正在保存…' : '应用'}
               </button>
               <button
@@ -223,10 +223,10 @@ export function CacheSection() {
               <p className="history-confirm-title">清理普通缓存？</p>
               <p className="history-confirm-impact">将删除约 {formatBytes(cacheBytes)} 普通缓存。</p>
               <div className="history-confirm-actions">
-                <button ref={confirmRef} type="button" className="btn btn-small btn-danger" aria-busy={busy === 'clear' || undefined} onClick={() => void clear()}>
+                <button ref={confirmRef} type="button" className="btn btn-small btn-danger btn-page" aria-busy={busy === 'clear' || undefined} onClick={() => void clear()}>
                   {busy === 'clear' ? '正在清理…' : '确认清理'}
                 </button>
-                <button type="button" className="btn btn-small" disabled={busy === 'clear'} onClick={() => setConfirming(false)}>
+                <button type="button" className="btn btn-small btn-page" disabled={busy === 'clear'} onClick={() => setConfirming(false)}>
                   取消
                 </button>
               </div>
@@ -236,7 +236,7 @@ export function CacheSection() {
               <button
                 ref={clearRef}
                 type="button"
-                className="btn btn-danger"
+                className="btn btn-danger btn-page"
                 disabled={busy !== null}
                 onClick={() => {
                   setMessage(null)

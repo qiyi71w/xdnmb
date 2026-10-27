@@ -290,17 +290,25 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
       ['info-bg'],
       ['pane', 'selected'],
       ['pane', 'hover'],
+      // Hovered page buttons (`.btn-page`) on the paper of pages and settings.
+      ['paper', 'hover'],
       ['window', 'glass-strong'],
       ...GLASS_BACKDROPS,
       ['window', 'glass', 'nav-current']
     ] satisfies Surface[]
   })),
+  // Page buttons (`.btn-page`) inside error and cached notices: secondary ink at rest, ink on the hover overlay.
+  { foreground: 'ink-2', surfaces: [['danger-bg'], ['warn-bg']] },
+  { foreground: 'ink', surfaces: [['danger-bg', 'hover'], ['warn-bg', 'hover']] },
   {
     foreground: 'accent-ink',
     surfaces: [
       ['paper'],
       ['pane'],
       ['info-bg'],
+      // The writing entries (回复 on the paper-coloured thread toolbar, 发新串 in the pane-coloured list
+      // head) rest on accent-soft at 55% and hover on all of it. The list holds the full layer: in
+      // both schemes the stronger tint is the less favourable case for accent-ink.
       ['paper', 'accent-soft'],
       ['pane', 'accent-soft'],
       ['window', 'accent-soft'],
@@ -317,10 +325,12 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
   // Context-menu footers (reminder and subscription menus, the 饼干颜色 palette) show errors on the glass sheet.
   // Official red text in bodies, excerpts and board/timeline notices: paper, pane, the notice band, the quote card,
   // a jump-highlighted post, hovered/selected rows (rows sit on the pane in the split layout, on paper in one column).
+  // Danger page buttons sit on the reading paper and the list pane, with the danger tint under them on hover.
   {
     foreground: 'danger-ink',
     surfaces: [
-      ['danger-bg'], ['paper'], ['pane'], ['info-bg'], ['paper', 'glass-strong'], ['pane', 'glass-strong'], ['window', 'glass-strong'],
+      ['danger-bg'], ['paper'], ['pane'], ['info-bg'], ['paper', 'danger-bg'], ['pane', 'danger-bg'],
+      ['paper', 'glass-strong'], ['pane', 'glass-strong'], ['window', 'glass-strong'],
       ['paper', 'accent-soft'], ['pane', 'hover'], ['pane', 'selected'], ['paper', 'hover'], ['paper', 'selected']
     ]
   },

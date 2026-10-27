@@ -34,7 +34,7 @@ import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
 import { useImageScope } from '../image/useImageLoad'
 import { useListImageViewer } from '../image/useListImageViewer'
-import { ListFilterBar } from '../search/FilterFields'
+import { ListFilterPanel, ListFilterToggle, useListFilter } from '../search/FilterFields'
 import { contentFilterCount, filterList, headMeta } from '../search/listFilters'
 import { NO_CONTENT_FILTERS } from '../search/searchState'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
@@ -181,6 +181,7 @@ export function SubscriptionPane({
   /** This view's filters; kept across source switches, never resetting the thread being read. */
   const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtersRef = useRef(filters)
+  const filter = useListFilter(filters, setFilters)
 
   const selection = overview === null ? null : selectionKey(overview)
   const overviewRef = useRef(overview)
@@ -515,6 +516,7 @@ export function SubscriptionPane({
                   </button>
                 ))}
               </div>
+              {threads.length > 0 && <ListFilterToggle filter={filter} />}
               <button
                 type="button"
                 className="icon-btn"
@@ -554,13 +556,25 @@ export function SubscriptionPane({
           )}
         </header>
 
+        {threads.length > 0 && (
+          <ListFilterPanel
+            filter={filter}
+            forums={forumNames}
+            noun="串"
+            total={threads.length}
+            result={filtered}
+            metadata={null}
+            coverage="已读取的订阅页"
+          />
+        )}
+
         <div className="sub-tools">
           {blocker !== null && (
             <div className="notice notice-cached is-compact" role="status">
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">{blocker}</p>
               {openSettings !== null && (
-                <button type="button" className="btn btn-small" onClick={() => openSettings('subscriptions')}>
+                <button type="button" className="btn btn-small btn-page" onClick={() => openSettings('subscriptions')}>
                   打开设置
                 </button>
               )}
@@ -615,7 +629,7 @@ export function SubscriptionPane({
                 第 {shown.error.page} 页读取失败：{describeReadError(shown.error.detail)}
               </span>
               {blocker === null && !readInFlight && (
-                <button type="button" className="btn btn-small" onClick={() => void readOn(shown.id)}>
+                <button type="button" className="btn btn-small btn-page" onClick={() => void readOn(shown.id)}>
                   重试
                 </button>
               )}
@@ -626,7 +640,7 @@ export function SubscriptionPane({
         {displayed === null && state.activity === 'idle' && blocker === null && (
           <div className="list-empty">
             <p className="list-empty-title">{shown !== null || state.refusal !== null || state.internalError !== null ? '还没有取得列表' : '还没有读取这份订阅'}</p>
-            <button type="button" className="btn sub-empty-action" onClick={refresh}>
+            <button type="button" className="btn btn-page sub-empty-action" onClick={refresh}>
               读取
             </button>
           </div>
@@ -639,20 +653,7 @@ export function SubscriptionPane({
         )}
 
         {threads.length > 0 && (
-          <ListFilterBar
-            filters={filters}
-            onChange={setFilters}
-            forums={forumNames}
-            noun="订阅的串"
-            total={threads.length}
-            result={filtered}
-            metadata={null}
-            coverage="已读取的订阅页"
-          />
-        )}
-
-        {threads.length > 0 && (
-          <ul className="thread-list sub-thread-list" aria-label={filtering ? '订阅的串（已筛选）' : '订阅的串'} onKeyDown={roving.onKeyDown}>
+          <ul className="thread-list sub-thread-list" aria-label={filtering ? '订阅（已筛选）' : '订阅'} onKeyDown={roving.onKeyDown}>
             {filtered.shown.map(({ item: thread }) => {
               const itemProps = roving.itemProps(thread.head.id)
               const entry = unsettled.rows.get(thread.head.id)
@@ -829,13 +830,13 @@ function AddForm({
           aria-invalid={error !== null ? true : undefined}
           aria-describedby={describedBy}
         />
-        <button type="submit" className="btn btn-small" disabled={disabled}>
+        <button type="submit" className="btn btn-small btn-page" disabled={disabled}>
           加入
         </button>
         {currentThreadId !== null && (
           <button
             type="button"
-            className="btn btn-small"
+            className="btn btn-small btn-page"
             disabled={disabled}
             onClick={() => {
               const blocked = onAdd(currentThreadId)
