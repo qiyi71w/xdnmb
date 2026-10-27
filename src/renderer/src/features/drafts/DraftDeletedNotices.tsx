@@ -22,6 +22,8 @@ export function DraftDeletedNotices({
     <BottomNotice
       key={entry.key}
       open
+      icon="trash"
+      tone="neutral"
       context={targetText(entry.content.target, forumName)}
       detail={entry.failure === null ? null : `没能撤销：${SAVE_FAILURE_TEXT[entry.failure]}`}
       actions={[

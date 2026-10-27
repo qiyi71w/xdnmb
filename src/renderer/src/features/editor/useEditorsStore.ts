@@ -75,7 +75,7 @@ export interface EditorsStore {
   current: () => EditorsState
   /** Editors whose draft write is running. */
   saving: ReadonlySet<EditorId>
-  /** Last failed write of each editor, until a write of it succeeds or starts again. */
+  /** Last failed write of each editor, until a write of it succeeds (or it is emptied by deletion). */
   saveErrors: ReadonlyMap<EditorId, SaveFailure>
   /**
    * Brings the editors' drafts up to date now (all editors when omitted), without waiting for the
@@ -222,7 +222,6 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
       if (found.publication !== null) return Promise.resolve({ ok: false, reason: 'locked' })
       const editor = withLastSaved(found, lastSaved.current)
       if (!wantsWrite(editor)) return Promise.resolve({ ok: true })
-      clearError(editorId)
       setSaving((previous) => new Set(previous).add(editorId))
       const run = (async (): Promise<SaveOutcome> => {
         let outcome: SaveOutcome
@@ -259,7 +258,8 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
           next.delete(editorId)
           return next
         })
-        if (!outcome.ok) {
+        if (outcome.ok) clearError(editorId)
+        else {
           const reason = outcome.reason
           setSaveErrors((previous) => new Map(previous).set(editorId, reason))
         }

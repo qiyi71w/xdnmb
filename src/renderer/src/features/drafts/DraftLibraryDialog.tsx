@@ -14,6 +14,9 @@ type ListState = { status: 'loading' } | { status: 'failed' } | { status: 'ready
 /** Drafts that sends still in progress hold (no edit, save or delete); `null`: could not be read. */
 type Locks = ReadonlySet<DraftId> | null
 
+/** Why a draft whose send is still sending or being checked cannot be deleted (row and tooltip). */
+const LOCKED_TEXT = '发送结果还没确定，暂时不能删除'
+
 /**
  * 草稿 library: every saved draft, most recently saved first; several may share a target.
  * 继续 hands the draft to the shell (focus its editor, load it into the editor already on its
@@ -193,15 +196,13 @@ export function DraftLibraryDialog({
                     {locked && (
                       <p className="draft-locked" id={`${rowId}-locked`}>
                         <Icon name="alert" size={13} />
-                        正在发送或确认是否已发出，不能删除
+                        {LOCKED_TEXT}
                       </p>
                     )}
                     {deleteFailed?.draftId === draft.id && (
                       <p className="notice-inline is-warning" role="alert">
                         <Icon name="alert" size={14} />
-                        {deleteFailed.locked
-                          ? '删除失败：正在发送或确认是否已发出'
-                          : '删除失败：本地存储不可用'}
+                        {deleteFailed.locked ? '没能删除：发送结果还没确定' : '没能删除：本地存储不可用'}
                       </p>
                     )}
                     {continueFailed?.draftId === draft.id && (
@@ -212,20 +213,30 @@ export function DraftLibraryDialog({
                     )}
                   </div>
                   {confirming === draft.id ? (
-                    <div className="draft-actions" role="group" aria-label={`确认删除：${target}`}>
+                    <div className="draft-actions is-confirming" role="group" aria-label={`确认删除：${target}`}>
                       {editing !== null && (
-                        <p className="draft-confirm-note">会同时关闭「{tabTitle(editing.tabId)}」标签里的这份编辑</p>
+                        <p className="draft-confirm-note" id={`${rowId}-confirm-note`}>
+                          会同时关闭「{tabTitle(editing.tabId)}」标签里的这份编辑
+                        </p>
                       )}
                       <button
                         ref={confirmRef}
                         type="button"
                         className="btn btn-small btn-danger"
+                        aria-describedby={editing !== null ? `${rowId}-confirm-note` : undefined}
                         aria-busy={deleting === draft.id || undefined}
                         onClick={() => void remove(draft, index)}
                       >
                         {deleting === draft.id ? '正在删除…' : '确认删除'}
                       </button>
-                      <button type="button" className="btn btn-small" disabled={deleting === draft.id} onClick={() => setConfirming(null)}>
+                      <button
+                        type="button"
+                        className="btn btn-small"
+                        aria-disabled={deleting === draft.id || undefined}
+                        onClick={() => {
+                          if (deleting !== draft.id) setConfirming(null)
+                        }}
+                      >
                         取消
                       </button>
                     </div>
@@ -248,7 +259,7 @@ export function DraftLibraryDialog({
                         data-delete-id={draft.id}
                         aria-describedby={locked ? `${rowId}-locked` : editing !== null ? `${rowId}-editing` : `${rowId}-target`}
                         aria-disabled={locked || deleting !== null || undefined}
-                        data-tip={locked ? '正在发送或确认是否已发出，不能删除' : undefined}
+                        title={locked ? LOCKED_TEXT : undefined}
                         onClick={() => {
                           if (locked || deleting !== null) return
                           setDeleteFailed(null)

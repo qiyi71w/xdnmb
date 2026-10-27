@@ -104,6 +104,8 @@ export function LaunchNotices({
           <BottomNotice
             key={attempt.id}
             open
+            icon={attempt.state === 'unknown' ? 'spinner' : 'alert'}
+            tone={attempt.state === 'unknown' ? 'neutral' : 'warning'}
             context={`上次退出时 · ${targetText(attempt.payload.target, forumName)}`}
             detail={failures.get(attempt.id) ?? null}
             actions={[
@@ -119,9 +121,10 @@ export function LaunchNotices({
       {rest.length > 0 && (
         <BottomNotice
           open
+          context="上次退出时"
           actions={[
             {
-              label: '打开草稿',
+              label: '查看草稿',
               onAction: () => {
                 dismiss(rest.map((attempt) => attempt.id))
                 onOpenDrafts()
@@ -131,7 +134,7 @@ export function LaunchNotices({
           ]}
           fallbackFocus={fallbackFocus}
         >
-          上次退出时还有 {rest.length} 个发送没有完成
+          还有 {rest.length} 个发送没有完成
         </BottomNotice>
       )}
     </>

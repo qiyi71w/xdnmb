@@ -61,8 +61,8 @@ export const SAVE_FAILURE_TEXT: Record<SaveFailure, string> = {
 /** Why another draft could not be continued in the editor already on its target. */
 export function loadFailureText(reason: SaveFailure): string {
   return reason === 'locked'
-    ? '这个目标的编辑正在发送，发送结束后才能载入另一份草稿'
-    : `当前编辑的草稿没能保存（${SAVE_FAILURE_TEXT[reason]}），没有载入这份草稿`
+    ? '没能载入：这个目标的编辑正在发送，发送结束后再试'
+    : `没能载入：当前编辑没能先存为草稿（${SAVE_FAILURE_TEXT[reason]}）`
 }
 
 export const ATTACH_FAILURE_TEXT: Record<Exclude<AttachFailure, 'cancelled'> | 'internal', string> = {

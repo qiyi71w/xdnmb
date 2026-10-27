@@ -1,16 +1,23 @@
 import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { CredentialId } from '../../../../shared/identity'
-import type { PoAnswer, PoPrompt } from '../../../../shared/publication'
+import type { PoAnswer, PoCandidate, PoPrompt } from '../../../../shared/publication'
 import { CookieId } from '../../components/CookieId'
+import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import './publication.css'
+
+/** Why a candidate cannot be chosen, shown inside its item. */
+const UNAVAILABLE_TEXT: Record<NonNullable<PoCandidate['unavailable']>, string> = {
+  unreadable: '无法读取这块饼干，不能使用'
+}
 
 /**
  * 发送前身份提示 for one's own thread: the main process holds the frozen payload behind `prompt`.
  * The cookies to choose from are a radio group (the current cookie, then every imported cookie with
  * the main post's 饼干 ID); 发送 sends with the selected one, 取消 or Esc sends nothing. Focus starts
  * on the selected cookie, arrow keys move it, Enter sends. “本次启动不再提示” only counts with a
- * send; cancelling changes neither the identity nor the suppression.
+ * send; cancelling changes neither the identity nor the suppression. While the answer is being
+ * handled every control keeps its focus and presses are ignored.
  */
 export function PoPromptDialog({
   prompt,
@@ -25,6 +32,7 @@ export function PoPromptDialog({
   onAnswer: (answer: PoAnswer) => void
 }) {
   const titleId = useId()
+  const introId = useId()
   const name = useId()
   const [suppress, setSuppress] = useState(false)
   const [selected, setSelected] = useState<CredentialId>(prompt.initial)
@@ -35,10 +43,10 @@ export function PoPromptDialog({
     groupRef.current?.querySelector<HTMLInputElement>('input:checked')?.focus()
   }, [])
 
+  const chosen = prompt.candidates.find((candidate) => candidate.credentialId === selected)
+  const usable = chosen !== undefined && chosen.unavailable === null
   const send = () => {
-    if (resolving) return
-    const chosen = prompt.candidates.find((candidate) => candidate.credentialId === selected)
-    if (chosen === undefined || chosen.unavailable !== null) return
+    if (resolving || chosen === undefined || chosen.unavailable !== null) return
     onAnswer({ kind: 'send', credentialId: chosen.credentialId, suppress })
   }
   const cancel = () => {
@@ -55,32 +63,55 @@ export function PoPromptDialog({
     <Modal className="po-dialog" labelledBy={titleId} onClose={cancel}>
       <header className="modal-header">
         <h2 className="modal-title" id={titleId}>
-          发送到自己的串：当前饼干不是 PO 饼干
+          用哪块饼干发送？
         </h2>
       </header>
       <div className="modal-body po-body">
-        <p className="po-intro">{target}，用哪块饼干发送？</p>
-        <div className="po-choices" role="radiogroup" aria-labelledby={titleId} ref={groupRef} onKeyDown={onGroupKeyDown}>
-          {prompt.candidates.map((candidate) => {
-            const unavailable = candidate.unavailable !== null
+        <p className="po-intro" id={introId}>
+          {target}：这是你的串，当前饼干不是 PO 饼干。
+        </p>
+        <div
+          className="po-choices"
+          role="radiogroup"
+          aria-labelledby={titleId}
+          aria-describedby={introId}
+          ref={groupRef}
+          onKeyDown={onGroupKeyDown}
+        >
+          {prompt.candidates.map((candidate, index) => {
+            const checked = selected === candidate.credentialId
+            const reasonId = `${name}-reason-${index}`
             return (
-              <label key={candidate.credentialId} className={`po-choice${unavailable ? ' is-unavailable' : ''}`}>
+              <label
+                key={candidate.credentialId}
+                className={`po-choice${checked ? ' is-selected' : ''}${candidate.unavailable !== null ? ' is-unavailable' : ''}`}
+              >
                 <input
                   type="radio"
                   name={name}
                   value={candidate.credentialId}
-                  checked={selected === candidate.credentialId}
-                  disabled={unavailable}
+                  checked={checked}
+                  disabled={candidate.unavailable !== null}
+                  aria-describedby={candidate.unavailable !== null ? reasonId : undefined}
                   onChange={() => {
                     if (!resolving) setSelected(candidate.credentialId)
                   }}
                 />
-                <span className="po-choice-text">
+                <span className="po-choice-who">
                   <span className="po-choice-name">{candidate.name}</span>
                   {candidate.cookieId !== null && <CookieId cookieId={candidate.cookieId} />}
-                  <span className="po-choice-role">{candidate.role === 'current' ? '当前饼干' : 'PO 饼干'}</span>
-                  {unavailable && <span className="po-choice-reason">无法读取这块饼干，不能使用</span>}
                 </span>
+                {candidate.role === 'current' ? (
+                  <span className="po-choice-role">当前饼干</span>
+                ) : (
+                  <span className="po-choice-role tag tag-po">PO</span>
+                )}
+                {candidate.unavailable !== null && (
+                  <span className="po-choice-reason" id={reasonId}>
+                    <Icon name="alert" size={13} />
+                    {UNAVAILABLE_TEXT[candidate.unavailable]}
+                  </span>
+                )}
               </label>
             )
           })}
@@ -88,7 +119,14 @@ export function PoPromptDialog({
       </div>
       <div className="modal-actions po-actions">
         <label className="po-suppress">
-          <input type="checkbox" checked={suppress} disabled={resolving} onChange={(event) => setSuppress(event.target.checked)} />
+          <input
+            type="checkbox"
+            checked={suppress}
+            aria-disabled={resolving || undefined}
+            onChange={(event) => {
+              if (!resolving) setSuppress(event.target.checked)
+            }}
+          />
           <span>本次启动不再提示</span>
         </label>
         <div className="po-buttons">
@@ -98,7 +136,7 @@ export function PoPromptDialog({
           <button
             type="button"
             className="btn btn-primary"
-            aria-disabled={resolving || undefined}
+            aria-disabled={resolving || !usable || undefined}
             aria-busy={resolving || undefined}
             onClick={send}
           >

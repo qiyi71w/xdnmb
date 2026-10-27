@@ -77,6 +77,8 @@ export function EditorPanel({
   const saveError = store.saveErrors.get(editorId) ?? null
   const [deleteError, setDeleteError] = useState<SaveFailure | null>(null)
   const [deleting, setDeleting] = useState(false)
+  /** The last “已存草稿 时间” shown, kept (invisible) while the next save runs so the toolbar does not move. */
+  const lastSaved = useRef('')
   const attach = useAttachImage(editor)
   const [retargeting, setRetargeting] = useState(false)
   const [identityNotice, setIdentityNotice] = useState<string | null>(null)
@@ -296,20 +298,38 @@ export function EditorPanel({
     </div>
   )
 
+  // A send's state is announced; the saved time is not (it changes at every pause while typing). While
+  // a save runs the previous time keeps its room, hidden, so nothing in the toolbar moves.
+  const sendState = publication !== null ? statusText : ''
+  const savedText = publication === null ? statusText : ''
+  if (savedText !== '') lastSaved.current = savedText
+  else if (editor.draft === null) lastSaved.current = ''
+  const heldText = savedText === '' && saving ? lastSaved.current : ''
   const status = (
-    <div className="editor-status" role="status">
-      <span className="editor-state">{statusText}</span>
+    <div className="editor-status">
+      <span className="editor-state" role="status">
+        {sendState}
+      </span>
+      {savedText !== '' ? (
+        <span className="editor-saved">{savedText}</span>
+      ) : (
+        heldText !== '' && (
+          <span className="editor-saved is-holding" aria-hidden="true">
+            {heldText}
+          </span>
+        )
+      )}
     </div>
   )
 
-  const saveFailure = saveError !== null && !saving && !locked && (
+  const saveFailure = saveError !== null && !locked && (
     <p className="notice-inline is-warning editor-error" role="alert">
       <Icon name="alert" size={14} />
       草稿没能保存：{SAVE_FAILURE_TEXT[saveError]}
     </p>
   )
 
-  const deleteFailure = deleteError !== null && !locked && (
+  const deleteFailure = deleteError !== null && editor.draft !== null && !locked && (
     <p className="notice-inline is-warning editor-error" role="alert">
       <Icon name="alert" size={14} />
       草稿没能删除：{SAVE_FAILURE_TEXT[deleteError]}
