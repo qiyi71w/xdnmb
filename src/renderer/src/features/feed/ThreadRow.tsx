@@ -29,12 +29,15 @@ export interface HeadlessThread {
  * A headless thread shows its title (when kept) and its meta line only.
  * With `tabMenu`, the row offers 在新标签页打开 (context menu, middle-click, Ctrl/Cmd+click), 复制串号
  * and 饼干颜色… for the head post's 饼干 ID.
+ * A `pinned` row (置顶串, forum and timeline lists only) is compact: a shorter, faded excerpt and a
+ * smaller thumbnail; everything else, including its behaviour, is the same as other rows.
  */
 export function ThreadRow({
   thread,
   forumName,
   selected,
   uncertain = false,
+  pinned = false,
   images,
   onOpen,
   itemProps,
@@ -47,6 +50,8 @@ export function ThreadRow({
   selected: boolean
   /** Kept by the list filters only because a field they judge by is unknown. */
   uncertain?: boolean
+  /** The list's 置顶串: shown compact. */
+  pinned?: boolean
   /** Where the list's thumbnails load. */
   images: ImageScope
   onOpen: () => void
@@ -61,7 +66,7 @@ export function ThreadRow({
   const title = meaningfulTitle(thread.head === null ? thread.title : thread.head.title)
   const name = head === null ? null : meaningfulName(head.name)
   const hasImage = head !== null && head.image !== null
-  const classes = ['thread-row', hasImage && 'has-thumb', selected && 'is-selected'].filter(Boolean).join(' ')
+  const classes = ['thread-row', hasImage && 'has-thumb', pinned && 'is-pinned', selected && 'is-selected'].filter(Boolean).join(' ')
   const inTab = useThreadTabMenu({ cookieColor: true })
   const tabThread = tabMenu ? id : null
   return (
