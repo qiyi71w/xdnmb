@@ -252,6 +252,29 @@
   overflow-wrap: anywhere;
 }
 
+.sub-facts {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 0;
+  font-size: var(--text-xs);
+}
+
+.sub-facts > div {
+  display: grid;
+  grid-template-columns: 5.5em minmax(0, 1fr);
+  gap: 8px;
+}
+
+.sub-facts dt {
+  color: var(--ink-3);
+}
+
+.sub-facts dd {
+  margin: 0;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
 .sub-journal-actions {
   display: flex;
   flex-wrap: wrap;

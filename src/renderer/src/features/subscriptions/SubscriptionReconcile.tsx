@@ -32,7 +32,7 @@ import {
   type ReconcileTask
 } from './reconcileState'
 import { isReconcilable } from './subscriptionListState'
-import { ACTION_NAME, PLAN_STATE_TEXT, SOURCE_NAME, failureText, observationState, planItemText, sourceBlocker, stopReasonText } from './subscriptionText'
+import { ACTION_NAME, PLAN_STATE_TEXT, SOURCE_NAME, failureText, observationState, planItemText, reportSummary, sourceBlocker, stopReasonText, verificationText } from './subscriptionText'
 import { useSubscriptionsContext } from './useSubscriptions'
 
 /** Title of the view and of history entries. */
@@ -730,7 +730,7 @@ export function ReconcileHistoryDialog({
   )
 }
 
-/** Each written item with its state; failed or unknown ones offer the read-only 核对订阅. */
+/** Each written item with its state, the server report and the readback kept apart; failed or unknown ones offer the read-only 核对订阅. */
 function PlanItems({ plan }: { plan: SubscriptionPlan }) {
   const { operations, active } = useSubscriptionsContext()
   const currentIndex = currentItemIndex(plan)
@@ -754,6 +754,18 @@ function PlanItems({ plan }: { plan: SubscriptionPlan }) {
                 {state.text}
               </span>
             </div>
+            {operation !== undefined && (
+              <dl className="sub-facts">
+                <div>
+                  <dt>服务端报告</dt>
+                  <dd>{reportSummary(operation)}</dd>
+                </div>
+                <div>
+                  <dt>回读核对</dt>
+                  <dd>{verificationText(operation)}</dd>
+                </div>
+              </dl>
+            )}
             {canReconcile && (
               <div className="sub-journal-actions">
                 <ReconcileButton operation={operation} />

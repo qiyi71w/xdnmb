@@ -9,8 +9,7 @@ import type {
   SubscriptionPlanItem,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
-import { describeReadError, formatPageList, meaningfulTitle } from '../../lib/format'
-import { formatRecordTime } from '../../lib/time'
+import { describeReadError, meaningfulTitle } from '../../lib/format'
 
 // Fixed copy only. Nothing here ever includes a UUID, a userhash or any other secret: the
 // renderer only knows local references, names and generations.
@@ -101,17 +100,38 @@ export function needsReconcile(operation: SubscriptionOperation): boolean {
   )
 }
 
-/** One-line page coverage of an observation, e.g. `第 1–3 页 · 10/24 09:12 · 第 3 页为空（结束候选）`. */
-export function coverageText(observation: SubscriptionObservation): string {
-  const pages = observation.pages
-  if (pages.length === 0) return '还没有取得任何一页'
-  const parts = [`已读取第 ${formatPageList(pages.map((page) => page.page))} 页`]
-  const last = pages.at(-1)
-  if (last !== undefined) parts.push(`${formatRecordTime(last.fetchedAt)} 获取`)
-  const end = pages.find((page) => page.endCandidate)
-  if (end !== undefined) parts.push(`第 ${end.page} 页为空（结束候选）`)
-  else if (observation.nextPage !== null) parts.push(`第 ${observation.nextPage} 页起未读取`)
-  return parts.join(' · ')
+function reportText(operation: SubscriptionOperation): string {
+  switch (operation.report) {
+    case 'pending':
+      return '尚未收到服务端报告'
+    case 'success':
+      return '服务端报告成功'
+    case 'rejected':
+      return '服务端拒绝了这次请求'
+    case 'unknown':
+      return '没有取得服务端报告，请求可能已经生效'
+  }
+}
+
+/** What the server said about one write, kept apart from what the readback observed. */
+export function reportSummary(operation: SubscriptionOperation): string {
+  const reason = operation.reportError === null ? '' : `（${describeReadError(operation.reportError)}）`
+  return `${reportText(operation)}${reason}`
+}
+
+export function verificationText(operation: SubscriptionOperation): string {
+  switch (operation.verification) {
+    case 'present':
+      return '回读看到这个串在订阅中'
+    case 'absent-supported':
+      return '回读从第 1 页读到结束候选都没有这个串'
+    case 'absent-unproven':
+      return '回读没有找到这个串，但不能证明它已不在订阅中'
+    case 'mismatch':
+      return '回读结果与服务端报告不一致'
+    case 'unknown':
+      return '尚未取得可用的回读'
+  }
 }
 
 /** One observation's state for a preview: how far it got and why it may be incomplete. */
