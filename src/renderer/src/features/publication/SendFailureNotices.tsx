@@ -94,6 +94,7 @@ export function SendFailureNotices({
     <BottomNotice
       key={notice.attemptId}
       open
+      note={notice.forumMessage === undefined ? null : `论坛提示：${notice.forumMessage}`}
       context={targetText(notice.target, forumName)}
       detail={failure}
       actions={[

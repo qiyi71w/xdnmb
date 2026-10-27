@@ -604,6 +604,14 @@ export const MIGRATIONS: readonly Migration[] = [
     up(db) {
       db.exec('ALTER TABLE drafts DROP COLUMN email;')
     }
+  },
+  {
+    // A failed attempt may keep the forum's own error text (plain, at most 120 characters).
+    // Existing attempts have none.
+    version: 19,
+    up(db) {
+      db.exec('ALTER TABLE publication_attempts ADD COLUMN forum_message TEXT CHECK (forum_message IS NULL OR length(forum_message) BETWEEN 1 AND 120);')
+    }
   }
 ]
 

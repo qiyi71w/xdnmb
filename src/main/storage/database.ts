@@ -212,6 +212,7 @@ interface PublicationRow {
   post_id: string | null
   thread_id: string | null
   saved_draft_id: number | null
+  forum_message: string | null
 }
 
 function publicationAttempt(row: PublicationRow): PublicationAttempt {
@@ -227,7 +228,8 @@ function publicationAttempt(row: PublicationRow): PublicationAttempt {
     updatedAt: row.updated_at,
     postId: row.post_id,
     threadId: row.thread_id,
-    savedDraftId: row.saved_draft_id === null ? null : String(row.saved_draft_id)
+    savedDraftId: row.saved_draft_id === null ? null : String(row.saved_draft_id),
+    ...(row.forum_message === null ? {} : { forumMessage: row.forum_message })
   }
 }
 
@@ -1080,11 +1082,11 @@ class SqliteReadingDatabase implements ReadingDatabase {
       // later result (e.g. positive evidence resolving an unknown one) replaces it.
       const launchNotice = input.launchNotice === true && (input.state === 'failed' || input.state === 'unknown')
       db.prepare(`
-        UPDATE publication_attempts SET state = ?, problem = ?, post_id = ?, thread_id = ?, updated_at = ?, launch_notice = ?
+        UPDATE publication_attempts SET state = ?, problem = ?, post_id = ?, thread_id = ?, updated_at = ?, launch_notice = ?, forum_message = ?
         WHERE id = ?
       `).run(input.state, input.state === 'confirmed' ? null : input.problem,
         input.state === 'confirmed' ? input.postId : null, input.state === 'confirmed' ? input.threadId : null, input.at,
-        Number(launchNotice), input.id)
+        Number(launchNotice), input.state === 'failed' ? input.forumMessage ?? null : null, input.id)
 
       if (input.state === 'failed') {
         // Changing the state above releases the source lock within this same transaction only.

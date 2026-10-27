@@ -33,7 +33,10 @@ const hasDrafts = (kind: Predecessor) => kind === 'retained-v6' || kind === 'int
 const hasRetained = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
 /** Draft columns every version keeps; v18 drops `email`, so snapshots taken before it compare these. */
 const draftColumns = 'id, target_kind, target_id, credential_id, content, title, name, watermark, attachment_id, version, created_at, saved_at'
-const keptColumns = (table: string) => table === 'drafts' ? `SELECT ${draftColumns} FROM drafts` : `SELECT * FROM ${table}`
+// publication_attempts.forum_message comes with v19.
+const attemptColumns = 'id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem, created_at, updated_at, post_id, thread_id, saved_draft_id, launch_notice'
+const keptColumns = (table: string) => table === 'drafts' ? `SELECT ${draftColumns} FROM drafts`
+  : table === 'publication_attempts' ? `SELECT ${attemptColumns} FROM publication_attempts` : `SELECT * FROM ${table}`
 
 function plan(): SubscriptionPlan {
   return { id: 'historical-plan', preview: { id: 'historical-preview', mode: 'sync', context, createdAt: at,
@@ -620,7 +623,7 @@ describe('schema v18: drafts drop the E-mail field', () => {
     try {
       const columns = (raw.prepare('PRAGMA table_info(drafts)').all() as { name: string }[]).map((column) => column.name)
       const kept = columns.filter((column) => column !== 'email').join(', ')
-      return { columns, rows: raw.prepare(`SELECT ${kept} FROM drafts`).all(), attempts: raw.prepare('SELECT * FROM publication_attempts').all() }
+      return { columns, rows: raw.prepare(`SELECT ${kept} FROM drafts`).all(), attempts: raw.prepare(keptColumns('publication_attempts')).all() }
     } finally { raw.close() }
   }
 
@@ -656,5 +659,26 @@ describe('schema v18: drafts drop the E-mail field', () => {
     expect(readFileSync(path)).toEqual(original)
     expect(draftTable(path).columns).toContain('email')
     expect(open(path).listDrafts()[0]?.fields).toEqual({ content: '未发送草稿', title: '草稿标题', name: '旧名称', watermark: true })
+  })
+})
+
+describe('schema v19: failed attempts may keep the forum’s error text', () => {
+  function attempts(path: string) {
+    const raw = new Database(path, { readonly: true })
+    try { return raw.prepare('SELECT * FROM publication_attempts ORDER BY id').all() as Record<string, unknown>[] } finally { raw.close() }
+  }
+
+  it('adds an empty column and reads every recorded attempt as before, without forum text', () => {
+    const path = predecessor('reminders-v9')
+    const v18 = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 18))
+    const before = v18.listPublications()
+    v18.close()
+    const rows = attempts(path)
+    expect(rows.length).toBeGreaterThan(0)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(attempts(path)).toEqual(rows.map((row) => ({ ...row, forum_message: null })))
+    expect(db.listPublications()).toEqual(before)
+    expect(db.listPublications().every((attempt) => !('forumMessage' in attempt))).toBe(true)
   })
 })

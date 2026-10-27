@@ -555,10 +555,16 @@ function SendStatus({ editor }: { editor: Editor }) {
         : notice.kind === 'failed'
           ? `发送失败${notice.problem === null ? '' : `：${ATTEMPT_PROBLEM_TEXT[notice.problem]}`}${notice.saved ? '，已保存为草稿' : '，草稿未能自动保存'}`
           : '这次发送没有发出，可以再次发送'
+    const forumMessage = notice.kind === 'failed' ? notice.forumMessage : undefined
     return (
-      <p className="notice-inline is-warning editor-send-notice">
+      <p className={`notice-inline is-warning editor-send-notice${forumMessage === undefined ? '' : ' has-forum-message'}`}>
         <Icon name="alert" size={14} />
-        {text}
+        {forumMessage === undefined ? text : (
+          <span className="editor-send-text">
+            <span>{text}</span>
+            <span className="editor-forum-message">论坛提示：{forumMessage}</span>
+          </span>
+        )}
       </p>
     )
   }

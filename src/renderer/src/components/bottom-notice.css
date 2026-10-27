@@ -55,6 +55,16 @@
   font-weight: 600;
 }
 
+/* Clipped to two lines; the full text stays in the DOM (screen readers) and in its title (hover). */
+.bottom-notice-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  color: var(--ink-2);
+}
+
 .bottom-notice-context {
   color: var(--ink-2);
 }

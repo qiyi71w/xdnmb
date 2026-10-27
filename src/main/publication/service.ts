@@ -101,7 +101,8 @@ export function createPublicationService(deps: {
     }
     const best = writes[0]!
     unstored.set(attempt.id, {
-      attempt: { ...attempt, state: best.state, problem: best.problem, postId: best.postId, threadId: best.threadId, updatedAt: best.at },
+      attempt: { ...attempt, state: best.state, problem: best.problem, postId: best.postId, threadId: best.threadId, updatedAt: best.at,
+        ...(best.state === 'failed' && best.forumMessage !== undefined ? { forumMessage: best.forumMessage } : {}) },
       writes
     })
     return null
@@ -187,7 +188,7 @@ export function createPublicationService(deps: {
       const stored = await persist(attempt, [
         { id: attempt.id, state: report.state, problem: report.state === 'confirmed' ? null : report.problem,
           postId: report.state === 'confirmed' ? report.postId : null, threadId: report.state === 'confirmed' ? report.threadId : null,
-          at, launchNotice: unattended },
+          at, launchNotice: unattended, ...(report.state === 'failed' && report.forumMessage !== undefined ? { forumMessage: report.forumMessage } : {}) },
         { id: attempt.id, state: 'unknown', problem: 'storage', postId: null, threadId: null, at, launchNotice: unattended }
       ])
       // Durable intent survives even if recording the result fails. Never expose a retryable failure.

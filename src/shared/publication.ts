@@ -19,6 +19,12 @@ export interface PublicationAttempt {
   threadId: string | null
   /** A failed submission's automatically saved draft, if that transaction succeeded. */
   savedDraftId: string | null
+  /**
+   * A failed attempt's error text from the forum's response (its first `<p class="error">`),
+   * whitespace collapsed, at most 120 characters ending in “…” when cut. Plain text, never HTML;
+   * absent when the forum gave none and on attempts recorded before it was kept.
+   */
+  forumMessage?: string
 }
 
 export interface SubmitInput {
@@ -82,12 +88,17 @@ export interface SendFailureNotice {
   draftId: DraftId
   problem: PublicationProblem
   target: PostTarget
+  /** Shown in the app only; a system notification never carries it. */
+  forumMessage?: string
 }
 
 /** The failure notice of a recorded attempt; `null` unless it failed and its draft was saved. */
 export function sendFailureNotice(attempt: PublicationAttempt): SendFailureNotice | null {
   if (attempt.state !== 'failed' || attempt.problem === null || attempt.savedDraftId === null) return null
-  return { attemptId: attempt.id, editorId: attempt.editorId, draftId: attempt.savedDraftId, problem: attempt.problem, target: attempt.payload.target }
+  return {
+    attemptId: attempt.id, editorId: attempt.editorId, draftId: attempt.savedDraftId, problem: attempt.problem, target: attempt.payload.target,
+    ...(attempt.forumMessage === undefined ? {} : { forumMessage: attempt.forumMessage })
+  }
 }
 
 /** “发送失败：<原因>” — the in-app notice's message and the system notification's title. */

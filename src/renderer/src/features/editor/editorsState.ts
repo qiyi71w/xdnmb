@@ -32,7 +32,8 @@ export type EditorPublication =
 /** Outcome of the last send shown in an unlocked editor, until the next send. */
 export type SendNotice =
   | { kind: 'refused'; reason: PublicationProblem }
-  | { kind: 'failed'; problem: PublicationProblem | null; saved: boolean }
+  /** `forumMessage`: the forum's own error text of the failed attempt, shown in full. */
+  | { kind: 'failed'; problem: PublicationProblem | null; saved: boolean; forumMessage?: string }
   /** An uncertain request turned out to have left no attempt: nothing was sent. */
   | { kind: 'not-sent' }
 
@@ -128,7 +129,7 @@ export type EditorsAction =
   /** Nothing was sent (refused, cancelled, or no attempt exists): unlocks the editor. */
   | { type: 'publish-released'; editorId: EditorId; notice: SendNotice | null }
   /** Explicit failure: unlocks and continues the automatically saved draft when there is one. */
-  | { type: 'publish-failed'; editorId: EditorId; problem: PublicationProblem | null; draft: SavedDraft | null }
+  | { type: 'publish-failed'; editorId: EditorId; problem: PublicationProblem | null; forumMessage?: string; draft: SavedDraft | null }
   /**
    * Removes a locked editor whose content now lives in its durable attempt: sent and confirmed,
    * or ended by the user while the result is unknown / the ID unconfirmed.
@@ -348,7 +349,8 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
         state,
         action.editorId,
         locked((editor) => {
-          const notice: SendNotice = { kind: 'failed', problem: action.problem, saved: action.draft !== null }
+          const notice: SendNotice = { kind: 'failed', problem: action.problem, saved: action.draft !== null,
+            ...(action.forumMessage === undefined ? {} : { forumMessage: action.forumMessage }) }
           const draft = action.draft
           if (draft === null) return { ...editor, publication: null, sendNotice: notice }
           return { ...editor, ...fromDraft(draft), identityUnknown: false, draft, publication: null, sendNotice: notice }

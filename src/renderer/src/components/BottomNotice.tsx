@@ -45,6 +45,7 @@ export function BottomNoticeStack({ children }: { children: ReactNode }) {
 export function BottomNotice({
   open,
   children,
+  note,
   context,
   detail,
   actions,
@@ -53,6 +54,11 @@ export function BottomNotice({
   open: boolean
   /** The message, one sentence. */
   children: ReactNode
+  /**
+   * Supporting words of the message, e.g. the forum's own reason, right under it: two lines at
+   * most on screen, all of it on hover and for screen readers. Plain text; null for none.
+   */
+  note?: string | null
   /** What the message is about, in a quieter line under it; null for none. */
   context?: ReactNode
   /** A warning under the message, e.g. why an action did not apply; null for none. */
@@ -120,6 +126,7 @@ export function BottomNotice({
       <Icon name="alert" className="bottom-notice-icon" />
       <div className="bottom-notice-text">
         <p className="bottom-notice-message">{children}</p>
+        {note !== undefined && note !== null && <p className="bottom-notice-note" title={note}>{note}</p>}
         {context !== undefined && context !== null && <p className="bottom-notice-context">{context}</p>}
         {detail !== undefined && detail !== null && <p className="bottom-notice-detail">{detail}</p>}
       </div>
