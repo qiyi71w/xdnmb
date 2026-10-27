@@ -1087,7 +1087,7 @@ dialog.compose-image-preview:not([open]) {
   outline-offset: 0;
 }
 
-/* Presets inserting something else (骰子, 防剧透 …) are named in the interface face, not drawn. */
+/* Named presets (骰子, 防剧透 …) and named custom kaomoji show the name in the interface face, not the drawing. */
 .kaomoji-item.is-named {
   font-family: var(--font-ui);
   color: var(--ink-2);
@@ -1146,13 +1146,52 @@ dialog.compose-image-preview:not([open]) {
   color: var(--paper);
 }
 
+/* 添加 opens a full row: the multi-line text (3 lines, growing to 8, then scrolling) and a name row. */
 .kaomoji-add-form {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  flex-basis: 100%;
+  display: grid;
+  gap: 8px;
+  padding: 4px 2px 2px;
 }
 
-.kaomoji-add-form input {
+.kaomoji-add-form textarea {
+  --lines-pad: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: calc(3lh + var(--lines-pad));
+  max-height: calc(8lh + var(--lines-pad));
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: var(--hover);
+  color: var(--ink);
+  font-family: var(--font-reading);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  field-sizing: content;
+  overflow-y: auto;
+  resize: none;
+  caret-color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.kaomoji-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.kaomoji-add-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+}
+
+.kaomoji-add-name input {
   width: 10em;
   min-height: 28px;
   padding: 2px 0;
@@ -1160,12 +1199,27 @@ dialog.compose-image-preview:not([open]) {
   border-radius: 0;
   background: transparent;
   color: var(--ink);
-  font-family: var(--font-reading);
+  font-family: var(--font-ui);
   font-size: var(--text-sm);
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+
+.kaomoji-add-name input:focus-visible {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
-.kaomoji-add-form input:focus-visible {
+.kaomoji-add-note {
+  color: var(--danger-ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+}
+
+.kaomoji-add-row .btn-primary {
+  margin-left: auto;
+}
+
+.kaomoji-add-form textarea:focus-visible,
+.kaomoji-add-name input:focus-visible {
   outline: none;
 }
 

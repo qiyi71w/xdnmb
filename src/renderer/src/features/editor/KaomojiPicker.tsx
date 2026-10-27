@@ -1,13 +1,18 @@
 // The compose panel's 颜文字 button and its panel. The panel opens above the toolbar and stays open
 // for several inserts; Esc (focus back on the button) or a press outside closes it. A kaomoji goes
 // into the text at its caret or over its selection, wherever focus was. After the presets come the
-// user's own kaomoji (removable; the `customKaomoji` setting) and 添加.
+// user's own kaomoji (removable; the `customKaomoji` setting) and 添加, which opens a multi-line
+// field (Enter is a new line, Ctrl/Cmd+Enter saves) and an optional name. A named item shows its
+// name in the interface face, like the named presets, and its full text on hover.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { KAOMOJI_LIMITS } from '../../../../shared/settings'
+import { isSendShortcut, sendAriaShortcut, sendShortcutLabel } from '../../app/shortcuts'
 import { Icon } from '../../components/Icon'
 import { openLayer } from '../../lib/layers'
 import { useSettings } from '../../lib/settingsContext'
-import { canAddKaomoji, KAOMOJI_PRESETS } from './kaomoji'
+import { KAOMOJI_PRESETS, newKaomoji, normalizeKaomojiText } from './kaomoji'
+import { useEditorWorkspace } from './workspace'
 
 const ITEM = '[data-kaomoji-item]'
 
@@ -38,12 +43,14 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
   const panelRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const { settings, latest, write } = useSettings()
+  const { platform } = useEditorWorkspace()
   const custom = settings.customKaomoji
   /** The grid's one tabbable item (roving focus), by position. */
   const [active, setActive] = useState(0)
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
+  const [draftName, setDraftName] = useState('')
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   /** Focus the item at this position once rendered (on opening, after adding or removing one). */
   const focusAt = useRef<number | null>(null)
   const itemCount = KAOMOJI_PRESETS.length + custom.length + 1
@@ -82,6 +89,7 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
     if (!open) {
       setAdding(false)
       setDraft('')
+      setDraftName('')
     }
   }, [open])
 
@@ -135,18 +143,37 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
   const save = (event: FormEvent) => {
     event.preventDefault()
     const saved = latest().customKaomoji
-    if (!canAddKaomoji(saved, draft)) return
-    write({ customKaomoji: [...saved, draft] })
+    const entry = newKaomoji(saved, draft, draftName)
+    if (entry === null) return
+    write({ customKaomoji: [...saved, entry] })
     setDraft('')
+    setDraftName('')
     setAdding(false)
     // 添加 again, after the new one.
     focusAt.current = itemCount
   }
 
+  /** Esc closes the form only (the panel stays); Ctrl/Cmd+Enter saves here instead of sending the post. */
+  const onAddKeyDown = (event: KeyboardEvent<HTMLFormElement>) => {
+    if (event.key === 'Escape' && !event.nativeEvent.isComposing) {
+      event.preventDefault()
+      setAdding(false)
+      setDraft('')
+      setDraftName('')
+      focusAt.current = itemCount - 1
+    } else if (platform !== null && isSendShortcut(event.nativeEvent, platform)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.currentTarget.requestSubmit()
+    }
+  }
+
   const remove = (text: string, position: number) => {
-    write({ customKaomoji: latest().customKaomoji.filter((item) => item !== text) })
+    write({ customKaomoji: latest().customKaomoji.filter((item) => item.text !== text) })
     focusAt.current = position
   }
+
+  const nameTooLong = [...draftName.trim()].length > KAOMOJI_LIMITS.nameLength
 
   /** A press keeps focus where it is, so the text keeps its caret and selection. */
   const keepFocus = (event: { preventDefault: () => void }) => event.preventDefault()
@@ -177,26 +204,31 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
             const at = items.indexOf(event.target as HTMLElement)
             if (at >= 0) setActive(at)
           }}>
-            {KAOMOJI_PRESETS.map((kaomoji, index) => (
-              <button
-                key={kaomoji.name}
-                type="button"
-                className={`kaomoji-item${kaomoji.name === kaomoji.text ? '' : ' is-named'}`}
-                tabIndex={index === current ? 0 : -1}
-                data-kaomoji-item=""
-                onMouseDown={keepFocus}
-                onClick={() => onInsert(kaomoji.text)}
-              >
-                {kaomoji.name}
-              </button>
-            ))}
-            {custom.map((text, index) => {
+            {KAOMOJI_PRESETS.map((kaomoji, index) => {
+              const named = kaomoji.name !== kaomoji.text
+              return (
+                <button
+                  key={kaomoji.name}
+                  type="button"
+                  className={`kaomoji-item${named ? ' is-named' : ''}`}
+                  tabIndex={index === current ? 0 : -1}
+                  title={named ? kaomoji.text : undefined}
+                  data-kaomoji-item=""
+                  onMouseDown={keepFocus}
+                  onClick={() => onInsert(kaomoji.text)}
+                >
+                  {kaomoji.name}
+                </button>
+              )
+            })}
+            {custom.map(({ text, name }, index) => {
               const position = KAOMOJI_PRESETS.length + index
               return (
                 <span key={text} className="kaomoji-custom">
                   <button
                     type="button"
-                    className="kaomoji-item"
+                    className={`kaomoji-item${name === undefined ? '' : ' is-named'}`}
+                    title={name === undefined ? undefined : text}
                     tabIndex={position === current ? 0 : -1}
                     aria-keyshortcuts="Delete"
                     aria-describedby={`${panelId}-custom`}
@@ -209,13 +241,13 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
                       remove(text, position)
                     }}
                   >
-                    {text}
+                    {name ?? text}
                   </button>
                   <button
                     type="button"
                     className="kaomoji-remove"
                     tabIndex={-1}
-                    aria-label={`删除 ${text}`}
+                    aria-label={`删除 ${name ?? text}`}
                     title="删除"
                     onMouseDown={keepFocus}
                     onClick={() => remove(text, position)}
@@ -226,28 +258,46 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
               )
             })}
             {adding ? (
-              <form className="kaomoji-add-form" onSubmit={save}>
-                <input
+              <form className="kaomoji-add-form" onSubmit={save} onKeyDown={onAddKeyDown}>
+                <textarea
                   ref={inputRef}
-                  type="text"
+                  rows={3}
                   aria-label="新颜文字"
                   placeholder="颜文字"
                   autoComplete="off"
                   spellCheck={false}
                   value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Escape' || event.nativeEvent.isComposing) return
-                    // Closes the form only; the panel stays.
-                    event.preventDefault()
-                    setAdding(false)
-                    setDraft('')
-                    focusAt.current = itemCount - 1
-                  }}
+                  onChange={(event) => setDraft(normalizeKaomojiText(event.target.value))}
                 />
-                <button type="submit" className="btn btn-small btn-primary" disabled={!canAddKaomoji(custom, draft)}>
-                  保存
-                </button>
+                <div className="kaomoji-add-row">
+                  <label className="kaomoji-add-name">
+                    名称
+                    <input
+                      type="text"
+                      placeholder="可不填"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={draftName}
+                      aria-invalid={nameTooLong || undefined}
+                      aria-describedby={nameTooLong ? `${panelId}-name-note` : undefined}
+                      onChange={(event) => setDraftName(event.target.value)}
+                    />
+                  </label>
+                  {nameTooLong && (
+                    <span className="kaomoji-add-note" id={`${panelId}-name-note`}>
+                      名称最多 {KAOMOJI_LIMITS.nameLength} 个字
+                    </span>
+                  )}
+                  <button
+                    type="submit"
+                    className="btn btn-small btn-primary"
+                    aria-keyshortcuts={sendAriaShortcut(platform)}
+                    title={sendShortcutLabel(platform) || undefined}
+                    disabled={newKaomoji(custom, draft, draftName) === null}
+                  >
+                    保存
+                  </button>
+                </div>
               </form>
             ) : (
               <button

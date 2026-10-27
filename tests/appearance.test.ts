@@ -243,7 +243,7 @@ describe('settings', () => {
     rail: { order: ['history', 'search'], hidden: ['drafts'] },
     boards: { favorites: ['forum:4', 'timeline:1'], hidden: ['forum:20'], order: { 'group-1': ['forum:9', 'forum:4'] }, collapsed: ['group-2', 'timelines'] },
     listWidth: 512,
-    customKaomoji: ['(｀・ω・)', '多行\n颜文字']
+    customKaomoji: [{ text: '(｀・ω・)' }, { text: '多行\n颜文字', name: '多行' }]
   }
 
   it('keeps navigation, list width and custom kaomoji across a restart', async () => {
@@ -272,12 +272,38 @@ describe('settings', () => {
     expect(open(path).loadSettings()).toEqual({ ...DEFAULT_SETTINGS, density: 'compact' })
   })
 
+  it('reads stored kaomoji saved as plain strings as unnamed entries', () => {
+    const stored = new Map<string, unknown>([['customKaomoji', ['(｀・ω・)', '多行\n颜文字']]])
+    expect(settingsFromStored(stored).customKaomoji).toEqual([{ text: '(｀・ω・)' }, { text: '多行\n颜文字' }])
+  })
+
+  it('drops only the invalid stored kaomoji and keeps the rest and the other settings', () => {
+    const stored = new Map<string, unknown>([
+      ['density', 'compact'],
+      ['customKaomoji', [
+        'old',
+        { text: 'a', name: '一二三四五六七八九十一二三四五六七' },
+        { text: 'b', name: '两\n行' },
+        { text: 'c', name: ' padded ' },
+        { text: 'd', name: '' },
+        { text: 'e\r\nf' },
+        { text: 'old', name: 'again' },
+        { text: 'g', name: '一二三四五六七八九十一二三四五六' },
+        { text: 'h', extra: true },
+        42
+      ]]
+    ])
+    expect(settingsFromStored(stored)).toEqual({ ...DEFAULT_SETTINGS, density: 'compact', customKaomoji: [{ text: 'old' }, { text: 'g', name: '一二三四五六七八九十一二三四五六' }] })
+  })
+
   it.each([
     ['a timeline order', { boards: { ...navigation.boards, order: { timelines: ['timeline:1'] } } }, 'boards.order'],
     ['a timeline in a group order', { boards: { ...navigation.boards, order: { 'group-1': ['timeline:1'] } } }, 'boards.order'],
     ['a repeated favorite', { boards: { ...navigation.boards, favorites: ['forum:4', 'forum:4'] } }, 'boards.favorites'],
     ['an unknown feature', { rail: { order: ['settings'], hidden: [] } }, 'rail.order'],
-    ['a blank kaomoji', { customKaomoji: ['  '] }, 'customKaomoji'],
+    ['a blank kaomoji', { customKaomoji: [{ text: '  ' }] }, 'customKaomoji'],
+    ['a kaomoji named past 16 characters', { customKaomoji: [{ text: 'x', name: '一二三四五六七八九十一二三四五六七' }] }, 'customKaomoji'],
+    ['a kaomoji repeated under another name', { customKaomoji: [{ text: 'x' }, { text: 'x', name: '别名' }] }, 'customKaomoji'],
     ['a list narrower than the minimum', { listWidth: 100 }, 'listWidth']
   ])('refuses %s', (_label, patch, field) => {
     expect(applySettingsPatch(DEFAULT_SETTINGS, patch)).toMatchObject({ ok: false, issues: [{ field }] })
