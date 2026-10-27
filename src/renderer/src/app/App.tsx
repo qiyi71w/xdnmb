@@ -285,10 +285,10 @@ export function App() {
 
   // ---------- Reminders: opening a thread clears its counts ----------
   // Every user step that shows a thread changes what the active tab shows (tab, entry, thread):
-  // opening from a list or beside it, links, quote jumps, back / forward, switching tabs. The first
-  // state seen is the startup's (a restored workspace, including its active tab): it is not an
-  // open. A tab opened in the background shows nothing until it becomes active. Re-renders, focus
-  // and later count growth change nothing here, so a displayed thread is not cleared again.
+  // opening from a list or beside it, links, quote jumps, new tabs, back / forward, switching tabs.
+  // The first state seen is the startup's (a restored workspace, including its active tab): it is
+  // not an open. Re-renders, focus and later count growth change nothing here, so a displayed
+  // thread is not cleared again.
   const shown = current === null ? null : shownThread(current)
   const shownThreadId = shown?.threadId ?? null
   const shownKey = current === null || shown === null ? null : `${current.id}:${currentEntry(current).key}:${shown.threadId}`
@@ -673,8 +673,7 @@ export function App() {
     dispatch({
       type: 'open-tab',
       entry: { kind: 'list', feed: null },
-      split: stateRef.current.settings.newTabSplitDefault,
-      background: false
+      split: stateRef.current.settings.newTabSplitDefault
     })
   }, [])
 
@@ -761,7 +760,7 @@ export function App() {
       if (state === null) return
       // The new tab takes the next tab ID.
       const tabId = state.nextId
-      dispatch({ type: 'open-tab', entry: entryFor(draft.target), split: stateRef.current.settings.newTabSplitDefault, background: false })
+      dispatch({ type: 'open-tab', entry: entryFor(draft.target), split: stateRef.current.settings.newTabSplitDefault })
       dispatchEditors({ type: 'open-draft', tabId, draft })
       requestFocus(focusKey(tabId, draft.target))
     },
@@ -833,8 +832,7 @@ export function App() {
     dispatch({
       type: 'open-tab',
       entry: { kind: 'list', feed: { kind: 'reminders' } },
-      split: stateRef.current.settings.newTabSplitDefault,
-      background: false
+      split: stateRef.current.settings.newTabSplitDefault
     })
   }, [closeNav, leaveSettings, reloadReminders])
 
@@ -857,7 +855,7 @@ export function App() {
 
   /** Opens a sent record's place from 历史 in a new active tab (global split default). */
   const openEntryInTab = useCallback((entry: EntryInit) => {
-    dispatch({ type: 'open-tab', entry, split: stateRef.current.settings.newTabSplitDefault, background: false })
+    dispatch({ type: 'open-tab', entry, split: stateRef.current.settings.newTabSplitDefault })
   }, [])
 
   /** Opens a thread from a list row / thread menu in a new active tab (global split default). */
@@ -867,8 +865,7 @@ export function App() {
     dispatch({
       type: 'open-tab',
       entry: { kind: 'thread', thread: { threadId, head, target, snapshot: null, unlocatedPostId: null } },
-      split: stateRef.current.settings.newTabSplitDefault,
-      background: false
+      split: stateRef.current.settings.newTabSplitDefault
     })
   }, [])
 
@@ -1318,8 +1315,15 @@ export function App() {
             </QuoteActiveContext.Provider>
             </QuoteControllerContext.Provider>
           </ContentRegistryContext.Provider>
-          {/* Outside every reader's content: a quote card is not part of any thread view. */}
-          {quote.cardProps !== null && <QuoteCard {...quote.cardProps} />}
+          {/* Outside every reader's content: a quote card is not part of any thread view. Its nested
+              quotes still go through the quote controller (click, Enter, menu, new tab). */}
+          {quote.cardProps !== null && (
+            <QuoteControllerContext.Provider value={quote.controller}>
+              <QuoteActiveContext.Provider value={quote.activeKey}>
+                <QuoteCard {...quote.cardProps} />
+              </QuoteActiveContext.Provider>
+            </QuoteControllerContext.Provider>
+          )}
           {/* The in-thread search sheet (Ctrl/Cmd+F); not while a 搜索 page holds the local search open. */}
           {tabs !== null && search.state.openTab === tabs.activeId && searchPageTab === null && (
             <SearchSheet

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { QuoteLocation } from '../../src/shared/api'
 import type { ThreadReadingState } from '../../src/shared/reading'
-import { canLocate, initialQuoteState, isCurrentLocate, quoteReducer, type QuoteAction, type QuoteSource, type QuoteState } from '../../src/renderer/src/features/quote/quoteState'
+import { canLocate, initialQuoteState, isCurrentLocate, locateCommit, quoteReducer, type QuoteAction, type QuoteSource, type QuoteState } from '../../src/renderer/src/features/quote/quoteState'
 import {
   activeTab,
-  backgroundTabEntry,
+  newTabEntry,
   currentEntry,
   entryThread,
   initialTabsState,
@@ -114,19 +114,20 @@ describe('quote navigation in the tab history', () => {
     expect(currentEntry(activeTab(run(state, { type: 'back', tabId: id })))).toMatchObject({ thread: { threadId: '100', snapshot: left('101') } })
   })
 
-  it('opens a background tab with the global split default and no copy of the source history', () => {
+  it('opens a located quote in a new active tab with the global split default and no copy of the source history', () => {
     const state = quote(readingA(), left('101'), open('200', '201'))
     const source = activeTab(state)
     for (const splitDefault of [true, false]) {
       const after = run(state, {
         type: 'open-tab',
-        entry: backgroundTabEntry(currentEntry(source), splitDefault, open('300', '301')),
-        split: splitDefault,
-        background: true
+        entry: newTabEntry(currentEntry(source), splitDefault, open('300', '301')),
+        split: splitDefault
       })
-      expect(after.activeId).toBe(source.id)
-      expect(activeTab(after)).toBe(source)
-      const opened = after.tabs.find((tab) => tab.id !== source.id)!
+      const opened = activeTab(after)
+      expect(opened.id).not.toBe(source.id)
+      expect(after.tabs.map((tab) => tab.id)).toEqual([source.id, opened.id])
+      // The source tab keeps its history and place untouched for switching back.
+      expect(after.tabs.find((tab) => tab.id === source.id)).toBe(source)
       expect(opened).toMatchObject({ split: splitDefault, index: 0 })
       expect(opened.entries).toHaveLength(1)
       expect(currentEntry(opened)).toMatchObject(
@@ -287,5 +288,27 @@ describe('quote card requests', () => {
     state = apply(state, { type: 'locate-done', cardId: id, seq: state.card!.locate!.seq, result: { status: 'unknown-thread' } })
     expect(canLocate(state.card!)).toBe(false)
     expect(apply(state, { type: 'locate-start', cardId: id, intent: 'navigate' })).toBe(state)
+  })
+
+  it('opens a new tab only for a located post; every other result stays on the card, and click / Enter still jump in place', () => {
+    expect(locateCommit('new-tab', located)).toBe('new-tab')
+    expect(locateCommit('navigate', located)).toBe('navigate')
+    expect(locateCommit('resolve', located)).toBe('card')
+    const missing = { kind: 'not-found', detail: null } as never
+    for (const result of [
+      { status: 'failed', threadId: null, error: network },
+      { status: 'failed', threadId: '100', error: missing },
+      { status: 'unknown-thread' },
+      { status: 'thread-known', threadId: '100', head: { id: '100' } as never }
+    ] satisfies QuoteLocation[]) {
+      expect(locateCommit('new-tab', result)).toBe('card')
+      expect(locateCommit('navigate', result)).toBe('card')
+    }
+    // A new-tab locate pins the card like a jump, so its failure stays visible where the quote is.
+    let state = apply(initialQuoteState, { type: 'open', source: source('150'), trigger: 'hover' })
+    const id = state.card!.id
+    state = apply(state, { type: 'locate-start', cardId: id, intent: 'new-tab' })
+    state = apply(state, { type: 'locate-done', cardId: id, seq: state.card!.locate!.seq, result: { status: 'failed', threadId: null, error: network } })
+    expect(state.card).toMatchObject({ id, pinned: true, locate: { intent: 'new-tab', result: { status: 'failed' } } })
   })
 })

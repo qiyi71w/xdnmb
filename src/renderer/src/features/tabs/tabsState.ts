@@ -120,8 +120,8 @@ export interface TabsState {
 }
 
 export type TabsAction =
-  /** `split` is the global “新标签默认开启分栏” value at creation time. */
-  | { type: 'open-tab'; entry: EntryInit; split: boolean; background: boolean }
+  /** Opens a tab after the active one and switches to it; `split` is the global “新标签默认开启分栏” value at creation time. */
+  | { type: 'open-tab'; entry: EntryInit; split: boolean }
   /** Closing the last tab leaves one new empty tab with `split`. */
   | { type: 'close-tab'; tabId: number; split: boolean }
   | { type: 'activate'; tabId: number }
@@ -169,11 +169,11 @@ function makeEntry(init: EntryInit, key: number, origin: EntryOrigin = null): Ta
 }
 
 /**
- * First entry of a background tab opened for a located quote. The tab gets the global split default
- * and no copy of the source history: with split on and a list shown in the source, the target opens
+ * First entry of a new tab opened for a located quote. The tab gets the global split default and
+ * no copy of the source history: with split on and a list shown in the source, the target opens
  * beside that list (fresh, not the source's loaded pages); otherwise as a whole-page thread.
  */
-export function backgroundTabEntry(source: TabEntry, splitDefault: boolean, thread: ThreadOpen): EntryInit {
+export function newTabEntry(source: TabEntry, splitDefault: boolean, thread: ThreadOpen): EntryInit {
   return splitDefault && source.kind === 'list' && source.feed !== null
     ? { kind: 'list', feed: source.feed, thread }
     : { kind: 'thread', thread }
@@ -240,7 +240,7 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       const tabs = [...state.tabs.slice(0, at + 1), tab, ...state.tabs.slice(at + 1)]
       return {
         tabs,
-        activeId: action.background ? state.activeId : tab.id,
+        activeId: tab.id,
         nextId: state.nextId + 1,
         nextKey: state.nextKey + 1
       }

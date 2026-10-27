@@ -323,7 +323,7 @@ describe('returning to search results through history', () => {
     const secondKey = currentEntry(activeTab(tabs)).key
     ;({ search, tabs } = openHit(run(search, { type: 'open', tabId, view: 'local' }), tabs, returns, '2', '200'))
 
-    tabs = runTabs(tabs, { type: 'open-tab', entry: { kind: 'list', feed: null }, split: true, background: false })
+    tabs = runTabs(tabs, { type: 'open-tab', entry: { kind: 'list', feed: null }, split: true })
     pruneReturns(returns, tabs)
     expect([...returns.keys()].sort()).toEqual([firstKey, secondKey].sort())
     expect(activeTab(tabs).entries.some((entry) => returns.has(entry.key))).toBe(false)
