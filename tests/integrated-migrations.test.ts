@@ -681,4 +681,20 @@ describe('schema v19: failed attempts may keep the forum’s error text', () => 
     expect(db.listPublications()).toEqual(before)
     expect(db.listPublications().every((attempt) => !('forumMessage' in attempt))).toBe(true)
   })
+
+  it('leaves the v18 file byte-for-byte unchanged when the v19 migration fails', () => {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 18)).close()
+    const original = readFileSync(path)
+    const failing = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 18), { version: 19, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 19)!.up(connection)
+      throw new Error('injected failure after adding the column')
+    } }])
+    connections.push(failing)
+    expect(failing.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failing.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(Object.keys(attempts(path)[0]!)).not.toContain('forum_message')
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+  })
 })
