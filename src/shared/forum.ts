@@ -23,8 +23,10 @@ export type ContentNode =
   /** Explicit reference to another post, e.g. `>>No.50000001`. Interaction belongs to quote navigation. */
   | { type: 'quoteRef'; postId: PostId; raw: string }
   | { type: 'emphasis'; style: EmphasisStyle; children: ContentNode[] }
-  /** Forum quote styling (`<font color="#789922">`), rendered as a semantic quote span. */
+  /** Forum quote styling (`<font color="#789922">`, inline green), rendered as a semantic quote span. */
   | { type: 'greentext'; children: ContentNode[] }
+  /** Official red inline styling (`color: red`), shown in the theme's danger ink, never the forum's value. */
+  | { type: 'redtext'; children: ContentNode[] }
   /** Absolute http(s) link only; anything else is reduced to its text children. */
   | { type: 'link'; href: string; children: ContentNode[] }
 

@@ -32,6 +32,7 @@ import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
 import { useImageScope } from '../image/useImageLoad'
+import { useListImageViewer } from '../image/useListImageViewer'
 import { ListFilterBar } from '../search/FilterFields'
 import { contentFilterCount, filterList, headMeta } from '../search/listFilters'
 import { NO_CONTENT_FILTERS } from '../search/searchState'
@@ -262,7 +263,7 @@ export function SubscriptionPane({
 
   // ---------- Scroll memory (same approach as the forum list) ----------
   const scrollRef = useRef<HTMLDivElement>(null)
-  const images = useImageScope(scrollRef)
+  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(scrollRef), scrollRef)
   const scrollTop = useRef(remembered?.scrollTop ?? saved?.scrollTop ?? 0)
   useLayoutEffect(() => {
     filtersRef.current = filters
@@ -423,6 +424,7 @@ export function SubscriptionPane({
         tabIndex={-1}
         data-pane-focus={view === 'list' ? '' : undefined}
         hidden={view !== 'list'}
+        inert={viewerOpen}
       >
         <header className="list-header">
           <div className="list-title-row">
@@ -643,6 +645,7 @@ export function SubscriptionPane({
           )}
         </div>
       </div>
+      {viewer}
       {view === 'reconcile' && (
         <div className="list-scroll" tabIndex={-1} data-pane-focus="">
           <ReconcileView headingRef={reconcileHeadingRef} onBack={() => showView('list')} />

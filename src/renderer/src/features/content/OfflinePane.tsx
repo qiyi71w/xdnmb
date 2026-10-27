@@ -13,6 +13,7 @@ import { meaningfulTitle } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
 import { useImageScope } from '../image/useImageLoad'
+import { useListImageViewer } from '../image/useListImageViewer'
 import { ListFilterBar } from '../search/FilterFields'
 import { contentFilterCount, filterList } from '../search/listFilters'
 import { useThreadMetadata } from '../search/useThreadMetadata'
@@ -64,7 +65,7 @@ export function OfflinePane({
   const { list, entries, load, remove, update, starting, startFailures, pollFailures } = useOfflineList()
   const { isDeleting } = useOfflineDeletions()
   const bodyRef = useRef<HTMLDivElement>(null)
-  const images = useImageScope(bodyRef)
+  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(bodyRef), bodyRef)
   const openInTab = useOpenThreadInTab()
   useRegisterContent('lists', entryKey, {
     refresh: () => {
@@ -149,7 +150,7 @@ export function OfflinePane({
 
   return (
     <section className="list-pane retained-page" aria-labelledby={headingId} aria-busy={list.status === 'loading' || undefined}>
-      <div className="list-scroll" ref={bodyRef} onScroll={onScroll} tabIndex={-1} data-pane-focus="">
+      <div className="list-scroll" ref={bodyRef} onScroll={onScroll} tabIndex={-1} data-pane-focus="" inert={viewerOpen}>
         <header className="list-header">
           <div className="list-title-row">
             <h2 className="list-title" id={headingId} ref={headingRef} tabIndex={-1}>
@@ -260,6 +261,7 @@ export function OfflinePane({
         )}
         <div className="list-footer" />
       </div>
+      {viewer}
       {rowMenu !== null && menuEntry !== undefined && (
         <OfflineRowMenu
           key={`menu:${rowMenu.threadId}`}

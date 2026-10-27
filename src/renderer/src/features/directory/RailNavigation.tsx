@@ -1,4 +1,4 @@
-// The navigation: the icon rail, with up to five favorite boards under its 版块 button. That button
+// The navigation: the icon rail, with the favorite boards under its 版块 button. That button
 // (and the board name at the top of a board list) opens a wide panel beside the rail: a filter with
 // 关闭 beside it, 收藏, then every group laid out in columns. Choosing a board closes it.
 // The panel is not modal: Esc, 关闭 or a press outside cancels it (focus back to its opener), Tab

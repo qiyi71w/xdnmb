@@ -129,7 +129,8 @@ function contentNodes(value: unknown, depth: number): ContentNode[] {
         if (!EMPHASIS.has(node.style as string)) fail()
         return { type: 'emphasis', style: node.style as never, children: contentNodes(node.children, depth + 1) }
       case 'greentext':
-        return { type: 'greentext', children: contentNodes(node.children, depth + 1) }
+      case 'redtext':
+        return { type: node.type, children: contentNodes(node.children, depth + 1) }
       case 'link': {
         const href = string(node.href)
         if (!URL.canParse(href) || !['http:', 'https:'].includes(new URL(href).protocol)) fail()

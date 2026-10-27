@@ -38,7 +38,7 @@ it('runs the production database worker with real trigram search, batched rebuil
     await store.savePost({ id: '100', title: 'Trigram 中文标题', forumId: null, createdAt: null, userHash: null, name: null,
       isAdmin: null, isSage: null, image: null, imageKnown: true, content: [{ type: 'text', text: 'worker content' }], plainText: 'worker content' }, '2026-10-24T00:00:00Z')
     const upper = await store.searchBoundary()
-    const input = { query: '中文标', scope: { kind: 'local' as const }, filters: { forumId: null, fromDate: null, toDate: null, image: 'any' as const }, after: 0, upper }
+    const input = { query: '中文标', scope: { kind: 'local' as const }, filters: { forumId: null, fromDate: null, toDate: null, image: 'any' as const, postKind: 'any' as const }, after: 0, upper }
     expect(await store.searchBatch(input)).toMatchObject({ batch: { hits: [{ postId: '100', retention: 'cache', hasImage: false }] } })
     for (let step = 0; step < 100; step++) if (!(await store.evictContentBatch(true)).more) break
     expect(await store.searchBatch({ ...input, query: 'worker' })).toMatchObject({ batch: { hits: [], done: true } })

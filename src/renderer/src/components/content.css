@@ -14,6 +14,11 @@
   color: var(--greentext);
 }
 
+/* Official red emphasis takes the theme's danger ink, never the forum's own colour value. */
+.redtext {
+  color: var(--danger-ink);
+}
+
 /* References read as part of the sentence, not as chips. Excerpts stay non-interactive. */
 .quote-ref {
   padding: 0;

@@ -123,8 +123,43 @@ describe('safe forum content', () => {
   })
 
   it('makes unknown elements transparent, merges adjacent text and drops empty containers', () => {
-    expect(parseContent('<unknown><div>a<span>b<p>c</p></span></div></unknown><b></b><font color="red">d</font>'))
+    expect(parseContent('<unknown><div>a<span>b<p>c</p></span></div></unknown><b></b><font color="blue">d</font>' +
+      '<span style="color:red"></span><span style="font-weight:bold"><span style="color:red"></span></span>'))
       .toEqual({ nodes: [{ type: 'text', text: 'abcd' }], plainText: 'abcd' })
+  })
+
+  it('shows official red, green and bold inline styles as closed nodes (No.52752005 head)', () => {
+    const html = '<span style=" color: red "><span style=" font-weight: bold ">新</span></span>官方<br />' +
+      '<span style=" color: green ">=== 注册已开启 ===</span>'
+    expect(parseContent(html)).toEqual({
+      nodes: [
+        { type: 'redtext', children: [{ type: 'emphasis', style: 'bold', children: [{ type: 'text', text: '新' }] }] },
+        { type: 'text', text: '官方' },
+        { type: 'lineBreak' },
+        { type: 'greentext', children: [{ type: 'text', text: '=== 注册已开启 ===' }] }
+      ],
+      plainText: '新官方\n=== 注册已开启 ==='
+    })
+  })
+
+  it('recognizes the red spellings on span and font, case- and whitespace-insensitively', () => {
+    const red = (text: string) => ({ type: 'redtext', children: [{ type: 'text', text }] })
+    expect(parseContent('<font color=red>a</font><font COLOR=" #FF0000 ">b</font>' +
+      '<span style="color:#f00;">c</span><font style="COLOR : Red">d</font>').nodes)
+      .toEqual([red('a'), red('b'), red('c'), red('d')])
+    expect(parseContent('<span style="font-weight: 700; color: RED">e</span>').nodes).toEqual([
+      { type: 'redtext', children: [{ type: 'emphasis', style: 'bold', children: [{ type: 'text', text: 'e' }] }] }
+    ])
+  })
+
+  it('drops every other declaration and attribute, keeping the text', () => {
+    expect(parseContent('<span style="color: blue">a</span><span style="font-size: 30px; background: red">b</span>' +
+      '<span style="font-weight: 500">c</span><span style="font-weight: normal">d</span>' +
+      '<span color="red">e</span><b style="color:red">f</b><span style="background-color: red">g</span>' +
+      '<span style="color: rgb(255, 0, 0)">h</span>')).toEqual({
+      nodes: [{ type: 'text', text: 'abcde' }, { type: 'emphasis', style: 'bold', children: [{ type: 'text', text: 'f' }] }, { type: 'text', text: 'gh' }],
+      plainText: 'abcdefgh'
+    })
   })
 
   it('preserves semantic emphasis and derives plain text recursively', () => {

@@ -1,12 +1,14 @@
 import type { QuoteLocation } from '../../../../shared/api'
 import type { PostId, ReadingMode, ThreadId } from '../../../../shared/forum'
-import type { ContentFilters, SearchBatch, SearchCoverage, SearchFetch, SearchHit, SearchResult, SearchScope } from '../../../../shared/search'
+import type { ContentFilters, SearchBatch, SearchCoverage, SearchFetch, SearchFilters, SearchHit, SearchResult, SearchScope } from '../../../../shared/search'
 import type { TabsState } from '../tabs/tabsState'
 
 /** The two searches of a tab: everything retained on this machine, or the thread being read. */
 export type SearchView = 'local' | 'thread'
 
 export const NO_CONTENT_FILTERS: ContentFilters = { forumId: null, fromDate: null, toDate: null, image: 'any' }
+/** The search page's filters: the list filters plus 发言类型. */
+export const NO_SEARCH_FILTERS: SearchFilters = { ...NO_CONTENT_FILTERS, postKind: 'any' }
 
 /** Hits a run collects before it pauses by itself; 继续搜索 asks for this many more. */
 export const HITS_PER_STEP = 40
@@ -29,7 +31,7 @@ export interface SearchRun {
   operationId: string
   query: string
   scope: SearchScope
-  filters: ContentFilters
+  filters: SearchFilters
   hits: SearchHit[]
   coverage: SearchCoverage | null
   status: RunStatus
@@ -42,7 +44,7 @@ export interface SearchRun {
 /** What one view shows: the text being typed, the filters being edited and the last run. */
 export interface SearchSession {
   input: string
-  filters: ContentFilters
+  filters: SearchFilters
   run: SearchRun | null
 }
 
@@ -126,9 +128,9 @@ export type SearchAction =
   | { type: 'view'; tabId: number; view: SearchView }
   /** `restoreSeq`: text typed before that restore (a late write of a replaced sheet) is ignored. */
   | { type: 'input'; tabId: number; view: SearchView; input: string; restoreSeq?: number }
-  | { type: 'filters'; tabId: number; view: SearchView; filters: ContentFilters }
+  | { type: 'filters'; tabId: number; view: SearchView; filters: SearchFilters }
   | { type: 'thread-mode'; tabId: number; mode: ReadingMode }
-  | { type: 'run-start'; tabId: number; view: SearchView; operationId: string; query: string; scope: SearchScope; filters: ContentFilters }
+  | { type: 'run-start'; tabId: number; view: SearchView; operationId: string; query: string; scope: SearchScope; filters: SearchFilters }
   | { type: 'run-next'; tabId: number; view: SearchView; operationId: string }
   | { type: 'run-batch'; tabId: number; view: SearchView; operationId: string; batch: SearchBatch }
   | { type: 'run-refused'; tabId: number; view: SearchView; operationId: string; reason: Refusal | 'internal' }
@@ -160,7 +162,7 @@ export const initialSearchState: SearchState = {
   nextSeq: 1
 }
 
-const emptySession = (): SearchSession => ({ input: '', filters: NO_CONTENT_FILTERS, run: null })
+const emptySession = (): SearchSession => ({ input: '', filters: NO_SEARCH_FILTERS, run: null })
 
 export function emptyTabSearch(): TabSearch {
   return { view: 'local', local: emptySession(), thread: { ...emptySession(), scope: null, fetch: null }, locate: null, lastHit: null }

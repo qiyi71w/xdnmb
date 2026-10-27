@@ -1,4 +1,4 @@
-import type { ContentFilters } from './search'
+import type { ContentFilters, SearchFilters } from './search'
 
 /** Recognized server calendar only; no timezone is inferred. */
 export function serverCalendarDate(value: string | null): string | null {
@@ -26,4 +26,15 @@ export function matchContentFilters(metadata: { forumId: string | null; createdA
     else if (metadata.hasImage !== (filters.image === 'with')) return { matches: false, uncertain: false }
   }
   return { matches: true, uncertain }
+}
+
+/** Content filters plus 发言类型; a post whose thread is unknown stays, marked uncertain. */
+export function matchSearchFilters(
+  metadata: { postId: string; threadId: string | null; forumId: string | null; createdAt: string | null; hasImage: boolean | null },
+  filters: SearchFilters
+): { matches: boolean; uncertain: boolean } {
+  const content = matchContentFilters(metadata, filters)
+  if (!content.matches || filters.postKind === 'any') return content
+  if (metadata.threadId === null) return { matches: true, uncertain: true }
+  return (metadata.postId === metadata.threadId) === (filters.postKind === 'head') ? content : { matches: false, uncertain: false }
 }

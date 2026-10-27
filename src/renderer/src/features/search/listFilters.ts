@@ -3,7 +3,7 @@
 // read to fill the list and the selected thread keeps being read.
 
 import type { Post } from '../../../../shared/forum'
-import type { ContentFilters } from '../../../../shared/search'
+import type { ContentFilters, SearchFilters } from '../../../../shared/search'
 import { matchContentFilters } from '../../../../shared/search-filters'
 
 /** Main-post metadata a list item is judged by; a field is null when not known. */
@@ -19,6 +19,11 @@ export function contentFilterCount(filters: ContentFilters): number {
     (filters.fromDate !== null || filters.toDate !== null ? 1 : 0) +
     (filters.image !== 'any' ? 1 : 0)
   )
+}
+
+/** Enabled filters of the search page: the list filters plus 发言类型. */
+export function searchFilterCount(filters: SearchFilters): number {
+  return contentFilterCount(filters) + (filters.postKind !== 'any' ? 1 : 0)
 }
 
 /** Image evidence of a post: present, known absent (explicit empty fields), or unknown. */

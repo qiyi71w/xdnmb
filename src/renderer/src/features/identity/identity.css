@@ -382,11 +382,15 @@
   min-width: 0;
 }
 
+/* Same face as `.user-hash` (the 饼干 ID elsewhere). */
 .account-cookie-id {
   font-family: var(--font-mono);
-  font-size: 0.95em;
-  font-weight: 600;
-  overflow-wrap: anywhere;
+  font-size: 1.0833em;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  font-feature-settings: 'zero';
+  line-height: 1.32;
+  white-space: nowrap;
 }
 
 .account-cookie-meta {

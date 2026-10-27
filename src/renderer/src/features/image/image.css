@@ -74,8 +74,8 @@
 }
 
 /* ---------- Image viewer ----------
-   Covers the reader that opened it (not the navigation or other panes). Frosted like the reader
-   toolbar; the image itself sits on the stage unblurred. */
+   Covers the reader or thread list that opened it (not the navigation or other panes). Frosted
+   like the reader toolbar; the image itself sits on the stage unblurred. */
 
 .image-viewer {
   position: absolute;

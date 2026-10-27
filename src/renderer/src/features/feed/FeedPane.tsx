@@ -15,6 +15,7 @@ import type { FeedInfo } from '../directory/feeds'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import type { WorkspaceList } from '../tabs/workspaceSnapshot'
 import { useImageScope } from '../image/useImageLoad'
+import { useListImageViewer } from '../image/useListImageViewer'
 import { QuoteEntryContext } from '../quote/QuoteContext'
 import { QuoteRef } from '../quote/QuoteRef'
 import type { FeedPageRecord } from './feedState'
@@ -85,7 +86,7 @@ export function FeedPane({
   const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtering = contentFilterCount(filters) > 0
   const scrollRef = useRef<HTMLDivElement>(null)
-  const images = useImageScope(scrollRef)
+  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(scrollRef), scrollRef)
   const sentinelRef = useRef<HTMLDivElement>(null)
   // While filtering, more pages are read only on request: a filter never scans the feed by itself.
   useNearEnd(scrollRef, sentinelRef, canAppend && !filtering, state.pages.length, loadMore)
@@ -242,7 +243,7 @@ export function FeedPane({
 
   return (
     <section className="list-pane" aria-label={`${kindLabel}：${info.name}`}>
-      <div className="list-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1} data-pane-focus="">
+      <div className="list-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1} data-pane-focus="" inert={viewerOpen}>
         <header className="list-header">
           <div className="list-title-row">
             <h2 className="list-title">
@@ -389,6 +390,7 @@ export function FeedPane({
           )}
         </div>
       </div>
+      {viewer}
     </section>
   )
 }

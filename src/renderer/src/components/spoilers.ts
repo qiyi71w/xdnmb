@@ -8,11 +8,12 @@ export type DisplayNode =
   | Exclude<ContentNode, { children: ContentNode[] }>
   | { type: 'emphasis'; style: EmphasisStyle; children: DisplayNode[] }
   | { type: 'greentext'; children: DisplayNode[] }
+  | { type: 'redtext'; children: DisplayNode[] }
   /** Link labels are never searched for markers: a mask cannot sit inside the link's control. */
   | { type: 'link'; href: string; children: ContentNode[] }
   | { type: 'spoiler'; children: DisplayNode[] }
 
-type Formatting = Extract<ContentNode, { type: 'emphasis' | 'greentext' }>
+type Formatting = Extract<ContentNode, { type: 'emphasis' | 'greentext' | 'redtext' }>
 type Leaf = Exclude<ContentNode, Formatting>
 /** A leaf with the formatting it sits in, outermost first. */
 interface Item { node: Leaf; path: readonly Formatting[] }
@@ -30,7 +31,7 @@ function append(nodes: DisplayNode[], node: Leaf): void {
 
 function flatten(nodes: readonly ContentNode[], path: readonly Formatting[], tokens: Token[]): void {
   for (const node of nodes) {
-    if (node.type === 'emphasis' || node.type === 'greentext') flatten(node.children, [...path, node], tokens)
+    if (node.type === 'emphasis' || node.type === 'greentext' || node.type === 'redtext') flatten(node.children, [...path, node], tokens)
     else if (node.type !== 'text') tokens.push({ node, path })
     else {
       let offset = 0

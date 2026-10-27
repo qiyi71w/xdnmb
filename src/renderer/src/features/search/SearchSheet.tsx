@@ -9,8 +9,8 @@ import { withSpoilers } from '../../components/spoilers'
 import { meaningfulTitle } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
-import { FilterFields, UncertainTag } from './FilterFields'
-import { contentFilterCount } from './listFilters'
+import { SearchFilterFields, UncertainTag } from './FilterFields'
+import { searchFilterCount } from './listFilters'
 import {
   coverageText,
   failureText,
@@ -156,7 +156,7 @@ export function SearchBody({
   const run = session.run
   const scope = tab.thread.scope
   const { input: inputRef, list: listRef } = focusRefs
-  const filterCount = contentFilterCount(session.filters)
+  const filterCount = searchFilterCount(session.filters)
   const [filtersOpen, setFiltersOpen] = useState(filterCount > 0)
 
   const [draft, setDraft] = useState({ view, text: session.input })
@@ -260,7 +260,12 @@ export function SearchBody({
       </form>
 
       <div className="search-filters" id={filtersId} hidden={!filtersOpen}>
-        <FilterFields value={session.filters} onChange={(filters) => commands.setFilters(tabId, view, filters)} forums={forums} />
+        <SearchFilterFields
+          value={session.filters}
+          onChange={(filters) => commands.setFilters(tabId, view, filters)}
+          forums={forums}
+          postKind={view === 'local'}
+        />
       </div>
 
       {view === 'thread' && scope !== null && (
@@ -534,7 +539,7 @@ function HitRow({
   const statusId = useId()
   const threadTitle = meaningfulTitle(hit.threadTitle)
   const title = meaningfulTitle(hit.title)
-  const isHead = hit.threadId !== null && hit.threadId === hit.postId
+  const kind = hit.threadId === null ? null : hit.threadId === hit.postId ? '主帖' : '回复'
   return (
     <li className={locate !== null ? 'search-hit is-locating' : 'search-hit'}>
       <button
@@ -549,7 +554,7 @@ function HitRow({
         {...itemProps}
       >
         <span className="search-hit-post">
-          <span className="search-hit-kind">{isHead ? '主帖' : '回复'}</span>
+          {kind !== null && <span className="search-hit-kind">{kind}</span>}
           <span className="search-hit-no">No.{hit.postId}</span>
           {hit.createdAt !== null && <span className="search-hit-time">{formatForumTime(hit.createdAt)}</span>}
         </span>

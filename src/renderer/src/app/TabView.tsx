@@ -121,7 +121,7 @@ export function TabView({
     if (!stranded) return
     const target =
       // A list pane may hide its list behind another view (订阅 › 同步与合并, the other pages of 历史).
-      (pane === 'list' ? shown.querySelector<HTMLElement>('.list-scroll:not([hidden]) .thread-row.is-selected') : null) ??
+      (pane === 'list' ? shown.querySelector<HTMLElement>('.list-scroll:not([hidden]) .thread-row.is-selected > .row-open') : null) ??
       shown.querySelector<HTMLElement>('[data-pane-focus]') ??
       shown
     target.focus({ preventScroll: pane === 'reader' })

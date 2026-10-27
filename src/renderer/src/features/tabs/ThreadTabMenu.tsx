@@ -14,9 +14,11 @@ export interface ThreadRowHandlers {
 
 export interface ThreadTabMenu {
   /**
-   * Spread on the focusable row of `threadId`: right-click / ContextMenu / Shift+F10 menu and
-   * middle-click. Empty for an unknown thread (`null`); no new-tab gestures outside the app shell
-   * or when not `openable` (the number is known but the thread cannot be opened yet: 复制串号 only).
+   * Spread on the row of `threadId`: right-click / ContextMenu / Shift+F10 menu and middle-click.
+   * The row is the focusable item itself, or a container holding it (`[data-roving-item]`) beside
+   * other controls; the menu focuses and returns to that item. Empty for an unknown thread (`null`);
+   * no new-tab gestures outside the app shell or when not `openable` (the number is known but the
+   * thread cannot be opened yet: 复制串号 only).
    */
   rowProps: (threadId: ThreadId | null, head?: Post | null, openable?: boolean) => ThreadRowHandlers
   /** Call first in the row's click handler: true when Ctrl/Cmd+click opened the thread in a new tab. */
@@ -82,8 +84,9 @@ export function useThreadTabMenu({ cookieColor = false }: { cookieColor?: boolea
       const inTab = openable ? openInTab : null
       const show = (event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
         event.preventDefault()
-        const row = event.currentTarget
-        const selection = selectionCopyItem(undefined, row)
+        const owner = event.currentTarget
+        const row = owner.matches('[data-roving-item]') ? owner : (owner.querySelector<HTMLElement>('[data-roving-item]') ?? owner)
+        const selection = selectionCopyItem(undefined, owner)
         // No scrolling into view: a scroll closes the menu that is about to open.
         row.focus({ preventScroll: true })
         setOpen({ threadId, head, openable, point: contextMenuPoint(event, row), row, selection })

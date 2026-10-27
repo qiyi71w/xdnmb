@@ -126,8 +126,8 @@ export function useLoadWhenNear(image: ImageLoad, near: NearViewport, target: Re
 }
 
 /**
- * Image scope of a view without a viewer (a thread list): its own view ID and lazy-load observer
- * rooted at `root`. Unmounting releases the view's images from reading protection.
+ * Image scope of a thread list (its viewer: `useListImageViewer`): its own view ID and lazy-load
+ * observer rooted at `root`. Unmounting releases the view's images from reading protection.
  */
 export function useImageScope(root: RefObject<Element | null>): ImageScope {
   const [viewId] = useState(() => crypto.randomUUID())

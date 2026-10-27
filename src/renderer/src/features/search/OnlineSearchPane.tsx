@@ -1,6 +1,6 @@
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
 import type { QuoteLocation, ReadError } from '../../../../shared/api'
-import type { BoardDirectory, ForumId, Post, PostId, ThreadId } from '../../../../shared/forum'
+import type { BoardDirectory, ForumId, Post, PostId, ThreadId, TimelineId } from '../../../../shared/forum'
 import { MAX_SEARCH_QUERY_LENGTH, type ForumLinkTarget, type SearchError, type SearchHit } from '../../../../shared/online-search'
 import { Icon } from '../../components/Icon'
 import { Loading } from '../../components/Notices'
@@ -42,6 +42,7 @@ type RowStatus =
   | { kind: 'failed'; subject: string; error: ReadError }
   | { kind: 'internal'; subject: string }
   | { kind: 'board-missing'; boardName: string; directoryLoaded: boolean }
+  | { kind: 'timeline-missing'; timelineId: TimelineId; directoryLoaded: boolean }
   | { kind: 'browser-failed' }
 
 interface RowState {
@@ -55,12 +56,18 @@ function postSubject(replyId: PostId, threadId: ThreadId): string {
   return replyId === threadId ? `主帖 No.${replyId}` : `回复 No.${replyId}`
 }
 
-/** 串 No.x／主帖 No.x／回复 No.y（串 No.x）／版面 名称／外部链接 */
-function targetLabel(target: ForumLinkTarget | null): string {
+/** 串 No.x／主帖 No.x／回复 No.y（串 No.x）／版面 名称／时间线 名称（或编号）／外部链接 */
+function targetLabel(target: ForumLinkTarget | null, directory: BoardDirectory | null): string {
   if (target === null) return '外部链接'
-  if (target.kind === 'board') return `版面 ${target.boardName}`
-  if (target.replyId === null) return `串 No.${target.threadId}`
-  return target.replyId === target.threadId ? `主帖 No.${target.threadId}` : `回复 No.${target.replyId}（串 No.${target.threadId}）`
+  switch (target.kind) {
+    case 'board':
+      return `版面 ${target.boardName}`
+    case 'timeline':
+      return `时间线 ${directory?.timelines.find((item) => item.id === target.timelineId)?.displayName ?? target.timelineId}`
+    case 'thread':
+      if (target.replyId === null) return `串 No.${target.threadId}`
+      return target.replyId === target.threadId ? `主帖 No.${target.threadId}` : `回复 No.${target.replyId}（串 No.${target.threadId}）`
+  }
 }
 
 /**
@@ -349,6 +356,16 @@ export function OnlineSearchPane({
       open({ kind: 'list', feed: { kind: 'forum', id: forumId } }, page, index)
       return
     }
+    if (target.kind === 'timeline') {
+      const timeline = directory?.timelines.find((item) => item.id === target.timelineId)
+      if (timeline === undefined) {
+        cancelLocate(false)
+        setRow({ page, index, status: { kind: 'timeline-missing', timelineId: target.timelineId, directoryLoaded: directory !== null } })
+        return
+      }
+      open({ kind: 'list', feed: { kind: 'timeline', id: timeline.id } }, page, index)
+      return
+    }
     if (target.replyId === null) {
       // PO links and page clues open the thread normally: no reading mode or position is changed.
       open({ kind: 'thread', thread: { threadId: target.threadId, head: null, target: null, snapshot: null, unlocatedPostId: null } }, page, index)
@@ -533,6 +550,7 @@ export function OnlineSearchPane({
                     <li key={key}>
                       <HitRow
                         hit={hit}
+                        label={targetLabel(hit.target, directory)}
                         hitKey={key}
                         status={row !== null && row.page === shownPage.pageNumber && row.index === index ? row.status : null}
                         itemProps={{
@@ -652,6 +670,7 @@ function Pager({ results, session, pendingPage }: { results: OnlineSearchResults
 
 function HitRow({
   hit,
+  label,
   hitKey,
   status,
   itemProps,
@@ -664,6 +683,8 @@ function HitRow({
   onOpenThread
 }: {
   hit: SearchHit
+  /** What the link was recognized as (串、回复、版面、时间线), or 外部链接. */
+  label: string
   hitKey: string
   status: RowStatus | null
   itemProps: { 'data-roving-item': string; tabIndex: number; onFocus: () => void }
@@ -680,11 +701,14 @@ function HitRow({
   const tabThread = knownThreadOf(target, status)
   // A reply link names its thread before being located: 复制串号 copies that number; opening waits for the location.
   const linkThreadId = target?.kind === 'thread' ? target.threadId : null
+  // A recognized link opens in Xidao; its web page stays one icon away at the row's end. An
+  // unrecognized one opens in the browser from the card itself and gets no extra button.
+  const browser = target !== null ? onBrowser : null
   // The row's own controls are reachable with Tab from the row that holds the list's tab stop.
   const tabIndex = itemProps.tabIndex
   const statusId = `online-search-hit-status-${hitKey}`
   return (
-    <article className="online-search-hit">
+    <article className={browser !== null ? 'online-search-hit has-browser' : 'online-search-hit'}>
       <button
         type="button"
         className="online-search-hit-main"
@@ -701,7 +725,7 @@ function HitRow({
         <span className="online-search-hit-top">
           <span className={target === null ? 'tag online-search-hit-kind is-external' : 'tag online-search-hit-kind'}>
             {target === null && <Icon name="external" size={12} />}
-            {targetLabel(target)}
+            {label}
           </span>
           {hit.date !== null && <span className="online-search-hit-date">{formatRecordTime(hit.date)}</span>}
         </span>
@@ -709,20 +733,22 @@ function HitRow({
         {hit.description !== null && <span className="online-search-hit-snippet">{hit.description}</span>}
         <span className="online-search-hit-source">{hit.url === null ? '链接不可用' : sourceText(hit.url)}</span>
       </button>
+      {browser !== null && (
+        <button
+          type="button"
+          className="icon-btn online-search-hit-browser"
+          tabIndex={tabIndex}
+          aria-label="在浏览器中打开"
+          title="在浏览器中打开"
+          onClick={browser}
+        >
+          <Icon name="external" size={16} />
+        </button>
+      )}
 
-      {(status !== null || (target !== null && onBrowser !== null)) && (
+      {status !== null && (
         <div className="online-search-hit-extra" id={statusId}>
-          {status !== null && (
-            <RowStatusView status={status} tabIndex={tabIndex} onBrowser={onBrowser} onCancel={onCancel} onRetry={onRetry} onOpenLocated={onOpenLocated} onOpenThread={onOpenThread} />
-          )}
-          {status === null && target !== null && onBrowser !== null && (
-            <div className="online-search-hit-actions">
-              <button type="button" className="btn btn-small btn-quiet" tabIndex={tabIndex} onClick={onBrowser}>
-                <Icon name="external" size={14} />
-                在浏览器中打开
-              </button>
-            </div>
-          )}
+          <RowStatusView status={status} tabIndex={tabIndex} onCancel={onCancel} onRetry={onRetry} onOpenLocated={onOpenLocated} onOpenThread={onOpenThread} />
         </div>
       )}
     </article>
@@ -732,7 +758,6 @@ function HitRow({
 function RowStatusView({
   status,
   tabIndex,
-  onBrowser,
   onCancel,
   onRetry,
   onOpenLocated,
@@ -740,19 +765,11 @@ function RowStatusView({
 }: {
   status: RowStatus
   tabIndex: number
-  onBrowser: (() => void) | null
   onCancel: () => void
   onRetry: () => void
   onOpenLocated: (location: Located) => void
   onOpenThread: (known: KnownThread) => void
 }) {
-  const browser =
-    onBrowser === null ? null : (
-      <button type="button" className="btn btn-small btn-quiet" tabIndex={tabIndex} onClick={onBrowser}>
-        <Icon name="external" size={14} />
-        在浏览器中打开
-      </button>
-    )
   const retry = (
     <button type="button" className="btn btn-small" tabIndex={tabIndex} onClick={onRetry}>
       <Icon name="refresh" size={14} />
@@ -760,7 +777,7 @@ function RowStatusView({
     </button>
   )
   let body: ReactNode
-  let actions: ReactNode = browser
+  let actions: ReactNode = null
   switch (status.kind) {
     case 'locating':
       body = <Loading live={false}>{status.intent === 'open' ? `正在定位${status.subject}…（Esc 取消）` : `正在重新定位${status.subject}…（Esc 取消）`}</Loading>
@@ -782,13 +799,10 @@ function RowStatusView({
         </Status>
       )
       actions = (
-        <>
-          <button type="button" className="btn btn-small" tabIndex={tabIndex} onClick={() => onOpenLocated(status.location)}>
-            <Icon name="arrowRight" size={14} />
-            打开
-          </button>
-          {browser}
-        </>
+        <button type="button" className="btn btn-small" tabIndex={tabIndex} onClick={() => onOpenLocated(status.location)}>
+          <Icon name="arrowRight" size={14} />
+          打开
+        </button>
       )
       break
     case 'thread-known':
@@ -798,12 +812,9 @@ function RowStatusView({
         </Status>
       )
       actions = (
-        <>
-          <button type="button" className="btn btn-small" tabIndex={tabIndex} onClick={() => onOpenThread(status.known)}>
-            打开原串
-          </button>
-          {browser}
-        </>
+        <button type="button" className="btn btn-small" tabIndex={tabIndex} onClick={() => onOpenThread(status.known)}>
+          打开原串
+        </button>
       )
       break
     case 'opening':
@@ -824,12 +835,7 @@ function RowStatusView({
           </p>
         </Status>
       )
-      actions = (
-        <>
-          {retry}
-          {browser}
-        </>
-      )
+      actions = retry
       break
     case 'unknown-thread':
       body = (
@@ -857,12 +863,7 @@ function RowStatusView({
           )}
         </Status>
       )
-      actions = (
-        <>
-          {retry}
-          {browser}
-        </>
-      )
+      actions = retry
       break
     }
     case 'internal':
@@ -872,12 +873,7 @@ function RowStatusView({
           <p className="online-search-status-detail">原因：应用内部请求失败</p>
         </Status>
       )
-      actions = (
-        <>
-          {retry}
-          {browser}
-        </>
-      )
+      actions = retry
       break
     case 'board-missing':
       body = (
@@ -888,13 +884,21 @@ function RowStatusView({
         </Status>
       )
       break
+    case 'timeline-missing':
+      body = (
+        <Status tone="info">
+          <p className="online-search-status-title">
+            {status.directoryLoaded ? `版面目录中没有时间线 ${status.timelineId}` : `版面目录尚未加载，无法确认时间线 ${status.timelineId}`}
+          </p>
+        </Status>
+      )
+      break
     case 'browser-failed':
       body = (
         <Status tone="error">
           <p className="online-search-status-title">无法在系统浏览器中打开这个链接</p>
         </Status>
       )
-      actions = null
       break
   }
   return (

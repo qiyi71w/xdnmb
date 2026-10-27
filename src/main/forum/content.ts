@@ -12,11 +12,41 @@ const emphasis: Readonly<Record<string, EmphasisStyle>> = {
 }
 
 type Container = Extract<ContentNode, { children: ContentNode[] }>
+interface Opened {
+  container: Container
+  parent: ContentNode[]
+}
 interface Frame {
   target: ContentNode[] | null
   inLink: boolean
-  container?: Container
-  parent?: ContentNode[]
+  /** Containers this tag opened, outermost first; each is dropped on close if it stayed empty. */
+  opened: Opened[]
+}
+
+const RED: Readonly<Record<string, true>> = { red: true, '#f00': true, '#ff0000': true }
+const GREEN: Readonly<Record<string, true>> = { green: true, '#789922': true }
+
+/**
+ * The only inline styles kept, from `span`/`font`: red or green text and bold. The color becomes a
+ * closed node type, never the forum's value; every other declaration is dropped.
+ */
+function inlineFormatting(name: string, attributes: Record<string, string>): Container[] {
+  if (name !== 'span' && name !== 'font') return []
+  let color = name === 'font' ? attributes.color?.replace(/\s+/g, '').toLowerCase() : undefined
+  let bold = false
+  for (const declaration of (attributes.style ?? '').split(';')) {
+    const colon = declaration.indexOf(':')
+    if (colon < 0) continue
+    const property = declaration.slice(0, colon).trim().toLowerCase()
+    const value = declaration.slice(colon + 1).replace(/\s+/g, '').toLowerCase()
+    if (property === 'color') color = value
+    else if (property === 'font-weight') bold = value === 'bold' || (/^\d+$/.test(value) && Number(value) >= 600)
+  }
+  const containers: Container[] = []
+  if (color !== undefined && Object.hasOwn(RED, color)) containers.push({ type: 'redtext', children: [] })
+  else if (color !== undefined && Object.hasOwn(GREEN, color)) containers.push({ type: 'greentext', children: [] })
+  if (bold) containers.push({ type: 'emphasis', style: 'bold', children: [] })
+  return containers
 }
 
 function appendText(nodes: ContentNode[], text: string): void {
@@ -92,34 +122,32 @@ export function submittedText(nodes: readonly ContentNode[]): string {
 /** Convert untrusted forum HTML into the closed, attribute-free content vocabulary. */
 export function parseContent(html: string): { nodes: ContentNode[]; plainText: string } {
   const nodes: ContentNode[] = []
-  const frames: Frame[] = [{ target: nodes, inLink: false }]
+  const frames: Frame[] = [{ target: nodes, inLink: false, opened: [] }]
   const parser = new Parser({
     onopentag(name, attributes) {
       const parent = frames[frames.length - 1]!
       if (parent.target === null || Object.hasOwn(droppedTags, name)) {
-        frames.push({ target: null, inLink: parent.inLink })
+        frames.push({ target: null, inLink: parent.inLink, opened: [] })
         return
       }
-      const target = parent.target
-      let container: Container | undefined
+      let target = parent.target
+      let inLink = parent.inLink
+      const containers: Container[] = []
       const style = Object.hasOwn(emphasis, name) ? emphasis[name] : undefined
-      if (style) container = { type: 'emphasis', style, children: [] }
-      else if (name === 'font' && attributes.color?.toLowerCase() === '#789922') {
-        container = { type: 'greentext', children: [] }
-      } else if (name === 'a' && !parent.inLink) {
+      if (style) containers.push({ type: 'emphasis', style, children: [] })
+      else if (name === 'a' && !parent.inLink) {
         const href = safeLink(attributes.href)
-        if (href !== null) container = { type: 'link', href, children: [] }
-      }
+        if (href !== null) containers.push({ type: 'link', href, children: [] })
+      } else containers.push(...inlineFormatting(name, attributes))
       if (name === 'br') target.push({ type: 'lineBreak' })
-      if (container) {
+      const opened: Opened[] = []
+      for (const container of containers) {
         target.push(container)
-        frames.push({
-          target: container.children,
-          inLink: parent.inLink || container.type === 'link',
-          container,
-          parent: target
-        })
-      } else frames.push({ target, inLink: parent.inLink })
+        opened.push({ container, parent: target })
+        target = container.children
+        inLink ||= container.type === 'link'
+      }
+      frames.push({ target, inLink, opened })
     },
     ontext(text) {
       const target = frames[frames.length - 1]!.target
@@ -128,7 +156,10 @@ export function parseContent(html: string): { nodes: ContentNode[]; plainText: s
     onclosetag() {
       if (frames.length === 1) return
       const frame = frames.pop()!
-      if (frame.container && frame.container.children.length === 0) frame.parent!.pop()
+      for (let index = frame.opened.length - 1; index >= 0; index--) {
+        const { container, parent } = frame.opened[index]!
+        if (container.children.length === 0) parent.pop()
+      }
     }
   }, { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true })
   parser.end(html)

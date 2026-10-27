@@ -17,7 +17,7 @@ import type { SearchApi, SearchFetch } from '../src/shared/search'
 import type { Post } from '../src/shared/forum'
 
 const at = '2026-10-24T00:00:00.000Z'
-const filters = { forumId: null, fromDate: null, toDate: null, image: 'any' as const }
+const filters = { forumId: null, fromDate: null, toDate: null, image: 'any' as const, postKind: 'any' as const }
 const resources: Array<{ folder: string; db: ReadingDatabase; service: SearchService; server: Server }> = []
 function post(id: string, body = 'searchable'): Post {
   return { id, title: null, forumId: null, createdAt: null, userHash: null, name: null, isAdmin: null, isSage: null,
