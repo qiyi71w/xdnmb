@@ -16,13 +16,14 @@ import type { ForumId, ThreadId, ThreadSummary } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import type {
   SubscriptionAction,
+  SubscriptionMergeSource,
   SubscriptionObservation,
   SubscriptionOperation,
   SubscriptionOverview,
   SubscriptionResult,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
-import { contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
+import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { selectionCopyItem } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
 import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
@@ -38,7 +39,8 @@ import { NO_CONTENT_FILTERS } from '../search/searchState'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 import { UnsettledLine, unsettledEntryOf, unsettledText, WriteStatus } from './SubscriptionActivity'
-import { ReconcileView } from './SubscriptionReconcile'
+import { previewBlocker, plansNeedingAttention, ReconcileHistoryDialog, ReconcileResult, ReconcileView } from './SubscriptionReconcile'
+import { taskMode, type ReconcileMode } from './reconcileState'
 import { SubscriptionRowMenu } from './SubscriptionRowMenu'
 import {
   decideChange,
@@ -94,7 +96,8 @@ export function SubscriptionPane({
   onOpenThread: (thread: ThreadSummary) => void
 }) {
   const subscriptions = useSubscriptionsContext()
-  const { overview, overviewFailed, refreshOverview, applyOverview, operations, active, change, busy, task, refreshPlans } = subscriptions
+  const { overview, overviewFailed, refreshOverview, applyOverview, operations, active, change, busy, task, plans, startPreview, dismissTask, revealSeq, claimReveal } =
+    subscriptions
   const openSettings = useSettingsOpener()
   const openInTab = useOpenThreadInTab()
   const registry = useContext(ContentRegistryContext)
@@ -103,8 +106,14 @@ export function SubscriptionPane({
     return memory?.kind === 'subscriptions' ? memory : null
   })
   const [saved] = useState(() => remembered === null ? registry?.savedLists.get(entryKey) : undefined)
-  /** 同步与合并 replaces the list in this pane; the list stays mounted (hidden) with its scroll position. */
-  const [view, setView] = useState<'list' | 'reconcile'>(remembered?.view ?? saved?.subscriptionView ?? 'list')
+  /**
+   * 同步与合并 replaces the list in this pane; the list stays mounted (hidden) with its scroll position.
+   * Previews live in this process only: a restored pane without one shows its list.
+   */
+  const [view, setView] = useState<'list' | 'reconcile'>(() =>
+    (remembered?.view ?? saved?.subscriptionView) === 'reconcile' && task !== null ? 'reconcile' : 'list'
+  )
+  const paneRef = useRef<HTMLElement>(null)
   const reconcileHeadingRef = useRef<HTMLHeadingElement>(null)
   const reconcileButtonRef = useRef<HTMLButtonElement>(null)
   const viewFocus = useRef(false)
@@ -114,10 +123,55 @@ export function SubscriptionPane({
     if (view === 'reconcile') reconcileHeadingRef.current?.focus()
     else reconcileButtonRef.current?.focus()
   }, [view])
-  const showView = (next: 'list' | 'reconcile') => {
-    viewFocus.current = true
+  /** `focus`: move focus to the new view (an explicit switch, or focus was in the view going away). */
+  const showView = (next: 'list' | 'reconcile', focus = true) => {
+    viewFocus.current = focus
     setView(next)
   }
+
+  /** 同步与合并: a running preview or plan is shown as it is; otherwise a fresh sync preview starts at once. */
+  const openReconcile = () => {
+    if (task?.phase !== 'previewing' && task?.phase !== 'executing') {
+      dismissTask()
+      if (overview !== null && previewBlocker(overview, 'sync') === null) void startPreview('sync', null)
+    }
+    showView('reconcile')
+  }
+  const restartPreview = (mode: ReconcileMode, mergeSource: SubscriptionMergeSource | null) => {
+    if (overview === null || busy || previewBlocker(overview, mode) !== null) return
+    void startPreview(mode, mergeSource)
+  }
+  /** 返回列表: an unexecuted preview is dropped (its reads stop); a running plan goes on. */
+  const leaveReconcile = () => {
+    dismissTask()
+    showView('list')
+  }
+
+  // An entry elsewhere (设置 › 订阅 › 从旧 UUID 合并…) started a preview: the first visible pane shows it.
+  useLayoutEffect(() => {
+    if (revealSeq === 0 || paneRef.current === null || paneRef.current.offsetParent === null) return
+    if (claimReveal(revealSeq)) showView('reconcile')
+  }, [revealSeq, claimReveal])
+
+  // A plan that finished returns this pane to its list, where the one-line result shows. The plan
+  // may have changed both collections, so the list it returns to is read again.
+  const phase = task?.phase ?? null
+  const lastPhase = useRef(phase)
+  const refreshRef = useRef<() => void>(() => undefined)
+  useLayoutEffect(() => {
+    const previous = lastPhase.current
+    lastPhase.current = phase
+    if (previous !== 'executing' || phase !== 'finished' || view !== 'reconcile') return
+    const focused = document.activeElement
+    const focusWasHere = focused === null || focused === document.body || paneRef.current?.contains(focused) === true
+    showView('list', focusWasHere)
+    if (task?.phase === 'finished' && task.outcome.type === 'plan') refreshRef.current()
+  }, [phase, view])
+
+  /** 同步记录 (更多 menu, or 查看 on a result): the plan to open in it, or null for the list only. */
+  const [history, setHistory] = useState<{ planId: string | null } | null>(null)
+  const [moreAt, setMoreAt] = useState<ContextMenuPoint | null>(null)
+  const moreRef = useRef<HTMLButtonElement>(null)
   const [state, dispatch] = useReducer(
     subscriptionListReducer,
     remembered?.state ?? initialSubscriptionListState,
@@ -238,8 +292,14 @@ export function SubscriptionPane({
     abandonRead()
     void readOn(null)
   }, [abandonRead, readOn])
-  // Ctrl/Cmd+R in 同步与合并 only re-reads local history: a preview is always started explicitly.
-  useRegisterContent('lists', entryKey, { refresh: view === 'reconcile' ? () => void refreshPlans() : refresh })
+  refreshRef.current = () => {
+    const latest = overviewRef.current
+    if (latest !== null && sourceBlocker(latest, latest.source) === null) refresh()
+  }
+  // Ctrl/Cmd+R in 同步与合并 reads a fresh preview (never while a preview is read or a plan runs).
+  useRegisterContent('lists', entryKey, {
+    refresh: view === 'reconcile' ? () => restartPreview(task === null ? 'sync' : taskMode(task), task?.mergeSource ?? null) : refresh
+  })
 
   const [switching, setSwitching] = useState<SubscriptionSource | null>(null)
   const [switchError, setSwitchError] = useState<string | null>(null)
@@ -358,16 +418,8 @@ export function SubscriptionPane({
     : overview !== null && !overview.writable
       ? '本地存储不可写'
       : blocker
-  const taskHint =
-    task === null || task.phase === 'preview-failed'
-      ? null
-      : task.phase === 'previewing'
-        ? '预览读取中'
-        : task.phase === 'preview'
-          ? '有一份未执行的预览'
-          : task.phase === 'executing'
-            ? '计划执行中'
-            : '计划已结束'
+  const taskHint = task?.phase === 'previewing' ? '预览读取中' : task?.phase === 'executing' ? '同步执行中' : null
+  const attention = plansNeedingAttention(plans)
 
   const labelOf = (threadId: ThreadId) => {
     const thread = threads.find((item) => item.head.id === threadId)
@@ -401,7 +453,7 @@ export function SubscriptionPane({
   // ---------- Render ----------
   if (overview === null) {
     return (
-      <section className="list-pane" aria-label="订阅" aria-busy={!overviewFailed || undefined}>
+      <section ref={paneRef} className="list-pane" aria-label="订阅" aria-busy={!overviewFailed || undefined}>
         <div className="pane-empty">
           {overviewFailed && <FailureNotice title="订阅设置读取失败" failure={{ type: 'internal' }} onRetry={() => void refreshOverview()} />}
         </div>
@@ -415,7 +467,7 @@ export function SubscriptionPane({
   const nextPage = shown !== null && shown.error === null && !readInFlight && blocker === null ? shown.nextPage : null
 
   return (
-    <section className="list-pane sub-pane" aria-label={`订阅：${SOURCE_NAME[source]}`}>
+    <section ref={paneRef} className="list-pane sub-pane" aria-label={`订阅：${SOURCE_NAME[source]}`}>
       <div
         className="list-scroll"
         ref={scrollRef}
@@ -434,7 +486,7 @@ export function SubscriptionPane({
                 type="button"
                 className="btn btn-small btn-quiet sub-recon-open"
                 ref={reconcileButtonRef}
-                onClick={() => showView('reconcile')}
+                onClick={openReconcile}
                 title={taskHint ?? undefined}
               >
                 同步与合并
@@ -474,6 +526,22 @@ export function SubscriptionPane({
               >
                 <RefreshIcon turn={refreshTurn} />
               </button>
+              <button
+                type="button"
+                ref={moreRef}
+                className="icon-btn sub-more"
+                aria-haspopup="menu"
+                aria-expanded={moreAt !== null}
+                aria-label={attention > 0 ? '更多（有需要查看的同步记录）' : '更多'}
+                title={attention > 0 ? '更多（有需要查看的同步记录）' : '更多'}
+                onClick={(event) => {
+                  // A press outside the open menu (this one included) has already closed it.
+                  const box = event.currentTarget.getBoundingClientRect()
+                  setMoreAt({ x: box.right, y: box.bottom + 4, end: true })
+                }}
+              >
+                <Icon name={attention > 0 ? 'alert' : 'more'} />
+              </button>
             </div>
           </div>
           {switchError !== null && (
@@ -497,6 +565,7 @@ export function SubscriptionPane({
             </div>
           )}
 
+          <ReconcileResult onView={(planId) => setHistory({ planId })} />
           <WriteStatus placed={placed} />
 
           <AddForm
@@ -644,9 +713,35 @@ export function SubscriptionPane({
         </div>
       </div>
       {view === 'reconcile' && (
-        <div className="list-scroll" tabIndex={-1} data-pane-focus="">
-          <ReconcileView headingRef={reconcileHeadingRef} onBack={() => showView('list')} />
-        </div>
+        <ReconcileView
+          headingRef={reconcileHeadingRef}
+          forumNames={forumNames}
+          selectedThreadId={selectedThreadId}
+          onOpenThread={onOpenThread}
+          onRestart={restartPreview}
+          onBack={leaveReconcile}
+        />
+      )}
+      {moreAt !== null && (
+        <ContextMenu
+          point={moreAt}
+          label="更多"
+          items={[
+            {
+              type: 'action',
+              key: 'history',
+              label: attention > 0 ? `同步记录（${attention} 份需要查看）` : '同步记录',
+              onSelect: () => setHistory({ planId: null })
+            }
+          ]}
+          onClose={(returnFocus) => {
+            setMoreAt(null)
+            if (returnFocus) moreRef.current?.focus()
+          }}
+        />
+      )}
+      {history !== null && (
+        <ReconcileHistoryDialog focusPlanId={history.planId} onClose={() => setHistory(null)} fallbackFocus={() => moreRef.current} />
       )}
       {rowMenu !== null && menuThread !== undefined && (
         <SubscriptionRowMenu

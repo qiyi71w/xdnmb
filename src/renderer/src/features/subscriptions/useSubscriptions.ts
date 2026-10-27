@@ -3,6 +3,7 @@ import type { OperationId } from '../../../../shared/api'
 import type { ThreadId } from '../../../../shared/forum'
 import type {
   SubscriptionAction,
+  SubscriptionChoice,
   SubscriptionFailure,
   SubscriptionMergeSource,
   SubscriptionOperation,
@@ -12,11 +13,13 @@ import type {
 } from '../../../../shared/subscriptions'
 import {
   busyTask,
-  defaultSelection,
+  defaultChoices,
   newestPlansFirst,
+  planChoices,
   previewCurrent,
-  selectedInOrder,
+  withChoice,
   type ExecuteOutcome,
+  type PreviewNotice,
   type ReconcileMode,
   type ReconcileTask
 } from './reconcileState'
@@ -87,14 +90,22 @@ export interface SubscriptionsState {
   busy: boolean
   /** Starts a fresh preview (bounded background reads, no writes). Merge needs an explicit old App reference. */
   startPreview: (mode: ReconcileMode, mergeSource: SubscriptionMergeSource | null) => Promise<void>
-  /** Checks or unchecks candidates of the current preview. */
-  setSelected: (ids: readonly string[], checked: boolean) => void
-  /** Executes the checked items of the current preview once; the preview is consumed whatever happens. */
+  /** Sets the choice of differences of the current preview (only where that choice is offered). */
+  setChoice: (ids: readonly string[], choice: SubscriptionChoice) => void
+  /**
+   * Executes the current preview's choices once; the preview is consumed whatever happens. A `stale`
+   * refusal wrote nothing: a fresh preview starts at once and says so.
+   */
   execute: () => Promise<void>
   /** Stops later reads / steps of the running preview or plan; an already sent write is not withdrawn. */
   stopTask: () => void
-  /** Drops a preview, a failed preview or a finished result. Running work cannot be dismissed. */
+  /** Drops a preview (a running preview read is cancelled), a failed preview or a finished result. A running plan stays. */
   dismissTask: () => void
+  /** Asks a subscription pane to show the 同步与合并 view (an entry outside the pane started a preview). */
+  revealSeq: number
+  requestReveal: () => void
+  /** The first visible pane takes the request; true at most once per request. */
+  claimReveal: (seq: number) => boolean
   /** Durable plan history (local), newest first; kept while a refresh fails. */
   plans: SubscriptionPlan[] | null
   plansFailed: boolean
@@ -309,12 +320,11 @@ export function useSubscriptions(): SubscriptionsState {
 
   const dismissLastWrite = useCallback(() => setLastWrite(null), [])
 
-  const startPreview = useCallback(
-    async (mode: ReconcileMode, mergeSource: SubscriptionMergeSource | null) => {
-      if (activeRef.current !== null || busyTask(taskRef.current)) return
-      if (mode === 'merge' && mergeSource === null) return
+  /** Reads a fresh preview; callers have checked that nothing else runs. */
+  const runPreview = useCallback(
+    async (mode: ReconcileMode, mergeSource: SubscriptionMergeSource | null, notice: PreviewNotice) => {
       const operationId = crypto.randomUUID()
-      setTask({ phase: 'previewing', mode, mergeSource, operationId, stopRequested: false })
+      setTask({ phase: 'previewing', mode, mergeSource, operationId, stopRequested: false, notice })
       let next: ReconcileTask
       try {
         const result =
@@ -322,7 +332,7 @@ export function useSubscriptions(): SubscriptionsState {
             ? await window.xidao.subscriptions.previewSync({ operationId })
             : await window.xidao.subscriptions.previewMerge({ sourceAppCredentialId: mergeSource.appCredentialId, operationId })
         next = result.ok
-          ? { phase: 'preview', preview: result.value, mergeSource, selected: defaultSelection(result.value) }
+          ? { phase: 'preview', preview: result.value, mergeSource, choices: defaultChoices(result.value), notice }
           : { phase: 'preview-failed', mode, mergeSource, reason: result.reason }
       } catch {
         next = { phase: 'preview-failed', mode, mergeSource, reason: 'internal' }
@@ -335,16 +345,20 @@ export function useSubscriptions(): SubscriptionsState {
     [setTask]
   )
 
-  const setSelected = useCallback(
-    (ids: readonly string[], checked: boolean) => {
+  const startPreview = useCallback(
+    async (mode: ReconcileMode, mergeSource: SubscriptionMergeSource | null) => {
+      if (activeRef.current !== null || busyTask(taskRef.current)) return
+      if (mode === 'merge' && mergeSource === null) return
+      await runPreview(mode, mergeSource, null)
+    },
+    [runPreview]
+  )
+
+  const setChoice = useCallback(
+    (ids: readonly string[], choice: SubscriptionChoice) => {
       const current = taskRef.current
       if (current?.phase !== 'preview') return
-      const selected = new Set(current.selected)
-      for (const id of ids) {
-        if (checked) selected.add(id)
-        else selected.delete(id)
-      }
-      setTask({ ...current, selected })
+      setTask({ ...current, choices: withChoice(current.preview, current.choices, ids, choice) })
     },
     [setTask]
   )
@@ -354,25 +368,31 @@ export function useSubscriptions(): SubscriptionsState {
     if (current?.phase !== 'preview' || activeRef.current !== null) return
     // A preview made for another UUID / binding is never sent; the backend would refuse it as stale too.
     if (!previewCurrent(current.preview, overviewRef.current?.context ?? null)) return
-    const { preview, mergeSource } = current
-    const selectedIds = selectedInOrder(preview, current.selected)
+    const { preview, mergeSource, choices } = current
+    const chosen = planChoices(preview, choices)
+    if (chosen.length === 0) return
     const operationId = crypto.randomUUID()
-    setTask({ phase: 'executing', preview, mergeSource, selectedIds, operationId, stopRequested: false })
+    setTask({ phase: 'executing', preview, mergeSource, choices, operationId, stopRequested: false })
     let outcome: ExecuteOutcome
     try {
-      const result = await window.xidao.subscriptions.executePlan({ previewId: preview.id, selectedItemIds: selectedIds, operationId })
+      const result = await window.xidao.subscriptions.executePlan({ previewId: preview.id, choices: chosen, operationId })
       outcome = result.ok ? { type: 'plan', plan: result.value } : { type: 'refused', reason: result.reason }
     } catch {
       outcome = { type: 'failed' }
     }
     if (!alive.current) return
     const ended = taskRef.current
-    const stopRequested = ended?.phase === 'executing' && ended.operationId === operationId ? ended.stopRequested : false
-    setTask({ phase: 'finished', preview, mergeSource, selectedIds, stopRequested, outcome })
+    const stillOurs = ended?.phase === 'executing' && ended.operationId === operationId
+    // Something changed after the preview and nothing was written: show the differences as they are now.
+    if (outcome.type === 'refused' && outcome.reason === 'stale' && stillOurs) {
+      void runPreview(preview.mode, mergeSource, 'stale')
+      return
+    }
+    setTask({ phase: 'finished', preview, mergeSource, choices, stopRequested: stillOurs ? ended.stopRequested : false, outcome })
     // History and journal are the durable record; re-read them whatever happened.
     void refreshPlans()
     void refreshOperations()
-  }, [setTask, refreshPlans, refreshOperations])
+  }, [setTask, runPreview, refreshPlans, refreshOperations])
 
   const stopTask = useCallback(() => {
     const current = taskRef.current
@@ -382,9 +402,21 @@ export function useSubscriptions(): SubscriptionsState {
   }, [setTask])
 
   const dismissTask = useCallback(() => {
-    if (busyTask(taskRef.current)) return
+    const current = taskRef.current
+    if (current?.phase === 'executing') return
+    // Its late result is dropped: the task no longer matches it.
+    if (current?.phase === 'previewing') window.xidao.subscriptions.cancel({ operationId: current.operationId }).catch(() => undefined)
     setTask(null)
   }, [setTask])
+
+  const [revealSeq, setRevealSeq] = useState(0)
+  const claimedReveal = useRef(0)
+  const requestReveal = useCallback(() => setRevealSeq((seq) => seq + 1), [])
+  const claimReveal = useCallback((seq: number) => {
+    if (seq <= claimedReveal.current) return false
+    claimedReveal.current = seq
+    return true
+  }, [])
 
   return {
     overview,
@@ -403,10 +435,13 @@ export function useSubscriptions(): SubscriptionsState {
     task,
     busy: active !== null || busyTask(task),
     startPreview,
-    setSelected,
+    setChoice,
     execute,
     stopTask,
     dismissTask,
+    revealSeq,
+    requestReveal,
+    claimReveal,
     plans,
     plansFailed,
     refreshPlans,

@@ -91,40 +91,6 @@ export function failureText(reason: SubscriptionFailure): string {
   }
 }
 
-function reportText(operation: SubscriptionOperation): string {
-  switch (operation.report) {
-    case 'pending':
-      return '尚未收到服务端报告'
-    case 'success':
-      return '服务端报告成功'
-    case 'rejected':
-      return '服务端拒绝了这次请求'
-    case 'unknown':
-      return '没有取得服务端报告，请求可能已经生效'
-  }
-}
-
-/** Report plus its error classification (e.g. 限流或需要验证), so a stopped result never hides why. */
-export function reportSummary(operation: SubscriptionOperation): string {
-  const reason = operation.reportError === null ? '' : `（${describeReadError(operation.reportError)}）`
-  return `${reportText(operation)}${reason}`
-}
-
-export function verificationText(operation: SubscriptionOperation): string {
-  switch (operation.verification) {
-    case 'present':
-      return '回读看到这个串在订阅中'
-    case 'absent-supported':
-      return '回读从第 1 页读到结束候选都没有这个串'
-    case 'absent-unproven':
-      return '回读没有找到这个串，但不能证明它已不在订阅中'
-    case 'mismatch':
-      return '回读结果与服务端报告不一致'
-    case 'unknown':
-      return '尚未取得可用的回读'
-  }
-}
-
 /** Whether a journal entry should offer the read-only 核对. */
 export function needsReconcile(operation: SubscriptionOperation): boolean {
   return (
