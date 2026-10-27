@@ -7,6 +7,7 @@ import { createContext, useMemo, useSyncExternalStore, type ReactNode } from 're
 import type { BoardDirectory } from '../../../../shared/forum'
 import { RAIL_FEATURES, type BoardSettings, type RailFeature, type RailSettings } from '../../../../shared/settings'
 import type { IconName } from '../../components/Icon'
+import { moveKey } from '../../lib/reorder'
 import { useSettings } from '../../lib/settingsContext'
 import { listKey, type ListRef } from '../tabs/tabsState'
 
@@ -165,16 +166,6 @@ function toggled<T>(list: readonly T[], value: T, on: boolean): T[] {
   return on ? [...without, value] : without
 }
 
-function moved<T>(list: readonly T[], key: T, delta: -1 | 1): T[] {
-  const result = [...list]
-  const from = result.indexOf(key)
-  const to = from + delta
-  if (from < 0 || to < 0 || to >= result.length) return result
-  result.splice(from, 1)
-  result.splice(to, 0, key)
-  return result
-}
-
 /** Only forum groups take a custom board order; timelines keep the directory order. */
 export function isReorderableGroup(groupId: string): boolean {
   return groupId.startsWith('group-')
@@ -183,16 +174,17 @@ export function isReorderableGroup(groupId: string): boolean {
 /** Changes to the rail and board preferences, each saved to the settings at once. */
 export interface NavActions {
   setFeatureShown(id: FeatureId, shown: boolean): void
-  /** Moves a feature one place in the rail order (hidden features count as places). */
-  moveFeature(id: FeatureId, delta: -1 | 1): void
+  /** Moves a feature into `target`'s place in the rail order (hidden features count as places). */
+  moveFeature(id: FeatureId, target: FeatureId): void
   /** Puts a feature right before `before` in the rail order, or last when `before` is `null`. */
   placeFeature(id: FeatureId, before: FeatureId | null): void
   setFavorite(key: string, favorite: boolean): void
-  moveFavorite(key: string, delta: -1 | 1): void
+  /** Moves a favorite into `target`'s place in the favorites order. */
+  moveFavorite(key: string, target: string): void
   setBoardsHidden(keys: readonly string[], hidden: boolean): void
   setCollapsed(groupIds: readonly string[], collapsed: boolean): void
-  /** Moves a board within its forum group; `keys` is the group's current display order. */
-  moveBoard(groupId: string, keys: readonly string[], key: string, delta: -1 | 1): void
+  /** Moves a board into `target`'s place within its forum group; `keys` is the group's current display order. */
+  moveBoard(groupId: string, keys: readonly string[], key: string, target: string): void
 }
 
 export function useNavActions(): NavActions {
@@ -205,9 +197,9 @@ export function useNavActions(): NavActions {
       setFeatureShown(id: FeatureId, shown: boolean) {
         rail({ hidden: toggled(latest().rail.hidden, id, !shown) })
       },
-      /** Moves a feature one place in the rail order (hidden features count as places). */
-      moveFeature(id: FeatureId, delta: -1 | 1) {
-        rail({ order: moved(featureIds(), id, delta) })
+      moveFeature(id: FeatureId, target: FeatureId) {
+        const order = moveKey(featureIds(), id, target)
+        if (order !== null) rail({ order })
       },
       /** Puts a feature right before `before` in the rail order, or last when `before` is `null`. */
       placeFeature(id: FeatureId, before: FeatureId | null) {
@@ -220,8 +212,9 @@ export function useNavActions(): NavActions {
       setFavorite(key: string, favorite: boolean) {
         boards({ favorites: toggled(latest().boards.favorites, key, favorite) })
       },
-      moveFavorite(key: string, delta: -1 | 1) {
-        boards({ favorites: moved(latest().boards.favorites, key, delta) })
+      moveFavorite(key: string, target: string) {
+        const favorites = moveKey(latest().boards.favorites, key, target)
+        if (favorites !== null) boards({ favorites })
       },
       setBoardsHidden(keys: readonly string[], hidden: boolean) {
         const set = new Set(latest().boards.hidden)
@@ -239,10 +232,9 @@ export function useNavActions(): NavActions {
         }
         boards({ collapsed: [...set] })
       },
-      /** Moves a board within its forum group; `keys` is the group's current display order. */
-      moveBoard(groupId: string, keys: readonly string[], key: string, delta: -1 | 1) {
-        if (!isReorderableGroup(groupId)) return
-        boards({ order: { ...latest().boards.order, [groupId]: moved(keys, key, delta) } })
+      moveBoard(groupId: string, keys: readonly string[], key: string, target: string) {
+        const order = isReorderableGroup(groupId) ? moveKey(keys, key, target) : null
+        if (order !== null) boards({ order: { ...latest().boards.order, [groupId]: order } })
       }
     }
   }, [latest, write])

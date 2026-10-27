@@ -1,10 +1,12 @@
-// The settings page's 功能显示 (show / hide each rail feature, 上移 / 下移 in the rail order) and
-// 版块管理 (filter, favorite, hide, reorder boards within forum groups; timelines keep their order).
+// The settings page's 功能显示 (show / hide each rail feature, sort the rail order by handle) and
+// 版块管理 (filter, favorite, hide, sort favorites and boards within forum groups by handle;
+// timelines keep their order, nothing sorts while filtering).
 
 import { useId, useRef, useState } from 'react'
 import type { BoardDirectory } from '../../../../shared/forum'
 import type { BoardSettings } from '../../../../shared/settings'
 import { Icon } from '../../components/Icon'
+import { SortHandle, SortStatus, useSortableList, type SortableList } from '../../components/SortHandle'
 import { useSettings } from '../../lib/settingsContext'
 import { matches, matchingGroups } from './BoardPicker'
 import { DirectorySkeleton, useBoardView } from './navParts'
@@ -15,14 +17,23 @@ export function FeatureVisibilitySection() {
   const prefs = useSettings().settings.rail
   const actions = useNavActions()
   const ordered = orderedFeatures(prefs.order)
+  const sort = useSortableList(
+    ordered.map((feature) => feature.id),
+    (from, to) => actions.moveFeature(ordered[from]!.id, ordered[to]!.id)
+  )
   return (
     <section className="settings-section" aria-labelledby={headingId}>
       <h3 className="settings-section-title" id={headingId}>
         功能显示
       </h3>
-      <ul className="shell-manage-list">
-        {ordered.map((feature, index) => (
-          <li key={feature.id} className="shell-manage-row">
+      <ul ref={sort.listRef} className={`shell-manage-list ${sort.listClassName}`} style={sort.listStyle}>
+        {ordered.map((feature) => (
+          <li
+            key={feature.id}
+            className={sort.dragging === feature.id ? 'shell-manage-row is-sort-dragging' : 'shell-manage-row'}
+            data-sort-key={feature.id}
+          >
+            <SortHandle sort={sort} itemKey={feature.id} label={feature.label} />
             <label className="shell-check">
               <input
                 type="checkbox"
@@ -32,17 +43,10 @@ export function FeatureVisibilitySection() {
               <Icon name={feature.icon} className="shell-check-icon" />
               <span>{feature.label}</span>
             </label>
-            <span className="shell-manage-actions">
-              <MoveButtons
-                label={feature.label}
-                first={index === 0}
-                last={index === ordered.length - 1}
-                onMove={(delta) => actions.moveFeature(feature.id, delta)}
-              />
-            </span>
           </li>
         ))}
       </ul>
+      <SortStatus sort={sort} />
     </section>
   )
 }
@@ -62,6 +66,10 @@ export function BoardManageSection({ directory }: { directory: BoardDirectory | 
   })
   const groups = filtering ? matchingGroups(all, normalized) : all
   const nothing = filtering && favorites.length === 0 && groups.length === 0
+  const favoriteSort = useSortableList(
+    favorites.map((item) => item.key),
+    (from, to) => actions.moveFavorite(favorites[from]!.key, favorites[to]!.key)
+  )
 
   return (
     <section className="settings-section" aria-labelledby={headingId}>
@@ -91,22 +99,13 @@ export function BoardManageSection({ directory }: { directory: BoardDirectory | 
               {favorites.length === 0 ? (
                 <p className="settings-empty">没有收藏的版块</p>
               ) : (
-                <ul className="shell-manage-list">
-                  {favorites.map((item, index) => (
-                    <ManageRow
-                      key={item.key}
-                      item={item}
-                      prefs={prefs}
-                      actions={actions}
-                      move={
-                        filtering
-                          ? null
-                          : { first: index === 0, last: index === favorites.length - 1, onMove: (delta) => actions.moveFavorite(item.key, delta) }
-                      }
-                    />
+                <ul ref={favoriteSort.listRef} className={`shell-manage-list ${favoriteSort.listClassName}`} style={favoriteSort.listStyle}>
+                  {favorites.map((item) => (
+                    <ManageRow key={item.key} item={item} prefs={prefs} actions={actions} sort={filtering ? null : favoriteSort} />
                   ))}
                 </ul>
               )}
+              <SortStatus sort={favoriteSort} />
             </div>
           )}
           {groups.map((group) => (
@@ -139,6 +138,7 @@ export function BoardManageSection({ directory }: { directory: BoardDirectory | 
  */
 function ManageGroup({ group, prefs, actions, filtering }: { group: BoardGroup; prefs: BoardSettings; actions: Actions; filtering: boolean }) {
   const keys = group.boards.map((item) => item.key)
+  const sort = useSortableList(keys, (from, to) => actions.moveBoard(group.id, keys, keys[from]!, keys[to]!))
   const hiddenCount = group.boards.filter((item) => prefs.hidden.includes(item.key)).length
   const reorder = !filtering && isReorderableGroup(group.id)
   const head = (
@@ -151,21 +151,14 @@ function ManageGroup({ group, prefs, actions, filtering }: { group: BoardGroup; 
     </>
   )
   const list = (
-    <ul className="shell-manage-list">
-      {group.boards.map((item, index) => (
-        <ManageRow
-          key={item.key}
-          item={item}
-          prefs={prefs}
-          actions={actions}
-          move={
-            reorder
-              ? { first: index === 0, last: index === group.boards.length - 1, onMove: (delta) => actions.moveBoard(group.id, keys, item.key, delta) }
-              : null
-          }
-        />
-      ))}
-    </ul>
+    <>
+      <ul ref={sort.listRef} className={`shell-manage-list ${sort.listClassName}`} style={sort.listStyle}>
+        {group.boards.map((item) => (
+          <ManageRow key={item.key} item={item} prefs={prefs} actions={actions} sort={reorder ? sort : null} />
+        ))}
+      </ul>
+      {reorder && <SortStatus sort={sort} />}
+    </>
   )
   if (filtering) {
     return (
@@ -190,18 +183,20 @@ function ManageRow({
   item,
   prefs,
   actions,
-  move
+  sort
 }: {
   item: Board
   prefs: BoardSettings
   actions: Actions
-  /** `null`: no reordering (timelines, filtered list). */
-  move: { first: boolean; last: boolean; onMove: (delta: -1 | 1) => void } | null
+  /** The list this row sorts in; `null`: no sorting (timelines, filtered list). */
+  sort: SortableList | null
 }) {
   const favorite = prefs.favorites.includes(item.key)
   const hidden = prefs.hidden.includes(item.key)
+  const className = ['shell-manage-row', hidden ? 'is-hidden' : null, sort?.dragging === item.key ? 'is-sort-dragging' : null]
   return (
-    <li className={hidden ? 'shell-manage-row is-hidden' : 'shell-manage-row'}>
+    <li className={className.filter(Boolean).join(' ')} data-sort-key={sort === null ? undefined : item.key}>
+      {sort !== null && <SortHandle sort={sort} itemKey={item.key} label={item.label} />}
       <Icon name={item.icon} className="shell-manage-icon" />
       <span className="shell-manage-label">{item.label}</span>
       <span className="shell-manage-actions">
@@ -224,35 +219,7 @@ function ManageRow({
         >
           {hidden ? '已隐藏' : '隐藏'}
         </button>
-        {move !== null && <MoveButtons label={item.label} first={move.first} last={move.last} onMove={move.onMove} />}
       </span>
     </li>
-  )
-}
-
-function MoveButtons({ label, first, last, onMove }: { label: string; first: boolean; last: boolean; onMove: (delta: -1 | 1) => void }) {
-  return (
-    <>
-      <button
-        type="button"
-        className="icon-btn"
-        aria-label={`上移 ${label}`}
-        title="上移"
-        aria-disabled={first ? true : undefined}
-        onClick={() => !first && onMove(-1)}
-      >
-        <Icon name="arrowUp" />
-      </button>
-      <button
-        type="button"
-        className="icon-btn shell-flip"
-        aria-label={`下移 ${label}`}
-        title="下移"
-        aria-disabled={last ? true : undefined}
-        onClick={() => !last && onMove(1)}
-      >
-        <Icon name="arrowUp" />
-      </button>
-    </>
   )
 }

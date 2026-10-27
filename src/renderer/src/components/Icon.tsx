@@ -34,7 +34,8 @@ const PATHS = {
       <path d="M12 4v11M7 10.5l5 5 5-5" />
     </>
   ),
-  arrowUp: <path d="M12 19V5M6.5 10.5 12 5l5.5 5.5" />,
+  /** ≡: a sort handle. */
+  grip: <path d="M5 8h14M5 12h14M5 16h14" />,
   arrowRight: <path d="M5 12h14M13.5 6.5 19 12l-5.5 5.5" />,
   arrowLeft: <path d="M19 12H5M10.5 6.5 5 12l5.5 5.5" />,
   plus: <path d="M12 5.5v13M5.5 12h13" />,
