@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PILL_REST, scrollStep, type PillEnds, type PillTracker } from '../../src/renderer/src/features/thread/jumpPills'
+import { PILL_REST, scrollStep, type PillEnds, type PillTracker } from '../../src/renderer/src/features/thread/jumpPillModel'
 
 const VIEWPORT = 900
 const AWAY: PillEnds = { atStart: false, atEnd: false }

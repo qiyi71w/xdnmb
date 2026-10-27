@@ -1,9 +1,9 @@
 // The reader's corner 开头 / 末尾 buttons. The reader reports its user scrolls
-// (never a position it set itself) and the user's input on it; the rules are in jumpPills.ts.
+// (never a position it set itself) and the user's input on it; the rules are in jumpPillModel.ts.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { PILL_GESTURE_MS, PILL_IDLE_MS, PILL_REST, scrollStep, type JumpPill, type PillEnds, type PillTracker } from './jumpPills'
+import { PILL_GESTURE_MS, PILL_IDLE_MS, PILL_REST, scrollStep, type JumpPill, type PillEnds, type PillTracker } from './jumpPillModel'
 
 export interface JumpPills {
   shown: JumpPill | null
