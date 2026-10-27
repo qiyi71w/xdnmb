@@ -31,6 +31,22 @@ function composeEntry(tabId: number, target: PostTarget, className?: string) {
 const READER_ENTRY = 'btn tb-btn is-primary'
 
 /**
+ * Targets whose floating editor panel the tab shows while it is active (and nothing covers it):
+ * a page thread's replies; a forum list's new threads, plus the replies of the thread beside the
+ * split list. The panel floats over the tab, so it stays shown whichever pane the single-pane
+ * fallback shows. New threads go to forums only; timelines and local lists have no post target.
+ */
+export function composeTargetsOf(tab: Tab): PostTarget[] {
+  const entry = currentEntry(tab)
+  if (entry.kind === 'thread') return [{ kind: 'reply', threadId: entry.thread.threadId }]
+  if (entry.kind !== 'list' || entry.feed === null) return []
+  const targets: PostTarget[] = []
+  if (entry.feed.kind === 'forum') targets.push({ kind: 'thread', forumId: entry.feed.id })
+  if (tab.split && entry.thread !== null) targets.push({ kind: 'reply', threadId: entry.thread.threadId })
+  return targets
+}
+
+/**
  * Content of one tab: its current history entry. Inactive tabs stay mounted but hidden, keeping
  * their lists, readers and reading positions. In the single-pane fallback both panes stay
  * mounted and the entry's `pane` decides which one is displayed. The editors of the targets it
@@ -112,12 +128,11 @@ export function TabView({
   }, [active, single, pane])
 
   /** Targets whose floating panel this tab can show. */
-  const composeTargets: ComposeTarget[] = []
+  const composeTargets: ComposeTarget[] = composeTargetsOf(tab).map((target) => ({ target, displayed: active && !composeHidden }))
 
   let body
   if (entry.kind === 'thread') {
     const target: PostTarget = { kind: 'reply', threadId: entry.thread.threadId }
-    composeTargets.push({ target, displayed: active && !composeHidden })
     body = (
       <main className="reader-wrap is-page" ref={readerRef} tabIndex={-1}>
         <ThreadPane
@@ -149,10 +164,7 @@ export function TabView({
     const feed = entry.feed
     const selectedThreadId = tab.split ? (entry.thread?.threadId ?? null) : null
     const info = isLocalList(feed) ? null : feedInfo(feed)
-    // New threads go to forums only; timelines and subscriptions have no post target. The panel
-    // floats over the tab, so it stays shown whichever pane the single-pane fallback shows.
     const forumTarget: PostTarget | null = feed.kind === 'forum' ? { kind: 'thread', forumId: feed.id } : null
-    if (forumTarget !== null) composeTargets.push({ target: forumTarget, displayed: active && !composeHidden })
     let list
     if (feed.kind === 'history' || feed.kind === 'offline') {
       list = (
@@ -215,9 +227,6 @@ export function TabView({
           <div className="pane-empty list-pending">{state}</div>
         </div>
       )
-    }
-    if (splitShown && entry.thread !== null) {
-      composeTargets.push({ target: { kind: 'reply', threadId: entry.thread.threadId }, displayed: active && !composeHidden })
     }
     body = splitShown ? (
       <div className={single ? 'split is-single' : 'split'}>

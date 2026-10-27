@@ -1,18 +1,9 @@
-import type { AttachFailure, DraftAttachment, PostFields, PostTarget } from '../../../../shared/drafts'
+import type { AttachFailure, DraftAttachment, PostFields } from '../../../../shared/drafts'
 import type { CredentialId, IdentityOverview } from '../../../../shared/identity'
 import { formatRecordTime } from '../../lib/time'
 import { ATTEMPT_STATE_LABEL } from '../publication/publicationText'
 import { isUnsaved, type Editor } from './editorsState'
 import type { SaveFailure } from './useEditorsStore'
-
-export function forumLabel(forumId: string, forumName: (forumId: string | null) => string | null): string {
-  return forumName(forumId) ?? `版面 ${forumId}`
-}
-
-/** “回复 No.X” / “在「X」发新串”. */
-export function targetText(target: PostTarget, forumName: (forumId: string | null) => string | null): string {
-  return target.kind === 'reply' ? `回复 No.${target.threadId}` : `在「${forumLabel(target.forumId, forumName)}」发新串`
-}
 
 /** One-line summary of what an editor or draft holds. */
 export function excerpt(fields: PostFields, attachment: DraftAttachment | null, max = 60): string {

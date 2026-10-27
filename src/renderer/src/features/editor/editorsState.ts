@@ -32,7 +32,8 @@ export type EditorPublication =
 /** Outcome of the last send shown in an unlocked editor, until the next send. */
 export type SendNotice =
   | { kind: 'refused'; reason: PublicationProblem }
-  | { kind: 'failed'; problem: PublicationProblem | null; saved: boolean }
+  /** `forumMessage`: the forum's own error text of the failed attempt, shown in full. */
+  | { kind: 'failed'; problem: PublicationProblem | null; saved: boolean; forumMessage?: string }
   /** An uncertain request turned out to have left no attempt: nothing was sent. */
   | { kind: 'not-sent' }
 
@@ -128,7 +129,7 @@ export type EditorsAction =
   /** Nothing was sent (refused, cancelled, or no attempt exists): unlocks the editor. */
   | { type: 'publish-released'; editorId: EditorId; notice: SendNotice | null }
   /** Explicit failure: unlocks and continues the automatically saved draft when there is one. */
-  | { type: 'publish-failed'; editorId: EditorId; problem: PublicationProblem | null; draft: SavedDraft | null }
+  | { type: 'publish-failed'; editorId: EditorId; problem: PublicationProblem | null; forumMessage?: string; draft: SavedDraft | null }
   /** Removes a locked editor whose send was sent: its content now lives in its durable attempt. */
   | { type: 'publish-ended'; editorId: EditorId }
 
@@ -345,7 +346,8 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
         state,
         action.editorId,
         locked((editor) => {
-          const notice: SendNotice = { kind: 'failed', problem: action.problem, saved: action.draft !== null }
+          const notice: SendNotice = { kind: 'failed', problem: action.problem, saved: action.draft !== null,
+            ...(action.forumMessage === undefined ? {} : { forumMessage: action.forumMessage }) }
           const draft = action.draft
           if (draft === null) return { ...editor, publication: null, sendNotice: notice }
           return { ...editor, ...fromDraft(draft), identityUnknown: false, draft, publication: null, sendNotice: notice }
@@ -360,6 +362,15 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
 
 export function editorFor(state: EditorsState, target: PostTarget): Editor | null {
   return state.editors.find((editor) => sameTarget(editor.target, target)) ?? null
+}
+
+/**
+ * Whether the editor is on screen: expanded, and its target among those the active tab displays
+ * now (`displayed`, empty while the settings page covers the tabs).
+ */
+export function editorOnScreen(state: EditorsState, editorId: EditorId, displayed: readonly PostTarget[]): boolean {
+  const editor = state.editors.find((item) => item.id === editorId)
+  return editor !== undefined && editor.expanded && displayed.some((target) => sameTarget(target, editor.target))
 }
 
 export function editorForDraft(state: EditorsState, draftId: string): Editor | null {

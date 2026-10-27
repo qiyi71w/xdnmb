@@ -6,13 +6,14 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import { EMPTY_FIELDS, type DraftSaveInput } from '../src/shared/drafts'
-import { isUnsettled, type PublicationAttempt, type SubmitResult } from '../src/shared/publication'
+import { isUnsettled, type PublicationAttempt, type SendFailureNotice, type SubmitResult } from '../src/shared/publication'
 import type { Post } from '../src/shared/forum'
 import type { AppStore } from '../src/main/storage/contract'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { createDraftService } from '../src/main/drafts/service'
 import { openManagedImageFiles } from '../src/main/images/files'
 import { createPublicationService } from '../src/main/publication/service'
+import { createFailureNotifier } from '../src/main/publication/failureNotifier'
 import { createPublicationAdapter } from '../src/main/publication/adapter'
 import { createForumClient } from '../src/main/forum/client'
 import { createForumTransport } from '../src/main/forum/transport'
@@ -40,6 +41,8 @@ async function forum() {
   let mode: 'success' | 'reject' | 'drop' | 'unrelated' | 'empty' | 'hold' | 'hold-lookup' | 'preflight-rate' | 'stale' | 'read-rate' | 'readback-differs' = 'success'
   let release: (() => void) | null = null
   let last: Record<string, string> | null = null
+  /** What `reject` answers a POST with. */
+  let rejection = { status: 200, body: '<p class="error">发布太频繁</p>' }
   let number = 700
   const posts = new Map<string, Record<string, string>>()
   /** Posts the lists and thread pages do not show yet (as a lagging forum cache would). */
@@ -73,7 +76,8 @@ async function forum() {
       const respond = () => {
         res.setHeader('Set-Cookie', 'PHPSESSID=controlled-session; Path=/')
         res.setHeader('Content-Type', 'text/html')
-        res.end(mode === 'reject' ? '<p class="error">发布太频繁</p>' : '<p class="success">成功</p>')
+        if (mode === 'reject') res.statusCode = rejection.status
+        res.end(mode === 'reject' ? rejection.body : '<p class="success">成功</p>')
       }
       if (mode === 'hold') release = respond
       else respond()
@@ -112,12 +116,13 @@ async function forum() {
     /** New posts stay out of reads until `catchUp`. */
     lag() { lagging = true },
     catchUp() { lagging = false; unseen.clear() },
-    lagCount(by: number) { countLag = by } }
+    lagCount(by: number) { countLag = by },
+    reject(body: string, status = 200) { mode = 'reject'; rejection = { status, body } } }
 }
 
 type Checks = { afterSendMs?: number | null; onRecover?: boolean; gapMs?: number }
 /** Automatic checks stay off unless a test is about them. */
-async function setup(checks: Checks = { afterSendMs: null, onRecover: false }) {
+async function setup(checks: Checks = { afterSendMs: null, onRecover: false }, options: { onRecorded?: (attempt: PublicationAttempt) => void } = {}) {
   const remote = await forum()
   const dir = mkdtempSync(join(tmpdir(), 'xidao-publication-'))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
@@ -136,7 +141,8 @@ async function setup(checks: Checks = { afterSendMs: null, onRecover: false }) {
     const drafts = createDraftService({ store, files })
     const service = createPublicationService({ store, drafts, files, protector,
       clientFor: userhash => createForumClient({ transport: createForumTransport({ allowedOrigins: [remote.origin], credentialOrigins: [remote.origin] }), baseUrl: remote.origin, browseIdentity: async () => userhash }),
-      adapter: createPublicationAdapter({ origin: remote.origin, apiOrigin: remote.origin, publishTimeoutMs: 1500 }), deadlineMs: 1500, checks: { gapMs: 0, ...active } })
+      adapter: createPublicationAdapter({ origin: remote.origin, apiOrigin: remote.origin, publishTimeoutMs: 1500 }), deadlineMs: 1500, checks: { gapMs: 0, ...active },
+      onRecorded: options.onRecorded })
     await service.recover(); await drafts.recover()
     return { service, drafts }
   }
@@ -292,6 +298,88 @@ it('saves an explicit rejection exactly once and sends again only on a new delib
   expect(await finished(s.service, retry.id)).toMatchObject({ state: 'confirmed' })
   expect(s.db.listDrafts()).toEqual([])
   expect(s.remote.seen.filter(r => r.path.startsWith('/Home/'))).toHaveLength(2)
+})
+
+it('notifies only explicit failures with their saved draft, never refusals, unknown results or a quit without a window', async () => {
+  const inApp: SendFailureNotice[] = []
+  const system: Array<{ title: string; body: string }> = []
+  let front = true
+  const failures = createFailureNotifier({
+    foreground: () => front,
+    showInApp: notice => { inApp.push(notice); return true },
+    isSupported: () => true,
+    create: message => { system.push(message); return { on() {}, show() {} } },
+    forumName: async id => (id === '1' ? '测试版' : null),
+    async openDraft() {}
+  })
+  const recorded: Array<Promise<void>> = []
+  const s = await setup(undefined, { onRecorded: value => { recorded.push(failures.recorded(value)) } })
+  const send = async (editorId: string, content = `正文 ${editorId}`) =>
+    finished(s.service, attempt(await s.service.submit({ requestId: randomUUID(), editorId, payload: payload(s.a, content) })).id)
+
+  s.remote.setMode('reject')
+  const rejected = await send('front')
+  await Promise.all(recorded)
+  expect(inApp).toEqual([{ attemptId: rejected.id, editorId: 'front', draftId: rejected.savedDraftId, problem: 'rate-limited', target: { kind: 'thread', forumId: '1' }, forumMessage: '发布太频繁' }])
+  expect(s.db.listDrafts().map(draft => draft.id)).toEqual([rejected.savedDraftId])
+
+  front = false
+  const behind = await send('behind', '不能出现在通知里')
+  await Promise.all(recorded)
+  expect(system).toEqual([{ title: '发送失败：论坛限制了发言频率，已停止', body: '在「测试版」发新串，内容已存为草稿' }])
+  // The forum's own words stay in the app.
+  expect(JSON.stringify(system)).not.toMatch(/不能出现|cookie-A|发布太频繁/)
+  expect(behind.savedDraftId).not.toBeNull()
+
+  // Not sent at all (local check), result unknown, and failure reached while finishing a quit: no notice.
+  expect(await s.service.submit({ requestId: randomUUID(), editorId: 'empty', payload: payload(s.a, '  ') })).toEqual({ kind: 'refused', reason: 'empty' })
+  s.remote.setMode('drop')
+  expect(await send('unknown')).toMatchObject({ state: 'unknown' })
+  s.remote.setMode('reject')
+  s.service.setUnattended(true)
+  expect(await send('quitting')).toMatchObject({ state: 'failed' })
+  await Promise.all(recorded)
+  expect(inApp).toHaveLength(1)
+  expect(system).toHaveLength(1)
+})
+
+it('keeps the forum’s own error text of a rejection, cut to 120 characters, across a restart', async () => {
+  const s = await setup()
+  const send = async () => finished(s.service, attempt(await s.service.submit({ requestId: randomUUID(), editorId: 'editor-1', payload: payload(s.a, `正文 ${randomUUID()}`) })).id)
+
+  // Only the first error element's text, whitespace collapsed; tags inside are not kept as markup.
+  s.remote.reject('<html><head><title>出错了</title></head><body><h1>提示</h1>\n<p class="error">\n  该串已被\n  <b>锁定</b>，<br />无法回复  </p><p class="error">第二条</p><p>返回</p></body></html>')
+  const first = await send()
+  expect(first).toMatchObject({ state: 'failed', problem: 'rejected', forumMessage: '该串已被 锁定， 无法回复' })
+
+  // Characters, not UTF-16 units: 120 kept whole, 121 cut to 119 and an ellipsis.
+  s.remote.reject(`<p class="error">${'𠮷'.repeat(120)}</p>`)
+  const exact = await send()
+  expect(exact.forumMessage).toBe('𠮷'.repeat(120))
+  s.remote.reject(`<p class="error">${'𠮷'.repeat(121)}</p>`)
+  const long = await send()
+  expect(long.forumMessage).toBe(`${'𠮷'.repeat(119)}…`)
+  expect([...long.forumMessage!]).toHaveLength(120)
+
+  // No error element, or one without text: a failure without forum text.
+  s.remote.reject('请求太频繁', 429)
+  const bare = await send()
+  expect(bare).toMatchObject({ state: 'failed', problem: 'rate-limited' })
+  expect(bare).not.toHaveProperty('forumMessage')
+  s.remote.reject('<p class="error">  <br /> </p>')
+  const blank = await send()
+  expect(blank).toMatchObject({ state: 'failed', problem: 'rejected' })
+  expect(blank).not.toHaveProperty('forumMessage')
+
+  await s.restart()
+  const listed = await s.service.listAttempts()
+  if (!listed.ok) throw new Error('attempts unavailable')
+  const kept = new Map(listed.attempts.map(item => [item.id, item.forumMessage]))
+  expect(kept.get(first.id)).toBe('该串已被 锁定， 无法回复')
+  expect(kept.get(exact.id)).toBe('𠮷'.repeat(120))
+  expect(kept.get(long.id)).toBe(`${'𠮷'.repeat(119)}…`)
+  expect(kept.get(bare.id)).toBeUndefined()
+  expect(kept.get(blank.id)).toBeUndefined()
 })
 
 it.each(['empty', 'unrelated'] as const)('records a send the forum reported successful as sent even when a %s latest post leaves its number unknown', async mode => {

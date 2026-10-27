@@ -26,7 +26,7 @@ export interface InFlightPublication {
   done: Promise<PublicationAttempt | null>
 }
 
-export interface PublicationService extends PublicationApi {
+export interface PublicationService extends Omit<PublicationApi, 'onFailureNotice' | 'onOpenDraft'> {
   recover(): Promise<void>
   /** Discard only uncommitted prompts when the renderer goes away; in-flight writes continue. */
   releasePrompts(): void
@@ -68,6 +68,11 @@ export function createPublicationService(deps: {
   deadlineMs?: number
   /** The one automatic check per send; tests shorten it or switch it off (`null`). */
   checks?: { afterSendMs?: number | null; onRecover?: boolean; gapMs?: number }
+  /**
+   * A send's result was recorded while a window may show it (not while finishing a quit, which
+   * keeps a launch notice instead). Called once per send, after storage accepted the result.
+   */
+  onRecorded?: (attempt: PublicationAttempt) => void
 }): PublicationService {
   const { store, drafts, files, protector, adapter } = deps
   const now = deps.now ?? (() => new Date())
@@ -119,7 +124,8 @@ export function createPublicationService(deps: {
     }
     const best = writes[0]!
     unstored.set(attempt.id, {
-      attempt: { ...attempt, state: best.state, problem: best.problem, postId: best.postId, threadId: best.threadId, updatedAt: best.at },
+      attempt: { ...attempt, state: best.state, problem: best.problem, postId: best.postId, threadId: best.threadId, updatedAt: best.at,
+        ...(best.state === 'failed' && best.forumMessage !== undefined ? { forumMessage: best.forumMessage } : {}) },
       writes
     })
     return null
@@ -262,7 +268,7 @@ export function createPublicationService(deps: {
       const stored = await persist(attempt, [
         { id: attempt.id, state: report.state, problem: report.state === 'confirmed' ? null : report.problem,
           postId: report.state === 'confirmed' ? report.postId : null, threadId: report.state === 'confirmed' ? report.threadId : null,
-          at, launchNotice: unattended },
+          at, launchNotice: unattended, ...(report.state === 'failed' && report.forumMessage !== undefined ? { forumMessage: report.forumMessage } : {}) },
         { id: attempt.id, state: 'unknown', problem: 'storage', postId: null, threadId: null, at, launchNotice: unattended }
       ])
       // Durable intent survives even if recording the result fails. Never expose a retryable failure.
@@ -270,6 +276,10 @@ export function createPublicationService(deps: {
       editorAttempts.set(attempt.editorId, result)
       if (!isUnsettled(result)) editorAttempts.delete(attempt.editorId)
       if (stored?.state === 'unknown' || stored?.state === 'unconfirmed') scheduleCheck(attempt.id)
+      // A notification problem must never change the recorded result.
+      if (stored !== null && !unattended) {
+        try { deps.onRecorded?.(stored) } catch { console.error('[publication] result notification failed') }
+      }
       return result
     } catch {
       const result: PublicationAttempt = { ...attempt, state: 'unknown', problem: 'network', updatedAt: now().toISOString() }

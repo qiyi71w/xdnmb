@@ -1,6 +1,6 @@
 import { REPORT_REASONS, reportReason } from '../../../../shared/report'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
-import { sameTarget, type IdentityChoice, type PostFields, type PostTarget } from '../../../../shared/drafts'
+import { forumLabel, sameTarget, targetText, type IdentityChoice, type PostFields, type PostTarget } from '../../../../shared/drafts'
 import type { CredentialId } from '../../../../shared/identity'
 import { isSendShortcut, saveAriaShortcut, sendAriaShortcut, sendShortcutLabel, shortcutLabel } from '../../app/shortcuts'
 import { Icon, Spinner } from '../../components/Icon'
@@ -8,10 +8,11 @@ import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { usePopover } from '../../lib/usePopover'
 import { formatBytes } from '../image/imageView'
-import { ATTEMPT_PROBLEM_TEXT, ATTEMPT_STATE_DETAIL, PROBLEM_TEXT, unverifiedText } from '../publication/publicationText'
+import { ATTEMPT_PROBLEM_TEXT, PROBLEM_TEXT } from '../../../../shared/publication'
+import { ATTEMPT_STATE_DETAIL, unverifiedText } from '../publication/publicationText'
 import type { IdentitiesState } from '../identity/useIdentities'
 import { ROLE_INFO } from '../identity/identityText'
-import { ATTACH_FAILURE_TEXT, editorStateText, forumLabel, SAVE_FAILURE_TEXT, targetText } from './editorText'
+import { ATTACH_FAILURE_TEXT, editorStateText, SAVE_FAILURE_TEXT } from './editorText'
 import { editorFor, identityStatus, isUnsaved, type Editor, type IdentityStatus } from './editorsState'
 import { focusKey } from './useEditorsStore'
 import { useEditorWorkspace } from './workspace'
@@ -547,10 +548,16 @@ function SendStatus({ editor }: { editor: Editor }) {
             ? unverifiedText(editor.target.kind)
             : `发送失败${notice.problem === null ? '' : `：${ATTEMPT_PROBLEM_TEXT[notice.problem]}`}${notice.saved ? '，已保存为草稿' : '，草稿未能自动保存'}`
           : '这次发送没有发出，可以再次发送'
+    const forumMessage = notice.kind === 'failed' ? notice.forumMessage : undefined
     return (
-      <p className="notice-inline is-warning editor-send-notice">
+      <p className={`notice-inline is-warning editor-send-notice${forumMessage === undefined ? '' : ' has-forum-message'}`}>
         <Icon name="alert" size={14} />
-        {text}
+        {forumMessage === undefined ? text : (
+          <span className="editor-send-text">
+            <span>{text}</span>
+            <span className="editor-forum-message">论坛提示：{forumMessage}</span>
+          </span>
+        )}
       </p>
     )
   }

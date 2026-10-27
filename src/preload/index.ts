@@ -3,6 +3,7 @@ import { IpcChannel, LIFECYCLE_REQUEST_CHANNEL, type XidaoApi } from '../shared/
 import type { LifecycleRequest } from '../shared/lifecycle'
 import { REMINDERS_CHANGED_CHANNEL, REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
 import { OFFLINE_CHANGED_CHANNEL } from '../shared/content'
+import { PUBLICATION_FAILURE_CHANNEL, PUBLICATION_OPEN_DRAFT_CHANNEL, type SendFailureNotice } from '../shared/publication'
 import type { ThreadId } from '../shared/forum'
 
 // A notification can create a window before React has mounted its listener. Keep the intent in
@@ -16,6 +17,29 @@ ipcRenderer.on(REMINDERS_OPEN_CHANNEL, () => {
     for (const listener of reminderOpenListeners) listener()
   }
 })
+
+/**
+ * Main → renderer messages that must not be lost to a window React has not mounted yet: kept here,
+ * in arrival order, until a subscriber takes them. Each message is the channel's argument list.
+ */
+function bufferedChannel<Args extends unknown[]>(channel: string) {
+  const pending: Args[] = []
+  const listeners = new Set<(...args: Args) => void>()
+  ipcRenderer.on(channel, (_event: IpcRendererEvent, ...args: unknown[]) => {
+    if (listeners.size === 0) pending.push(args as Args)
+    else for (const listener of listeners) listener(...(args as Args))
+  })
+  return (listener: (...args: Args) => void) => {
+    listeners.add(listener)
+    if (pending.length > 0) queueMicrotask(() => {
+      if (!listeners.has(listener)) return
+      for (const args of pending.splice(0)) listener(...args)
+    })
+    return () => { listeners.delete(listener) }
+  }
+}
+const onFailureNotice = bufferedChannel<[notice: SendFailureNotice, missed: boolean]>(PUBLICATION_FAILURE_CHANNEL)
+const onOpenDraft = bufferedChannel<[notice: SendFailureNotice]>(PUBLICATION_OPEN_DRAFT_CHANNEL)
 
 // Named operations only: no generic invoke/send, no Electron objects, URLs, SQL or file access.
 const api: XidaoApi = {
@@ -181,7 +205,9 @@ const api: XidaoApi = {
     listAttempts: () => ipcRenderer.invoke(IpcChannel.listPublications),
     getAttempt: (input) => ipcRenderer.invoke(IpcChannel.getPublication, input),
     getPoWarning: () => ipcRenderer.invoke(IpcChannel.getPoWarning),
-    setPoWarning: (input) => ipcRenderer.invoke(IpcChannel.setPoWarning, input)
+    setPoWarning: (input) => ipcRenderer.invoke(IpcChannel.setPoWarning, input),
+    onFailureNotice,
+    onOpenDraft
   },
   lifecycle: {
     onRequest(listener) {

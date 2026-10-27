@@ -675,6 +675,14 @@ export const MIGRATIONS: readonly Migration[] = [
           SELECT cookie_id, 'blue', MIN(imported_at) FROM credentials WHERE cookie_id IS NOT NULL GROUP BY cookie_id;
         INSERT INTO cookie_color_auto (cookie_id) SELECT cookie_id FROM cookie_colors;`)
     }
+  },
+  {
+    // A failed attempt may keep the forum's own error text (plain, at most 120 characters).
+    // Existing attempts have none.
+    version: 21,
+    up(db) {
+      db.exec('ALTER TABLE publication_attempts ADD COLUMN forum_message TEXT CHECK (forum_message IS NULL OR length(forum_message) BETWEEN 1 AND 120);')
+    }
   }
 ]
 

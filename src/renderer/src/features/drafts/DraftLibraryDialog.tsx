@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { DraftId, SavedDraft } from '../../../../shared/drafts'
+import { targetText, type DraftId, type SavedDraft } from '../../../../shared/drafts'
 import { isUnsettled } from '../../../../shared/publication'
 import { Icon } from '../../components/Icon'
 import { Modal, ModalHeader } from '../../components/Modal'
 import { formatRecordTime } from '../../lib/time'
 import { editorForDraft } from '../editor/editorsState'
-import { credentialLine, excerpt, targetText } from '../editor/editorText'
+import { credentialLine, excerpt } from '../editor/editorText'
 import { useEditorWorkspace } from '../editor/workspace'
 import './drafts.css'
 

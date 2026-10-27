@@ -139,6 +139,22 @@
   margin: 0;
 }
 
+/* A failure with the forum's own words: the full text on its own line under the result. */
+.editor-send-notice.has-forum-message {
+  align-items: flex-start;
+}
+
+.editor-send-notice.has-forum-message .icon {
+  margin-top: 0.2em;
+}
+
+.editor-send-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .editor-actions {
   display: flex;
   flex-wrap: wrap;

@@ -17,6 +17,8 @@ export interface PublicationFinish {
    * next start until dismissed. Any later result clears it.
    */
   launchNotice?: boolean
+  /** A failed result's forum error text, as `PublishReport` gave it; ignored for other states. */
+  forumMessage?: string
 }
 
 export interface PublicationStore {
@@ -49,7 +51,9 @@ export interface PublicationStore {
 export type PublishReport =
   | { state: 'confirmed'; postId: string; threadId: string }
   | { state: 'unconfirmed'; problem: PublicationProblem | null }
-  | { state: 'failed' | 'unknown'; problem: PublicationProblem }
+  /** `forumMessage`: the forum's own error text (see `PublicationAttempt.forumMessage`), when it gave one. */
+  | { state: 'failed'; problem: PublicationProblem; forumMessage?: string }
+  | { state: 'unknown'; problem: PublicationProblem }
 
 export interface PublicationAdapter {
   /**

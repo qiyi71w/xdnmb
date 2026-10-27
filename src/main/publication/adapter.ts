@@ -53,25 +53,51 @@ function receive(response: IncomingMessage, done: (result: Response) => void, fa
   else pipeline(response, count, collect, complete)
 }
 
-function outcome(response: Response): 'success' | PublicationProblem {
+const FORUM_MESSAGE_MAX = 120
+
+/** Whitespace collapsed and trimmed; longer than the limit (in characters) is cut to end in “…”. */
+function forumMessage(text: string): string | undefined {
+  const collapsed = text.replace(/\s+/g, ' ').trim()
+  if (collapsed === '') return undefined
+  const characters = [...collapsed]
+  return characters.length <= FORUM_MESSAGE_MAX ? collapsed : `${characters.slice(0, FORUM_MESSAGE_MAX - 1).join('')}…`
+}
+
+/** The POST's classified result and, for a rejection page, the forum's own error text. */
+interface PostOutcome { result: 'success' | PublicationProblem; message?: string }
+
+function outcome(response: Response): PostOutcome {
   let success = false
   let error = false
-  const parser = new Parser({ onopentag(name, attributes) {
-    if (name !== 'p') return
-    const classes = (attributes.class ?? '').split(/\s+/)
-    success ||= classes.includes('success')
-    error ||= classes.includes('error')
-  } })
+  // Text of the first `<p class="error">` only, never the rest of the page.
+  let inError = false
+  let errorText: string | null = null
+  const parser = new Parser({
+    onopentag(name, attributes) {
+      if (inError && name === 'br') errorText += ' '
+      if (name !== 'p') return
+      const classes = (attributes.class ?? '').split(/\s+/)
+      success ||= classes.includes('success')
+      if (classes.includes('error')) {
+        if (!error) { inError = true; errorText = '' }
+        error = true
+      }
+    },
+    ontext(text) { if (inError) errorText += text },
+    onclosetag(name) { if (name === 'p') inError = false }
+  })
   parser.end(response.text)
   // Conflicting markers are never treated as a safe-to-retry rejection.
-  if (response.status === 200 && success && !error) return 'success'
-  if (success) return 'response'
-  if (response.status === 429) return 'rate-limited'
+  if (response.status === 200 && success && !error) return { result: 'success' }
+  if (success) return { result: 'response' }
+  const message = errorText === null ? undefined : forumMessage(errorText)
+  const withMessage = (result: PublicationProblem) => message === undefined ? { result } : { result, message }
+  if (response.status === 429) return withMessage('rate-limited')
   if (error) {
     const plain = parseContent(response.text).plainText
-    return /验证码|captcha/i.test(plain) ? 'captcha' : /频繁|太快|间隔|限制/.test(plain) ? 'rate-limited' : 'rejected'
+    return withMessage(/验证码|captcha/i.test(plain) ? 'captcha' : /频繁|太快|间隔|限制/.test(plain) ? 'rate-limited' : 'rejected')
   }
-  return 'response'
+  return { result: 'response' }
 }
 
 function json(text: string): unknown {
@@ -184,10 +210,14 @@ export function createPublicationAdapter(options: {
       content: payload.fields.content, title: payload.fields.title, name: payload.fields.name,
       ...(payload.fields.watermark ? { water: 'true' } : {})
     }
-    let result: 'success' | PublicationProblem
-    try { result = outcome(await request(payload.target.kind === 'thread' ? '/Home/Forum/doPostThread.html' : '/Home/Forum/doReplyThread.html', fields)) }
+    let sent: PostOutcome
+    try { sent = outcome(await request(payload.target.kind === 'thread' ? '/Home/Forum/doPostThread.html' : '/Home/Forum/doReplyThread.html', fields)) }
     catch (error) { return error instanceof NotSent ? { state: 'failed', problem: error.problem } : { state: 'unknown', problem: 'network' } }
-    if (result !== 'success') return { state: ['rejected', 'rate-limited', 'captcha'].includes(result) ? 'failed' : 'unknown', problem: result }
+    const result = sent.result
+    if (result !== 'success') {
+      if (result !== 'rejected' && result !== 'rate-limited' && result !== 'captcha') return { state: 'unknown', problem: result }
+      return sent.message === undefined ? { state: 'failed', problem: result } : { state: 'failed', problem: result, forumMessage: sent.message }
+    }
     onAccepted?.()
     try {
       const response = await request('/Api/getLastPost', null)

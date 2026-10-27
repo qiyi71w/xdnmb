@@ -31,7 +31,7 @@ type Predecessor = 'subscriptions-v5' | 'retained-v6' | typeof heads[number]
 const hasSubscriptions = (kind: Predecessor) => kind === 'subscriptions-v5' || kind === 'integrated-v7' || kind === 'reconciliation-v6' || kind === 'integrated-v8' || kind === 'reminders-v9'
 const hasDrafts = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'lifecycle-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
 const hasRetained = (kind: Predecessor) => kind === 'retained-v6' || kind === 'integrated-v7' || kind === 'integrated-v8' || kind === 'reminders-v9'
-/** Publication columns every version keeps; v19 adds `cookie_id`, so snapshots taken before it compare these. */
+/** Publication columns every version keeps; v19 adds `cookie_id` and v21 `forum_message`, so snapshots taken before them compare these. */
 const publicationColumns = 'id, request_id, editor_id, draft_id, payload_json, credential_id, forum_id, attachment_id, state, problem, created_at, updated_at, post_id, thread_id, saved_draft_id, launch_notice'
 /** Draft columns every version keeps; v18 drops `email`, so snapshots taken before it compare these. */
 const draftColumns = 'id, target_kind, target_id, credential_id, content, title, name, watermark, attachment_id, version, created_at, saved_at'
@@ -789,5 +789,42 @@ describe('schema v20: 饼干标色', () => {
     db.close()
     expect(readFileSync(path)).toEqual(original)
     expect(open(path).listCookieColors()).toHaveLength(2)
+    })
+  })
+
+describe('schema v21: failed attempts may keep the forum’s error text', () => {
+  function attempts(path: string) {
+    const raw = new Database(path, { readonly: true })
+    try { return raw.prepare('SELECT * FROM publication_attempts ORDER BY id').all() as Record<string, unknown>[] } finally { raw.close() }
+  }
+
+  it('adds an empty column and reads every recorded attempt as before, without forum text', () => {
+    const path = predecessor('reminders-v9')
+    const v20 = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 20))
+    const before = v20.listPublications()
+    v20.close()
+    const rows = attempts(path)
+    expect(rows.length).toBeGreaterThan(0)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(attempts(path)).toEqual(rows.map((row) => ({ ...row, forum_message: null })))
+    expect(db.listPublications()).toEqual(before)
+    expect(db.listPublications().every((attempt) => !('forumMessage' in attempt))).toBe(true)
+  })
+
+  it('leaves the v20 file byte-for-byte unchanged when the v21 migration fails', () => {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 20)).close()
+    const original = readFileSync(path)
+    const failing = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 20), { version: 21, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 21)!.up(connection)
+      throw new Error('injected failure after adding the column')
+    } }])
+    connections.push(failing)
+    expect(failing.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failing.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(Object.keys(attempts(path)[0]!)).not.toContain('forum_message')
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
   })
 })

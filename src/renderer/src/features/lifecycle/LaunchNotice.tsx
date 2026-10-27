@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { targetText } from '../../../../shared/drafts'
 import type { PublicationAttempt } from '../../../../shared/publication'
 import { Icon } from '../../components/Icon'
-import { targetText } from '../editor/editorText'
 import { useEditorWorkspace } from '../editor/workspace'
 import { ATTEMPT_STATE_LABEL } from '../publication/publicationText'
 import './lifecycle.css'

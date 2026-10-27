@@ -291,7 +291,7 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
         }
       }
       if (saved !== null) lastSaved.current.set(editorId, saved)
-      rawDispatch({ type: 'publish-failed', editorId, problem: attempt.problem, draft: saved })
+      rawDispatch({ type: 'publish-failed', editorId, problem: attempt.problem, forumMessage: attempt.forumMessage, draft: saved })
     },
     [bump, find, settle]
   )
