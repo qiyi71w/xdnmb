@@ -9,6 +9,7 @@ import {
   parseAccountList
 } from '../src/main/account/protocol'
 import { createAccountClient } from '../src/main/account/client'
+import { parseExportPayload } from '../src/main/identity/parse'
 
 // Synthetic fixtures only; no real forum credentials, tokens, or network requests.
 const SYNTHETIC_SECRET = 'SyntheticMemberSecretValue123456789'
@@ -397,6 +398,14 @@ describe('parseAccountExport HTML adapter', () => {
     } catch (error) {
       expect((error as AccountError).reason).toBe('unknown-structure')
     }
+  })
+
+  it('reads the export page QR `text` with `+` and `/` written as they are and the padding as `%3D`', () => {
+    // Synthetic; the name is chosen so the Base64 contains `+`, `/` and `=` padding.
+    const base64 = Buffer.from(JSON.stringify({ cookie: 'Synth+Plus%7Ex', name: 'Synt㏿' })).toString('base64')
+    expect(base64).toMatch(/\+\/.*=$/)
+    const html = `<html><body><img src="https://publicapi.ovear.info/qrcode.php?w=500&amp;text=${base64.replace(/=$/, '%3D')}&amp;base64=1" /></body></html>`
+    expect(parseExportPayload(parseAccountExport(html))).toEqual({ ok: true, userhash: 'Synth+Plus%7Ex', cookieId: 'Synt㏿' })
   })
 
   it('throws AccountError unknown-structure for untrusted image domain, wrong path, or invalid protocol', () => {

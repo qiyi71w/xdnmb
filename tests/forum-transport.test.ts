@@ -170,3 +170,18 @@ describe('credential-free bounded forum transport', () => {
       .rejects.toMatchObject({ error: { kind: 'network', detail: 'connection' } })
   })
 })
+
+describe('browse credential cookie', () => {
+  it('sends an exported userhash with `+` written as `%20`, leaving `%7E` and other characters unchanged', async () => {
+    let cookie: string | undefined
+    const origin = await serve((request, response) => {
+      cookie = request.headers.cookie
+      response.setHeader('Content-Type', 'application/json')
+      response.end('{}')
+    })
+    // Synthetic value in the export form: a space as `+`, a tilde as `%7E`.
+    await createForumTransport({ allowedOrigins: [origin], credentialOrigins: [origin] })
+      .get(new URL('/api/showf', origin), signal, { userhash: 'Synth+etic%7EHash/+=' })
+    expect(cookie).toBe('userhash=Synth%20etic%7EHash/%20=')
+  })
+})

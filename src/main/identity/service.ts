@@ -3,6 +3,7 @@ import type {
   CredentialId, CredentialSource, DuplicateCookieId, IdentityMutationResult, IdentityOverview, IdentityRole, ImportResult
 } from '../../shared/identity'
 import { ForumReadError } from '../forum/contract'
+import { userhashCookieValue } from '../forum/userhash'
 import { StorageWriteRefusedError, type IdentityStore } from '../storage/contract'
 import { validateCookieId } from '../../shared/identity'
 import { parseExportPayload, parseRawUserhash, validateName, type ParsedCredential } from './parse'
@@ -86,7 +87,9 @@ export function createIdentityService(deps: {
     if (!(await protector.isAvailable())) return { ok: false, failure: { reason: 'protection-unavailable' } }
 
     return serialized(async () => {
-      // Duplicates are found by decrypting the stored secrets and comparing directly in memory.
+      // Duplicates are found by decrypting the stored secrets and comparing directly in memory, in the
+      // form actually sent: the export form (`+`) and the browser form (`%20`) are one cookie.
+      const imported = userhashCookieValue(parsed.userhash)
       const existing = await store.loadCredentialCiphertexts()
       for (const entry of existing) {
         let stored: string
@@ -95,7 +98,7 @@ export function createIdentityService(deps: {
         } catch {
           return { ok: false, failure: { reason: 'decrypt-failed' } }
         }
-        if (stored === parsed.userhash) {
+        if (userhashCookieValue(stored) === imported) {
           const summary = (await store.listCredentials()).find((credential) => credential.id === entry.id)
           if (summary) {
             // Re-importing the same secret only ever fills a missing 饼干 ID: name, order and roles stay.

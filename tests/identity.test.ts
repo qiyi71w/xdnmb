@@ -101,6 +101,25 @@ describe('paste entries', () => {
     }
   })
 
+  it('accepts the export Base64 percent-encoded or as the whole QR image address, keeping `+` and `/`', () => {
+    // Synthetic; the name is chosen so the Base64 contains `+`, `/` and `=` padding.
+    const json = JSON.stringify({ cookie: 'Synth+Plus%7Ex', name: 'Synt㏿' })
+    const base64 = Buffer.from(json).toString('base64')
+    expect(base64).toMatch(/\+\/.*=$/)
+    const encoded = encodeURIComponent(base64)
+    const padded = base64.replace(/=$/, '%3D')
+    for (const input of [
+      encoded,
+      padded,
+      `https://publicapi.ovear.info/qrcode.php?w=500&text=${encoded}&base64=1`,
+      ` http://publicapi.ovear.info/qrcode.php?text=${padded}&base64=1\n`,
+      // The JSON form is never percent-decoded: the cookie value itself may contain `%`.
+      json
+    ]) {
+      expect(parseExportPayload(input)).toEqual({ ok: true, userhash: 'Synth+Plus%7Ex', cookieId: 'Synt㏿' })
+    }
+  })
+
   it.each([
     ['', 'empty'],
     ['   ', 'empty'],
@@ -116,7 +135,13 @@ describe('paste entries', () => {
     [exportPayload(SECRET_A), 'missing-cookie-id'],
     [exportPayload(SECRET_A, '  '), 'missing-cookie-id'],
     [exportPayload(SECRET_A, 'two words'), 'missing-cookie-id'],
-    [exportPayload(SECRET_A, 'x'.repeat(33)), 'missing-cookie-id']
+    [exportPayload(SECRET_A, 'x'.repeat(33)), 'missing-cookie-id'],
+    [`https://example.invalid/qrcode.php?text=${exportPayload(SECRET_A, 'IdA')}`, 'not-export-url'],
+    [`https://publicapi.ovear.info/other.php?text=${exportPayload(SECRET_A, 'IdA')}`, 'not-export-url'],
+    ['https://publicapi.ovear.info/qrcode.php?w=500&base64=1', 'not-export-url'],
+    ['https://publicapi.ovear.info/qrcode.php?text=&base64=1', 'not-export-url'],
+    ['eyJjb29raWUi%E0%A4%A', 'not-base64'],
+    ['https://publicapi.ovear.info/qrcode.php?text=eyJjb29raWUi%E0%A4%A', 'not-export-url']
   ])('classifies a bad export payload (%#) as %s', (input, error) => {
     expect(parseExportPayload(input)).toEqual({ ok: false, error })
   })
@@ -188,6 +213,23 @@ describe('identity service with real SQLite', () => {
       ok: false, failure: { reason: 'duplicate', cookieId: 'same', existing: b }
     })
     expect(await service.getOverview()).toEqual(expected)
+  })
+
+  it('treats the export form (`+`) and the browser form (`%20`) of one userhash as the same cookie, in either order', async () => {
+    const { service } = setup()
+    const exported = await service.importExport(exportPayload('SyntheticSpace+A%7Ex', 'SpcA123'), null)
+    const pasted = await service.importRaw('userhash=SyntheticSpace%20B%7Ex', 'SpcB123', null)
+    if (!exported.ok || !pasted.ok) throw new Error('import failed')
+    const before = await service.getOverview()
+    expect(await service.importRaw('userhash=SyntheticSpace%20A%7Ex', 'SpcA123', null)).toEqual({
+      ok: false, failure: { reason: 'duplicate', cookieId: 'same', existing: exported.credential }
+    })
+    expect(await service.importExport(exportPayload('SyntheticSpace+B%7Ex', 'SpcB123'), null)).toEqual({
+      ok: false, failure: { reason: 'duplicate', cookieId: 'same', existing: pasted.credential }
+    })
+    // `%7E` is not decoded: a literal `~` is a different value.
+    expect(await service.importRaw('userhash=SyntheticSpace%20A~x', 'SpcC123', null)).toMatchObject({ ok: true })
+    expect((await service.getOverview()).credentials).toHaveLength(before.credentials.length + 1)
   })
 
   it('fills in or changes a 饼干 ID from settings, validating it', async () => {

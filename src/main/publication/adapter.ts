@@ -11,6 +11,7 @@ import type { PublicationProblem } from '../../shared/publication'
 import { parseContent, submittedText } from '../forum/content'
 import { createForumClient } from '../forum/client'
 import { createForumTransport } from '../forum/transport'
+import { userhashCookieValue } from '../forum/userhash'
 import { PUBLISH_DEADLINE_MS, type PublicationAdapter, type PublishReport } from './contract'
 
 const COOKIE = /^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+$/
@@ -112,7 +113,7 @@ export function createPublicationAdapter(options: {
 
   return { async publish({ payload, userhash, attachment, onAccepted }): Promise<PublishReport> {
     if (!COOKIE.test(userhash)) return { state: 'failed', problem: 'identity' }
-    const cookies = new Map<string, string>([['userhash', userhash]])
+    const cookies = new Map<string, string>([['userhash', userhashCookieValue(userhash)]])
     async function request(path: string, fields: Record<string, string> | null): Promise<Response> {
       const url = new URL(path, origin)
       if (url.origin !== origin.origin) throw new Error('Invalid publication target')
