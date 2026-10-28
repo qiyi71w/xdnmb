@@ -60,26 +60,39 @@
   max-width: 100%;
 }
 
+/* The track has a fixed preferred width, not a percentage of this shrink-to-fit row (that resolved
+   to the whole row and pushed the value onto its own line). When the row is short of room the
+   track narrows first, so the value stays beside it at 200% zoom too. */
 .setting-slider {
   display: inline-flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px 10px;
+  gap: 10px;
   max-width: 100%;
 }
 
 .setting-slider input[type='range'] {
-  width: min(220px, 100%);
+  flex: 0 1 auto;
+  width: 220px;
+  min-width: 72px;
   min-height: 24px;
   margin: 0;
   accent-color: var(--accent);
 }
 
 .setting-value {
+  flex: none;
   min-width: 4.5em;
+  white-space: nowrap;
   font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
   color: var(--ink-2);
+}
+
+/* 自定义主题: the editor, the 保存 row and the import / export row are three groups, a little
+   further apart than the rows inside the editor. */
+.theme-body:not([hidden]) {
+  display: grid;
+  gap: 20px;
 }
 
 .theme-empty,
@@ -93,36 +106,36 @@
   justify-items: stretch;
 }
 
+/* Editor rows line up with `.setting-row` (name left, control right) and keep their error under. */
 .theme-field {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 12px;
+  justify-content: space-between;
+  gap: 6px 16px;
 }
 
-/* Text fields themselves: identity.css (shared with the 饼干 and 订阅 sections). */
-.theme-field .text-input {
+.theme-field-label {
   flex: 1 1 12em;
-  width: auto;
+  min-width: 0;
+}
+
+.theme-field-control {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Text fields themselves: identity.css (shared with the 饼干 and 订阅 sections). The name field
+   ends where the color fields end; a long name scrolls inside it. */
+.theme-field .theme-name-input {
+  width: 16em;
+  max-width: 100%;
 }
 
 .theme-colors {
   display: grid;
   gap: 10px;
-}
-
-.theme-color {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 12px;
-}
-
-.theme-color-label {
-  flex: 1 1 12em;
-  min-width: 0;
-  display: grid;
-  gap: 1px;
 }
 
 .theme-color-inputs {
@@ -190,12 +203,13 @@
 .theme-transfer {
   display: grid;
   gap: 6px;
-  padding-top: 4px;
 }
 
+.theme-actions,
 .theme-transfer-buttons {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 

@@ -1,53 +1,5 @@
 // Plain-Chinese descriptions of appearance issues (theme editor, theme import, refused settings).
-import { COOKIE_COLORS } from '../../../shared/cookieColors'
-import { THEME_LIMITS, cookieColorToken, type AppearanceIssue, type ColorToken } from '../../../shared/theme'
-import { COOKIE_COLOR_LABELS } from '../features/cookieColors/cookieColorNames'
-
-/** Text colors as the user knows them. Custom themes draw both secondary tokens with 次要文字. */
-const TEXT_LABELS: Partial<Record<ColorToken, string>> = {
-  ink: '正文文字',
-  'ink-2': '次要文字',
-  'ink-3': '次要文字',
-  'accent-ink': '强调色文字（链接）',
-  'on-accent': '主按钮文字',
-  greentext: '绿字引用',
-  'quote-ref-ink': '引用编号',
-  'warn-ink': '提醒文字',
-  'danger-ink': '错误提示文字',
-  ...Object.fromEntries(COOKIE_COLORS.map((name) => [cookieColorToken(name), `饼干颜色“${COOKIE_COLOR_LABELS[name]}”`]))
-}
-
-const SURFACE_LABELS: Partial<Record<ColorToken, string>> = {
-  window: '窗口底色',
-  'window-tint-a': '窗口底色的晕染处',
-  'window-tint-b': '窗口底色的晕染处',
-  glass: '磨砂导航',
-  'glass-strong': '磨砂工具栏与浮层',
-  pane: '列表底色',
-  paper: '正文底色',
-  'info-bg': '说明框底色',
-  selected: '选中项底色',
-  hover: '悬停项底色',
-  'nav-current': '当前导航项底色',
-  'accent-soft': '强调色浅底',
-  accent: '强调色',
-  'quote-ref-bg': '引用编号底色',
-  'warn-bg': '提醒底色',
-  'danger-bg': '错误提示底色'
-}
-
-/** Surface layers bottom → top, named from the top: “磨砂导航（窗口底色上）”. */
-function surfaceText(surface: readonly ColorToken[]): string {
-  const labels = surface.map((token) => SURFACE_LABELS[token] ?? token).reverse()
-  const [top, ...below] = labels
-  if (below.length === 0) return top ?? ''
-  return below.length === 1 ? `${top}（${below[0]}上）` : `${top}（叠在${below.join('、')}上）`
-}
-
-/** 4.5 → “4.5”, 3.9 → “3.9”, 4.49 → “4.49” (ratios arrive rounded down to two decimals). */
-function ratioText(value: number): string {
-  return String(Math.floor(value * 100) / 100)
-}
+import { THEME_LIMITS, type AppearanceIssue } from '../../../shared/theme'
 
 const FIELD_LABELS: Record<string, string> = {
   name: '主题名称',
@@ -119,8 +71,6 @@ export function describeIssue(issue: AppearanceIssue): string {
       return '文件不是汐岛主题文件'
     case 'version':
       return issue.found === null ? '主题文件缺少版本号' : `不支持主题文件版本 ${issue.found}`
-    case 'contrast':
-      return `${issue.scheme === undefined ? '' : issue.scheme === 'light' ? '浅色：' : '深色：'}${TEXT_LABELS[issue.foreground] ?? issue.foreground}在${surfaceText(issue.surface)}对比度 ${ratioText(issue.ratio)}:1，需至少 ${ratioText(issue.minimum)}:1`
     case 'field': {
       const field = relativeField(issue.field)
       const label = FIELD_LABELS[field] ?? FIELD_LABELS[field.replace(/^colors\.(light|dark)\./, 'colors.')] ?? `字段“${issue.field}”`
@@ -140,7 +90,7 @@ export function describeIssue(issue: AppearanceIssue): string {
   }
 }
 
-/** Distinct descriptions in order (custom themes repeat one color under two tokens). */
+/** Distinct descriptions in order (a color malformed in both schemes reads the same twice). */
 export function describeIssues(issues: readonly AppearanceIssue[]): string[] {
   return [...new Set(issues.map(describeIssue))]
 }

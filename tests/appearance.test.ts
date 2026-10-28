@@ -100,27 +100,21 @@ describe('contrast', () => {
     // Danger page buttons on the reading paper and the list pane, the danger tint under them on hover.
     expect(surfacesOf('danger-ink')).toEqual(expect.arrayContaining([['paper'], ['pane'], ['paper', 'danger-bg'], ['pane', 'danger-bg']]))
   })
-  it('checks translucent glass as composited over the window, not the solid surface alone', () => {
+  it('measures translucent glass as composited over the window, not the solid surface alone', () => {
     // Secondary text passes on the solid surface but not on 50% glass over a dark window.
     const theme: CustomTheme = { ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, background: '#5c5c5c', secondaryText: '#6e6e6e' } }, opacity: 0.5 }
     expect(contrastRatio(color('#6e6e6e'), color(sepia.colors.light.surface))).toBeGreaterThanOrEqual(4.5)
-    const result = parseCustomTheme(theme)
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.issues).toContainEqual(expect.objectContaining({ kind: 'contrast', foreground: 'ink-2', surface: ['window', 'glass'] }))
+    expect(paletteContrastFailures(customPalette(theme, 'light'))).toContainEqual(expect.objectContaining({ foreground: 'ink-2', surface: ['window', 'glass'] }))
   })
 
-  it('checks the transparent top bar text directly on the window tints', () => {
+  it('measures the transparent top bar text directly on the window tints', () => {
     // Secondary text passes on the plain window (4.52:1) but not on the accent tint drawn behind the tabs.
     const theme: CustomTheme = {
       ...sepia,
       colors: { ...sepia.colors, light: { background: '#ababab', surface: '#ffffff', text: '#000000', secondaryText: '#404040', accent: '#000000' } },
       opacity: 0.5
     }
-    const result = parseCustomTheme(theme)
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.issues).toContainEqual(expect.objectContaining({ kind: 'contrast', foreground: 'ink-2', surface: ['window-tint-a'] }))
+    expect(paletteContrastFailures(customPalette(theme, 'light'))).toContainEqual(expect.objectContaining({ foreground: 'ink-2', surface: ['window-tint-a'] }))
   })
 })
 
@@ -137,16 +131,15 @@ describe('custom themes', () => {
     expect(paletteContrastFailures(palette)).toEqual([])
   })
 
-  it('refuses a theme whose own colors are too low in contrast, naming the pair and ratio', () => {
-    const result = parseCustomTheme({ ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, text: '#b0a898' } } })
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    const issue = result.issues.find((i) => i.kind === 'contrast' && i.foreground === 'ink' && i.surface.join() === 'paper')
-    expect(issue).toMatchObject({ minimum: 4.5 })
-    expect(issue && issue.kind === 'contrast' && issue.ratio).toBeLessThan(4.5)
+  it('accepts low-contrast colors in both sets and keeps them exactly as given', () => {
+    const pale = { ...sepia, colors: { light: { ...sepia.colors.light, text: '#f0ece4', secondaryText: '#4685b9' }, dark: { ...sepia.colors.dark, text: sepia.colors.dark.surface } } }
+    const result = parseCustomTheme(pale)
+    expect(result).toEqual({ ok: true, value: pale })
+    const palette = customPalette(pale, 'light')
+    expect([palette.ink, palette['ink-2']]).toEqual(['#f0ece4', '#4685b9'])
   })
 
-  it('seeds custom themes from both built-in schemes that pass the same checks', () => {
+  it('seeds custom themes from both built-in schemes', () => {
     expect(parseCustomTheme(themeFromBuiltin('light')).ok).toBe(true)
     expect(parseCustomTheme(themeFromBuiltin('dark')).ok).toBe(true)
   })
@@ -172,10 +165,9 @@ describe('dual-set appearance', () => {
     expect(resolveAppearance({ ...settings, customThemeEnabled: false }, false).variables['--paper']).toBe(BUILTIN_PALETTES.light.paper)
   })
 
-  it('checks the inactive dark set too', () => {
-    const parsed = parseCustomTheme({ ...sepia, colors: { ...sepia.colors, dark: { ...sepia.colors.dark, text: sepia.colors.dark.surface } } })
-    expect(parsed.ok).toBe(false)
-    if (!parsed.ok) expect(parsed.issues).toContainEqual(expect.objectContaining({ kind: 'contrast', scheme: 'dark', foreground: 'ink' }))
+  it('checks the fields of the inactive dark set too', () => {
+    const parsed = parseCustomTheme({ ...sepia, colors: { ...sepia.colors, dark: { ...sepia.colors.dark, text: 'white' } } })
+    expect(parsed).toEqual({ ok: false, issues: [{ kind: 'field', field: 'customTheme.colors.dark.text', problem: 'range' }] })
   })
 
   it('accepts installed font family names and safely quotes the CSS font family', () => {
@@ -249,7 +241,7 @@ describe('settings', () => {
     const stored = new Map<string, unknown>([
       ['density', 'compact'],
       ['colorScheme', 'custom'],
-      ['customTheme', { ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, text: sepia.colors.light.surface } } }],
+      ['customTheme', { ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, text: 'black' } } }],
       ['reading', { font: 'serif', fontSize: 12, readingWidth: 42 }]
     ])
     expect(settingsFromStored(stored)).toEqual({ ...DEFAULT_SETTINGS, density: 'compact', colorScheme: 'system', customTheme: null })
@@ -366,7 +358,7 @@ describe('settings service with real storage', () => {
     const service = createSettingsService(storeOf(open(path)))
     const saved = await service.update({ density: 'compact', motion: 'reduce', reading: { font: 'serif', fontSize: 20, readingWidth: 36 } })
     expect(saved).toMatchObject({ saved: true, issues: [] })
-    const refused = await service.update({ customTheme: { ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, accent: '#fbf6ec' } } }, customThemeEnabled: true })
+    const refused = await service.update({ customTheme: { ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, accent: '#fbf6e' } } }, customThemeEnabled: true })
     expect(refused.saved).toBe(false)
     expect(refused.issues.length).toBeGreaterThan(0)
     expect(refused.settings).toEqual(saved.settings)
@@ -380,12 +372,9 @@ describe('settings service with real storage', () => {
     await service.update({ customTheme: sepia, customThemeEnabled: true })
     const before = db.loadSettings()
 
-    const lowContrast = join(dir, 'low.json')
-    writeFileSync(lowContrast, serializeThemeDocument(themeDocument({ ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, text: '#d8d0c0' } } }, DEFAULT_SETTINGS.reading)))
-    expect(await service.importTheme(lowContrast)).toMatchObject({
-      status: 'rejected',
-      issues: expect.arrayContaining([expect.objectContaining({ kind: 'contrast', foreground: 'ink', surface: ['paper'] })])
-    })
+    const malformed = join(dir, 'malformed.json')
+    writeFileSync(malformed, serializeThemeDocument(themeDocument({ ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, text: 'black' } } }, DEFAULT_SETTINGS.reading)))
+    expect(await service.importTheme(malformed)).toEqual({ status: 'rejected', issues: [{ kind: 'field', field: 'colors.light.text', problem: 'range' }] })
 
     const large = join(dir, 'large.json')
     writeFileSync(large, ' '.repeat(MAX_THEME_FILE_BYTES + 1))
@@ -417,6 +406,17 @@ describe('settings service with real storage', () => {
       customTheme: sepia,
       reading: { font: 'serif', fontSize: 19, readingWidth: 34 }
     })
+  })
+
+  it('imports a low-contrast theme file and saves its colors unchanged', async () => {
+    const dir = folder()
+    const db = open(join(dir, 'a.sqlite'))
+    const service = createSettingsService(storeOf(db))
+    const pale = { ...sepia, colors: { ...sepia.colors, light: { ...sepia.colors.light, text: '#d8d0c0', secondaryText: '#e0d8c8' } } }
+    const file = join(dir, 'pale.json')
+    writeFileSync(file, serializeThemeDocument(themeDocument(pale, DEFAULT_SETTINGS.reading)))
+    expect(await service.importTheme(file)).toMatchObject({ status: 'imported' })
+    expect(db.loadSettings()).toMatchObject({ customThemeEnabled: true, customTheme: pale })
   })
 
   it('exports a seed of the built-in scheme in effect when there is no custom theme', async () => {

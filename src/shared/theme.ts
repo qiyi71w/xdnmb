@@ -509,7 +509,7 @@ function onAccent(accent: Rgba): string {
   return toHex(must(contrastRatio(must(light), accent) >= contrastRatio(must(dark), accent) ? light : dark))
 }
 
-/** Custom theme seeded from a built-in scheme; it passes the same checks. */
+/** Custom theme seeded from a built-in scheme. */
 export function themeFromBuiltin(base: SchemeBase): CustomTheme {
   return {
     name: '我的主题',
@@ -532,15 +532,13 @@ function colorsFromBuiltin(base: SchemeBase): ThemeColors {
  * - `syntax`: not JSON; `format`: not an 汐岛 theme document; `version`: unsupported version.
  * - `field`: `field` is a dotted path (e.g. `colors.text`). `unavailable` means the value is valid
  *   alone but not usable now (e.g. the custom scheme without a custom theme).
- * - `contrast`: ordinary text below `minimum` on a surface (layers bottom to top); `ratio` is
- *   rounded down to two decimals.
+ * A custom theme's own colors are the user's choice: their contrast is never checked.
  */
 export type AppearanceIssue =
   | { kind: 'syntax' }
   | { kind: 'format' }
   | { kind: 'version'; found: number | null }
   | { kind: 'field'; field: string; problem: 'missing' | 'type' | 'range' | 'unknown' | 'unavailable' }
-  | { kind: 'contrast'; scheme?: SchemeBase; foreground: ColorToken; surface: Surface; ratio: number; minimum: number }
 
 type Fields = Record<string, unknown>
 
@@ -654,27 +652,13 @@ function readTheme(input: Fields, prefix: string, issues: AppearanceIssue[]): Cu
   return { name, colors, opacity, radius }
 }
 
-/** Contrast issues of a custom theme (empty when every listed pair reaches the minimum). */
-export function themeContrastIssues(theme: CustomTheme): AppearanceIssue[] {
-  return (['light', 'dark'] as const).flatMap((scheme) => paletteContrastFailures(customPalette(theme, scheme)).map((failure): AppearanceIssue => ({
-    kind: 'contrast',
-    scheme,
-    foreground: failure.foreground,
-    surface: failure.surface,
-    ratio: Math.floor(failure.ratio * 100) / 100,
-    minimum: MIN_TEXT_CONTRAST
-  })))
-}
-
-/** Validates a custom theme value (settings or editor), including the contrast checks. */
+/** Validates a custom theme value (settings or editor): fields and ranges only. */
 export function parseCustomTheme(value: unknown, field = 'customTheme'): Parsed<CustomTheme> {
   if (!isRecord(value)) return { ok: false, issues: [{ kind: 'field', field, problem: 'type' }] }
   const issues: AppearanceIssue[] = []
   unknownFields(value, Object.hasOwn(value, 'base') ? LEGACY_THEME_KEYS : THEME_KEYS, `${field}.`, issues)
   const theme = readTheme(value, `${field}.`, issues)
-  if (theme === null || issues.length > 0) return { ok: false, issues }
-  const contrast = themeContrastIssues(theme)
-  return contrast.length > 0 ? { ok: false, issues: contrast } : { ok: true, value: theme }
+  return theme === null || issues.length > 0 ? { ok: false, issues } : { ok: true, value: theme }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -701,7 +685,7 @@ export function serializeThemeDocument(document: ThemeDocument): string {
   return `${JSON.stringify(document, null, 2)}\n`
 }
 
-/** Parses a theme file. Unknown versions and fields, out-of-range values and low contrast are refused. */
+/** Parses a theme file. Unknown versions and fields and out-of-range values are refused. */
 export function parseThemeDocument(text: string): { ok: true; theme: CustomTheme; reading: ReadingParams } | { ok: false; issues: AppearanceIssue[] } {
   let raw: unknown
   try {
@@ -718,7 +702,5 @@ export function parseThemeDocument(text: string): { ok: true; theme: CustomTheme
   if (raw.version === 1 && !Object.hasOwn(raw, 'base')) issues.push({ kind: 'field', field: 'base', problem: 'missing' })
   const theme = readTheme(raw, '', issues)
   const reading = readReading(raw, '', issues)
-  if (theme === null || reading === null || issues.length > 0) return { ok: false, issues }
-  const contrast = themeContrastIssues(theme)
-  return contrast.length > 0 ? { ok: false, issues: contrast } : { ok: true, theme, reading }
+  return theme === null || reading === null || issues.length > 0 ? { ok: false, issues } : { ok: true, theme, reading }
 }
