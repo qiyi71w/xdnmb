@@ -1,5 +1,8 @@
-import { useLayoutEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { closeDialogs, noticeHost, onDialogsChange, topDialog } from '../lib/dialogs'
 import { Icon, Spinner, type IconName } from './Icon'
+import { FOCUSABLE } from './Modal'
 import './bottom-notice.css'
 
 function subscribeVisibility(onChange: () => void): () => void {
@@ -18,6 +21,11 @@ export interface BottomNoticeAction {
   label: string
   /** The action is under way: kept focusable, presses are ignored. */
   busy?: boolean
+  /**
+   * The action takes the user elsewhere (查看更新, 打开草稿, …): open dialogs are closed first, each
+   * through its own close path; when one refuses (busy), the press does nothing.
+   */
+  leaves?: boolean
   onAction: () => void
 }
 
@@ -26,12 +34,52 @@ export interface BottomNoticeAction {
  * the order they appeared, oldest on top. The polite live region is always mounted, so a notice
  * that appears is announced once; changes inside one are not re-read as a whole
  * (`aria-atomic="false"`), and a part the caller wraps in `aria-live="off"` updates silently.
+ *
+ * While a modal dialog is open (outside it everything is inert), the same region moves into the
+ * topmost dialog as a manual popover: in the top layer above the dialog and its backdrop, operable
+ * by pointer, its actions in the dialog's Tab cycle, and inside the dialog's accessibility tree so
+ * new notices are still announced. The element itself moves, so notices keep their state. A
+ * topmost dialog that keeps the notices below (`Modal`'s `noticesBelow`) sends the region back to
+ * its own place, under every dialog and inert.
  */
 export function BottomNoticeStack({ children }: { children: ReactNode }) {
+  const homeRef = useRef<HTMLDivElement>(null)
+  const [region] = useState(() => {
+    const element = document.createElement('div')
+    element.className = 'bottom-notice-region'
+    element.setAttribute('role', 'status')
+    element.setAttribute('aria-atomic', 'false')
+    return element
+  })
+
+  useLayoutEffect(() => {
+    const home = homeRef.current
+    if (home === null) return
+    const place = () => {
+      const dialog = noticeHost()
+      if (dialog === null) {
+        // Moving it out hides it as a popover; at home it is in the page again.
+        if (region.parentElement !== home) home.append(region)
+        region.removeAttribute('popover')
+        return
+      }
+      region.setAttribute('popover', 'manual')
+      if (region.parentElement !== dialog) dialog.append(region)
+      if (!region.matches(':popover-open')) region.showPopover()
+    }
+    place()
+    const stop = onDialogsChange(place)
+    return () => {
+      stop()
+      region.remove()
+    }
+  }, [region])
+
   return (
-    <div className="bottom-notice-region" role="status" aria-atomic="false">
-      {children}
-    </div>
+    <>
+      <div ref={homeRef} className="bottom-notice-home" />
+      {createPortal(children, region)}
+    </>
   )
 }
 
@@ -41,7 +89,7 @@ export function BottomNoticeStack({ children }: { children: ReactNode }) {
  * hidden nothing is shown: a notice that arrives then appears (and is announced) when the window
  * is shown again. When new actions replace the focused one, focus moves to the action now in its
  * place (else the last). When the notice goes away with focus inside, focus returns to where it
- * came from, else to `fallbackFocus`.
+ * came from, else to `fallbackFocus`; while a dialog is open, focus stays in the topmost dialog.
  */
 export function BottomNotice({
   open,
@@ -83,12 +131,35 @@ export function BottomNotice({
 
   const focusInside = useRef(false)
   const returnTo = useRef<HTMLElement | null>(null)
-  /** Focus left with the notice (now on the body): back to where it came from, else the fallback. */
+  /**
+   * Focus left with the notice (now on the body): back to where it came from, else the fallback.
+   * While a dialog is open everything outside it is inert: focus goes back only to a place inside
+   * the topmost dialog, else to its first control (not a notice), else to the dialog itself.
+   */
   const restoreFocus = (back: HTMLElement | null) => {
     const active = document.activeElement
     if (active !== null && active !== document.body) return
-    const target = back !== null && back.isConnected ? back : fallbackFocus()
-    target?.focus({ preventScroll: true })
+    const returnable = back !== null && back.isConnected ? back : null
+    const dialog = topDialog()
+    if (dialog === null) {
+      const target = returnable ?? fallbackFocus()
+      target?.focus({ preventScroll: true })
+      return
+    }
+    if (returnable !== null && dialog.contains(returnable)) {
+      returnable.focus({ preventScroll: true })
+      return
+    }
+    const control = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].find(
+      (element) => element.closest('.bottom-notice-region') === null && element.getClientRects().length > 0
+    )
+    if (control !== undefined) {
+      control.focus({ preventScroll: true })
+      return
+    }
+    // A dialog element takes focus only with a tabindex; -1 keeps it out of the Tab order.
+    if (!dialog.hasAttribute('tabindex')) dialog.tabIndex = -1
+    dialog.focus({ preventScroll: true })
   }
   const restoreRef = useRef(restoreFocus)
   useLayoutEffect(() => {
@@ -179,7 +250,9 @@ export function BottomNotice({
             aria-disabled={action.busy || undefined}
             aria-busy={action.busy || undefined}
             onClick={() => {
-              if (!action.busy) action.onAction()
+              if (action.busy) return
+              if (action.leaves === true && !closeDialogs()) return
+              action.onAction()
             }}
           >
             {action.label}

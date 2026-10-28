@@ -32,7 +32,7 @@ import './search.css'
  * 串内搜索 of one tab (spec I10 / I11): searches the thread on screen in either mode without
  * changing how it is read, and can fetch the whole thread on request. Everything retained is
  * searched on the 搜索 page instead (its 本机 side, `SearchBody` with the `local` view). The sheet
- * is modal. Esc cancels a running locate first, then closes.
+ * is modal. Esc (or a press on the backdrop) cancels a running locate first, then closes.
  */
 export function SearchSheet({
   tabId,
@@ -74,7 +74,7 @@ export function SearchSheet({
   }
 
   return (
-    <Modal className="search-sheet" labelledBy={titleId} onClose={onEscape} fallbackFocus={fallbackFocus}>
+    <Modal className="search-sheet" labelledBy={titleId} onClose={onEscape} closeOnBackdrop fallbackFocus={fallbackFocus}>
       <header className="modal-header search-header">
         <h2 className="modal-title" id={titleId}>
           串内搜索

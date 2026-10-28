@@ -157,15 +157,9 @@ function UpdateArea({ settings, write }: { settings: AppSettings; write: Write }
         </div>
       )}
 
-      <SettingRow
-        labelId="setting-update-auto-check"
-        label="自动检查更新"
-        help="启动时及运行中每 24 小时检查，关闭后仍可手动检查"
-        helpId="setting-update-auto-check-help"
-      >
+      <SettingRow labelId="setting-update-auto-check" label="自动检查更新">
         <Switch
           labelledBy="setting-update-auto-check"
-          describedBy="setting-update-auto-check-help"
           checked={settings.updateAutoCheck}
           onToggle={() => write({ updateAutoCheck: !settings.updateAutoCheck })}
         />
@@ -174,7 +168,7 @@ function UpdateArea({ settings, write }: { settings: AppSettings; write: Write }
         <SettingRow
           labelId="setting-update-auto-install"
           label="退出时自动安装更新"
-          help="发现新版后自动下载，主动退出汐岛时安装，安装后不自动重新打开；收进托盘时不安装，直接关机或重启的，下次启动时先安装"
+          help="自动下载新版本，退出汐岛时安装"
           helpId="setting-update-auto-install-help"
         >
           <Switch
@@ -200,10 +194,9 @@ function UpdateArea({ settings, write }: { settings: AppSettings; write: Write }
           />
         </SettingRow>
       )}
-      <SettingRow labelId="setting-update-network" label="更新网络" help="只用于检查和下载更新，不影响论坛、图片和搜索" helpId="setting-update-network-help">
+      <SettingRow labelId="setting-update-network" label="更新网络">
         <Choice<UpdateNetwork>
           labelledBy="setting-update-network"
-          describedBy="setting-update-network-help"
           options={UPDATE_NETWORKS.map((value) => ({ value, label: NETWORK_LABEL[value] }))}
           value={settings.updateNetwork}
           onChange={(updateNetwork) => write({ updateNetwork })}
@@ -361,14 +354,9 @@ function PackageActions({ state, download }: { state: UpdateState; download: Upd
         )}
         {download.status === 'ready' && (
           <>
-            <p className="about-status-line">安装包已下载并通过校验</p>
-            {platform === 'mac' ? (
+            <p className="about-status-line">安装包已下载</p>
+            {platform === 'mac' && (
               <p className="setting-help">打开安装包后，请先退出汐岛，再把新版汐岛拖到“应用程序”文件夹替换旧版</p>
-            ) : (
-              <>
-                <p className="setting-help">安装并重启会正常退出汐岛，安装完成后重新打开</p>
-                {state.installOnQuit && <p className="setting-help">已开启退出时自动安装：退出汐岛时安装，安装后不自动重新打开；直接关机的，下次启动时安装</p>}
-              </>
             )}
           </>
         )}

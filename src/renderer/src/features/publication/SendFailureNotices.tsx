@@ -98,7 +98,7 @@ export function SendFailureNotices({
       context={targetText(notice.target, forumName)}
       detail={failure}
       actions={[
-        { label: '打开草稿', busy: opening, onAction: () => void open(notice) },
+        { label: '打开草稿', busy: opening, leaves: true, onAction: () => void open(notice) },
         { label: '知道了', onAction: () => close(notice.attemptId) }
       ]}
       fallbackFocus={fallbackFocus}

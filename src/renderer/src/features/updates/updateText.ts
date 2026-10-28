@@ -4,7 +4,7 @@
 import type { InstallResult, UpdateFailure, UpdatePlatform, UpdateUnavailable } from '../../../../shared/updates'
 
 export const UNAVAILABLE_TEXT: Record<UpdateUnavailable, string> = {
-  'not-installed': '当前不是安装版（例如解压即用的试用副本），不能在应用内检查和安装更新',
+  'not-installed': '当前不是安装版，不能在应用内更新',
   platform: '这个系统暂不支持在应用内更新'
 }
 
@@ -13,7 +13,7 @@ export const UNAVAILABLE_NEXT = '可在仓库的 Releases 页面获取新版本'
 
 const REASON: Record<Exclude<UpdateFailure, 'install'>, string> = {
   network: '连不上 GitHub，请检查网络或“更新网络”设置',
-  source: '没有从 GitHub 取得可用的更新信息',
+  source: '未取得更新信息',
   integrity: '下载的文件校验未通过，已删除',
   storage: '无法在本机保存或读取安装包，请检查磁盘空间和权限'
 }
@@ -58,7 +58,7 @@ export function readyNoticeText(platform: UpdatePlatform, version: string): stri
  */
 export function readyLaterText(platform: UpdatePlatform, installOnQuit: boolean): string {
   if (platform === 'mac') return '稍后可在“设置 › 系统 › 关于”中打开'
-  if (installOnQuit) return '稍后会在退出汐岛时安装；如果直接关机，下次启动时安装'
+  if (installOnQuit) return '退出汐岛时安装'
   return '稍后可在“设置 › 系统 › 关于”中安装'
 }
 

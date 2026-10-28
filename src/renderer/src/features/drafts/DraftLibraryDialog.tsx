@@ -24,9 +24,10 @@ const UNKNOWN_LOCK_TEXT = '发送状态未知，暂时不能删除'
  * 草稿 library: every saved draft, most recently saved first; several may share a target.
  * 继续 hands the draft to the shell (focus its editor, load it into the editor already on its
  * target, or open it in a new tab); 删除 removes the record at once, closing an editor that
- * continues it, and can be undone from its bottom notice. A draft whose send is still sending or
- * being checked, or any draft while the send records cannot be read, cannot be deleted: 删除 is
- * then unavailable and says why.
+ * continues it, and can be undone from its bottom notice, which shows over this dialog (the draft
+ * comes back into this list). A draft whose send is still sending or being checked, or any draft
+ * while the send records cannot be read, cannot be deleted: 删除 is then unavailable and says why.
+ * Esc, 关闭 or a press on the backdrop closes it.
  */
 export function DraftLibraryDialog({
   tabTitle,
@@ -46,8 +47,6 @@ export function DraftLibraryDialog({
   const [deleting, setDeleting] = useState<DraftId | null>(null)
   const deletingRef = useRef(false)
   const [deleteFailed, setDeleteFailed] = useState<{ draftId: DraftId; reason: SaveFailure } | null>(null)
-  /** Target of the draft just deleted here, until the next deletion. */
-  const [deletedNote, setDeletedNote] = useState<string | null>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const closeRef = useRef<HTMLDivElement>(null)
   const alive = useRef(true)
@@ -83,7 +82,7 @@ export function DraftLibraryDialog({
   }, [load, revision])
 
   // After a deletion, keep focus in the list: the item now at the same position, else (the last
-  // one gone) the dialog's close button. The undo stays in the bottom notice once the dialog closes.
+  // one gone) the dialog's close button.
   useLayoutEffect(() => {
     const index = focusAfterDelete.current
     if (index === null || list.status !== 'ready') return
@@ -103,7 +102,6 @@ export function DraftLibraryDialog({
     deletingRef.current = true
     setDeleting(draft.id)
     setDeleteFailed(null)
-    setDeletedNote(null)
     try {
       // An editor continuing the draft is closed with it (that editor only); the store refuses a
       // draft a send holds, and on failure nothing is deleted.
@@ -114,7 +112,6 @@ export function DraftLibraryDialog({
         return
       }
       focusAfterDelete.current = index
-      setDeletedNote(targetText(draft.target, forumName))
       setList((current) => (current.status === 'ready' ? { status: 'ready', drafts: current.drafts.filter((item) => item.id !== draft.id) } : current))
     } finally {
       deletingRef.current = false
@@ -130,20 +127,11 @@ export function DraftLibraryDialog({
   }
 
   return (
-    <Modal className="drafts-dialog" label="草稿" onClose={onClose} fallbackFocus={fallbackFocus}>
+    <Modal className="drafts-dialog" label="草稿" onClose={onClose} closeOnBackdrop fallbackFocus={fallbackFocus}>
       <div ref={closeRef}>
         <ModalHeader title="草稿" closeLabel="关闭草稿" onClose={onClose} />
       </div>
       <div className="modal-body drafts-body" aria-busy={list.status === 'loading' || undefined}>
-        {/* The undo is the bottom notice behind this dialog: say where it is, as the deletion's result. */}
-        <div role="status" className="form-message-region">
-          {deletedNote !== null && (
-            <p className="notice-inline">
-              <Icon name="check" size={14} />
-              已删除「{deletedNote}」的草稿；关闭草稿后可在窗口底部撤销
-            </p>
-          )}
-        </div>
         {list.status === 'failed' && (
           <div className="notice notice-error" role="alert">
             <Icon name="alert" className="notice-icon" />
@@ -210,7 +198,7 @@ export function DraftLibraryDialog({
                     </p>
                     {editing !== null && (
                       <p className="draft-editing" id={`${rowId}-editing`}>
-                        正在「{tabTitle(editing.tabId)}」标签编辑{!sendHeld && '；删除会同时关闭这份编辑'}
+                        正在「{tabTitle(editing.tabId)}」标签编辑
                       </p>
                     )}
                     {sendHeld && (

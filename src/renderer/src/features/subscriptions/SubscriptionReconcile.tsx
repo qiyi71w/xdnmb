@@ -688,7 +688,7 @@ export function ReconcileHistoryDialog({
   }, [found])
 
   return (
-    <Modal className="sub-history-dialog" labelledBy={titleId} onClose={onClose} fallbackFocus={fallbackFocus}>
+    <Modal className="sub-history-dialog" labelledBy={titleId} onClose={onClose} closeOnBackdrop fallbackFocus={fallbackFocus}>
       <ModalHeader title="同步记录" titleId={titleId} closeLabel="关闭同步记录" onClose={onClose} />
       <div className="modal-body sub-history-body" aria-busy={(plans === null && !plansFailed) || undefined}>
         {plansFailed && (

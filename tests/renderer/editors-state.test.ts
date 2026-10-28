@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { EMPTY_FIELDS, type IdentityChoice, type PostTarget, type SavedDraft } from '../../src/shared/drafts'
+import { EMPTY_FIELDS, type DraftAttachment, type IdentityChoice, type PostTarget, type SavedDraft } from '../../src/shared/drafts'
 import type { IdentityOverview } from '../../src/shared/identity'
 import {
   editorFor,
@@ -9,6 +9,7 @@ import {
   identityStatus,
   INITIAL_EDITORS,
   saveInput,
+  takeBackRefusal,
   wantsWrite,
   type Editor,
   type EditorsAction,
@@ -181,6 +182,32 @@ describe('drafts in editors', () => {
     const library = run(INITIAL_EDITORS, { type: 'open-draft', tabId: 1, draft: draft() }, { type: 'open', tabId: 1, target: replyB, identity: byDefault('1') })
     const closed = run(library, { type: 'close-editor', editorId: only(library, 1, replyA).id })
     expect(closed.editors.map((item) => item.target)).toEqual([replyB])
+  })
+
+  it('takes an undone deletion back into the editor it emptied only while that editor is open, blank and unlocked', () => {
+    const attachment: DraftAttachment = { id: 'a1', format: 'png', bytes: 100, width: 10, height: 10, originalName: 'a.png', url: 'xidao-image://draft/a1.png' }
+    const opened = run(INITIAL_EDITORS, { type: 'open-draft', tabId: 1, draft: draft() })
+    const editor = only(opened, 1, replyA)
+    const state = run(opened, { type: 'draft-deleted', editorId: editor.id })
+    const restored = draft({ id: '11', fields: { ...EMPTY_FIELDS, content: '恢复的' }, attachment })
+    expect(takeBackRefusal(state, editor.id, replyA)).toBeNull()
+    const back = run(state, { type: 'take-back', editorId: editor.id, draft: restored })
+    // Content and image come back; the collapsed editor stays collapsed (nothing opens).
+    expect(only(back, 1, replyA)).toMatchObject({ id: editor.id, draft: restored, fields: { content: '恢复的' }, attachment, expanded: false })
+    expect(wantsWrite(only(back, 1, replyA))).toBe(false)
+
+    // Reopened and written in again: it keeps the new content; the draft stays in 草稿 only.
+    const written = run(state, { type: 'open', tabId: 1, target: replyA, identity: byDefault('1') }, { type: 'edit', editorId: editor.id, patch: { content: '新写的' } })
+    expect(takeBackRefusal(written, editor.id, replyA)).toBe('occupied')
+    expect(run(written, { type: 'take-back', editorId: editor.id, draft: restored })).toBe(written)
+
+    const sending = run(written, { type: 'publish-start', editorId: editor.id, requestId: 'r1' })
+    expect(takeBackRefusal(sending, editor.id, replyA)).toBe('locked')
+
+    // Its tab closed: the editor is gone.
+    const closed = run(state, { type: 'close-tab', tabId: 1 })
+    expect(takeBackRefusal(closed, editor.id, replyA)).toBe('closed')
+    expect(run(closed, { type: 'take-back', editorId: editor.id, draft: restored })).toBe(closed)
   })
 
   it('continues another draft of the same target in the editor already there, and only there', () => {

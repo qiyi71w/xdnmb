@@ -109,7 +109,7 @@ export function LaunchNotices({
             context={`上次退出时 · ${targetText(attempt.payload.target, forumName)}`}
             detail={failures.get(attempt.id) ?? null}
             actions={[
-              ...(failure === null ? [] : [{ label: '打开草稿', busy, onAction: () => void open(failure) }]),
+              ...(failure === null ? [] : [{ label: '打开草稿', busy, leaves: true, onAction: () => void open(failure) }]),
               { label: '知道了', busy, onAction: () => dismiss([attempt.id]) }
             ]}
             fallbackFocus={fallbackFocus}
@@ -125,6 +125,7 @@ export function LaunchNotices({
           actions={[
             {
               label: '查看草稿',
+              leaves: true,
               onAction: () => {
                 dismiss(rest.map((attempt) => attempt.id))
                 onOpenDrafts()

@@ -9,6 +9,7 @@ import {
   INITIAL_EDITORS,
   isBlank,
   saveInput,
+  takeBackRefusal,
   wantsWrite,
   type Editor,
   type EditorsAction,
@@ -35,11 +36,22 @@ export interface DeletedDraft {
   key: string
   /** What the draft (or the editor continuing it) held when it was deleted. */
   content: DraftContent
-  /** The deletion emptied or closed an editor: undoing opens the restored draft again. */
-  reopen: boolean
+  /** The editor the deletion emptied (deleted from that editor); null when deleted from 草稿. */
+  editorId: EditorId | null
   restoring: boolean
   /** Why the last undo did not restore it; null when it has not failed. */
   failure: SaveFailure | null
+}
+
+/**
+ * An undone deletion: its draft is saved again, so it is back in 草稿. When it was deleted from an
+ * editor still open, that editor shows it again; `refused` says why that editor could not take it
+ * back (it stays in 草稿 only). Null when it went back, or there is no such editor (deleted from
+ * 草稿, or the editor closed since).
+ */
+export interface UndoneDeletion {
+  draft: SavedDraft
+  refused: 'locked' | 'occupied' | null
 }
 
 /** Where keyboard focus should go next: the panel of this tab's editor for this target. */
@@ -94,10 +106,11 @@ export interface EditorsStore {
   /** Deletions that can still be undone, oldest first. */
   deleted: readonly DeletedDraft[]
   /**
-   * Saves the deleted content as a draft again; resolves to it (and whether to reopen it), or null
-   * when it could not be restored (the entry then says why and stays).
+   * Saves the deleted content as a draft again and puts it back into the editor the deletion
+   * emptied when that editor is still open; resolves to the outcome, or null when it could not be
+   * restored (the entry then says why and stays). Never opens an editor.
    */
-  undoDelete: (key: string) => Promise<{ draft: SavedDraft; reopen: boolean } | null>
+  undoDelete: (key: string) => Promise<UndoneDeletion | null>
   /** The deletion's notice went away: it can no longer be undone and its image copy is released. */
   forgetDeleted: (key: string) => void
   /**
@@ -379,7 +392,7 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
         clearError(editor.id)
         rawDispatch(editorMode === 'empty' ? { type: 'draft-deleted', editorId: editor.id } : { type: 'close-editor', editorId: editor.id })
       }
-      setDeleted((list) => [...list, { key, content, reopen: editor !== null, restoring: false, failure: null }])
+      setDeleted((list) => [...list, { key, content, editorId: editor !== null && editorMode === 'empty' ? editor.id : null, restoring: false, failure: null }])
       bump()
       return { ok: true }
     },
@@ -387,7 +400,7 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
   )
 
   const undoDelete = useCallback(
-    async (key: string): Promise<{ draft: SavedDraft; reopen: boolean } | null> => {
+    async (key: string): Promise<UndoneDeletion | null> => {
       const entry = deletedRef.current.find((item) => item.key === key)
       if (entry === undefined || entry.restoring) return null
       patchDeleted(key, { restoring: true, failure: null })
@@ -400,7 +413,17 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
           // The restored draft references the image now: the undo hold can go.
           releaseDeleted(key)
           bump()
-          return { draft: result.draft, reopen: entry.reopen }
+          let refused: UndoneDeletion['refused'] = null
+          if (entry.editorId !== null) {
+            const refusal = takeBackRefusal(stateRef.current, entry.editorId, result.draft.target)
+            if (refusal === null) {
+              cancelTimer(entry.editorId)
+              lastSaved.current.delete(entry.editorId)
+              clearError(entry.editorId)
+              rawDispatch({ type: 'take-back', editorId: entry.editorId, draft: result.draft })
+            } else if (refusal !== 'closed') refused = refusal
+          }
+          return { draft: result.draft, refused }
         }
         failure = result.reason
       } catch {
@@ -409,7 +432,7 @@ export function useEditorsStore(hooks?: SendHooks): EditorsStore {
       patchDeleted(key, { restoring: false, failure })
       return null
     },
-    [patchDeleted, releaseDeleted, bump]
+    [patchDeleted, releaseDeleted, bump, cancelTimer, clearError]
   )
 
   const forgetDeleted = useCallback((key: string) => {

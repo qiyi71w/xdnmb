@@ -191,7 +191,7 @@ export function OfflineDialog({
   }
 
   return (
-    <Modal className="offline-dialog" labelledBy={titleId} onClose={onClose} fallbackFocus={fallbackFocus}>
+    <Modal className="offline-dialog" labelledBy={titleId} onClose={onClose} closeOnBackdrop fallbackFocus={fallbackFocus}>
       <ModalHeader title="离线副本" titleId={titleId} closeLabel="关闭离线副本" onClose={onClose} />
       <div className="modal-body offline-body" aria-busy={state.status === 'loading' || undefined}>
         <p className="offline-thread">

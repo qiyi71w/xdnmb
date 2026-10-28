@@ -58,6 +58,7 @@ export function UpdateNotice({ fallbackFocus }: { fallbackFocus: () => HTMLEleme
       : [
           {
             label: '查看更新',
+            leaves: true,
             onAction: () => {
               openSettings('about')
               acknowledge(shown)
