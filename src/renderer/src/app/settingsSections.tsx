@@ -146,9 +146,9 @@ export function SettingRow({
   )
 }
 
-function IssueList({ id, title, issues }: { id?: string; title: string; issues: readonly AppearanceIssue[] }) {
+function IssueList({ title, issues }: { title: string; issues: readonly AppearanceIssue[] }) {
   return (
-    <div className="issue-list" id={id} role="status">
+    <div className="issue-list" role="status">
       <p className="issue-list-title">
         <Icon name="alert" size={14} />
         {title}
@@ -290,6 +290,57 @@ function sameTheme(a: CustomTheme | null, b: CustomTheme | null): boolean {
   )
 }
 
+const SCHEME_LABELS: Record<SchemeBase, string> = { light: '浅色', dark: '深色' }
+
+/** Why parseCustomTheme refused the name: 1–40 characters once trimmed, no control or bidi characters. */
+function nameError(name: string): string {
+  const length = [...name.trim()].length
+  if (length < THEME_LIMITS.nameLength.min) return '请填写名称'
+  if (length > THEME_LIMITS.nameLength.max) return `最多 ${THEME_LIMITS.nameLength.max} 个字符，当前 ${length} 个`
+  return '含有不可见的控制字符，请删除'
+}
+
+/**
+ * A theme editor row laid out like `SettingRow` (name left, control right), with its own error line
+ * under it. `labelFor` names one input; `labelId` names a group that refers to it.
+ */
+function ThemeField({
+  label,
+  labelFor,
+  labelId,
+  error,
+  errorId,
+  children
+}: {
+  label: string
+  labelFor?: string
+  labelId?: string
+  error: string | null
+  errorId: string
+  children: ReactNode
+}) {
+  return (
+    <div className="theme-field">
+      {labelFor !== undefined ? (
+        <label className="theme-field-label setting-label" htmlFor={labelFor}>
+          {label}
+        </label>
+      ) : (
+        <span className="theme-field-label setting-label" id={labelId}>
+          {label}
+        </span>
+      )}
+      <div className="theme-field-control">{children}</div>
+      {error !== null && (
+        <span className="field-error" id={errorId}>
+          <Icon name="alert" size={13} />
+          {error}
+        </span>
+      )}
+    </div>
+  )
+}
+
 /**
  * 自定义主题, collapsed until opened. Valid edits preview in this renderer at once; only 保存 writes
  * settings. 放弃修改, or leaving the page (unmount), restores the saved appearance.
@@ -334,8 +385,10 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
   }
   const dirty = !sameTheme(draft, settings.customTheme)
   const invalid = invalidFields(issues)
-  const describedBy = issues.length > 0 ? 'theme-issues' : undefined
   const usable = settings.customTheme
+  const nameInvalid = invalid.has('name')
+  const otherScheme: SchemeBase = editingScheme === 'light' ? 'dark' : 'light'
+  const otherInvalid = THEME_COLOR_KEYS.some((key) => invalid.has(`colors.${otherScheme}.${key}`))
   return (
     <Section
       id="settings-theme"
@@ -345,7 +398,7 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
         </button>
       }
     >
-      <div id="theme-editor-body" hidden={!expanded}>
+      <div id="theme-editor-body" className="theme-body" hidden={!expanded}>
         {draft === null ? (
           <div className="theme-empty">
             <button type="button" className="btn btn-page" onClick={create}>
@@ -355,33 +408,36 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
           </div>
         ) : (
           <div className="theme-editor">
-            <div className="theme-field">
-              <label className="setting-label" htmlFor="theme-name">
-                名称
-              </label>
+            <ThemeField label="名称" labelFor="theme-name" error={nameInvalid ? nameError(draft.name) : null} errorId="theme-name-error">
               <input
                 id="theme-name"
-                className="text-input"
+                className="text-input theme-name-input"
                 type="text"
                 autoComplete="off"
                 spellCheck={false}
                 value={draft.name}
-                aria-invalid={invalid.has('name') ? true : undefined}
-                aria-describedby={describedBy}
+                aria-invalid={nameInvalid ? true : undefined}
+                aria-describedby={nameInvalid ? 'theme-name-error' : undefined}
                 onChange={(event) => edit({ ...draft, name: event.target.value })}
               />
-            </div>
-            <SettingRow labelId="theme-base" label="编辑颜色">
+            </ThemeField>
+            <ThemeField
+              label="编辑颜色"
+              labelId="theme-base"
+              error={otherInvalid ? `${SCHEME_LABELS[otherScheme]}有颜色格式不正确` : null}
+              errorId="theme-base-error"
+            >
               <Choice<SchemeBase>
                 labelledBy="theme-base"
+                describedBy={otherInvalid ? 'theme-base-error' : undefined}
                 options={[
-                  { value: 'light', label: '浅色' },
-                  { value: 'dark', label: '深色' }
+                  { value: 'light', label: SCHEME_LABELS.light },
+                  { value: 'dark', label: SCHEME_LABELS.dark }
                 ]}
                 value={editingScheme}
                 onChange={setEditingScheme}
               />
-            </SettingRow>
+            </ThemeField>
 
             <div className="theme-colors" role="group" aria-label="颜色">
               {THEME_COLOR_KEYS.map((key) => {
@@ -389,13 +445,11 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
                 const typed = draft.colors[editingScheme][key]
                 const picker = HEX.test(typed) ? typed.toLowerCase() : (usable?.colors[editingScheme][key] ?? '#000000')
                 const fieldInvalid = invalid.has(`colors.${editingScheme}.${key}`)
+                const errorId = `theme-color-${key}-error`
                 const setColor = (value: string) =>
                   edit({ ...draft, colors: { ...draft.colors, [editingScheme]: { ...draft.colors[editingScheme], [key]: value } } })
                 return (
-                  <div key={key} className="theme-color">
-                    <label className="theme-color-label" htmlFor={`theme-color-${key}`}>
-                      <span className="setting-label">{label}</span>
-                    </label>
+                  <ThemeField key={key} label={label} labelFor={`theme-color-${key}`} error={fieldInvalid ? '格式应为 #rrggbb' : null} errorId={errorId}>
                     <span className="theme-color-inputs">
                       <input
                         type="color"
@@ -412,17 +466,11 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
                         spellCheck={false}
                         value={typed}
                         aria-invalid={fieldInvalid ? true : undefined}
-                        aria-describedby={describedBy}
+                        aria-describedby={fieldInvalid ? errorId : undefined}
                         onChange={(event) => setColor(event.target.value)}
                       />
                     </span>
-                    {fieldInvalid && (
-                      <span className="field-error">
-                        <Icon name="alert" size={13} />
-                        格式应为 #rrggbb
-                      </span>
-                    )}
-                  </div>
+                  </ThemeField>
                 )
               })}
             </div>
@@ -449,12 +497,10 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
                 onChange={(radius) => edit({ ...draft, radius })}
               />
             </SettingRow>
-
-            {issues.length > 0 && <IssueList id="theme-issues" title="请调整以下颜色" issues={issues} />}
           </div>
         )}
         {dirty && (
-          <div className="theme-transfer-buttons">
+          <div className="theme-actions">
             <button type="button" className="btn btn-primary" aria-disabled={issues.length > 0 || undefined} onClick={save}>
               保存
             </button>
