@@ -1,0 +1,64 @@
+# macOS packages: builds the x64 and arm64 DMGs (DMGs need macOS) and checks them on an Apple
+# Silicon runner. Packages are kept as workflow artifacts only; no GitHub Release is created.
+name: macOS packages
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dmg:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Build DMGs (x64, arm64)
+        run: npm run dist:mac
+
+      - name: Build the next patch version (arm64) for the update check
+        run: |
+          next=$(node -p "const [a, b, c] = require('./package.json').version.split('.'); [a, b, Number(c) + 1].join('.')")
+          npx electron-builder --mac dmg --arm64 --publish never "-c.extraMetadata.version=$next" -c.directories.output=dist-next
+
+      - name: Install check tools
+        run: |
+          npm install --no-save playwright-core@1.56.1
+          arch -x86_64 /usr/bin/true || softwareupdate --install-rosetta --agree-to-license
+
+      - name: Inspect packages
+        run: node scripts/ci/mac-update-smoke.mjs inspect
+
+      - name: Intel app under Rosetta
+        run: node scripts/ci/mac-update-smoke.mjs x64
+
+      - name: Update chain on Apple Silicon
+        run: node scripts/ci/mac-update-smoke.mjs update
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-packages-${{ github.sha }}
+          path: |
+            dist/*.dmg
+            dist/latest-mac.yml
+            mac-smoke/
+          if-no-files-found: warn
+          retention-days: 14
