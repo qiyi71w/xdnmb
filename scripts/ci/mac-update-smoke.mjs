@@ -96,8 +96,12 @@ function inspect() {
   }
 }
 
+let launches = 0
 async function launch(executablePath, args = []) {
   const app = await electron.launch({ executablePath, args, timeout: 90_000 })
+  // The app's own console output, kept for diagnosing a stuck quit.
+  const output = join(RESULTS, `app-${++launches}.log`)
+  for (const stream of [app.process().stdout, app.process().stderr]) stream?.on('data', (chunk) => appendFileSync(output, chunk))
   const page = await app.firstWindow({ timeout: 60_000 })
   await page.waitForLoadState('domcontentloaded')
   await sleep(2500)
@@ -113,10 +117,25 @@ async function waitFor(page, predicate, label, timeout = 180_000) {
     await sleep(250)
   }
 }
-async function quit(app) {
-  const exited = new Promise((resolve) => app.process().once('exit', (code) => resolve(code)))
+/** A real quit (app menu / Cmd+Q path); on a timeout, records where the process is and ends it. */
+async function quit(app, label) {
+  const child = app.process()
+  const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)))
   await app.evaluate(({ app }) => { app.quit() }).catch(() => undefined)
-  return Promise.race([exited, sleep(90_000).then(() => 'timeout')])
+  const result = await Promise.race([exited, sleep(90_000).then(() => 'timeout')])
+  if (result !== 'timeout') return result
+  const pid = String(child.pid)
+  const windows = await Promise.race([
+    app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows().map((window) => ({ visible: window.isVisible(), destroyed: window.isDestroyed() }))),
+    sleep(5000).then(() => 'no answer')
+  ]).catch((error) => String(error))
+  const tree = spawnSync('/bin/ps', ['-ax', '-o', 'pid,ppid,stat,etime,command'], { encoding: 'utf8' }).stdout.split('\n')
+    .filter((line) => line.includes(pid) || /xidao|汐岛/.test(line)).slice(0, 20)
+  spawnSync('/usr/bin/sample', [pid, '3', '-file', join(RESULTS, `sample-${label}.txt`)])
+  log(`quit stuck: ${label}`, { windows, tree })
+  child.kill('SIGKILL')
+  await exited
+  return result
 }
 async function openAbout(page) {
   if (!(await page.locator('#shell-set-about').count())) await page.keyboard.press('Meta+,')
@@ -135,7 +154,7 @@ async function x64() {
   const state = await updateState(page)
   check('x64 app runs (Rosetta)', arch === 'x64' && status.storage.state === 'ready' && state.platform === 'mac' && state.unavailable === null, { arch, status, platform: state.platform })
   await page.screenshot({ path: join(RESULTS, 'x64.png') })
-  check('x64 app quits', (await quit(running)) === 0)
+  check('x64 app quits', (await quit(running, 'x64')) === 0)
 }
 
 /** Serves the next release for the app's update session only (forum and other sessions are untouched). */
@@ -225,7 +244,7 @@ async function update() {
   const afterOpen = await updateState(page)
   check('opening the package mounts the verified DMG, still the old version', opened.length > 0 && afterOpen.currentVersion === version && (await aboutText(page)).includes(`版本 ${version}`), { opened })
   await page.screenshot({ path: join(RESULTS, 'mac-opened.png') })
-  check('quit before replacing', (await quit(app)) === 0)
+  check('quit before replacing', (await quit(app, 'opened')) === 0)
 
   // What the user does: drag the new app over the old one.
   if (opened.length > 0) {
@@ -243,7 +262,7 @@ async function update() {
   check('next start shows the version actually running, keeps data, drops the installed package', upgraded.currentVersion === next && upgraded.release === null &&
     settings.updateAutoDownload === true && status.storage.state === 'ready' && leftovers.length === 0, { version: upgraded.currentVersion, release: upgraded.release, storage: status.storage, leftovers })
   await page.screenshot({ path: join(RESULTS, 'mac-upgraded.png') })
-  check('quit new version', (await quit(app)) === 0)
+  check('quit new version', (await quit(app, 'upgraded')) === 0)
 }
 
 const commands = { inspect, x64, update }
