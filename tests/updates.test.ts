@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EngineCheck, UpdateEngine } from '../src/main/updates/engine'
 import { createPendingInstallStore, createRecordStore, removeFile, sha512OfFile } from '../src/main/updates/files'
 import { createUpdateService, type UpdateSettings } from '../src/main/updates/service'
+import { createLifecycle } from '../src/main/lifecycle/controller'
 import type { UpdatePlatform, UpdateState } from '../src/shared/updates'
 
 const DAY = 24 * 60 * 60 * 1000
@@ -236,9 +237,9 @@ describe('software updates', () => {
     const ready = service(fakeEngine())
     await ready.instance.start(settings({ updateAutoInstall: true }))
     expect(pending.consume()).toBeNull()
-    ready.instance.endSession()
+    ready.instance.endSession(false)
     expect(pending.consume()).toMatchObject({ path: packagePath(), sha512: SHA, release: { version: '0.2.0' } })
-    ready.instance.endSession()
+    ready.instance.endSession(false)
     expect(pending.consume()).toBeNull()
     await ready.instance.launchInstaller()
     expect(ready.installers).toEqual([])
@@ -249,30 +250,63 @@ describe('software updates', () => {
       await s.instance.prepareExit(reason)
       expect(pending.consume()).toBeNull()
       if (reason === 'drafts-lost') {
-        s.instance.endSession()
+        s.instance.endSession(true)
         expect(pending.consume()).toBeNull()
       }
     }
     const disabled = service(fakeEngine())
     await disabled.instance.start(settings({ updateAutoInstall: true }))
     disabled.instance.configure(settings({ updateAutoInstall: false }))
-    disabled.instance.endSession()
+    disabled.instance.endSession(false)
     expect(pending.consume()).toBeNull()
     const absent = service(fakeEngine())
     await absent.instance.start(settings({ updateAutoCheck: false, updateAutoInstall: true }))
-    absent.instance.endSession()
+    absent.instance.endSession(false)
     expect(pending.consume()).toBeNull()
     const mac = service(fakeEngine(), { platform: 'mac' })
     await mac.instance.start(settings({ updateAutoDownload: true, updateAutoInstall: true }))
-    mac.instance.endSession()
+    mac.instance.endSession(false)
     expect(pending.consume()).toBeNull()
+  })
+
+  it.each([[false, false], [true, false], [false, true]])('snapshots draft eligibility during lifecycle finishing (saved=%s, reopened=%s)', async (draftsSaved, reopened) => {
+    const s = service(fakeEngine())
+    await s.instance.start(settings({ updateAutoInstall: true }))
+    const finishing = Promise.withResolvers<void>()
+    const exited = Promise.withResolvers<void>()
+    const lifecycle = createLifecycle({
+      window: { state: () => 'shown', async open() {}, reveal() {}, hide() {}, destroy() {}, send() {} },
+      closeAction: async () => 'quit',
+      publication: { inFlight: () => [], setUnattended() {}, async abandon() { return null }, unstoredResults: () => [], async retryUnstored() { return true } },
+      stopBackgroundWork: () => finishing.promise,
+      notify() {},
+      exit(reason) { void s.instance.prepareExit(reason).then(() => s.instance.launchInstaller()).then(exited.resolve) },
+      now: Date.now,
+      sleep: async () => {},
+      onTrigger() {}
+    })
+    await lifecycle.start()
+    lifecycle.requestQuit()
+    lifecycle.completeQuit(draftsSaved)
+    expect(lifecycle.phase).toBe('finishing')
+    if (reopened) lifecycle.reopen()
+    // Native session event arrives before the asynchronous quit reaches prepareExit.
+    s.instance.endSession(lifecycle.draftsLost)
+    lifecycle.endSession()
+    const pending = createPendingInstallStore(join(dir, 'update-on-start.json')).consume()
+    expect(pending !== null).toBe(draftsSaved || reopened)
+    finishing.resolve()
+    if (reopened) await settle()
+    else await exited.promise
+    expect(s.installers).toEqual([])
+    expect(existsSync(packagePath())).toBe(true)
   })
 
   it('starts no installer once the system is ending the session, even when the install was already prepared', async () => {
     const s = service(fakeEngine())
     await s.instance.start(settings({ updateAutoInstall: true }))
     await s.instance.prepareExit('install')
-    s.instance.endSession()
+    s.instance.endSession(false)
     await s.instance.launchInstaller()
     expect(s.installers).toEqual([])
     expect(existsSync(packagePath())).toBe(true)

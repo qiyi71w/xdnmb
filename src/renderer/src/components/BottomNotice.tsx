@@ -39,8 +39,9 @@ export function BottomNoticeStack({ children }: { children: ReactNode }) {
  * One in-app notice of a `BottomNoticeStack`: strong glass like menus and dialogs, a message and
  * its actions, each notice closed on its own. Not modal and never takes focus. While the window is
  * hidden nothing is shown: a notice that arrives then appears (and is announced) when the window
- * is shown again. When the notice goes away with focus inside, focus returns to where it came
- * from, else to `fallbackFocus`.
+ * is shown again. When new actions replace the focused one, focus moves to the action now in its
+ * place (else the last). When the notice goes away with focus inside, focus returns to where it
+ * came from, else to `fallbackFocus`.
  */
 export function BottomNotice({
   open,
@@ -114,6 +115,29 @@ export function BottomNotice({
     []
   )
 
+  /** Position of the focused action that this render removed (focus is left on the body). */
+  const replaced = useRef<number | null>(null)
+  const actionsRow = useRef<HTMLDivElement>(null)
+  // Focus stays in the notice, and closing it later still returns focus to where it came from.
+  useLayoutEffect(() => {
+    const index = replaced.current
+    replaced.current = null
+    if (index === null || !shown) return
+    const active = document.activeElement
+    if (active !== null && active !== document.body) return
+    const buttons = actionsRow.current?.querySelectorAll<HTMLElement>('button') ?? []
+    const back = returnTo.current
+    if (buttons.length === 0) {
+      focusInside.current = false
+      returnTo.current = null
+      restoreFocus(back)
+      return
+    }
+    buttons[Math.min(index, buttons.length - 1)]?.focus({ preventScroll: true })
+    focusInside.current = true
+    returnTo.current = back
+  })
+
   if (!shown) return null
   return (
     <div
@@ -142,11 +166,15 @@ export function BottomNotice({
         {context !== undefined && context !== null && <p className="bottom-notice-context">{context}</p>}
         {detail !== undefined && detail !== null && <p className="bottom-notice-detail">{detail}</p>}
       </div>
-      <div className="bottom-notice-actions">
-        {actions.map((action) => (
+      <div className="bottom-notice-actions" ref={actionsRow}>
+        {actions.map((action, index) => (
           <button
             key={action.label}
             type="button"
+            ref={(button) => () => {
+              // Detached while still in the document: focused here means focus leaves with it.
+              if (document.activeElement === button) replaced.current = index
+            }}
             className="btn btn-small bottom-notice-action"
             aria-disabled={action.busy || undefined}
             aria-busy={action.busy || undefined}

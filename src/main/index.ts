@@ -250,7 +250,7 @@ async function start(): Promise<void> {
     sessionSentinel = new BaseWindow({ show: false, skipTaskbar: true, width: 1, height: 1 })
     const endSession = () => {
       sessionEnding = true
-      updates?.endSession()
+      updates?.endSession(lifecycle?.draftsLost ?? false)
       lifecycle?.endSession()
     }
     sessionSentinel.on('query-session-end', endSession)
@@ -506,7 +506,7 @@ async function start(): Promise<void> {
   })
   lifecycle = controller
   if (sessionEnding) {
-    updateService.endSession()
+    updateService.endSession(controller.draftsLost)
     controller.endSession()
   }
 

@@ -70,6 +70,8 @@ export interface LifecycleDeps {
 
 export interface Lifecycle {
   readonly phase: LifecyclePhase
+  /** The current finishing/exiting quit lost drafts; cancelled or reopened quits do not count. */
+  readonly draftsLost: boolean
   /** Cold start: opens the first window, then reports `cold-start` once. */
   start(): Promise<void>
   /** The window's close button. */
@@ -186,6 +188,9 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
   return {
     get phase() {
       return phase
+    },
+    get draftsLost() {
+      return (phase === 'finishing' || phase === 'exiting') && draftsLost
     },
 
     async start() {

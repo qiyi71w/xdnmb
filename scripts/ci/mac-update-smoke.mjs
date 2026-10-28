@@ -1,6 +1,7 @@
 // macOS package and update checks for CI (Apple Silicon runner):
 //   inspect  both DMGs: architecture, native module, identity, icon, ad-hoc signature, latest-mac.yml checksums
-//   x64      the Intel app starts under Rosetta with working storage
+//   x64      the Intel app starts under Rosetta with working storage; a notice turning from found to
+//            ready keeps focus on its actions and leaves focus elsewhere alone
 //   update   install the chain's current DMG, find / download / verify the next version from a
 //            controlled GitHub stand-in, answer the ready notice (稍后, then 打开安装包 at the next
 //            start), replace the app as a user would, and start the new version
@@ -190,6 +191,49 @@ async function checkReadyNotice(page, version, label) {
   return notice
 }
 
+/**
+ * Focus across a notice found → ready (sent to the window as the main process would): a focused
+ * 查看更新 / 知道了 stays on the ready action in its place, focus outside stays put, and 稍后
+ * gives focus back to where it came from.
+ */
+async function checkNoticeFocus(app, page) {
+  await openAbout(page)
+  const state = await waitFor(page, (state) => !state.checking && state.lastCheck !== null, 'x64 start check')
+  const notice = page.locator('.bottom-notice', { hasText: '0.9.' })
+  const send = (version, kind) => app.evaluate(({ BrowserWindow }, { state, version, kind }) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('updates:state', { ...state, notice: { version, kind }, release: {
+      info: { version, releaseDate: null, notes: [], pageUrl: 'https://github.com/qiyi71w/xdnmb' },
+      download: { status: kind === 'ready' ? 'ready' : 'downloading', transferred: 1, total: 100 }
+    } })
+  }, { state, version, kind })
+  const focused = () => page.evaluate(() => ({
+    text: document.activeElement === document.body ? 'BODY' : document.activeElement?.textContent ?? null,
+    outside: document.activeElement !== document.body && document.activeElement === globalThis.__outside
+  }))
+  const cases = [['查看更新', '打开安装包'], ['知道了', '稍后'], [null, null]]
+  for (const [index, [from, to]] of cases.entries()) {
+    const version = `0.9.${index}`
+    await send(version, 'available')
+    await notice.getByRole('button', { name: '知道了', exact: true }).waitFor({ timeout: 10_000 })
+    await page.locator('input[type="text"], input:not([type]), textarea').first().focus()
+    await page.evaluate(() => { globalThis.__outside = document.activeElement })
+    if (from !== null) await notice.getByRole('button', { name: from, exact: true }).focus()
+    await send(version, 'ready')
+    await notice.getByRole('button', { name: '稍后', exact: true }).waitFor({ timeout: 10_000 })
+    await sleep(300)
+    const after = await focused()
+    check(`notice found → ready: focus on ${from ?? 'an input outside'} ${from === null ? 'stays there' : `moves to ${to}`}`,
+      from === null ? after.outside : after.text === to, after)
+    if (from === '知道了') {
+      await page.keyboard.press('Enter')
+      await notice.waitFor({ state: 'detached', timeout: 10_000 })
+      await sleep(300)
+      const closed = await focused()
+      check('稍后 after found → ready gives focus back to where it came from', closed.outside, closed)
+    }
+  }
+}
+
 async function x64() {
   const app = appIn(join(DIST, 'mac'))
   const data = mkdtempSync(join(tmpdir(), 'xidao-x64-'))
@@ -199,6 +243,7 @@ async function x64() {
   const status = await page.evaluate(() => window.xidao.app.getStatus())
   const state = await updateState(page)
   check('x64 app runs (Rosetta)', arch === 'x64' && status.storage.state === 'ready' && state.platform === 'mac' && state.unavailable === null, { arch, status, platform: state.platform })
+  await checkNoticeFocus(running, page)
   await page.screenshot({ path: join(RESULTS, 'x64.png') })
   check('x64 app quits', (await quit(running, 'x64')) === 0)
 }

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { UpdateState } from '../../../../shared/updates'
 import { BottomNotice, type BottomNoticeAction } from '../../components/BottomNotice'
 import { useSettings } from '../../lib/settingsContext'
@@ -35,8 +35,6 @@ export function UpdateNotice({ fallbackFocus }: { fallbackFocus: () => HTMLEleme
   /** Notices acknowledged in this run, as `version:kind`. */
   const [acknowledged, setAcknowledged] = useState<ReadonlySet<string>>(() => new Set())
   const [attempt, setAttempt] = useState<Attempt | null>(null)
-  /** The notice's action row whose pressed button a failure replaced: focus moves to its first button. */
-  const refocus = useRef<HTMLElement | null>(null)
 
   const notice = state !== null && state.unavailable === null ? state.notice : null
   const key = notice === null ? null : `${notice.version}:${notice.kind}`
@@ -48,15 +46,6 @@ export function UpdateNotice({ fallbackFocus }: { fallbackFocus: () => HTMLEleme
   const packageReady = status === 'ready'
   // A ready notice whose package went away elsewhere has nothing left to offer (About says why).
   const open = notice !== null && key !== null && !acknowledged.has(key) && (notice.kind === 'available' || packageReady || own !== null)
-
-  useLayoutEffect(() => {
-    const row = refocus.current
-    if (row === null || pending) return
-    refocus.current = null
-    const active = document.activeElement
-    if (!row.isConnected || (active !== null && active !== document.body)) return
-    row.querySelector<HTMLElement>('button')?.focus({ preventScroll: true })
-  })
 
   const acknowledge = (shown: Notice) => {
     setAcknowledged((set) => new Set(set).add(`${shown.version}:${shown.kind}`))
@@ -78,9 +67,6 @@ export function UpdateNotice({ fallbackFocus }: { fallbackFocus: () => HTMLEleme
 
   /** The same call as the About section's 安装并重启 / 打开安装包, with the same gate in the main process. */
   const runPackage = async (shown: Notice) => {
-    // A failure that discards the package replaces the pressed button; its row stays (BottomNotice markup).
-    const pressed = document.activeElement
-    refocus.current = pressed instanceof HTMLElement ? pressed.closest<HTMLElement>('.bottom-notice-actions') : null
     setAttempt({ version: shown.version, pending: true, failure: null })
     let failure: string | null
     try {

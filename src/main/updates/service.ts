@@ -68,8 +68,8 @@ export interface UpdateService {
   prepareExit(reason: ExitReason): Promise<void>
   /** After storage has closed: starts the installer prepared by `prepareExit`, if any. */
   launchInstaller(): Promise<void>
-  /** The operating system is ending the session: nothing is installed from now on, whatever was prepared. */
-  endSession(): void
+  /** Session end never installs now; `draftsLost` is the lifecycle's synchronous current-quit snapshot. */
+  endSession(draftsLost: boolean): void
 }
 
 /** Timers wake at most this far apart and compare wall-clock time, so sleep or a clock change cannot stretch the 24 hours. */
@@ -94,7 +94,6 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
   let armed: { path: string; restart: boolean } | null = null
   /** The operating system is ending the session: no installer starts in this process any more. */
   let sessionEnded = false
-  let draftsLost = false
   /** The version the engine's last successful check offered; it can only download that one. */
   let offered: string | null = null
 
@@ -335,7 +334,6 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
 
     async prepareExit(reason) {
       armed = null
-      draftsLost = reason === 'drafts-lost'
       const allowed = reason === 'install' || (reason === 'quit' && settings?.updateAutoInstall === true)
       if (deps.platform !== 'windows' || sessionEnded || !allowed || release?.download.status !== 'ready') return
       const confirmed = await confirmedPackage()
@@ -354,7 +352,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       }
     },
 
-    endSession() {
+    endSession(draftsLost) {
       if (sessionEnded) return
       sessionEnded = true
       armed = null
