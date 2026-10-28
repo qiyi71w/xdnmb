@@ -1,4 +1,4 @@
-﻿﻿; Additions to electron-builder's assisted NSIS installer (`nsis.include` in electron-builder.yml).
+﻿; Additions to electron-builder's assisted NSIS installer (`nsis.include` in electron-builder.yml).
 ; Pages: installation mode, location, options (desktop shortcut), progress, finish. An in-app update
 ; (`--updated`) skips every choice and keeps the existing mode, location and shortcuts.
 
