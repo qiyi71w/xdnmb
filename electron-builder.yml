@@ -39,9 +39,10 @@ nsis:
   allowElevation: true
   allowToChangeInstallationDirectory: true
   include: resources/installer.nsh
+  # A single installer language (no language selector); electron-builder needs the multi-language
+  # path to use any language other than en_US.
   installerLanguages: [zh_CN]
   language: '2052'
-  multiLanguageInstaller: false
   # The start menu shortcut is always created; the desktop one follows the installer option.
   createStartMenuShortcut: true
   createDesktopShortcut: true
