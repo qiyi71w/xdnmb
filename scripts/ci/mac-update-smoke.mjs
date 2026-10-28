@@ -226,7 +226,19 @@ async function checkNoticeFocus(app, page) {
     try {
       await notice.getByRole('button', { name: '知道了', exact: true }).waitFor({ timeout: 10_000 })
     } catch (error) {
-      log('notice transition setup failed', await page.evaluate(() => ({ visibility: document.visibilityState, notices: Array.from(document.querySelectorAll('.bottom-notice')).map((element) => element.textContent) })))
+      log('notice transition setup failed', await page.evaluate(() => {
+        const button = [...document.querySelectorAll('.bottom-notice button')].find((element) => element.textContent?.trim() === '知道了')
+        const chain = []
+        for (let element = button ?? null; element !== null; element = element.parentElement) {
+          const style = getComputedStyle(element)
+          chain.push({ tag: element.tagName, cls: element.className, display: style.display, visibility: style.visibility, ariaHidden: element.getAttribute('aria-hidden'),
+            inert: element.inert, popover: element.getAttribute('popover'), popoverOpen: element.matches('[popover]') && element.matches(':popover-open'), open: element instanceof HTMLDialogElement ? element.open : undefined })
+        }
+        const rect = button?.getBoundingClientRect()
+        return { visibility: document.visibilityState, notices: Array.from(document.querySelectorAll('.bottom-notice')).map((element) => element.textContent),
+          rect: rect && [rect.x, rect.y, rect.width, rect.height], chain,
+          dialogs: Array.from(document.querySelectorAll('dialog')).map((dialog) => ({ cls: dialog.className, open: dialog.open })) }
+      }))
       await page.screenshot({ path: join(RESULTS, 'notice-setup-failure.png') })
       throw error
     }
