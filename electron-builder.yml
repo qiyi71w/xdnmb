@@ -15,6 +15,15 @@ files:
   - resources/icons/**/*
   - package.json
   - LICENSE
+# These renderer dependencies are bundled into out/, not shipped as production node_modules.
+# Copy their notices from the locked installed versions rather than maintaining duplicate text.
+extraResources:
+  - from: node_modules/react/LICENSE
+    to: licenses/react-LICENSE.txt
+  - from: node_modules/react-dom/LICENSE
+    to: licenses/react-dom-LICENSE.txt
+  - from: node_modules/scheduler/LICENSE
+    to: licenses/scheduler-LICENSE.txt
 # The update metadata's fixed source; the client also fixes it in code.
 publish:
   provider: github
