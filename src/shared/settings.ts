@@ -56,8 +56,11 @@ export interface BoardSettings {
 /** Split-view list width bounds, CSS pixels; the reader still keeps its minimum text width. */
 export const LIST_WIDTH_LIMITS = { min: 260, max: 1600, default: 340 } as const
 
-/** The user's own kaomoji: count, per-entry length and name length (characters) limits. */
-export const KAOMOJI_LIMITS = { count: 200, length: 500, nameLength: 16 } as const
+/**
+ * Kaomoji limits: the user's own (count, per-entry length, name length in characters) and how many
+ * recently inserted ones the panel keeps.
+ */
+export const KAOMOJI_LIMITS = { count: 200, length: 500, nameLength: 16, recent: 8 } as const
 
 /** One of the user's own kaomoji: `text` is what it inserts; a `name`, when given, is what its button shows. */
 export interface CustomKaomoji {
@@ -103,6 +106,8 @@ export interface AppSettings {
   listWidth: number
   /** Kaomoji added by the user, after the presets, in the order added. */
   customKaomoji: readonly CustomKaomoji[]
+  /** Texts of the kaomoji inserted most recently (presets and the user's own), latest first. */
+  recentKaomoji: readonly string[]
   /** Check for updates at cold start and every 24 hours while running. */
   updateAutoCheck: boolean
   /** Windows: download a found release and install it when the user really quits. */
@@ -128,6 +133,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   boards: { favorites: [], hidden: [], order: {}, collapsed: [] },
   listWidth: LIST_WIDTH_LIMITS.default,
   customKaomoji: [],
+  recentKaomoji: [],
   updateAutoCheck: true,
   updateAutoInstall: false,
   updateAutoDownload: false,
@@ -149,6 +155,7 @@ export const SETTING_KEYS = [
   'boards',
   'listWidth',
   'customKaomoji',
+  'recentKaomoji',
   'updateAutoCheck',
   'updateAutoInstall',
   'updateAutoDownload',
@@ -270,6 +277,24 @@ function storedKaomoji(value: unknown, field: string): Parsed<CustomKaomoji[]> {
   return { ok: true, value: list }
 }
 
+/** An update replaces the whole list: at most the limit, each a valid kaomoji text, none repeated. */
+function parseRecentKaomoji(value: unknown, field: string): Parsed<string[]> {
+  const issues: Issues = []
+  const list = stringList(value, field, isKaomojiText, KAOMOJI_LIMITS.recent, issues)
+  return list === null ? { ok: false, issues } : { ok: true, value: list }
+}
+
+/** The stored list: invalid or repeated texts are dropped without affecting the rest, then cut to the limit. */
+function storedRecentKaomoji(value: unknown, field: string): Parsed<string[]> {
+  if (!Array.isArray(value)) return { ok: false, issues: [{ kind: 'field', field, problem: 'type' }] }
+  const list: string[] = []
+  for (const item of value) {
+    if (list.length === KAOMOJI_LIMITS.recent) break
+    if (typeof item === 'string' && isKaomojiText(item) && !list.includes(item)) list.push(item)
+  }
+  return { ok: true, value: list }
+}
+
 function parseListWidth(value: unknown, field: string): Parsed<number> {
   if (typeof value !== 'number' || !Number.isInteger(value)) return { ok: false, issues: [{ kind: 'field', field, problem: 'type' }] }
   if (value < LIST_WIDTH_LIMITS.min || value > LIST_WIDTH_LIMITS.max) return { ok: false, issues: [{ kind: 'field', field, problem: 'range' }] }
@@ -335,6 +360,9 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
     case 'customKaomoji':
       parsed = parseKaomoji(value, key)
       break
+    case 'recentKaomoji':
+      parsed = parseRecentKaomoji(value, key)
+      break
     case 'updateNetwork':
       parsed = choice(value, UPDATE_NETWORKS, key)
       break
@@ -375,14 +403,16 @@ export function applySettingsPatch(current: AppSettings, patch: unknown): Parsed
 
 /**
  * Settings from stored values. A missing or no longer valid value falls back to its default (the
- * custom kaomoji list drops only its invalid entries), and a custom scheme whose theme is unusable
- * falls back to `system`; the stored rows are not rewritten.
+ * custom and recent kaomoji lists drop only their invalid entries), and a custom scheme whose theme
+ * is unusable falls back to `system`; the stored rows are not rewritten.
  */
 export function settingsFromStored(stored: ReadonlyMap<string, unknown>): AppSettings {
   const settings: AppSettings = { ...DEFAULT_SETTINGS }
   for (const key of SETTING_KEYS) {
     if (!stored.has(key)) continue
-    const parsed = key === 'customKaomoji' ? storedKaomoji(stored.get(key), key) : parseSetting(key, stored.get(key))
+    const value = stored.get(key)
+    const parsed =
+      key === 'customKaomoji' ? storedKaomoji(value, key) : key === 'recentKaomoji' ? storedRecentKaomoji(value, key) : parseSetting(key, value)
     if (parsed.ok) (settings as Record<keyof AppSettings, unknown>)[key] = parsed.value
   }
   if (stored.get('colorScheme') === 'custom' && settings.customTheme !== null) {

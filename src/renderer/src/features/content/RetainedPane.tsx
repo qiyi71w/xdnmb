@@ -9,6 +9,7 @@ import { ContextMenu, contextMenuPoint, type ContextMenuItem, type ContextMenuPo
 import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { copyNumberItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { formatRecordTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
@@ -281,6 +282,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, ac
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">
                 {PAGE.title}读取失败：{contentFailureText(list.refused)}
+                <KaomojiDecor state="failure" />
               </p>
               <button type="button" className="btn btn-small btn-page" onClick={() => void load()}>
                 重试
@@ -291,13 +293,17 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, ac
 
         {list.status === 'ready' && entries.length === 0 && (
           <div className="list-empty" role="status">
-            <p className="list-empty-title">{PAGE.empty}</p>
+            <p className="list-empty-title">
+              <KaomojiDecor state="historyEmpty" above />
+              {PAGE.empty}
+            </p>
           </div>
         )}
 
         {filtering && entries.length > 0 && filtered.shown.length === 0 && (
           <p className="list-filters-empty" role="status">
             {PAGE.title}中没有符合筛选的串。
+            <KaomojiDecor state="filteredOut" />
           </p>
         )}
 

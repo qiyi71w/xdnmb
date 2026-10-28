@@ -9,6 +9,7 @@ import type { ForumId, Post, ThreadId } from '../../../../shared/forum'
 import { contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { selectionCopyItem } from '../../components/copyMenuItems'
 import { Icon, Spinner } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { meaningfulTitle } from '../../lib/format'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
@@ -178,6 +179,7 @@ export function OfflinePane({
             <p className={done.cacheCleanup === 'complete' ? 'notice-inline' : 'notice-inline is-warning'} role="status">
               <Icon name={done.cacheCleanup === 'complete' ? 'check' : 'alert'} size={14} />
               已删除「{done.label}」的离线副本{done.cacheCleanup === 'failed' && '；普通缓存额度检查失败'}
+              {done.cacheCleanup === 'failed' && <KaomojiDecor state="failure" />}
             </p>
           )}
           {list.status === 'failed' && (
@@ -185,6 +187,7 @@ export function OfflinePane({
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">
                 {TITLE}读取失败：{contentFailureText(list.refused)}
+                <KaomojiDecor state="failure" />
               </p>
               <button type="button" className="btn btn-small btn-page" onClick={() => void load()}>
                 重试
@@ -195,13 +198,17 @@ export function OfflinePane({
 
         {list.status === 'ready' && entries.length === 0 && (
           <div className="list-empty" role="status">
-            <p className="list-empty-title">还没有离线副本</p>
+            <p className="list-empty-title">
+              <KaomojiDecor state="offlineEmpty" above />
+              还没有离线副本
+            </p>
           </div>
         )}
 
         {filtering && entries.length > 0 && filtered.shown.length === 0 && (
           <p className="list-filters-empty" role="status">
             {TITLE}中没有符合筛选的串。
+            <KaomojiDecor state="filteredOut" />
           </p>
         )}
 
@@ -254,6 +261,7 @@ export function OfflinePane({
                     <p className="notice-inline is-warning" role="alert">
                       <Icon name="alert" size={14} />
                       {startFailure}
+                      <KaomojiDecor state="failure" />
                     </p>
                   )}
                 </li>

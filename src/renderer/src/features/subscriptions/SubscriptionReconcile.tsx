@@ -10,6 +10,7 @@ import type {
   SubscriptionPreview
 } from '../../../../shared/subscriptions'
 import { Icon, Spinner } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { Modal, ModalHeader } from '../../components/Modal'
 import { formatRecordTime } from '../../lib/time'
 import { useSettingsOpener } from '../../lib/settingsOpener'
@@ -334,6 +335,7 @@ function Differences({
             : preview.mode === 'sync'
               ? '两端订阅一致'
               : '旧 UUID 里的串都已在当前 App 订阅中'}
+          <KaomojiDecor state="reconcileEmpty" />
         </p>
       ) : (
         <div className="sub-diff" onKeyDown={roving.onKeyDown}>
@@ -694,13 +696,21 @@ export function ReconcileHistoryDialog({
         {plansFailed && (
           <div className="notice notice-cached is-compact" role="status">
             <Icon name="alert" className="notice-icon" />
-            <p className="notice-text">记录读取失败，下面可能不是最新状态</p>
+            <p className="notice-text">
+              记录读取失败，下面可能不是最新状态
+              <KaomojiDecor state="failure" />
+            </p>
             <button type="button" className="btn btn-small" onClick={() => void refreshPlans()}>
               重试
             </button>
           </div>
         )}
-        {plans !== null && plans.length === 0 && <p className="sub-journal-empty">还没有同步或合并记录</p>}
+        {plans !== null && plans.length === 0 && (
+          <p className="sub-journal-empty">
+            还没有同步或合并记录
+            <KaomojiDecor state="syncJournalEmpty" />
+          </p>
+        )}
         {plans !== null && plans.length > 0 && (
           <ul className="sub-journal-list" aria-labelledby={titleId}>
             {plans.map((plan) => (

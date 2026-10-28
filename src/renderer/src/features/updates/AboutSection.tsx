@@ -16,6 +16,7 @@ import {
 import appIcon from '../../../../../resources/icons/xidao-icon-512.png'
 import { Choice, Section, SettingRow, Switch, type Write } from '../../app/settingsSections'
 import { Icon, Spinner } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { formatRecordTime } from '../../lib/time'
 import { formatBytes } from '../content/contentText'
 import { ReleaseNotes } from './ReleaseNotes'
@@ -64,7 +65,10 @@ export function AboutSection({ settings, write }: { settings: AppSettings; write
       <div className="about-identity">
         <img className="about-icon" src={appIcon} alt="" width={64} height={64} draggable={false} />
         <div className="about-name-block">
-          <p className="about-name">汐岛</p>
+          <p className="about-name">
+            汐岛
+            <KaomojiDecor state="about" />
+          </p>
           {state !== null && <p className="about-version">版本 {state.currentVersion}</p>}
         </div>
       </div>
@@ -121,7 +125,10 @@ function UpdateArea({ settings, write }: { settings: AppSettings; write: Write }
           {state !== null && state.startupFailure !== null && (
             <p className="notice-inline is-warning about-status-line">
               <Icon name="alert" size={14} />
-              <span>{startupFailedText(state.startupFailure, state.platform)}</span>
+              <span>
+                {startupFailedText(state.startupFailure, state.platform)}
+                <KaomojiDecor state="failure" />
+              </span>
             </p>
           )}
         </div>
@@ -213,6 +220,7 @@ function CheckStatus({ state, failed, checking }: { state: UpdateState | null; f
       <p className="notice-inline is-warning">
         <Icon name="alert" size={14} />
         未能读取更新状态
+        <KaomojiDecor state="failure" />
       </p>
     ) : (
       <p className="about-status-line">正在读取更新状态…</p>
@@ -244,6 +252,7 @@ function CheckStatus({ state, failed, checking }: { state: UpdateState | null; f
           <Icon name="alert" size={14} />
           <span>
             {checkFailedText(last.failure, state.platform)} {at}
+            <KaomojiDecor state="failure" />
           </span>
         </p>
       )
@@ -343,6 +352,7 @@ function PackageActions({ state, download }: { state: UpdateState; download: Upd
           <p className="notice-inline is-warning">
             <Icon name="alert" size={14} />
             {downloadFailedText(download.failure, platform)}
+            <KaomojiDecor state="failure" />
           </p>
         )}
         {download.status === 'downloading' && <p className="about-status-line">正在下载更新</p>}
@@ -364,6 +374,7 @@ function PackageActions({ state, download }: { state: UpdateState; download: Upd
           <p className="notice-inline is-warning">
             <Icon name="alert" size={14} />
             {outcome.text}
+            <KaomojiDecor state="failure" />
           </p>
         )}
         {outcome?.kind === 'opened' && <p className="setting-help">已打开安装包</p>}

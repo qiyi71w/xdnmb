@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import { targetText, type DraftId, type SavedDraft } from '../../../../shared/drafts'
 import { isUnsettled } from '../../../../shared/publication'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { Modal, ModalHeader } from '../../components/Modal'
 import { formatRecordTime } from '../../lib/time'
 import { editorForDraft } from '../editor/editorsState'
@@ -136,7 +137,10 @@ export function DraftLibraryDialog({
           <div className="notice notice-error" role="alert">
             <Icon name="alert" className="notice-icon" />
             <div className="notice-text">
-              <p className="notice-title">草稿读取失败：本地存储不可用</p>
+              <p className="notice-title">
+                草稿读取失败：本地存储不可用
+                <KaomojiDecor state="failure" />
+              </p>
             </div>
             <button type="button" className="btn btn-small" onClick={() => void load(false)}>
               重试
@@ -154,7 +158,10 @@ export function DraftLibraryDialog({
         )}
         {list.status === 'ready' && list.drafts.length === 0 && (
           <div className="drafts-empty" role="status">
-            <p className="drafts-empty-title">还没有草稿</p>
+            <p className="drafts-empty-title">
+              <KaomojiDecor state="draftsEmpty" above />
+              还没有草稿
+            </p>
           </div>
         )}
         {list.status === 'ready' && list.drafts.length > 0 && (
@@ -211,12 +218,14 @@ export function DraftLibraryDialog({
                       <p className="notice-inline is-warning" role="alert">
                         <Icon name="alert" size={14} />
                         没能删除：{deleteFailed.reason === 'locked' ? '发送结果还没确定' : SAVE_FAILURE_TEXT[deleteFailed.reason]}，草稿仍保留
+                        <KaomojiDecor state="failure" />
                       </p>
                     )}
                     {continueFailed?.draftId === draft.id && (
                       <p className="notice-inline is-warning" role="alert">
                         <Icon name="alert" size={14} />
                         {continueFailed.text}
+                        <KaomojiDecor state="failure" />
                       </p>
                     )}
                   </div>

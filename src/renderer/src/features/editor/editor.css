@@ -1050,7 +1050,7 @@ dialog.compose-image-preview:not([open]) {
   margin-right: 6px;
 }
 
-/* ----- 颜文字: a panel above the toolbar; the presets, the user's own, then 添加 ----- */
+/* ----- 颜文字: a panel above the toolbar; 最近使用, the presets, the user's own, then 添加 ----- */
 
 .kaomoji-panel {
   position: absolute;
@@ -1080,6 +1080,17 @@ dialog.compose-image-preview:not([open]) {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+/* 最近使用: the top row, set off from the presets by a faint rule; wraps rather than overflowing. */
+.kaomoji-recent {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-bottom: 6px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .kaomoji-item {

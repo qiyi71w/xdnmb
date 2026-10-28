@@ -4,6 +4,7 @@ import { forumLabel, sameTarget, targetText, type IdentityChoice, type PostField
 import type { CredentialId } from '../../../../shared/identity'
 import { isSendShortcut, sendAriaShortcut, sendShortcutLabel } from '../../app/shortcuts'
 import { Icon, Spinner } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { usePopover } from '../../lib/usePopover'
@@ -333,6 +334,7 @@ export function EditorPanel({
     <p className="notice-inline is-warning editor-error" role="alert">
       <Icon name="alert" size={14} />
       草稿没能保存：{SAVE_FAILURE_TEXT[saveError]}
+      <KaomojiDecor state="failure" />
     </p>
   )
 
@@ -340,6 +342,7 @@ export function EditorPanel({
     <p className="notice-inline is-warning editor-error" role="alert">
       <Icon name="alert" size={14} />
       草稿没能删除：{SAVE_FAILURE_TEXT[deleteError]}
+      <KaomojiDecor state="failure" />
     </p>
   )
 
@@ -558,21 +561,32 @@ function SendStatus({ editor }: { editor: Editor }) {
   if (publication === null) {
     const notice = editor.sendNotice
     if (notice === null) return null
+    const unverified = notice.kind === 'failed' && notice.problem === 'unverified' && notice.saved
     const text =
       notice.kind === 'refused'
         ? `没有发送：${PROBLEM_TEXT[notice.reason]}`
         : notice.kind === 'failed'
-          ? notice.problem === 'unverified' && notice.saved
+          ? unverified
             ? unverifiedText(editor.target.kind)
             : `发送失败${notice.problem === null ? '' : `：${ATTEMPT_PROBLEM_TEXT[notice.problem]}`}${notice.saved ? '，已保存为草稿' : '，草稿未能自动保存'}`
           : '这次发送没有发出，可以再次发送'
     const forumMessage = notice.kind === 'failed' ? notice.forumMessage : undefined
+    // 发送失败 ends with the failure kaomoji; a refusal, a send not made or one that may have gone out does not.
+    const decor = notice.kind === 'failed' && !unverified && <KaomojiDecor state="failure" />
     return (
       <p className={`notice-inline is-warning editor-send-notice${forumMessage === undefined ? '' : ' has-forum-message'}`}>
         <Icon name="alert" size={14} />
-        {forumMessage === undefined ? text : (
+        {forumMessage === undefined ? (
+          <>
+            {text}
+            {decor}
+          </>
+        ) : (
           <span className="editor-send-text">
-            <span>{text}</span>
+            <span>
+              {text}
+              {decor}
+            </span>
             <span className="editor-forum-message">论坛提示：{forumMessage}</span>
           </span>
         )}
@@ -600,6 +614,7 @@ function SendStatus({ editor }: { editor: Editor }) {
           <p className="notice-inline is-warning editor-send-notice">
             <Icon name="alert" size={14} />
             发送失败，内容已存为草稿；暂时读不到这份草稿，正在重新读取
+            <KaomojiDecor state="failure" />
           </p>
         )
       }

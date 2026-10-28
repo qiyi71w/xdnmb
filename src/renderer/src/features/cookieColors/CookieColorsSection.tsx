@@ -7,6 +7,7 @@ import { COOKIE_ID_MAX_LENGTH, validateCookieId } from '../../../../shared/ident
 import { cookieColorToken } from '../../../../shared/theme'
 import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { cookieIdErrorText } from '../identity/identityText'
 import { COOKIE_COLOR_LABELS } from './cookieColorNames'
 import { useCookieColors } from './cookieColorsStore'
@@ -42,13 +43,21 @@ export function CookieColorsSection() {
       {failure !== null && (
         <div className="notice notice-error is-compact" role="alert">
           <Icon name="alert" className="notice-icon" />
-          <p className="notice-text">{failure}</p>
+          <p className="notice-text">
+            {failure}
+            <KaomojiDecor state="failure" />
+          </p>
           <button type="button" className="btn btn-small btn-page" onClick={() => void retry()}>
             重试
           </button>
         </div>
       )}
-      {loaded && entries.length === 0 && <p className="settings-empty">还没有饼干颜色</p>}
+      {loaded && entries.length === 0 && (
+        <p className="settings-empty">
+          还没有饼干颜色
+          <KaomojiDecor state="cookieColorsEmpty" />
+        </p>
+      )}
       {entries.length > 0 && (
         <>
           <div className="shell-picker-field shell-manage-filter">

@@ -1,0 +1,22 @@
+/* Decorative kaomoji (lib/kaomojiDecor.ts): the reading face at normal weight, in the color of the
+   text it follows; never wraps inside, never takes a press or a text selection. */
+.kaomoji-decor {
+  margin-inline-start: 0.4em;
+  font-family: var(--font-reading);
+  font-weight: 400;
+  white-space: pre;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Above an empty state's title: its own line in the title element, quieter than the title. */
+.kaomoji-decor.is-above {
+  display: block;
+  margin: 0 0 6px;
+  color: var(--ink-3);
+}
+
+/* One-line notices already space their parts. */
+.notice-inline > .kaomoji-decor {
+  margin-inline-start: 0;
+}

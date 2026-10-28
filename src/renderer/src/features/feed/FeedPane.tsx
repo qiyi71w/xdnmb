@@ -3,6 +3,7 @@ import type { ForumId, ThreadSummary } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import { Content, contentText } from '../../components/Content'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { FailureNotice, PartialNotice, SourceNotice } from '../../components/Notices'
 import { formatPageList } from '../../lib/format'
@@ -333,7 +334,10 @@ export function FeedPane({
 
         {!firstLoad && state.threads.length === 0 && state.reachedEmptyPage === 1 && (
           <div className="list-empty" role="status">
-            <p className="list-empty-title">这里还没有串</p>
+            <p className="list-empty-title">
+              <KaomojiDecor state="feedEmpty" above />
+              这里还没有串
+            </p>
           </div>
         )}
 
@@ -368,10 +372,14 @@ export function FeedPane({
         {filtering && visibleThreads.length > 0 && filtered.shown.length === 0 && (
           <p className="list-filters-empty" role="status">
             已加载的串都不符合筛选
+            <KaomojiDecor state="filteredOut" />
           </p>
         )}
         {!firstLoad && state.threads.length > 0 && visibleThreads.length === 0 && (
-          <p className="list-filters-empty" role="status">已加载的串均已屏蔽</p>
+          <p className="list-filters-empty" role="status">
+            已加载的串均已屏蔽
+            <KaomojiDecor state="filteredOut" />
+          </p>
         )}
 
         <div className="list-footer" aria-busy={state.activity === 'append' || undefined}>

@@ -26,6 +26,7 @@ import type {
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { selectionCopyItem } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { FailureNotice } from '../../components/Notices'
 import { describeReadError, meaningfulTitle } from '../../lib/format'
@@ -622,7 +623,10 @@ export function SubscriptionPane({
           {state.refusal !== null && (
             <div className="notice notice-error is-compact" role="alert">
               <Icon name="alert" className="notice-icon" />
-              <p className="notice-text">读取未执行：{failureText(state.refusal)}</p>
+              <p className="notice-text">
+                读取未执行：{failureText(state.refusal)}
+                <KaomojiDecor state="failure" />
+              </p>
             </div>
           )}
           {shown !== null && shown.error !== null && (
@@ -642,7 +646,10 @@ export function SubscriptionPane({
 
         {displayed === null && state.activity === 'idle' && blocker === null && (
           <div className="list-empty">
-            <p className="list-empty-title">{shown !== null || state.refusal !== null || state.internalError !== null ? '还没有取得列表' : '还没有读取这份订阅'}</p>
+            <p className="list-empty-title">
+              <KaomojiDecor state="subscriptionUnread" above />
+              {shown !== null || state.refusal !== null || state.internalError !== null ? '还没有取得列表' : '还没有读取这份订阅'}
+            </p>
             <button type="button" className="btn btn-page sub-empty-action" onClick={refresh}>
               读取
             </button>
@@ -651,7 +658,10 @@ export function SubscriptionPane({
 
         {displayed !== null && threads.length === 0 && endPage === 1 && (
           <div className="list-empty" role="status">
-            <p className="list-empty-title">没有订阅</p>
+            <p className="list-empty-title">
+              <KaomojiDecor state="subscriptionsEmpty" above />
+              没有订阅
+            </p>
           </div>
         )}
 
@@ -707,6 +717,7 @@ export function SubscriptionPane({
         {filtering && threads.length > 0 && filtered.shown.length === 0 && (
           <p className="list-filters-empty" role="status">
             已读取的订阅都不符合筛选。
+            <KaomojiDecor state="filteredOut" />
           </p>
         )}
 

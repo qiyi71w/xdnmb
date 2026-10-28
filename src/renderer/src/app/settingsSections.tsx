@@ -26,6 +26,7 @@ import {
   type ThemeColors
 } from '../../../shared/theme'
 import { Icon } from '../components/Icon'
+import { KaomojiDecor } from '../components/KaomojiDecor'
 import { previewTheme, systemPrefersDark, systemReducesMotion } from '../lib/useAppearance'
 import { describeIssues, invalidFields } from './appearanceIssues'
 import type { SettingsWriteStatus } from './useSettingsWriter'
@@ -50,6 +51,7 @@ export function SettingsStatusNotices({ status }: { status: SettingsWriteStatus 
         <p className="notice-inline is-warning" role="status">
           <Icon name="alert" size={14} />
           设置未保存
+          <KaomojiDecor state="failure" />
         </p>
       )}
       {status.refused.length > 0 && <IssueList title="更改未应用" issues={status.refused} />}
@@ -532,6 +534,7 @@ function ThemeTransfer({ adopt }: { adopt: (settings: AppSettings) => void }) {
             <p className={result.tone === 'done' ? 'notice-inline is-done' : 'notice-inline is-warning'}>
               <Icon name={result.tone === 'done' ? 'check' : 'alert'} size={14} />
               {result.text}
+              {result.tone !== 'done' && <KaomojiDecor state="failure" />}
             </p>
             {result.issues !== undefined && (
               <ul className="issue-items">
@@ -916,6 +919,7 @@ export function PublicationSection() {
         <p className="notice-inline is-warning" role="status">
           <Icon name="alert" size={14} />
           设置未保存
+          <KaomojiDecor state="failure" />
         </p>
       )}
     </section>

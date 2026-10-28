@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { OfflineCopy } from '../../../../shared/content'
 import type { ThreadId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { Modal, ModalHeader } from '../../components/Modal'
 import { Loading } from '../../components/Notices'
 import { formatPageList } from '../../lib/format'
@@ -203,7 +204,10 @@ export function OfflineDialog({
           <div className="notice notice-error" role="alert">
             <Icon name="alert" className="notice-icon" />
             <div className="notice-text">
-              <p className="notice-title">离线副本状态读取失败：{contentFailureText(state.refused)}</p>
+              <p className="notice-title">
+                离线副本状态读取失败：{contentFailureText(state.refused)}
+                <KaomojiDecor state="failure" />
+              </p>
             </div>
             <button type="button" className="btn btn-small" onClick={() => void reload()}>
               重试
@@ -216,6 +220,7 @@ export function OfflineDialog({
           <p className="notice-inline is-warning" role="status">
             <Icon name="alert" size={14} />
             {pollFailure}
+            <KaomojiDecor state="failure" />
           </p>
         )}
 
@@ -357,6 +362,7 @@ function OfflineSummary({ copy }: { copy: OfflineCopy }) {
         <p className="notice-inline is-warning">
           <Icon name="alert" size={14} />
           {error}
+          <KaomojiDecor state="failure" />
         </p>
       )}
       {copy.imageFailures.length > 0 && (

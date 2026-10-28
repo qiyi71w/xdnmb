@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent 
 import type { SubscriptionOverview, SubscriptionResult } from '../../../../shared/subscriptions'
 import { ContextMenu, type ContextMenuPoint } from '../../components/ContextMenu'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { FailureNotice } from '../../components/Notices'
 import { singleFlight } from '../../lib/singleFlight'
 import { useListOpener } from '../reminders/openList'
@@ -48,7 +49,10 @@ export function SubscriptionSection({ subscriptions }: { subscriptions: Subscrip
           {overviewFailed && (
             <div className="notice notice-cached is-compact" role="status">
               <Icon name="alert" className="notice-icon" />
-              <p className="notice-text">订阅设置刷新失败，下面可能不是最新状态</p>
+              <p className="notice-text">
+                订阅设置刷新失败，下面可能不是最新状态
+                <KaomojiDecor state="failure" />
+              </p>
               <button type="button" className="btn btn-small btn-page" onClick={() => void refreshOverview()}>
                 重试
               </button>
@@ -139,7 +143,10 @@ function MergeEntry({ overview, subscriptions }: { overview: SubscriptionOvervie
       {mergeSourcesFailed && (
         <div className="notice notice-error is-compact" role="alert">
           <Icon name="alert" className="notice-icon" />
-          <p className="notice-text">用过的 App UUID 读取失败</p>
+          <p className="notice-text">
+            用过的 App UUID 读取失败
+            <KaomojiDecor state="failure" />
+          </p>
           <button type="button" className="btn btn-small btn-page" onClick={() => void refreshMergeSources()}>
             重试
           </button>

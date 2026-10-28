@@ -1,6 +1,7 @@
 import { useContext, useLayoutEffect, useRef } from 'react'
 import type { FeedRef, ForumId, Post, ThreadId } from '../../../shared/forum'
 import type { PostTarget } from '../../../shared/drafts'
+import { KaomojiDecor } from '../components/KaomojiDecor'
 import { FailureNotice } from '../components/Notices'
 import { RetainedPane } from '../features/content/RetainedPane'
 import { ListHostContext } from '../features/directory/navStore'
@@ -243,7 +244,10 @@ export function TabView({
         >
           {entry.thread === null ? (
             <div className="pane-empty">
-              <p className="pane-empty-title">选择一个串</p>
+              <p className="pane-empty-title">
+                <KaomojiDecor state="noThread" above />
+                选择一个串
+              </p>
             </div>
           ) : (
             <ThreadPane

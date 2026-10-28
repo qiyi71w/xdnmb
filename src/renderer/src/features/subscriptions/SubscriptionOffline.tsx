@@ -1,6 +1,7 @@
 import { useLayoutEffect, useState, type ReactNode } from 'react'
 import type { ThreadId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { OfflineDeleteConfirm } from '../content/OfflineDeleteConfirm'
 import { isDeletingOffline } from '../content/offlineSync'
 import { OfflineDetailsDialog } from '../content/ThreadRetention'
@@ -73,6 +74,7 @@ export function useSubscriptionOffline(): { open: (opened: Opened) => void; dial
     <p className={done.cacheCleanup === 'complete' ? 'notice-inline' : 'notice-inline is-warning'} role="status">
       <Icon name={done.cacheCleanup === 'complete' ? 'check' : 'alert'} size={14} />
       已删除「{done.label}」的离线副本{done.cacheCleanup === 'failed' && '；普通缓存额度检查失败'}
+      {done.cacheCleanup === 'failed' && <KaomojiDecor state="failure" />}
     </p>
   )
 

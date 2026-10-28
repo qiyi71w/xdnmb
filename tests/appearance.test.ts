@@ -312,6 +312,25 @@ describe('settings', () => {
     expect(settingsFromStored(stored)).toEqual({ ...DEFAULT_SETTINGS, density: 'compact', customKaomoji: [{ text: 'old' }, { text: 'g', name: '一二三四五六七八九十一二三四五六' }] })
   })
 
+  it('keeps the recent kaomoji across a restart, in their order', async () => {
+    const path = join(folder(), 'settings.sqlite')
+    const first = open(path)
+    const recentKaomoji = ['[n]', '多行\n颜文字', '(｀・ω・)', '|∀ﾟ', 'a', 'b', 'c', 'd']
+    expect(await createSettingsService(storeOf(first)).update({ recentKaomoji })).toMatchObject({ saved: true, issues: [] })
+    first.close()
+    databases.splice(databases.indexOf(first), 1)
+    expect(open(path).loadSettings()).toEqual({ ...DEFAULT_SETTINGS, recentKaomoji })
+  })
+
+  it('drops only the invalid or repeated stored recent kaomoji and keeps the first 8', () => {
+    const stored = new Map<string, unknown>([
+      ['density', 'compact'],
+      ['recentKaomoji', ['a', 42, '  ', 'b', 'a', 'bad\u0000', { text: 'c' }, 'c', 'd', 'e', 'f', 'g', 'h', 'i']]
+    ])
+    expect(settingsFromStored(stored)).toEqual({ ...DEFAULT_SETTINGS, density: 'compact', recentKaomoji: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] })
+    expect(settingsFromStored(new Map<string, unknown>([['recentKaomoji', 'a']])).recentKaomoji).toEqual([])
+  })
+
   it.each([
     ['a timeline order', { boards: { ...navigation.boards, order: { timelines: ['timeline:1'] } } }, 'boards.order'],
     ['a timeline in a group order', { boards: { ...navigation.boards, order: { 'group-1': ['timeline:1'] } } }, 'boards.order'],
@@ -320,6 +339,10 @@ describe('settings', () => {
     ['a blank kaomoji', { customKaomoji: [{ text: '  ' }] }, 'customKaomoji'],
     ['a kaomoji named past 16 characters', { customKaomoji: [{ text: 'x', name: '一二三四五六七八九十一二三四五六七' }] }, 'customKaomoji'],
     ['a kaomoji repeated under another name', { customKaomoji: [{ text: 'x' }, { text: 'x', name: '别名' }] }, 'customKaomoji'],
+    ['more than 8 recent kaomoji', { recentKaomoji: ['1', '2', '3', '4', '5', '6', '7', '8', '9'] }, 'recentKaomoji'],
+    ['a repeated recent kaomoji', { recentKaomoji: ['x', 'y', 'x'] }, 'recentKaomoji'],
+    ['a blank recent kaomoji', { recentKaomoji: ['  '] }, 'recentKaomoji'],
+    ['a recent kaomoji that is not text', { recentKaomoji: [{ text: 'x' }] }, 'recentKaomoji'],
     ['a list narrower than the minimum', { listWidth: 100 }, 'listWidth']
   ])('refuses %s', (_label, patch, field) => {
     expect(applySettingsPatch(DEFAULT_SETTINGS, patch)).toMatchObject({ ok: false, issues: [{ field }] })

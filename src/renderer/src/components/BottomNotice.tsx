@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode
 import { createPortal } from 'react-dom'
 import { closeDialogs, noticeHost, onDialogsChange, topDialog } from '../lib/dialogs'
 import { Icon, Spinner, type IconName } from './Icon'
+import { KaomojiDecor } from './KaomojiDecor'
 import { FOCUSABLE } from './Modal'
 import './bottom-notice.css'
 
@@ -107,7 +108,10 @@ export function BottomNotice({
   children: ReactNode
   /** The leading mark: the warning sign by default; `spinner` while something is being checked. */
   icon?: IconName | 'spinner'
-  /** `warning` draws the mark in the warning ink; `neutral` (a plain outcome) in the secondary ink. */
+  /**
+   * `warning` draws the mark in the warning ink and ends the message with the warning kaomoji;
+   * `neutral` (a plain outcome) draws it in the secondary ink.
+   */
   tone?: 'warning' | 'neutral'
   /**
    * Supporting words of the message, e.g. the forum's own reason, right under it: two lines at
@@ -232,7 +236,10 @@ export function BottomNotice({
         <Icon name={icon} className={`bottom-notice-icon is-${tone}`} />
       )}
       <div className="bottom-notice-text">
-        <p className="bottom-notice-message">{children}</p>
+        <p className="bottom-notice-message">
+          {children}
+          {tone === 'warning' && icon !== 'spinner' && <KaomojiDecor state="warningNotice" />}
+        </p>
         {note !== undefined && note !== null && <p className="bottom-notice-note" title={note}>{note}</p>}
         {context !== undefined && context !== null && <p className="bottom-notice-context">{context}</p>}
         {detail !== undefined && detail !== null && <p className="bottom-notice-detail">{detail}</p>}
