@@ -197,6 +197,15 @@ async function checkReadyNotice(page, version, label) {
  * gives focus back to where it came from.
  */
 async function checkNoticeFocus(app, page) {
+  await app.evaluate(({ app, BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.show()
+    window.focus()
+    app.focus({ steal: true })
+  })
+  await page.bringToFront()
+  log('x64 notice surface', await page.evaluate(() => ({ visibility: document.visibilityState, focused: document.hasFocus() })))
+  await page.waitForFunction(() => document.visibilityState === 'visible')
   await openAbout(page)
   const state = await waitFor(page, (state) => !state.checking && state.lastCheck !== null, 'x64 start check')
   const notice = page.locator('.bottom-notice', { hasText: '0.9.' })
@@ -214,7 +223,13 @@ async function checkNoticeFocus(app, page) {
   for (const [index, [from, to]] of cases.entries()) {
     const version = `0.9.${index}`
     await send(version, 'available')
-    await notice.getByRole('button', { name: '知道了', exact: true }).waitFor({ timeout: 10_000 })
+    try {
+      await notice.getByRole('button', { name: '知道了', exact: true }).waitFor({ timeout: 10_000 })
+    } catch (error) {
+      log('notice transition setup failed', await page.evaluate(() => ({ visibility: document.visibilityState, notices: Array.from(document.querySelectorAll('.bottom-notice')).map((element) => element.textContent) })))
+      await page.screenshot({ path: join(RESULTS, 'notice-setup-failure.png') })
+      throw error
+    }
     await page.locator('input[type="text"], input:not([type]), textarea').first().focus()
     await page.evaluate(() => { globalThis.__outside = document.activeElement })
     if (from !== null) await notice.getByRole('button', { name: from, exact: true }).focus()
