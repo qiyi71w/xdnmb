@@ -3,6 +3,7 @@ import type { QuoteLocation, ReadError } from '../../../../shared/api'
 import type { BoardDirectory, ForumId, Post, PostId, ThreadId, TimelineId } from '../../../../shared/forum'
 import { MAX_SEARCH_QUERY_LENGTH, type ForumLinkTarget, type SearchError, type SearchHit } from '../../../../shared/online-search'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { Loading } from '../../components/Notices'
 import { describeReadError } from '../../lib/format'
 import { formatRecordTime } from '../../lib/time'
@@ -494,6 +495,7 @@ export function OnlineSearchPane({
             <p className="notice-inline is-warning" role="status">
               <Icon name="alert" size={14} />
               无法在系统浏览器中打开搜索网站
+              <KaomojiDecor state="failure" />
             </p>
           )}
         </div>
@@ -540,7 +542,10 @@ export function OnlineSearchPane({
 
             {hits.length === 0 && (
               <div className="list-empty" role="status">
-                <p className="list-empty-title">{shownPage.pageNumber === 1 ? '没有找到结果' : '这一页没有结果'}</p>
+                <p className="list-empty-title">
+                  <KaomojiDecor state="searchEmpty" above />
+                  {shownPage.pageNumber === 1 ? '没有找到结果' : '这一页没有结果'}
+                </p>
               </div>
             )}
 
@@ -625,6 +630,7 @@ function RequestNotice({ notice, onRetry }: { notice: Exclude<OnlineSearchNotice
       <div className="notice-text">
         <p className="notice-title">
           {subject}失败：{reason}
+          <KaomojiDecor state="failure" />
         </p>
         {details.map((line) => (
           <p key={line} className="notice-detail">

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { DEFAULT_CACHE_LIMIT, type ContentUsage } from '../../../../shared/content'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { singleFlight } from '../../lib/singleFlight'
 import { attempt, contentFailureText, exactBytes, formatBytes, limitToGbText, parseLimitGb, type Refused } from './contentText'
 import './content.css'
@@ -117,7 +118,10 @@ export function CacheSection() {
         <div className="notice notice-error" role="alert">
           <Icon name="alert" className="notice-icon" />
           <div className="notice-text">
-            <p className="notice-title">本地占用读取失败：{contentFailureText(state.refused)}</p>
+            <p className="notice-title">
+              本地占用读取失败：{contentFailureText(state.refused)}
+              <KaomojiDecor state="failure" />
+            </p>
           </div>
           <button type="button" className="btn btn-small btn-page" onClick={() => void load()}>
             重试

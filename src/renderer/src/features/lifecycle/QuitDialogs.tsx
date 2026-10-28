@@ -34,8 +34,9 @@ const QUIT_WORK_SHOW_DELAY_MS = 300
 
 /**
  * Mounted for as long as a quit works without asking: as a modal dialog it keeps the rest of the
- * window inert and takes focus out of any editor, so nothing changes after its unsaved edits were
- * handled. Transparent at first; the status appears after a short delay. Esc does nothing.
+ * window inert (the bottom notices included) and takes focus out of any editor, so nothing changes
+ * after its unsaved edits were handled. Transparent at first; the status appears after a short
+ * delay. Esc does nothing.
  */
 export function QuitWorkingDialog({ work }: { work: QuitWork }) {
   const titleId = useId()
@@ -51,6 +52,7 @@ export function QuitWorkingDialog({ work }: { work: QuitWork }) {
       className={shown ? 'lifecycle-dialog lifecycle-working is-shown' : 'lifecycle-dialog lifecycle-working'}
       labelledBy={titleId}
       onClose={stay.reopenIfClosed}
+      noticesBelow
     >
       <header className="modal-header">
         <h2 className="modal-title" id={titleId}>

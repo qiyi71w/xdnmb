@@ -7,7 +7,7 @@ import './content.css'
 
 /**
  * 删除离线副本？ for both entrances (a 离线 row's menu, the 离线副本 dialog). Focus starts on 取消;
- * 取消 or Esc changes nothing, a save in progress included. While the deletion runs (here or from
+ * 取消, Esc or a press on the backdrop changes nothing, a save in progress included. While the deletion runs (here or from
  * another view) nothing can be asked again; a refusal stays here with the copy untouched, and a
  * deletion goes to `onDeleted`, whose owner closes this and says what happened. The owner keeps
  * this mounted whatever its lists do meanwhile: storage's change notice usually arrives first.
@@ -60,7 +60,7 @@ export function OfflineDeleteConfirm({
   }
 
   return (
-    <Modal className="offline-delete-dialog" labelledBy={titleId} onClose={cancel} fallbackFocus={fallbackFocus}>
+    <Modal className="offline-delete-dialog" labelledBy={titleId} onClose={cancel} closeOnBackdrop fallbackFocus={fallbackFocus}>
       <header className="modal-header">
         <h2 className="modal-title" id={titleId}>
           删除离线副本？

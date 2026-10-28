@@ -5,6 +5,7 @@ import { useMemo, type Ref } from 'react'
 import type { BoardDirectory } from '../../../../shared/forum'
 import { formatReminderCount } from '../../../../shared/reminders'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { FailureNotice, IdentitySettingsAction, SourceNotice } from '../../components/Notices'
 import { formatRecordTime } from '../../lib/time'
 import { useSettings } from '../../lib/settingsContext'
@@ -132,7 +133,12 @@ export function DirectoryPlaceholder({ state, onRetry, empty }: { state: Directo
           <FailureNotice title="版面目录读取失败" failure={state.failure} onRetry={onRetry} compact />
         </div>
       )}
-      {directory !== null && empty && <p className="nav-empty">没有可浏览的版面</p>}
+      {directory !== null && empty && (
+        <p className="nav-empty">
+          没有可浏览的版面
+          <KaomojiDecor state="directoryEmpty" />
+        </p>
+      )}
     </>
   )
 }

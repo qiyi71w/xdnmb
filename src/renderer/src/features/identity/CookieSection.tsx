@@ -14,6 +14,7 @@ import {
 } from '../../../../shared/identity'
 import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { FailureNotice } from '../../components/Notices'
 import { SortHandle, SortStatus, useSortableList, type SortableList } from '../../components/SortHandle'
 import { formatForumTime, formatRecordTime } from '../../lib/time'
@@ -77,7 +78,10 @@ export function CookieSection({ identities }: { identities: IdentitiesState }) {
           {failed && (
             <div className="notice notice-cached is-compact" role="status">
               <Icon name="alert" className="notice-icon" />
-              <p className="notice-text">饼干信息刷新失败，下面可能不是最新状态</p>
+              <p className="notice-text">
+                饼干信息刷新失败，下面可能不是最新状态
+                <KaomojiDecor state="failure" />
+              </p>
               <button type="button" className="btn btn-small btn-page" onClick={() => void refresh()}>
                 重试
               </button>
@@ -218,7 +222,10 @@ function CredentialList({ overview, onChanged }: { overview: IdentityOverview; o
         已导入的饼干
       </h4>
       {credentials.length === 0 ? (
-        <p className="settings-empty">还没有导入饼干</p>
+        <p className="settings-empty">
+          还没有导入饼干
+          <KaomojiDecor state="cookiesEmpty" />
+        </p>
       ) : (
         <ul
           className={`credential-list ${sort.listClassName}`}
@@ -1096,7 +1103,10 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
             )}
           </div>
           {cookies.length === 0 ? (
-            <p className="settings-empty">账号里没有饼干</p>
+            <p className="settings-empty">
+              账号里没有饼干
+              <KaomojiDecor state="accountCookiesEmpty" />
+            </p>
           ) : (
             <>
               <ul className="account-cookie-list" aria-labelledby={listTitleId}>

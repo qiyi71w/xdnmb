@@ -2,10 +2,12 @@
 // button in the thread toolbar; the panel is a centred modal over a dimmed reader. Editors keep the
 // store's semantics: closing only collapses, content stays.
 
-import { useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, type ReactNode } from 'react'
 import { targetKey, targetText, type EditorId, type PostTarget } from '../../../../shared/drafts'
 import { Icon } from '../../components/Icon'
+import { keepTabInside, useBackdropPress } from '../../components/Modal'
 import { useCover } from '../../lib/appCovered'
+import { registerDialog } from '../../lib/dialogs'
 import { openLayer, type Layer } from '../../lib/layers'
 import { rememberComposeOpener, returnComposeFocus } from '../directory/navStore'
 import { EditorPanel, useComposeOpen } from './EditorPanel'
@@ -108,8 +110,12 @@ const FOCUSABLE =
 function ComposeModal({ label, onCollapse, children }: { label: string; onCollapse: () => void; children: ReactNode }) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const layerRef = useRef<Layer | null>(null)
-  const pressedBackdrop = useRef(false)
+  const collapse = useRef(onCollapse)
+  useLayoutEffect(() => {
+    collapse.current = onCollapse
+  })
   useCover(true)
+  const backdrop = useBackdropPress(onCollapse)
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current
@@ -117,31 +123,20 @@ function ComposeModal({ label, onCollapse, children }: { label: string; onCollap
     const layer = openLayer()
     layerRef.current = layer
     if (!dialog.open) dialog.showModal()
+    const removeTab = keepTabInside(dialog, FOCUSABLE)
+    const unregister = registerDialog(dialog, () => collapse.current())
     // The text is what the panel is for; an opening focus request lands there too.
     if (!dialog.contains(document.activeElement) || document.activeElement === dialog) {
       dialog.querySelector<HTMLTextAreaElement>('.editor-content')?.focus()
     }
     // Removing the open dialog takes it out of the top layer; the panel decides where focus goes.
     return () => {
+      unregister()
+      removeTab()
       layer.release()
       layerRef.current = null
     }
   }, [])
-
-  const onKeyDown = (event: KeyboardEvent<HTMLDialogElement>) => {
-    if (event.key !== 'Tab' || dialogRef.current === null) return
-    const items = [...dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((element) => element.getClientRects().length > 0)
-    const first = items[0]
-    const last = items.at(-1)
-    if (first === undefined || last === undefined) return
-    if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) {
-      event.preventDefault()
-      last.focus()
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault()
-      first.focus()
-    }
-  }
 
   return (
     <dialog
@@ -150,18 +145,12 @@ function ComposeModal({ label, onCollapse, children }: { label: string; onCollap
       aria-label={label}
       aria-modal="true"
       data-keeps-arrows=""
-      onKeyDown={onKeyDown}
       onCancel={(event) => {
         event.preventDefault()
         if (layerRef.current?.isTop() !== false) onCollapse()
       }}
-      onPointerDown={(event) => {
-        pressedBackdrop.current = event.target === event.currentTarget
-      }}
-      onClick={(event) => {
-        if (pressedBackdrop.current && event.target === event.currentTarget) onCollapse()
-        pressedBackdrop.current = false
-      }}
+      onPointerDown={backdrop.onPointerDown}
+      onClick={backdrop.onClick}
     >
       {children}
     </dialog>

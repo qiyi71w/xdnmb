@@ -33,6 +33,11 @@
   gap: 2px;
 }
 
+/* A one-paragraph notice is plain text: its end (a decorative kaomoji) stays on the same line. */
+p.notice-text {
+  display: block;
+}
+
 .notice-title {
   font-weight: 600;
 }

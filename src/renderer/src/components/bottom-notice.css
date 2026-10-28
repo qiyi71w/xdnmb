@@ -1,7 +1,7 @@
 /* Bottom notices: a floating status layer centred over the content column. It starts after the
    inline icon rail (--nav-width, 0 when the navigation is an overlay) and stays under the overlay
-   navigation, menus and dialogs. Notices stack upwards in the order they appeared (each sets its
-   `order`), oldest on top. Only the notices themselves take pointer input. */
+   navigation and menus. Notices stack upwards in the order they appeared (each sets its `order`),
+   oldest on top. Only the notices themselves take pointer input. */
 .bottom-notice-region {
   position: absolute;
   z-index: 25;
@@ -13,6 +13,27 @@
   gap: 8px;
   padding-inline: 16px;
   pointer-events: none;
+}
+
+/* Where the region lives while no dialog is open: it lays nothing out itself. */
+.bottom-notice-home {
+  display: contents;
+}
+
+/* Over an open modal dialog the region is a manual popover inside the topmost dialog: in the top
+   layer, above the dialog and its backdrop, centred across the window like the dialog. The
+   popover defaults (frame, canvas, centring, scrolling) are cleared. */
+.bottom-notice-region:popover-open {
+  position: fixed;
+  inset: auto 0 20px;
+  width: auto;
+  height: auto;
+  margin: 0;
+  border: 0;
+  padding-block: 0;
+  overflow: visible;
+  background: none;
+  color: inherit;
 }
 
 /* Strong glass, large radius and the float shadow, as context menus and dialogs. */

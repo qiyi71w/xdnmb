@@ -6,6 +6,7 @@ import { useId, useRef, useState } from 'react'
 import type { BoardDirectory } from '../../../../shared/forum'
 import type { BoardSettings } from '../../../../shared/settings'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { SortHandle, SortStatus, useSortableList, type SortableList } from '../../components/SortHandle'
 import { useSettings } from '../../lib/settingsContext'
 import { matches, matchingGroups } from './BoardPicker'
@@ -97,7 +98,10 @@ export function BoardManageSection({ directory }: { directory: BoardDirectory | 
             <div className="settings-group">
               <h4 className="settings-group-title">收藏</h4>
               {favorites.length === 0 ? (
-                <p className="settings-empty">没有收藏的版块</p>
+                <p className="settings-empty">
+                  没有收藏的版块
+                  <KaomojiDecor state="favoritesEmpty" />
+                </p>
               ) : (
                 <ul ref={favoriteSort.listRef} className={`shell-manage-list ${favoriteSort.listClassName}`} style={favoriteSort.listStyle}>
                   {favorites.map((item) => (

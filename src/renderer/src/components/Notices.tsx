@@ -5,6 +5,7 @@ import { formatRecordTime } from '../lib/time'
 import type { Failure, Source } from '../lib/operations'
 import { useSettingsOpener } from '../lib/settingsOpener'
 import { Icon, Spinner } from './Icon'
+import { KaomojiDecor } from './KaomojiDecor'
 import './notices.css'
 
 /**
@@ -31,7 +32,10 @@ export function Loading({ children, live = true }: { children: ReactNode; live?:
   )
 }
 
-/** Failure with a reason and a retry button. `title` names what failed. */
+/**
+ * Failure with a reason and a retry button. `title` names what failed. The title ends with the
+ * failure kaomoji, or the missing one when the target is gone (串不存在／已删除).
+ */
 export function FailureNotice({
   title,
   failure,
@@ -52,6 +56,7 @@ export function FailureNotice({
       <div className="notice-text">
         <p className="notice-title">
           {title}：{describeFailure(failure)}
+          <KaomojiDecor state={failure.type === 'read' && failure.error.kind === 'not-found' ? 'missing' : 'failure'} />
         </p>
         {serverMessage !== null && <p className="notice-detail">论坛提示：{serverMessage}</p>}
       </div>

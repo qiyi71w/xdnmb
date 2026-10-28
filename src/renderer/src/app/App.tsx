@@ -857,7 +857,7 @@ export function App() {
   )
 
   /**
-   * 继续 a draft (from the library, a failure's 打开草稿, or an undone deletion): the editor
+   * 继续 a draft (from the library or a failure's 打开草稿): the editor
    * continuing it is shown; an editor already on its target saves its own content and then loads
    * it; otherwise a new tab (global split default) opens its target and continues it there.
    * Resolves to why it could not be continued, or null.
@@ -1469,7 +1469,7 @@ export function App() {
                   fallbackFocus={activeTabFocus}
                 />
                 <LaunchNotices openDraft={openFailedDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
-                <DraftDeletedNotices reopen={continueDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
+                <DraftDeletedNotices onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
                 <UpdateNotice fallbackFocus={activeTabFocus} />
               </BottomNoticeStack>
 

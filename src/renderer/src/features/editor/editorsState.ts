@@ -110,6 +110,11 @@ export type EditorsAction =
   /** Ends an unlocked editor at once (its draft was deleted from the library). */
   | { type: 'close-editor'; editorId: EditorId }
   /**
+   * An undone deletion goes back into the editor it emptied, which keeps its expanded state.
+   * Ignored unless `takeBackRefusal` allows it.
+   */
+  | { type: 'take-back'; editorId: EditorId; draft: SavedDraft }
+  /**
    * Continues another saved draft in this unlocked editor (same target); its own content was
    * saved first. Ignored when another editor continues that draft.
    */
@@ -271,6 +276,11 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
       const editors = state.editors.filter((editor) => editor.id !== action.editorId || editor.publication !== null)
       return editors.length === state.editors.length ? state : { ...state, editors }
     }
+    case 'take-back':
+      if (takeBackRefusal(state, action.editorId, action.draft.target) !== null) return state
+      return update(state, action.editorId, (editor) => ({
+        ...editor, ...fromDraft(action.draft), identityUnknown: false, draft: action.draft, caret: undefined, sendNotice: null
+      }))
     case 'load-draft': {
       // One editor per target and per draft: only this editor's own target, a draft nobody else continues.
       const occupant = editorForDraft(state, action.draft.id)
@@ -368,6 +378,20 @@ export function editorOnScreen(state: EditorsState, editorId: EditorId, displaye
 
 export function editorForDraft(state: EditorsState, draftId: string): Editor | null {
   return state.editors.find((editor) => editor.draft?.id === draftId) ?? null
+}
+
+/**
+ * Why the editor a deletion emptied cannot take the restored draft back: `closed` (it ended),
+ * `locked` (a send holds it), `occupied` (it holds something again, or another editor has the
+ * draft's target); null when it can.
+ */
+export function takeBackRefusal(state: EditorsState, editorId: EditorId, target: PostTarget): 'closed' | 'locked' | 'occupied' | null {
+  const editor = state.editors.find((item) => item.id === editorId)
+  if (editor === undefined) return 'closed'
+  if (editor.publication !== null) return 'locked'
+  if (!isBlank(editor) || editor.draft !== null) return 'occupied'
+  const occupant = editorFor(state, target)
+  return occupant !== null && occupant.id !== editorId ? 'occupied' : null
 }
 
 function sameFields(a: PostFields, b: PostFields): boolean {

@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Form
 import type { ForumId, ThreadId } from '../../../../shared/forum'
 import type { SearchHit } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { Modal } from '../../components/Modal'
 import { Loading } from '../../components/Notices'
 import { SpoilerPlaceholder } from '../../components/Spoiler'
@@ -32,7 +33,7 @@ import './search.css'
  * 串内搜索 of one tab (spec I10 / I11): searches the thread on screen in either mode without
  * changing how it is read, and can fetch the whole thread on request. Everything retained is
  * searched on the 搜索 page instead (its 本机 side, `SearchBody` with the `local` view). The sheet
- * is modal. Esc cancels a running locate first, then closes.
+ * is modal. Esc (or a press on the backdrop) cancels a running locate first, then closes.
  */
 export function SearchSheet({
   tabId,
@@ -74,7 +75,7 @@ export function SearchSheet({
   }
 
   return (
-    <Modal className="search-sheet" labelledBy={titleId} onClose={onEscape} fallbackFocus={fallbackFocus}>
+    <Modal className="search-sheet" labelledBy={titleId} onClose={onEscape} closeOnBackdrop fallbackFocus={fallbackFocus}>
       <header className="modal-header search-header">
         <h2 className="modal-title" id={titleId}>
           串内搜索
@@ -362,7 +363,10 @@ function RunStatus({ run, onMore, onRerun }: { run: SearchRun; onMore: () => voi
       body =
         count === 0 ? (
           <span className="search-empty">
-            <strong>没有找到「{run.query}」</strong>
+            <strong>
+              没有找到「{run.query}」
+              <KaomojiDecor state="searchEmpty" />
+            </strong>
           </span>
         ) : (
           <span>共找到 {count} 条</span>
@@ -407,7 +411,10 @@ function RebuildBlock({ rebuild, indexMissing, commands }: { rebuild: RebuildSta
     <div className="notice notice-error search-index" role="alert">
       <Icon name="alert" className="notice-icon" />
       <div className="notice-text">
-        <p className="notice-title">{indexMissing ? '搜索索引不可用，这次没有执行搜索' : '正在重建搜索索引'}</p>
+        <p className="notice-title">
+          {indexMissing ? '搜索索引不可用，这次没有执行搜索' : '正在重建搜索索引'}
+          {indexMissing && <KaomojiDecor state="failure" />}
+        </p>
         {running && <Loading>{rebuild.cancelling ? '正在取消重建…' : '正在重建索引…'}</Loading>}
       </div>
       {running ? (
@@ -444,6 +451,7 @@ function RebuildResult({ rebuild }: { rebuild: Exclude<RebuildState, { status: '
     <p className={rebuild.status === 'done' ? 'notice-inline' : 'notice-inline is-warning'} role="status">
       <Icon name={rebuild.status === 'done' ? 'check' : 'alert'} size={14} />
       {text}
+      {rebuild.status === 'failed' && <KaomojiDecor state="failure" />}
     </p>
   )
 }

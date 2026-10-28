@@ -1,9 +1,11 @@
 // The compose panel's 颜文字 button and its panel. The panel opens above the toolbar and stays open
 // for several inserts; Esc (focus back on the button) or a press outside closes it. A kaomoji goes
-// into the text at its caret or over its selection, wherever focus was. After the presets come the
-// user's own kaomoji (removable; the `customKaomoji` setting) and 添加, which opens a multi-line
-// field (Enter is a new line, Ctrl/Cmd+Enter saves) and an optional name. A named item shows its
-// name in the interface face, like the named presets, and its full text on hover.
+// into the text at its caret or over its selection, wherever focus was. The 最近使用 row comes first
+// (the `recentKaomoji` setting, as it was when the panel opened, so nothing moves under the pointer
+// while inserting), then the presets, the user's own kaomoji (removable; the `customKaomoji`
+// setting) and 添加, which opens a multi-line field (Enter is a new line, Ctrl/Cmd+Enter saves) and
+// an optional name. A named item shows its name in the interface face, like the named presets, and
+// its full text on hover.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { KAOMOJI_LIMITS } from '../../../../shared/settings'
@@ -11,7 +13,7 @@ import { isSendShortcut, sendAriaShortcut, sendShortcutLabel } from '../../app/s
 import { Icon } from '../../components/Icon'
 import { openLayer } from '../../lib/layers'
 import { useSettings } from '../../lib/settingsContext'
-import { KAOMOJI_PRESETS, newKaomoji, normalizeKaomojiText } from './kaomoji'
+import { KAOMOJI_PRESETS, newKaomoji, normalizeKaomojiText, recentKaomojiItems, withRecentKaomoji } from './kaomoji'
 import { useEditorWorkspace } from './workspace'
 
 const ITEM = '[data-kaomoji-item]'
@@ -45,6 +47,9 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
   const { settings, latest, write } = useSettings()
   const { platform } = useEditorWorkspace()
   const custom = settings.customKaomoji
+  /** The recent list as it was when the panel opened; a removed kaomoji leaves the row at once. */
+  const [shownRecent, setShownRecent] = useState<readonly string[]>([])
+  const recent = recentKaomojiItems(shownRecent, custom)
   /** The grid's one tabbable item (roving focus), by position. */
   const [active, setActive] = useState(0)
   const [adding, setAdding] = useState(false)
@@ -53,7 +58,9 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
   const inputRef = useRef<HTMLTextAreaElement>(null)
   /** Focus the item at this position once rendered (on opening, after adding or removing one). */
   const focusAt = useRef<number | null>(null)
-  const itemCount = KAOMOJI_PRESETS.length + custom.length + 1
+  const presetStart = recent.length
+  const customStart = presetStart + KAOMOJI_PRESETS.length
+  const itemCount = customStart + custom.length + 1
   const current = Math.min(active, itemCount - 1)
 
   // One closable layer: Esc closes the panel, not the compose panel under it.
@@ -107,8 +114,20 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
   const toggle = () => {
     const opening = !open
     setOpen(opening)
-    // Opening puts focus on the grid's current item.
-    if (opening) focusAt.current = current
+    if (!opening) return
+    // Opening shows the recent row as it is now and puts focus on the grid's current item: the same
+    // preset or own kaomoji as before, or the row's first item when it was one of the row.
+    const saved = latest()
+    const shown = recentKaomojiItems(saved.recentKaomoji, saved.customKaomoji).length
+    const at = current < presetStart ? 0 : current - presetStart + shown
+    setShownRecent(saved.recentKaomoji)
+    setActive(at)
+    focusAt.current = at
+  }
+
+  const insert = (text: string) => {
+    onInsert(text)
+    write({ recentKaomoji: withRecentKaomoji(latest().recentKaomoji, text) })
   }
 
   const onGridKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -169,8 +188,13 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
   }
 
   const remove = (text: string, position: number) => {
-    write({ customKaomoji: latest().customKaomoji.filter((item) => item.text !== text) })
-    focusAt.current = position
+    const saved = latest()
+    write({
+      customKaomoji: saved.customKaomoji.filter((item) => item.text !== text),
+      recentKaomoji: saved.recentKaomoji.filter((item) => item !== text)
+    })
+    // The next item takes its place, one earlier when the row loses it too.
+    focusAt.current = recent.some((item) => item.text === text) ? position - 1 : position
   }
 
   const nameTooLong = [...draftName.trim()].length > KAOMOJI_LIMITS.nameLength
@@ -204,6 +228,24 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
             const at = items.indexOf(event.target as HTMLElement)
             if (at >= 0) setActive(at)
           }}>
+            {recent.length > 0 && (
+              <div className="kaomoji-recent" role="group" aria-label="最近使用">
+                {recent.map(({ text, name }, index) => (
+                  <button
+                    key={text}
+                    type="button"
+                    className={`kaomoji-item${name === null ? '' : ' is-named'}`}
+                    tabIndex={index === current ? 0 : -1}
+                    title={name === null ? undefined : text}
+                    data-kaomoji-item=""
+                    onMouseDown={keepFocus}
+                    onClick={() => insert(text)}
+                  >
+                    {name ?? text}
+                  </button>
+                ))}
+              </div>
+            )}
             {KAOMOJI_PRESETS.map((kaomoji, index) => {
               const named = kaomoji.name !== kaomoji.text
               return (
@@ -211,18 +253,18 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
                   key={kaomoji.name}
                   type="button"
                   className={`kaomoji-item${named ? ' is-named' : ''}`}
-                  tabIndex={index === current ? 0 : -1}
+                  tabIndex={presetStart + index === current ? 0 : -1}
                   title={named ? kaomoji.text : undefined}
                   data-kaomoji-item=""
                   onMouseDown={keepFocus}
-                  onClick={() => onInsert(kaomoji.text)}
+                  onClick={() => insert(kaomoji.text)}
                 >
                   {kaomoji.name}
                 </button>
               )
             })}
             {custom.map(({ text, name }, index) => {
-              const position = KAOMOJI_PRESETS.length + index
+              const position = customStart + index
               return (
                 <span key={text} className="kaomoji-custom">
                   <button
@@ -234,7 +276,7 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
                     aria-describedby={`${panelId}-custom`}
                     data-kaomoji-item=""
                     onMouseDown={keepFocus}
-                    onClick={() => onInsert(text)}
+                    onClick={() => insert(text)}
                     onKeyDown={(event) => {
                       if (event.key !== 'Delete' && event.key !== 'Backspace') return
                       event.preventDefault()

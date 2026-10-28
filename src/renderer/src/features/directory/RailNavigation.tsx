@@ -6,6 +6,7 @@
 
 import { useEffect, useLayoutEffect, useRef, type CSSProperties, type FocusEvent } from 'react'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { openLayer } from '../../lib/layers'
 import { listKey, type ListRef } from '../tabs/tabsState'
 import { BoardPicker } from './BoardPicker'
@@ -163,7 +164,10 @@ export function BoardPanelEmptyPage({ title = '选择版块', onOpen }: { title?
   const open = useBoardPanelOpen()
   return (
     <div className="pane-empty">
-      <p className="pane-empty-title">{title}</p>
+      <p className="pane-empty-title">
+        <KaomojiDecor state="noBoard" above />
+        {title}
+      </p>
       <button
         type="button"
         className="btn btn-page pane-empty-action"

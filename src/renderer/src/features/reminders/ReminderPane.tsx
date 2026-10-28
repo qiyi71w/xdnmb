@@ -9,6 +9,7 @@ import type { ReminderThreadRow } from '../../../../shared/reminders'
 import { contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { selectionCopyItem } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { meaningfulTitle } from '../../lib/format'
 import { formatClockTime } from '../../lib/time'
@@ -32,14 +33,16 @@ const TITLE = '提醒'
 
 /**
  * Coverage issues at the end of the row's meta line: an icon whose accessible name is the reasons
- * (so the row's name ends with them), repeated as a tip on hover or keyboard focus of the row.
+ * (so the row's name ends with them), repeated as a tip on hover or keyboard focus of the row; a
+ * thread that no longer exists adds the missing kaomoji after the icon.
  */
-function IssueStatus({ text }: { text: string }) {
+function IssueStatus({ text, missing }: { text: string; missing: boolean }) {
   return (
     <span className="row-status is-warning">
       <span className="row-status-icon" role="img" aria-label={text}>
         <Icon name="alert" size={14} />
       </span>
+      {missing && <KaomojiDecor state="missing" />}
       <span className="row-status-tip" aria-hidden="true">
         {text}
       </span>
@@ -306,6 +309,7 @@ export function ReminderPane({
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">
                 {overview === null ? '提醒读取失败' : '提醒更新失败'}：{failureText(failure)}
+                <KaomojiDecor state="failure" />
               </p>
               <button type="button" className="btn btn-small btn-page" onClick={() => void reload()}>
                 重试
@@ -316,7 +320,10 @@ export function ReminderPane({
 
         {overview !== null && rows.length === 0 && (
           <div className="list-empty" role="status">
-            <p className="list-empty-title">还没有开启提醒的串</p>
+            <p className="list-empty-title">
+              <KaomojiDecor state="remindersEmpty" above />
+              还没有开启提醒的串
+            </p>
             {openList !== null && (
               <button type="button" className="btn btn-page reminder-empty-action" onClick={() => openList({ kind: 'subscriptions' })}>
                 去订阅
@@ -372,7 +379,7 @@ export function ReminderPane({
                       (counts !== null || issues !== null) && (
                         <>
                           {counts !== null && <span className="reminder-counts">{counts}</span>}
-                          {issues !== null && <IssueStatus text={issues} />}
+                          {issues !== null && <IssueStatus text={issues} missing={row.issues.includes('not-found')} />}
                         </>
                       )
                     }
@@ -381,6 +388,7 @@ export function ReminderPane({
                     <p className="notice-inline is-warning" role="alert">
                       <Icon name="alert" size={14} />
                       {clearFailure}
+                      <KaomojiDecor state="failure" />
                     </p>
                   )}
                 </li>

@@ -23,6 +23,7 @@ import { CookieId } from '../../components/CookieId'
 import { copyNumberItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
 import { TextExcerpt } from '../../components/Content'
 import { Icon, Spinner } from '../../components/Icon'
+import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
 import { formatRecordTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
@@ -282,7 +283,10 @@ export function SentPage({
           {(list.status === 'failed' || readFailed) && (
             <div className="notice notice-error is-compact" role="alert">
               <Icon name="alert" className="notice-icon" />
-              <p className="notice-text">发送记录读取失败：本地存储不可用</p>
+              <p className="notice-text">
+                发送记录读取失败：本地存储不可用
+                <KaomojiDecor state="failure" />
+              </p>
               <button type="button" className="btn btn-small btn-page" onClick={() => onReload(list.status === 'ready')}>
                 重试
               </button>
@@ -292,7 +296,10 @@ export function SentPage({
 
         {list.status === 'ready' && records.length === 0 && (
           <div className="list-empty" role="status">
-            <p className="list-empty-title">{text.empty}</p>
+            <p className="list-empty-title">
+              <KaomojiDecor state="sentEmpty" above />
+              {text.empty}
+            </p>
           </div>
         )}
 

@@ -142,3 +142,28 @@ export function newKaomoji(custom: readonly CustomKaomoji[], text: string, name:
   }
   return trimmed === '' ? { text } : { text, name: trimmed }
 }
+
+// 最近使用: the `recentKaomoji` setting keeps the texts of the latest inserts, latest first.
+
+/** The recent list after inserting `text`: it moves to the front (once), keeping at most the limit. */
+export function withRecentKaomoji(recent: readonly string[], text: string): string[] {
+  return [text, ...recent.filter((item) => item !== text)].slice(0, KAOMOJI_LIMITS.recent)
+}
+
+/**
+ * The 最近使用 row for `recent`: each text that is still a preset or one of the user's own, with the
+ * name its button shows elsewhere (null shows the text itself); a removed kaomoji is left out.
+ */
+export function recentKaomojiItems(recent: readonly string[], custom: readonly CustomKaomoji[]): { text: string; name: string | null }[] {
+  const items: { text: string; name: string | null }[] = []
+  for (const text of recent) {
+    const preset = KAOMOJI_PRESETS.find((item) => item.text === text)
+    if (preset !== undefined) {
+      items.push({ text, name: preset.name === text ? null : preset.name })
+      continue
+    }
+    const own = custom.find((item) => item.text === text)
+    if (own !== undefined) items.push({ text, name: own.name ?? null })
+  }
+  return items
+}

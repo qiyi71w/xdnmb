@@ -163,8 +163,8 @@ export function useRetainedList(resets: ReadingResets) {
 
 /**
  * 删除…／清空历史… of 浏览: a dialog naming what goes, with 同时清除阅读进度 opt-in and spelled out.
- * Focus starts on 取消; 取消 or Esc changes nothing (ignored while the deletion runs). A refusal
- * stays here; a deletion closes it from its owner.
+ * Focus starts on 取消; 取消, Esc or a press on the backdrop changes nothing (ignored while the
+ * deletion runs). A refusal stays here; a deletion closes it from its owner.
  */
 export function HistoryConfirm({
   confirming,
@@ -202,7 +202,7 @@ export function HistoryConfirm({
   }
 
   return (
-    <Modal className="history-delete-dialog" labelledBy={titleId} onClose={cancel} fallbackFocus={fallbackFocus}>
+    <Modal className="history-delete-dialog" labelledBy={titleId} onClose={cancel} closeOnBackdrop fallbackFocus={fallbackFocus}>
       <header className="modal-header">
         <h2 className="modal-title" id={titleId}>
           {all ? '清空全部浏览历史？' : '删除这条访问记录？'}
