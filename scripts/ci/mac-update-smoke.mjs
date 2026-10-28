@@ -171,7 +171,12 @@ async function quit(app, label) {
   await exited
   return result
 }
-/** Animation frames in one second (Playwright's visibility waits poll on them). */
+/**
+ * Animation frames in one second. Playwright's visibility waits poll on them, and the x64 app under
+ * Rosetta on the runner draws as few as one to twenty frames a second, so UI waits allow a minute.
+ */
+const UI_WAIT_MS = 60_000
+/** Animation frames in one second (logged around the settings checks). */
 const frameRate = (page) => page.evaluate(() => new Promise((resolve) => {
   let count = 0
   const tick = () => { count++; requestAnimationFrame(tick) }
@@ -181,9 +186,9 @@ const frameRate = (page) => page.evaluate(() => new Promise((resolve) => {
 async function openAbout(page) {
   if (!(await page.locator('#shell-set-about').count())) await page.keyboard.press('Meta+,')
   log('frames before settings', { rafPerSecond: await frameRate(page) })
-  await page.waitForSelector('#shell-set-about', { state: 'attached', timeout: 20_000 })
+  await page.waitForSelector('#shell-set-about', { state: 'attached', timeout: UI_WAIT_MS })
   log('frames with settings', { rafPerSecond: await frameRate(page) })
-  await page.waitForSelector('#shell-set-about', { timeout: 20_000 })
+  await page.waitForSelector('#shell-set-about', { timeout: UI_WAIT_MS })
   await page.evaluate(() => document.getElementById('shell-set-about')?.scrollIntoView())
   await sleep(300)
 }
@@ -193,7 +198,7 @@ const readyNotice = (page, version) => page.locator('.bottom-notice', { hasText:
 const focusInNotice = (page) => page.evaluate(() => document.activeElement?.closest('.bottom-notice') != null)
 async function checkReadyNotice(page, version, label) {
   const notice = readyNotice(page, version)
-  await notice.waitFor({ timeout: 20_000 })
+  await notice.waitFor({ timeout: UI_WAIT_MS })
   const buttons = (await notice.getByRole('button').allInnerTexts()).map((text) => text.trim())
   const text = await notice.innerText()
   check(`${label}: ready notice offers 打开安装包 and 稍后, says what 稍后 leaves, takes no focus`,
@@ -234,7 +239,7 @@ async function checkNoticeFocus(app, page) {
     const version = `0.9.${index}`
     await send(version, 'available')
     try {
-      await notice.getByRole('button', { name: '知道了', exact: true }).waitFor({ timeout: 10_000 })
+      await notice.getByRole('button', { name: '知道了', exact: true }).waitFor({ timeout: UI_WAIT_MS })
     } catch (error) {
       const frames = await page.evaluate(() => new Promise((resolve) => {
         let count = 0
@@ -268,14 +273,14 @@ async function checkNoticeFocus(app, page) {
     await page.evaluate(() => { globalThis.__outside = document.activeElement })
     if (from !== null) await notice.getByRole('button', { name: from, exact: true }).focus()
     await send(version, 'ready')
-    await notice.getByRole('button', { name: '稍后', exact: true }).waitFor({ timeout: 10_000 })
+    await notice.getByRole('button', { name: '稍后', exact: true }).waitFor({ timeout: UI_WAIT_MS })
     await sleep(300)
     const after = await focused()
     check(`notice found → ready: focus on ${from ?? 'an input outside'} ${from === null ? 'stays there' : `moves to ${to}`}`,
       from === null ? after.outside : after.text === to, after)
     if (from === '知道了') {
       await page.keyboard.press('Enter')
-      await notice.waitFor({ state: 'detached', timeout: 10_000 })
+      await notice.waitFor({ state: 'detached', timeout: UI_WAIT_MS })
       await sleep(300)
       const closed = await focused()
       check('稍后 after found → ready gives focus back to where it came from', closed.outside, closed)
@@ -380,7 +385,7 @@ async function update() {
   const notice = await checkReadyNotice(page, next, 'after download')
   await notice.getByRole('button', { name: '稍后', exact: true }).focus()
   await page.keyboard.press('Enter')
-  await notice.waitFor({ state: 'detached', timeout: 10_000 })
+  await notice.waitFor({ state: 'detached', timeout: UI_WAIT_MS })
   const later = await waitFor(page, (state) => state.notice === null, 'ready notice acknowledged', 10_000)
   await sleep(3000)
   const focusAfterLater = await page.evaluate(() => document.activeElement !== null && document.activeElement !== document.body)
