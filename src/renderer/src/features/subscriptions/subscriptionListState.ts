@@ -9,7 +9,7 @@ import type {
 } from '../../../../shared/subscriptions'
 import type { ThreadId } from '../../../../shared/forum'
 import { needsReconcile, sourceBlocker } from './subscriptionText'
-import type { ActiveWrite, ChangeRequest } from './useSubscriptions'
+import type { ActiveWrite, ChangeRequest, WriteNotice } from './useSubscriptions'
 
 export type ListActivity = 'idle' | 'stored' | 'first' | 'next'
 
@@ -55,6 +55,13 @@ export const initialSubscriptionListState: SubscriptionListState = {
   stopRequested: false,
   refusal: null,
   internalError: null
+}
+
+/** Leaving a result's page clears only that same successful notice, never an unsettled or newer write. */
+export function clearSuccessfulWriteOnLeave(current: WriteNotice | null, displayed: WriteNotice | null): WriteNotice | null {
+  if (current === null || current !== displayed || current.outcome.type !== 'done') return current
+  const operation = current.outcome.operation
+  return operation.reportError?.kind !== 'rate-limited' && !needsReconcile(operation) ? null : current
 }
 
 /** Identity of what the list shows; any change drops results still arriving for the old one. */

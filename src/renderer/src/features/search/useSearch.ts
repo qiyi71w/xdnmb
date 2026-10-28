@@ -19,6 +19,7 @@ import {
   type SearchReturn,
   type SearchState,
   type SearchView,
+  type RebuildState,
   type ThreadScope
 } from './searchState'
 
@@ -490,6 +491,10 @@ export function useSearch(options: Options) {
     }
   }, [tabs, apply])
 
+  const clearRebuildResult = useCallback((rebuild: RebuildState) => {
+    apply({ type: 'leave-rebuild-result', rebuild })
+  }, [apply])
+
   const commands = useMemo<SearchCommands>(
     () => ({
       open,
@@ -506,12 +511,13 @@ export function useSearch(options: Options) {
       cancelFetch,
       rebuild,
       cancelRebuild,
+      clearRebuildResult,
       chooseHit,
       openHitThread,
       cancelLocate,
       dismissLocate
     }),
-    [open, returnTo, close, setView, setInput, setFilters, setThreadMode, submit, more, stop, fetchThread, cancelFetch, rebuild, cancelRebuild, chooseHit, openHitThread, cancelLocate, dismissLocate]
+    [open, returnTo, close, setView, setInput, setFilters, setThreadMode, submit, more, stop, fetchThread, cancelFetch, rebuild, cancelRebuild, clearRebuildResult, chooseHit, openHitThread, cancelLocate, dismissLocate]
   )
 
   return { state, commands }
@@ -538,6 +544,7 @@ export interface SearchCommands {
   cancelFetch(tabId: number): void
   rebuild(): void
   cancelRebuild(): void
+  clearRebuildResult(rebuild: RebuildState): void
   /** `navigate`: choosing the hit opens it once located. `resolve`: 重试 only shows where it is. */
   chooseHit(tabId: number, view: SearchView, hit: SearchHit, intent: 'navigate' | 'resolve'): void
   openHitThread(tabId: number): void

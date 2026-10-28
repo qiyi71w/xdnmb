@@ -10,6 +10,7 @@ import { withSpoilers } from '../../components/spoilers'
 import { meaningfulTitle } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
+import { useClearOnLeave } from '../../lib/useClearOnLeave'
 import { SearchFilterFields, UncertainTag } from './FilterFields'
 import { searchFilterCount } from './listFilters'
 import {
@@ -136,7 +137,8 @@ export function SearchBody({
   commands,
   forums,
   focusRefs,
-  tabMenu = false
+  tabMenu = false,
+  displayed = true
 }: {
   className: string
   tabId: number
@@ -150,6 +152,7 @@ export function SearchBody({
   focusRefs: SearchFocusRefs
   /** Hits offer 在新标签页打开 (not in the modal sheet, whose top layer would hide the menu). */
   tabMenu?: boolean
+  displayed?: boolean
 }) {
   const inputId = useId()
   const filtersId = useId()
@@ -158,6 +161,7 @@ export function SearchBody({
   const scope = tab.thread.scope
   const { input: inputRef, list: listRef } = focusRefs
   const filterCount = searchFilterCount(session.filters)
+  useClearOnLeave(displayed, () => commands.clearRebuildResult(rebuild))
   const [filtersOpen, setFiltersOpen] = useState(filterCount > 0)
 
   const [draft, setDraft] = useState({ view, text: session.input })

@@ -154,6 +154,7 @@ export function useRetainedList(resets: ReadingResets) {
     failure,
     setFailure,
     done,
+    setDone,
     listRef,
     bodyRef,
     ask,

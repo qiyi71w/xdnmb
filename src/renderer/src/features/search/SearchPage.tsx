@@ -127,6 +127,7 @@ export function SearchPage({
               tabId={tabId}
               tab={tab}
               view="local"
+              displayed={displayed && side === 'local'}
               rebuild={host.state.rebuild}
               commands={host.commands}
               forums={host.forums}

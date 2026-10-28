@@ -2,7 +2,8 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { ThreadId } from '../../../../shared/forum'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
-import { deleteOfflineCopy, showDeletionNote, useOfflineDeletions, type DeletionOutcome } from './offlineSync'
+import { useClearOnLeave } from '../../lib/useClearOnLeave'
+import { deleteOfflineCopy, deletionNote, showDeletionNote, useOfflineDeletions, type DeletionOutcome } from './offlineSync'
 import './content.css'
 
 /**
@@ -100,10 +101,13 @@ export function OfflineDeleteConfirm({
 
 /**
  * Under a thread's toolbar: what the deletion asked for in its 更多 menu did, until dismissed or a
- * new save of the thread starts. A cache check that failed is said separately; the copy is gone.
+ * new save starts; a successful note also ends when the reader is left. A failed cache check stays.
  */
-export function OfflineDeleteNote({ threadId }: { threadId: ThreadId }) {
+export function OfflineDeleteNote({ threadId, displayed }: { threadId: ThreadId; displayed: boolean }) {
   const { note } = useOfflineDeletions()
+  useClearOnLeave(displayed, () => {
+    if (note?.threadId === threadId && note.cacheCleanup === 'complete' && deletionNote() === note) showDeletionNote(null)
+  })
   if (note === null || note.threadId !== threadId) return null
   const failed = note.cacheCleanup === 'failed'
   return (

@@ -15,6 +15,7 @@ import { Modal, ModalHeader } from '../../components/Modal'
 import { formatRecordTime } from '../../lib/time'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
+import { useClearOnLeave } from '../../lib/useClearOnLeave'
 import { ThreadRow } from '../feed/ThreadRow'
 import type { ImageView } from '../image/imageView'
 import { useImageScope } from '../image/useImageLoad'
@@ -101,6 +102,7 @@ function previewFailureLine(reason: Extract<ReconcileTask, { phase: 'preview-fai
  * app-wide. The pane returns to its list when a plan finishes.
  */
 export function ReconcileView({
+  displayed,
   headingRef,
   forumNames,
   selectedThreadId,
@@ -108,6 +110,7 @@ export function ReconcileView({
   onRestart,
   onBack
 }: {
+  displayed: boolean
   headingRef: RefObject<HTMLHeadingElement | null>
   forumNames: ReadonlyMap<ForumId, string>
   selectedThreadId: string | null
@@ -216,7 +219,7 @@ export function ReconcileView({
           {sides !== null && <p className="sub-recon-meta">{sides}</p>}
         </header>
         <div className="sub-recon">
-          <WriteStatus />
+          <WriteStatus displayed={displayed} />
           {body}
         </div>
         <ActionBar task={task} plan={plan} overview={overview} onExecute={() => void execute()} onStop={stopTask} onBack={onBack} />
@@ -607,12 +610,15 @@ function resultLine(
  * The finished sync / merge as one line at the top of the list; 查看 opens its record when
  * something failed or is unknown. Always rendered as a polite live region.
  */
-export function ReconcileResult({ onView }: { onView: (planId: string | null) => void }) {
-  const { task, dismissTask } = useSubscriptionsContext()
+export function ReconcileResult({ displayed, onView }: { displayed: boolean; onView: (planId: string | null) => void }) {
+  const { task, dismissTask, clearSuccessfulTask } = useSubscriptionsContext()
   const finished = task?.phase === 'finished' ? task : null
   const stored = usePlanFor(finished?.preview.id ?? null)
   const plan = stored ?? (finished?.outcome.type === 'plan' ? finished.outcome.plan : null)
   const line = finished === null ? null : resultLine(finished.preview.mode, finished.outcome, plan)
+  useClearOnLeave(displayed, () => {
+    if (finished !== null && line?.tone === 'done') clearSuccessfulTask(finished)
+  })
   return (
     <div className="sub-write-region" role="status">
       {line !== null && (

@@ -339,3 +339,26 @@ describe('returning to search results through history', () => {
     expect(returns.size).toBe(0)
   })
 })
+
+describe('leaving a search result page', () => {
+  it('clears the displayed rebuild success, keeps failures and a newer result, and never restores a closed tab', () => {
+    const completed = run(initialSearchState,
+      { type: 'open', tabId: 1, view: 'local' },
+      { type: 'rebuild-start', operationId: 'rebuild-1' },
+      { type: 'rebuild-end', operationId: 'rebuild-1', outcome: { rebuilt: true } }
+    )
+    const leave: SearchAction = { type: 'leave-rebuild-result', rebuild: completed.rebuild }
+    expect(run(completed, leave).rebuild.status).toBe('idle')
+    const failed = run(completed,
+      { type: 'rebuild-start', operationId: 'rebuild-2' },
+      { type: 'rebuild-end', operationId: 'rebuild-2', outcome: 'internal' }
+    )
+    expect(run(failed, { ...leave, rebuild: failed.rebuild })).toBe(failed)
+    const newer = run(completed,
+      { type: 'rebuild-start', operationId: 'rebuild-2' },
+      { type: 'rebuild-end', operationId: 'rebuild-2', outcome: { rebuilt: true } }
+    )
+    expect(run(newer, leave)).toBe(newer)
+    expect(run(completed, { type: 'dispose', tabId: 1 }, leave).tabs[1]).toBeUndefined()
+  })
+})
