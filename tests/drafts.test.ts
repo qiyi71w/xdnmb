@@ -153,6 +153,7 @@ describe('saved drafts', () => {
     expect(readOnly.db.status.state).toBe('read-only')
     expect(await readOnly.service.save(input({ draftId: draft.id, fields: { ...EMPTY_FIELDS, content: '新版' } })))
       .toEqual({ ok: false, reason: 'storage' })
+    expect(await readOnly.service.delete(draft.id)).toEqual({ ok: false, reason: 'storage' })
     expect((await list(readOnly.service))[0]).toMatchObject({ id: draft.id, version: 1, fields: { content: '旧版' } })
     const source = join(base, 'pick.png')
     writeFileSync(source, pngBytes())

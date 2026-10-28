@@ -419,7 +419,9 @@ export function OnlineSearchPane({
 
   // ---------- Search box ----------
   const query = state.draft.trim()
-  const canSubmit = query !== '' && query.length <= MAX_SEARCH_QUERY_LENGTH
+  /** This exact query's run is still awaited: searching it again would only repeat the request. */
+  const samePending = state.pending?.kind === 'run' && state.pending.query === query
+  const canSubmit = query !== '' && query.length <= MAX_SEARCH_QUERY_LENGTH && !samePending
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (canSubmit) session.run(query)
@@ -466,7 +468,9 @@ export function OnlineSearchPane({
               value={state.draft}
               onChange={(event) => session.setDraft(event.target.value)}
             />
-            <button type="submit" className="btn btn-page online-search-submit" disabled={!canSubmit}>
+            {/* Unavailable stays focusable; `submit` refuses it from any input, and the session itself
+                drops a repeat of the query it is still running (before this re-renders). */}
+            <button type="submit" className="btn btn-page online-search-submit" aria-disabled={!canSubmit || undefined} aria-busy={samePending || undefined}>
               <Icon name="search" />
               搜索
             </button>

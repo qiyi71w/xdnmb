@@ -28,7 +28,7 @@ import { selectionCopyItem } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
 import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { FailureNotice } from '../../components/Notices'
-import { describeReadError } from '../../lib/format'
+import { describeReadError, meaningfulTitle } from '../../lib/format'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
@@ -43,6 +43,7 @@ import { UnsettledLine, unsettledEntryOf, unsettledText, WriteStatus } from './S
 import { previewBlocker, plansNeedingAttention, ReconcileHistoryDialog, ReconcileResult, ReconcileView } from './SubscriptionReconcile'
 import { taskMode, type ReconcileMode } from './reconcileState'
 import { SubscriptionRowMenu } from './SubscriptionRowMenu'
+import { useSubscriptionOffline } from './SubscriptionOffline'
 import {
   decideChange,
   displayedObservation,
@@ -448,6 +449,7 @@ export function SubscriptionPane({
   /** Whether a row event comes from its unsettled line (核对订阅), which is not part of the row's menu or link. */
   const fromInline = (event: { target: EventTarget }) => event.target instanceof Element && event.target.closest('.sub-inline') !== null
   const menuThread = rowMenu === null ? undefined : threads.find((thread) => thread.head.id === rowMenu.threadId)
+  const offline = useSubscriptionOffline()
   const readInFlight = state.activity === 'first' || state.activity === 'next'
   // Before the early return below: hooks run in the same order on every render.
   const refreshTurn = useRefreshTurn(readInFlight)
@@ -604,6 +606,7 @@ export function SubscriptionPane({
 
         {/* Reading is silent (no progress, no coverage); only a failure shows, as one line. */}
         <div className="list-status" aria-busy={readInFlight || state.activity === 'stored' ? true : undefined}>
+          {offline.notice}
           {state.internalError !== null && (
             <FailureNotice
               title={state.internalError === 'stored' ? '本机保存的列表读取失败' : '订阅读取失败'}
@@ -765,9 +768,17 @@ export function SubscriptionPane({
             return decision.kind === 'blocked' ? decision.reason : null
           })()}
           onRemove={() => void writeNow('remove', rowMenu.threadId, threadLabel(menuThread))}
+          onOfflineSave={() =>
+            offline.open({
+              threadId: rowMenu.threadId,
+              label: meaningfulTitle(menuThread.head.title) ?? `No.${rowMenu.threadId}`,
+              row: rowMenu.row
+            })
+          }
           onClose={closeRowMenu}
         />
       )}
+      {offline.dialogs}
     </section>
   )
 }
@@ -830,15 +841,19 @@ function AddForm({
           aria-invalid={error !== null ? true : undefined}
           aria-describedby={describedBy}
         />
-        <button type="submit" className="btn btn-small btn-page" disabled={disabled}>
+        {/* Unavailable stays focusable (focus is kept while the write runs); `submit` refuses it, so a
+            click, Enter or Space on it and Enter in the field all do nothing then. */}
+        <button type="submit" className="btn btn-small btn-page" aria-disabled={disabled || undefined} aria-describedby={hint !== null ? hintId : undefined}>
           加入
         </button>
         {currentThreadId !== null && (
           <button
             type="button"
             className="btn btn-small btn-page"
-            disabled={disabled}
+            aria-disabled={disabled || undefined}
+            aria-describedby={hint !== null ? hintId : undefined}
             onClick={() => {
+              if (disabled) return
               const blocked = onAdd(currentThreadId)
               setError(blocked)
             }}

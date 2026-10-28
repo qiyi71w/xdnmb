@@ -68,35 +68,47 @@ describe('retained content storage', () => {
   it('returns only locally retained head metadata for list rows and keeps missing heads unknown', () => {
     const { db } = fixture()
     db.recordVisit('200', t0)
-    expect(db.listHistory()[0]).toMatchObject({ threadId: '200', head: null, excerpt: null })
+    expect(db.listHistory()[0]).toMatchObject({ threadId: '200', head: null, replyCount: null })
     const head: Post = { ...post('100', true, '保留正文'), userHash: 'AdminID', name: '名字',
       createdAt: '2026-10-24 08:00', isAdmin: true, isSage: true, forumId: '4' }
     db.saveThreadPage({ ...page(), head }, t0)
     db.recordVisit('100', t1)
     expect(db.listHistory()[0]).toMatchObject({
-      threadId: '100', excerpt: '保留正文', head: { forumId: '4', createdAt: '2026-10-24 08:00',
+      threadId: '100', head: { plainText: '保留正文', forumId: '4', createdAt: '2026-10-24 08:00',
         userHash: 'AdminID', name: '名字', title: '标题100', isAdmin: true, isSage: true,
         image: { path: '2026-10-24/shared', ext: '.jpg' } }
     })
     clear(db)
-    expect(db.listHistory()[0]).toMatchObject({ threadId: '100', title: '标题100', head: null, excerpt: null })
+    expect(db.listHistory()[0]).toMatchObject({ threadId: '100', title: '标题100', head: null })
   })
 
-  it('keeps a 防剧透 segment closed when the history excerpt limit cuts through it', () => {
+  it('keeps full local content and known all-reply counts for consistent previews without truncating spoilers', () => {
     const { db } = fixture()
-    const secret = '秘'.repeat(500)
-    const heads: Array<[string, string]> = [['100', `前文[h]${secret}[/h]后文`], ['300', `前文[h]${secret}`], ['400', `${'前'.repeat(396)}[/h]x`]]
-    for (const [id, text] of heads) {
-      db.saveThreadPage({ ...page(id, []), head: post(id, false, text) }, t0)
-      db.recordVisit(id, t1)
-    }
-    const excerpts = new Map(db.listHistory().map((entry) => [entry.threadId, entry.excerpt]))
-    // Paired in the full text: the cut segment is closed, so the row masks it.
-    expect(excerpts.get('100')).toBe(`前文[h]${secret.slice(0, 395)}[/h]`)
-    // Never closed in the full text: stays as typed, as the reader shows it.
-    expect(excerpts.get('300')).toBe(`前文[h]${secret.slice(0, 395)}`)
-    // A closing marker with no opening one before the cut changes nothing.
-    expect(excerpts.get('400')).toBe(`${'前'.repeat(396)}[/h]`)
+    const text = `第一行\n\n[h]${'秘'.repeat(500)}[/h]\n末行`
+    const head: Post = { ...post('100', true, text), content: [{ type: 'text', text }, { type: 'emphasis', style: 'bold', children: [{ type: 'text', text: '加粗' }] }] }
+    db.saveThreadPage({ ...page(), head, replyCount: 21 }, t0)
+    db.saveThreadPage({ ...page(), head, mode: 'po', replyCount: 2 }, t1)
+    db.recordVisit('100', t1)
+    expect(db.listHistory()[0]).toMatchObject({ head, replyCount: 21, at: t1 })
+    expect(db.listHistory()[0]!.head!.plainText).toBe(text)
+  })
+
+  it('projects only the confirmed sent post while leaving immutable payload and missing local previews intact', () => {
+    const { db } = fixture()
+    const credentialId = db.insertCredential({ name: '测试', cookieId: 'Sender', source: 'raw', importedAt: t0, ciphertext: Uint8Array.of(1) }).id
+    const payload = { draftId: null, target: { kind: 'reply' as const, threadId: '100' }, credentialId,
+      fields: { content: '实际回复\n\n<b>字面</b>', title: '', name: '', watermark: false }, attachmentId: null }
+    const sent = db.createPublication({ requestId: 'sent-preview', editorId: 'editor', payload, forumId: '4', at: t0 })
+    db.finishPublication({ id: sent.id, state: 'confirmed', problem: null, postId: '101', threadId: '100', at: t1 })
+    db.saveThreadPage(page(), t1)
+    const reply = { ...post('101', true, payload.fields.content), userHash: 'Sender' }
+    db.savePost(reply, t1)
+    expect(db.listPublications()[0]).toMatchObject({ payload, postId: '101', preview: reply })
+    expect(db.getPublication(sent.id)!.payload).toEqual(payload)
+    clear(db)
+    const missing = db.listPublications()[0]!
+    expect(missing.preview).toBeUndefined()
+    expect(missing.payload).toEqual(payload)
   })
 
   it('lists offline copies by first save from local content only, and updating a copy keeps its place', () => {

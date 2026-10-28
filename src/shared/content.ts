@@ -28,10 +28,10 @@ export interface OfflineCopy {
 export interface RetainedEntry {
   threadId: ThreadId
   title: string | null
-  /** Head post text while it is held locally; null once evicted or never fetched. */
-  excerpt: string | null
-  /** Cached head metadata only; null after eviction or before the head was fetched. */
-  head: Pick<Post, 'forumId' | 'createdAt' | 'userHash' | 'name' | 'title' | 'isAdmin' | 'isSage' | 'image'> | null
+  /** Complete cached head for the shared preview rules; null once evicted or never fetched. */
+  head: Post | null
+  /** Latest locally observed all-replies count; unknown is never presented as zero. */
+  replyCount: number | null
   /** Last visit. */
   at: string
   offline: OfflineCopy | null

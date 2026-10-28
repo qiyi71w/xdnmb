@@ -18,6 +18,7 @@ import { FailureNotice } from '../../components/Notices'
 import { SortHandle, SortStatus, useSortableList, type SortableList } from '../../components/SortHandle'
 import { formatForumTime, formatRecordTime } from '../../lib/time'
 import { moveItem } from '../../lib/reorder'
+import { singleFlight } from '../../lib/singleFlight'
 import {
   MISSING_SELECTION_TEXT,
   ROLE_INFO,
@@ -303,6 +304,10 @@ function CredentialItem({
   const roles = rolesUsing(overview, credential.id)
   const writable = overview.writable
   const browsing = index === 0
+  /** 重命名, 填写／修改 ID and 移除: only while the item is shown as is and storage is writable. */
+  const actionsAvailable = writable && mode === 'view'
+  /** Taken synchronously: a second Enter or press before `pending` renders does not save or remove twice. */
+  const [flight] = useState(singleFlight)
 
   // Focus follows the mode: into the editor / confirmation, back to the button that opened it.
   useEffect(() => {
@@ -408,35 +413,36 @@ function CredentialItem({
   const saveEdit = (event: FormEvent) => {
     event.preventDefault()
     if (pending) return
-    void (mode === 'cookie-id' ? saveCookieId() : saveRename())
+    void flight.run(mode === 'cookie-id' ? saveCookieId : saveRename)
   }
 
-  const confirmRemove = async () => {
-    if (pending) return
-    setPending(true)
-    try {
-      const result = await window.xidao.identities.remove({ credentialId: credential.id })
-      if (result.ok || result.reason === 'not-found') {
-        const affected = [
-          roles.length > 0 ? `${roleList(roles)}需要重新选择` : null,
-          browsing && count > 1 ? '浏览改用下一个饼干' : null
-        ].filter(Boolean)
-        onAnnounce({
-          tone: 'success',
-          text: result.ok ? `已移除「${credential.name}」${affected.length > 0 ? `；${affected.join('，')}` : ''}` : '这个饼干已不存在'
-        })
-        // The item disappears; keep keyboard focus inside the list area.
-        listHeading.current?.focus()
-        await onChanged()
-      } else {
-        setError(mutationErrorText(result, '移除'))
+  const confirmRemove = () =>
+    flight.run(async () => {
+      if (pending) return
+      setPending(true)
+      try {
+        const result = await window.xidao.identities.remove({ credentialId: credential.id })
+        if (result.ok || result.reason === 'not-found') {
+          const affected = [
+            roles.length > 0 ? `${roleList(roles)}需要重新选择` : null,
+            browsing && count > 1 ? '浏览改用下一个饼干' : null
+          ].filter(Boolean)
+          onAnnounce({
+            tone: 'success',
+            text: result.ok ? `已移除「${credential.name}」${affected.length > 0 ? `；${affected.join('，')}` : ''}` : '这个饼干已不存在'
+          })
+          // The item disappears; keep keyboard focus inside the list area.
+          listHeading.current?.focus()
+          await onChanged()
+        } else {
+          setError(mutationErrorText(result, '移除'))
+        }
+      } catch {
+        setError('移除请求失败，未移除，请重试')
+      } finally {
+        setPending(false)
       }
-    } catch {
-      setError('移除请求失败，未移除，请重试')
-    } finally {
-      setPending(false)
-    }
-  }
+    })
 
   const onEditorKeyDown = (event: KeyboardEvent) => {
     // Esc cancels the inline step only; the dialog stays open.
@@ -475,10 +481,18 @@ function CredentialItem({
               aria-describedby={errorId}
               disabled={pending}
             />
-            <button type="submit" className="btn btn-small btn-page" disabled={pending}>
+            {/* Saving keeps both buttons focusable; `saveEdit` and 取消 refuse while it runs. */}
+            <button type="submit" className="btn btn-small btn-page" aria-disabled={pending || undefined} aria-busy={pending || undefined}>
               {pending ? '正在保存…' : '保存'}
             </button>
-            <button type="button" className="btn btn-small btn-page" onClick={() => leave(openerOf(mode))} disabled={pending}>
+            <button
+              type="button"
+              className="btn btn-small btn-page"
+              onClick={() => {
+                if (!pending) leave(openerOf(mode))
+              }}
+              aria-disabled={pending || undefined}
+            >
               取消
             </button>
           </div>
@@ -518,8 +532,10 @@ function CredentialItem({
               type="button"
               ref={renameButton}
               className="btn btn-small btn-page"
-              onClick={() => startEdit('rename')}
-              disabled={!writable || mode !== 'view'}
+              onClick={() => {
+                if (actionsAvailable) startEdit('rename')
+              }}
+              aria-disabled={!actionsAvailable || undefined}
               aria-label={`重命名「${credential.name}」`}
             >
               重命名
@@ -528,8 +544,10 @@ function CredentialItem({
               type="button"
               ref={cookieIdButton}
               className="btn btn-small btn-page"
-              onClick={() => startEdit('cookie-id')}
-              disabled={!writable || mode !== 'view'}
+              onClick={() => {
+                if (actionsAvailable) startEdit('cookie-id')
+              }}
+              aria-disabled={!actionsAvailable || undefined}
               aria-label={`${credential.cookieId === null ? '填写' : '修改'}「${credential.name}」的饼干 ID`}
             >
               {credential.cookieId === null ? '填写 ID' : '修改 ID'}
@@ -539,10 +557,11 @@ function CredentialItem({
               ref={removeButton}
               className="btn btn-small btn-danger btn-page"
               onClick={() => {
+                if (!actionsAvailable) return
                 setError(null)
                 setMode('confirm-remove')
               }}
-              disabled={!writable || mode !== 'view'}
+              aria-disabled={!actionsAvailable || undefined}
               aria-label={`移除「${credential.name}」`}
             >
               移除
@@ -561,10 +580,24 @@ function CredentialItem({
             {browsing && count > 1 && '浏览将改用下一个饼干。'}
           </p>
           <div className="credential-confirm-actions">
-            <button type="button" className="btn btn-small btn-danger btn-page" onClick={() => void confirmRemove()} disabled={pending}>
+            <button
+              type="button"
+              className="btn btn-small btn-danger btn-page"
+              onClick={() => void confirmRemove()}
+              aria-disabled={pending || undefined}
+              aria-busy={pending || undefined}
+            >
               {pending ? '正在移除…' : '确认移除'}
             </button>
-            <button type="button" ref={cancelRemove} className="btn btn-small btn-page" onClick={() => leave(removeButton)} disabled={pending}>
+            <button
+              type="button"
+              ref={cancelRemove}
+              className="btn btn-small btn-page"
+              onClick={() => {
+                if (!pending) leave(removeButton)
+              }}
+              aria-disabled={pending || undefined}
+            >
               取消
             </button>
           </div>
@@ -715,7 +748,9 @@ function ImportForm({
 
   return (
     <form className="import-form" aria-label={copy.title} onSubmit={(event) => void submit(event)} noValidate>
-      <fieldset className="import-fieldset" disabled={disabled}>
+      {/* Not a disabled fieldset: that would take the page button out of the tab order too. The
+          fields and 导入 are disabled one by one; `submit` refuses while `disabled` or pending. */}
+      <fieldset className="import-fieldset">
         <label className="field-label" htmlFor={secretId}>
           {copy.secretLabel}
         </label>
@@ -732,14 +767,19 @@ function ImportForm({
             placeholder={copy.placeholder}
             aria-describedby={invalid === 'secret' ? messageId : undefined}
             aria-invalid={invalid === 'secret' ? true : undefined}
+            disabled={disabled}
             onInput={() => {
               if (invalid === 'secret') setInvalid(null)
             }}
           />
+          {/* A page button: unavailable it stays focusable (not inside a disabled fieldset) and does nothing. */}
           <button
             type="button"
             className="btn btn-small btn-page"
-            onClick={() => setShown((value) => !value)}
+            onClick={() => {
+              if (!disabled) setShown((value) => !value)
+            }}
+            aria-disabled={disabled || undefined}
             aria-controls={secretId}
             aria-label={`${shown ? '隐藏' : '显示'}${copy.secretLabel}`}
           >
@@ -769,6 +809,7 @@ function ImportForm({
               aria-required
               aria-describedby={invalid === 'cookie-id' ? messageId : undefined}
               aria-invalid={invalid === 'cookie-id' ? true : undefined}
+              disabled={disabled}
             />
           </>
         )}
@@ -788,10 +829,11 @@ function ImportForm({
           placeholder={entry === 'export' ? '默认为导出内容中的饼干 ID' : '默认为饼干 ID'}
           aria-describedby={invalid === 'name' ? messageId : undefined}
           aria-invalid={invalid === 'name' ? true : undefined}
+          disabled={disabled}
         />
 
         <div className="import-actions">
-          <button type="submit" className="btn btn-primary" disabled={pending} aria-describedby={messageId}>
+          <button type="submit" className="btn btn-primary" disabled={pending || disabled} aria-describedby={messageId}>
             {pending ? '正在导入…' : '导入'}
           </button>
         </div>

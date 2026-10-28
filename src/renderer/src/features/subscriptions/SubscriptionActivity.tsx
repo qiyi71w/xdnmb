@@ -99,7 +99,15 @@ export function WriteStatus({ placed }: { placed?: (notice: WriteNotice) => bool
             </p>
             {active.stopRequested && <p className="sub-write-detail">已停止回读</p>}
           </div>
-          <button type="button" className="btn btn-small btn-page" onClick={stopReadback} disabled={active.stopRequested}>
+          {/* Kept focusable once asked (focus stays here); a second press does nothing. */}
+          <button
+            type="button"
+            className="btn btn-small btn-page"
+            aria-disabled={active.stopRequested || undefined}
+            onClick={() => {
+              if (!active.stopRequested) stopReadback()
+            }}
+          >
             {active.kind === 'change' ? '停止回读' : '停止核对'}
           </button>
         </div>

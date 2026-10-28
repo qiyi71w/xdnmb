@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
-import type { ThreadId, ThreadSummary } from '../../../../shared/forum'
-import { Content } from '../../components/Content'
+import type { Post, ThreadId, ThreadSummary } from '../../../../shared/forum'
+import { Content, TextExcerpt } from '../../components/Content'
 import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
@@ -95,7 +95,7 @@ export function ThreadRow({
             )}
             {title !== null && <span className="row-title">{title}</span>}
             {name !== null && <span className="row-name">{name}</span>}
-            {head !== null && <Content nodes={head.content} mode="excerpt" className="row-excerpt" />}
+            {head !== null && <RowExcerpt post={head} />}
             <span className="row-meta">
               {forumName !== null && <span className="row-forum">{forumName}</span>}
               <span className="row-no">No.{id}</span>
@@ -118,4 +118,15 @@ export function ThreadRow({
       {inTab.menu}
     </>
   )
+}
+
+/**
+ * A list row's excerpt of a held post: its content tree with the allowed formatting; a post held
+ * with text but no tree (an older local record) shows that text, its line breaks kept. Nothing
+ * when the post has neither.
+ */
+export function RowExcerpt({ post }: { post: Pick<Post, 'content' | 'plainText'> }) {
+  if (post.content.length > 0) return <Content nodes={post.content} mode="excerpt" className="row-excerpt" />
+  const text = post.plainText.trim()
+  return text === '' ? null : <TextExcerpt text={text} className="row-excerpt" />
 }

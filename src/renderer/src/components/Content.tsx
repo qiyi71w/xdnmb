@@ -1,6 +1,7 @@
 import { Fragment, useMemo, type ReactNode } from 'react'
 import type { ContentNode, EmphasisStyle } from '../../../shared/forum'
 import { Spoiler, SpoilerPlaceholder } from './Spoiler'
+import { plainNodes } from './plainNodes'
 import { withSpoilers, type DisplayNode } from './spoilers'
 import './content.css'
 
@@ -122,11 +123,13 @@ export function Content({
 }
 
 /**
- * A list row's excerpt kept as plain text (history and offline rows, sent records): line breaks
- * kept, 防剧透 segments shown as the same non-interactive placeholder as other list excerpts.
+ * A list row's excerpt from plain text (a sent post's literal payload, a held post whose content
+ * tree is empty): never parsed as HTML. Each `\n` becomes a line break node, so the row keeps its
+ * lines and blank lines whatever `white-space` the row applies; 防剧透 segments show as the same
+ * non-interactive placeholder as other list excerpts.
  */
 export function TextExcerpt({ text, className }: { text: string; className?: string }) {
-  const nodes = useMemo<ContentNode[]>(() => [{ type: 'text', text }], [text])
+  const nodes = useMemo(() => plainNodes(text), [text])
   return <Content nodes={nodes} mode="excerpt" className={className} />
 }
 

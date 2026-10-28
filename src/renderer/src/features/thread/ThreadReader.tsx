@@ -146,7 +146,8 @@ function PagePopover({
               aria-invalid={invalid ? true : undefined}
               aria-describedby={invalid ? `${inputId}-error` : undefined}
             />
-            <button type="submit" className="btn btn-small btn-page" disabled={!valid} aria-label="跳转到输入的页码">
+            {/* Unavailable stays in the tab order; `submit` refuses an invalid page from any input. */}
+            <button type="submit" className="btn btn-small btn-page" aria-disabled={!valid || undefined} aria-label="跳转到输入的页码">
               跳转
             </button>
             {invalid && (

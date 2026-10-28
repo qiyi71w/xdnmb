@@ -411,7 +411,15 @@ function RebuildBlock({ rebuild, indexMissing, commands }: { rebuild: RebuildSta
         {running && <Loading>{rebuild.cancelling ? '正在取消重建…' : '正在重建索引…'}</Loading>}
       </div>
       {running ? (
-        <button type="button" className="btn btn-small btn-page" onClick={commands.cancelRebuild} disabled={rebuild.cancelling}>
+        // Kept focusable once asked (focus stays here); a second press does nothing.
+        <button
+          type="button"
+          className="btn btn-small btn-page"
+          aria-disabled={rebuild.cancelling || undefined}
+          onClick={() => {
+            if (!rebuild.cancelling) commands.cancelRebuild()
+          }}
+        >
           取消重建
         </button>
       ) : (
@@ -465,7 +473,15 @@ function FetchBlock({ tab, tabId, commands }: { tab: TabSearch; tabId: number; c
       )}
       <div className="search-fetch-actions">
         {running ? (
-          <button type="button" className="btn btn-small btn-page" onClick={() => commands.cancelFetch(tabId)} disabled={fetch.cancelling}>
+          // Kept focusable once asked (focus stays here); a second press does nothing.
+          <button
+            type="button"
+            className="btn btn-small btn-page"
+            aria-disabled={fetch.cancelling || undefined}
+            onClick={() => {
+              if (!fetch.cancelling) commands.cancelFetch(tabId)
+            }}
+          >
             取消获取
           </button>
         ) : (

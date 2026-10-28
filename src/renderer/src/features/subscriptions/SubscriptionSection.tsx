@@ -3,6 +3,7 @@ import type { SubscriptionOverview, SubscriptionResult } from '../../../../share
 import { ContextMenu, type ContextMenuPoint } from '../../components/ContextMenu'
 import { Icon } from '../../components/Icon'
 import { FailureNotice } from '../../components/Notices'
+import { singleFlight } from '../../lib/singleFlight'
 import { useListOpener } from '../reminders/openList'
 import { failureText, webObjectText } from './subscriptionText'
 import type { SubscriptionsState } from './useSubscriptions'
@@ -240,39 +241,44 @@ function AppUuidForm({
     setDirty((uuidRef.current?.value.trim().toLowerCase() ?? '') !== (saved ?? ''))
   }
 
-  const apply = async (kind: 'set' | 'generate', uuid: string | null) => {
-    if (pending !== null || blocked) return
-    const before = overview.context.generation
-    setPending(kind)
-    setMessage(null)
-    let result: SubscriptionResult<SubscriptionOverview>
-    try {
-      result = await window.xidao.subscriptions.configureApp({ uuid })
-    } catch {
-      setPending(null)
-      setMessage({ tone: 'error', text: '请求失败，结果未知；请重新打开设置查看' })
-      return
-    }
-    setPending(null)
-    if (!result.ok) {
-      setMessage({ tone: 'error', text: failureText(result.reason) })
-      if (result.reason === 'invalid-uuid') {
-        setInvalid(true)
-        uuidRef.current?.focus()
+  /** Taken synchronously: a second press or Enter before `pending` renders does not write twice. */
+  const [flight] = useState(singleFlight)
+  const apply = (kind: 'set' | 'generate', uuid: string | null) =>
+    flight.run(async () => {
+      if (pending !== null || blocked) return
+      const before = overview.context.generation
+      setPending(kind)
+      setMessage(null)
+      let result: SubscriptionResult<SubscriptionOverview>
+      try {
+        result = await window.xidao.subscriptions.configureApp({ uuid })
+      } catch {
+        setPending(null)
+        setMessage({ tone: 'error', text: '请求失败，结果未知；请重新打开设置查看' })
+        return
       }
-      return
-    }
-    setDirty(false)
-    onApplied(result.value)
-    const after = result.value.context.generation
-    setMessage({
-      tone: 'success',
-      text: after === before ? '与当前 UUID 相同' : kind === 'generate' ? '已生成并保存新的 UUID' : '已保存'
+      setPending(null)
+      if (!result.ok) {
+        setMessage({ tone: 'error', text: failureText(result.reason) })
+        if (result.reason === 'invalid-uuid') {
+          setInvalid(true)
+          uuidRef.current?.focus()
+        }
+        return
+      }
+      setDirty(false)
+      onApplied(result.value)
+      const after = result.value.context.generation
+      setMessage({
+        tone: 'success',
+        text: after === before ? '与当前 UUID 相同' : kind === 'generate' ? '已生成并保存新的 UUID' : '已保存'
+      })
     })
-  }
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
+    // Nothing at all while blocked or writing: no message, no field state, no write.
+    if (blocked || pending !== null) return
     const value = uuidRef.current?.value.trim() ?? ''
     if (value === '') {
       setInvalid(true)
@@ -299,12 +305,14 @@ function AppUuidForm({
     if (event.key !== 'Escape') return
     event.preventDefault()
     event.stopPropagation()
-    if (pending === null) closeConfirm()
+    if (pending === null && !blocked) closeConfirm()
   }
 
   return (
     <form className="import-form" aria-labelledby={titleId} onSubmit={submit} noValidate>
-      <fieldset className="import-fieldset" disabled={blocked}>
+      {/* Not a disabled fieldset: that would take the page buttons out of the tab order too. The
+          field and 保存 are disabled one by one; every handler here refuses while `blocked`. */}
+      <fieldset className="import-fieldset">
         <h4 className="import-title" id={titleId}>
           App 订阅 UUID
         </h4>
@@ -328,11 +336,15 @@ function AppUuidForm({
             aria-describedby={invalid ? messageId : undefined}
             aria-invalid={invalid ? true : undefined}
             onInput={onInput}
+            disabled={blocked}
           />
           <button
             type="button"
             className="btn btn-small btn-page"
-            onClick={() => setShown((value) => !value)}
+            aria-disabled={blocked || undefined}
+            onClick={() => {
+              if (!blocked) setShown((value) => !value)
+            }}
             aria-controls={inputId}
             aria-label={shown ? '隐藏 UUID' : '显示 UUID'}
           >
@@ -341,7 +353,7 @@ function AppUuidForm({
         </div>
 
         <div className="import-actions sub-uuid-actions">
-          <button type="submit" className="btn btn-primary" disabled={pending !== null || !dirty} aria-describedby={messageId}>
+          <button type="submit" className="btn btn-primary" disabled={blocked || pending !== null || !dirty} aria-describedby={messageId}>
             {pending === 'set' ? '正在保存…' : '保存'}
           </button>
           <button
@@ -350,7 +362,7 @@ function AppUuidForm({
             className="btn btn-page"
             onClick={generate}
             // Not disabled while busy: focus returns here from the confirmation and must not be dropped.
-            aria-disabled={pending !== null || confirmGenerate ? true : undefined}
+            aria-disabled={blocked || pending !== null || confirmGenerate ? true : undefined}
           >
             {pending === 'generate' ? '正在生成…' : '生成新的 UUID'}
           </button>
@@ -366,8 +378,9 @@ function AppUuidForm({
               <button
                 type="button"
                 className="btn btn-small btn-danger btn-page"
-                disabled={pending !== null}
+                aria-disabled={pending !== null || blocked || undefined}
                 onClick={() => {
+                  if (pending !== null || blocked) return
                   setConfirmGenerate(false)
                   generateRef.current?.focus()
                   void apply('generate', null)
@@ -375,7 +388,15 @@ function AppUuidForm({
               >
                 确认生成
               </button>
-              <button type="button" ref={cancelGenerateRef} className="btn btn-small btn-page" onClick={closeConfirm} disabled={pending !== null}>
+              <button
+                type="button"
+                ref={cancelGenerateRef}
+                className="btn btn-small btn-page"
+                aria-disabled={pending !== null || blocked || undefined}
+                onClick={() => {
+                  if (pending === null && !blocked) closeConfirm()
+                }}
+              >
                 取消
               </button>
             </div>
