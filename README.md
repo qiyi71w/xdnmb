@@ -391,7 +391,7 @@ npm run dist:mac  # 在 macOS 上构建 x64／arm64 DMG 与 latest-mac.yml 到 d
 
 打包配置见 `electron-builder.yml`：使用上游预编译 Electron，不编译 Chromium／Electron／Node；better-sqlite3 自带各平台的 N-API 预编译模块，打包时不需要编译原生代码。只打包 `out/`、`resources/icons/`、`package.json` 与 `LICENSE`。版本号取自 `package.json`；发布时把安装包与对应的 `latest.yml`（Windows）、`latest-mac.yml`（macOS，两种架构合在一个文件里）一起上传到 tag 为 `v<版本>` 的正式 GitHub Release，客户端依赖这些文件名与其中的 SHA-512。
 
-`.github/workflows/macos-packages.yml` 在 GitHub 的 Apple Silicon macOS 机器上运行类型检查和测试，构建两种架构的 DMG，再用 `scripts/ci/mac-update-smoke.mjs` 检查：两个应用的 CPU 架构与 SQLite 原生模块、应用身份、图标、临时签名、`latest-mac.yml` 中的 SHA-512；Intel 版在 Rosetta 下能启动并读写数据；Apple Silicon 版安装后，用只在更新网络会话内应答的受控发布源走完发现新版、校验失败丢弃、自动下载、打开 DMG、按用户方式替换应用、下次启动显示新版本并保留设置。DMG 与检查记录作为工作流产物保留 14 天，不发布 Release。这些是自动化检查，不包括 Gatekeeper 首次打开提示与钥匙串授权等需要真人操作的环节。
+`.github/workflows/macos-packages.yml` 在 GitHub 的 Apple Silicon macOS 机器上运行类型检查和测试，构建两种架构的 DMG，再用 `scripts/ci/mac-update-smoke.mjs` 检查：两个应用的 CPU 架构与 SQLite 原生模块、应用身份、图标、临时签名、`latest-mac.yml` 中的 SHA-512；Intel 版在 Rosetta 下能启动并读写数据；Apple Silicon 版安装后，用只在更新网络会话内应答的受控发布源走完缺少元数据时检查失败（不显示为已是最新）、发现新版、校验失败丢弃、自动下载、打开 DMG、退出、按用户方式替换应用、下次启动显示新版本并保留设置。结果不依赖仓库实际发布了哪些 Release。DMG、检查记录和应用输出作为工作流产物保留 14 天，不发布 Release。这些是自动化检查，不包括 Gatekeeper 首次打开提示与钥匙串授权等需要真人操作的环节。
 
 代码结构：
 

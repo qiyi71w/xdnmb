@@ -103,8 +103,8 @@ function inspect() {
 const EXIT_HELD_BY_DEBUGGER = 'Waiting for the debugger to disconnect'
 const finishedOf = new WeakMap()
 let launches = 0
-async function launch(executablePath, args = []) {
-  const app = await electron.launch({ executablePath, args, timeout: 90_000 })
+async function launch(executablePath, args = [], timeout = 90_000) {
+  const app = await electron.launch({ executablePath, args, timeout })
   // The app's own console output, kept as evidence.
   const output = join(RESULTS, `app-${++launches}.log`)
   const finished = Promise.withResolvers()
@@ -177,7 +177,8 @@ const aboutText = (page) => page.locator('#shell-set-about').innerText()
 async function x64() {
   const app = appIn(join(DIST, 'mac'))
   const data = mkdtempSync(join(tmpdir(), 'xidao-x64-'))
-  const { app: running, page } = await launch(executableOf(app), [`--user-data-dir=${data}`])
+  // The first start under Rosetta translates the whole x64 Electron first (about 90 s on the runner).
+  const { app: running, page } = await launch(executableOf(app), [`--user-data-dir=${data}`], 300_000)
   const arch = await running.evaluate(() => process.arch)
   const status = await page.evaluate(() => window.xidao.app.getStatus())
   const state = await updateState(page)
