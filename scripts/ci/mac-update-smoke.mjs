@@ -96,12 +96,27 @@ function inspect() {
   }
 }
 
+/**
+ * Node prints this once the main process has finished and is exiting while the test driver's
+ * inspector session (`--inspect`) is still attached; that session can keep the process alive.
+ */
+const EXIT_HELD_BY_DEBUGGER = 'Waiting for the debugger to disconnect'
+const finishedOf = new WeakMap()
 let launches = 0
 async function launch(executablePath, args = []) {
   const app = await electron.launch({ executablePath, args, timeout: 90_000 })
-  // The app's own console output, kept for diagnosing a stuck quit.
+  // The app's own console output, kept as evidence.
   const output = join(RESULTS, `app-${++launches}.log`)
-  for (const stream of [app.process().stdout, app.process().stderr]) stream?.on('data', (chunk) => appendFileSync(output, chunk))
+  const finished = Promise.withResolvers()
+  finishedOf.set(app, finished.promise)
+  let text = ''
+  for (const stream of [app.process().stdout, app.process().stderr]) {
+    stream?.on('data', (chunk) => {
+      appendFileSync(output, chunk)
+      text += chunk
+      if (text.includes(EXIT_HELD_BY_DEBUGGER)) finished.resolve('finished')
+    })
+  }
   const page = await app.firstWindow({ timeout: 60_000 })
   await page.waitForLoadState('domcontentloaded')
   await sleep(2500)
@@ -117,12 +132,26 @@ async function waitFor(page, predicate, label, timeout = 180_000) {
     await sleep(250)
   }
 }
-/** A real quit (app menu / Cmd+Q path); on a timeout, records where the process is and ends it. */
+/**
+ * A real quit (app menu / Cmd+Q path). Done when the process exits, or when the main process has
+ * finished and only the driver's inspector holds it (then the driver ends it). On a timeout,
+ * records where the process is and ends it.
+ */
 async function quit(app, label) {
   const child = app.process()
   const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)))
   await app.evaluate(({ app }) => { app.quit() }).catch(() => undefined)
-  const result = await Promise.race([exited, sleep(90_000).then(() => 'timeout')])
+  const result = await Promise.race([exited, finishedOf.get(app), sleep(90_000).then(() => 'timeout')])
+  if (result === 'finished') {
+    const code = await Promise.race([exited, sleep(5000).then(() => 'held')])
+    if (code === 'held') {
+      log(`quit finished, process held by the driver's debugger: ${label}`)
+      child.kill('SIGKILL')
+      await exited
+      return 0
+    }
+    return code
+  }
   if (result !== 'timeout') return result
   const pid = String(child.pid)
   const windows = await Promise.race([
