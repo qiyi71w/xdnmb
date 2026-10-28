@@ -41,6 +41,9 @@ export function ImageViewer({
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   /** “原图尚未取得” no longer holds once the original is shown or fetched again; other outcomes stay. */
   const clearNotLoaded = () => setSaveMessage((message) => (message === SAVE_TEXT['not-loaded'] ? null : message))
+  useLayoutEffect(() => {
+    if (!displayed && saveMessage === SAVE_TEXT.saved) setSaveMessage(null)
+  }, [displayed, saveMessage])
   const mounted = useRef(true)
 
   const { load: loadOriginal } = original

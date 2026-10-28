@@ -657,7 +657,7 @@ export function ThreadReader({
         )}
         {compose?.note}
         <SubscribeNote threadId={threadId} />
-        <OfflineDeleteNote threadId={threadId} />
+        <OfflineDeleteNote threadId={threadId} displayed={displayed} />
       </div>
       {task === null && state.endProbe?.status === 'interrupted' && <IdentitySettingsAction error={state.endProbe.error} />}
       {locating && (

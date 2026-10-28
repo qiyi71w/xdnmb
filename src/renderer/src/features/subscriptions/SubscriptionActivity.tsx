@@ -1,5 +1,6 @@
 import type { SubscriptionOperation } from '../../../../shared/subscriptions'
 import { Icon, Spinner } from '../../components/Icon'
+import { useClearOnLeave } from '../../lib/useClearOnLeave'
 import { isReconcilable } from './subscriptionListState'
 import { ACTION_NAME, SOURCE_NAME, failureText, needsReconcile } from './subscriptionText'
 import { useSubscriptionsContext, type ActiveWrite, type WriteNotice } from './useSubscriptions'
@@ -86,8 +87,9 @@ export function UnsettledLine({ operation, text, tabIndex }: { operation: Subscr
  * so a change of state is announced wherever the user is. `placed`: results shown in place by the
  * view (in a row) and so not repeated here.
  */
-export function WriteStatus({ placed }: { placed?: (notice: WriteNotice) => boolean }) {
-  const { active, lastWrite, dismissLastWrite, stopReadback } = useSubscriptionsContext()
+export function WriteStatus({ displayed, placed }: { displayed: boolean; placed?: (notice: WriteNotice) => boolean }) {
+  const { active, lastWrite, dismissLastWrite, clearSuccessfulWrite, stopReadback } = useSubscriptionsContext()
+  useClearOnLeave(displayed, () => clearSuccessfulWrite(lastWrite))
   return (
     <div className="sub-write-region" role="status">
       {active !== null && (

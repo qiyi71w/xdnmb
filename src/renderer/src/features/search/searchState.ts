@@ -149,6 +149,7 @@ export type SearchAction =
   | { type: 'rebuild-start'; operationId: string }
   | { type: 'rebuild-cancelling'; operationId: string }
   | { type: 'rebuild-end'; operationId: string; outcome: { rebuilt: boolean } | Refusal | 'internal' }
+  | { type: 'leave-rebuild-result'; rebuild: RebuildState }
   /** The tab closed: everything it ran is forgotten. */
   | { type: 'dispose'; tabId: number }
 
@@ -477,6 +478,10 @@ export function searchReducer(state: SearchState, action: SearchAction): SearchS
             : { status: 'failed', failure: outcome }
       return { ...state, rebuild }
     }
+    case 'leave-rebuild-result':
+      return state.rebuild === action.rebuild && state.rebuild.status === 'done'
+        ? { ...state, rebuild: { status: 'idle' } }
+        : state
     case 'dispose': {
       if (state.tabs[action.tabId] === undefined && state.openTab !== action.tabId) return state
       const tabs = { ...state.tabs }

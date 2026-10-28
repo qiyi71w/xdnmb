@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import type { SubscriptionContext, SubscriptionOperation, SubscriptionOverview } from '../../src/shared/subscriptions'
 import {
   blocksNewWrite,
+  clearSuccessfulWriteOnLeave,
   decideChange,
   isReconcilable,
   isRunningChange
 } from '../../src/renderer/src/features/subscriptions/subscriptionListState'
+import type { WriteNotice } from '../../src/renderer/src/features/subscriptions/useSubscriptions'
 
 const context = (generation: number, appCredentialId: string | null, webCredentialId: string | null): SubscriptionContext => ({
   generation,
@@ -119,5 +121,29 @@ describe('a press of 订阅／取消订阅 (prototype: no confirmation)', () => 
     expect(press({ operations: [unresolvedAppAdd(context(2, '7', null))] })).toEqual({ kind: 'blocked', reason: '待核对' })
     // Another App collection's unresolved entry does not block this one.
     expect(press({ operations: [unresolvedAppAdd(context(1, '6', null))] }).kind).toBe('write')
+  })
+})
+
+describe('leaving a subscription result page', () => {
+  it('clears the displayed success, keeps unsettled and failed results, and never clears a newer notice', () => {
+    const operation = unresolvedAppAdd(context(2, '7', '3'))
+    const notice = (outcome: WriteNotice['outcome']): WriteNotice => ({
+      write: { kind: 'change', operationId: 'write-1', source: 'app', threadId: '1003', action: 'remove', generation: 2, label: '', stopRequested: false },
+      outcome
+    })
+    const success = notice({ type: 'done', operation: { ...operation, state: 'settled', report: 'success', verification: 'absent-supported' } })
+    expect(clearSuccessfulWriteOnLeave(success, success)).toBeNull()
+    for (const kept of [
+      notice({ type: 'done', operation }),
+      notice({ type: 'done', operation: { ...operation, state: 'settled', report: 'success', reportError: { kind: 'rate-limited', detail: 'http-status' } } }),
+      notice({ type: 'refused', reason: 'result-storage' }),
+      notice({ type: 'refused', reason: 'locked' }),
+      notice({ type: 'failed' })
+    ]) {
+      expect(clearSuccessfulWriteOnLeave(kept, kept)).toBe(kept)
+    }
+    const newer = notice(success.outcome)
+    expect(clearSuccessfulWriteOnLeave(newer, success)).toBe(newer)
+    expect(clearSuccessfulWriteOnLeave(success, null)).toBe(success)
   })
 })

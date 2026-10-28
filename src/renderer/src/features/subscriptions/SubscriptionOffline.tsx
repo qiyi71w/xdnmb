@@ -21,10 +21,13 @@ interface Opened {
  * copy's details are the dialog's; 删除离线副本… asks with the same confirmation as elsewhere. Nothing
  * here changes the subscription, its reminders or 历史. `notice` says what a deletion did.
  */
-export function useSubscriptionOffline(): { open: (opened: Opened) => void; dialogs: ReactNode; notice: ReactNode } {
+export function useSubscriptionOffline(displayed: boolean): { open: (opened: Opened) => void; dialogs: ReactNode; notice: ReactNode } {
   const [details, setDetails] = useState<Opened | null>(null)
   const [deleteAsk, setDeleteAsk] = useState<(Opened & { saving: boolean }) | null>(null)
   const [done, setDone] = useState<{ label: string; cacheCleanup: 'complete' | 'failed' } | null>(null)
+  useLayoutEffect(() => {
+    if (!displayed && done?.cacheCleanup === 'complete') setDone(null)
+  }, [displayed, done])
   /** After a deletion closes both dialogs: focus its row (each value once). */
   const [focusRow, setFocusRow] = useState<{ row: HTMLElement; seq: number } | null>(null)
   useLayoutEffect(() => {

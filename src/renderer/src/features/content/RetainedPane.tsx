@@ -59,6 +59,7 @@ interface RetainedPaneProps {
   tabId: number
   entryKey: number
   kind: 'history' | 'offline'
+  displayed: boolean
   forumNames: ReadonlyMap<ForumId, string>
   /** The thread shown beside the list (split), highlighted. */
   selectedThreadId: ThreadId | null
@@ -68,7 +69,7 @@ interface RetainedPaneProps {
 
 export function RetainedPane(props: RetainedPaneProps) {
   const host = useContext(HistoryPageContext)
-  if (props.kind === 'offline') return <OfflinePane entryKey={props.entryKey} forumNames={props.forumNames} selectedThreadId={props.selectedThreadId} onOpenThread={props.onOpenThread} />
+  if (props.kind === 'offline') return <OfflinePane entryKey={props.entryKey} displayed={props.displayed} forumNames={props.forumNames} selectedThreadId={props.selectedThreadId} onOpenThread={props.onOpenThread} />
   if (host === null) return <BrowsingPane {...props} />
   return <HistoryPage {...props} host={host} />
 }
@@ -125,7 +126,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
         <BrowsingPane
           {...props}
           actionsSlot={actionsSlot}
-          displayed={view === 'browsing'}
+          displayed={props.displayed && view === 'browsing'}
           refreshOverride={view === 'browsing' ? undefined : () => setSentRefresh((value) => value + 1)}
           onViewerOpenChange={setViewerOpen}
         />
@@ -139,7 +140,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
                   <SentPage
                     kind={item.kind}
                     entryKey={props.entryKey}
-                    displayed={view === item.view}
+                    displayed={props.displayed && view === item.view}
                     list={sent.list}
                     readFailed={sent.readFailed}
                     onReload={(quiet) => void sent.load(quiet)}
@@ -161,10 +162,9 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
  * the head: its own, or the 历史 page's (`actionsSlot`) while that page shows 浏览.
  * Middle-click or Ctrl/Cmd+click opens a new tab, as in the thread lists.
  */
-function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, actionsSlot, displayed = true, refreshOverride, onViewerOpenChange }: RetainedPaneProps & {
+function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, actionsSlot, displayed, refreshOverride, onViewerOpenChange }: RetainedPaneProps & {
   /** The 历史 page's head holds the actions; without it this pane shows its own head. */
   actionsSlot?: HTMLElement | null
-  displayed?: boolean
   refreshOverride?: () => void
   /** Inside the history page: told when the image viewer opens or closes, so the page header can be made inert. */
   onViewerOpenChange?: (open: boolean) => void
@@ -174,8 +174,11 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, ac
   const registry = useContext(ContentRegistryContext)
   // Outside the shell (no registry) nothing else clears reading data: a private store never resets.
   const [ownResets] = useState(createReadingResets)
-  const { list, entries, load, confirming, setConfirming, busy, failure, setFailure, done, listRef, bodyRef, ask, clearHistory } =
+  const { list, entries, load, confirming, setConfirming, busy, failure, setFailure, done, setDone, listRef, bodyRef, ask, clearHistory } =
     useRetainedList(registry?.readingResets ?? ownResets)
+  useLayoutEffect(() => {
+    if (!displayed && done !== null) setDone(null)
+  }, [displayed, done, setDone])
   const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(bodyRef), bodyRef)
   useLayoutEffect(() => onViewerOpenChange?.(viewerOpen), [onViewerOpenChange, viewerOpen])
   const openInTab = useOpenThreadInTab()

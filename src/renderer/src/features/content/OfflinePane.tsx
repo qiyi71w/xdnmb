@@ -51,11 +51,13 @@ function CopyStatus({ attention }: { attention: OfflineAttention }) {
 
 export function OfflinePane({
   entryKey,
+  displayed,
   forumNames,
   selectedThreadId,
   onOpenThread
 }: {
   entryKey: number
+  displayed: boolean
   forumNames: ReadonlyMap<ForumId, string>
   /** The thread shown beside the list (split), highlighted. */
   selectedThreadId: ThreadId | null
@@ -74,7 +76,7 @@ export function OfflinePane({
       void load()
     }
   })
-  const onScroll = useRetainedScroll(entryKey, bodyRef, list.status === 'ready', true)
+  const onScroll = useRetainedScroll(entryKey, bodyRef, list.status === 'ready', displayed)
 
   // ---------- Filters ----------
   const [listFilters, changeFilters] = useRetainedFilters('offline')
@@ -125,8 +127,11 @@ export function OfflinePane({
   const listRef = useRef<HTMLUListElement>(null)
   /** The copy being confirmed: its label, whether it was saving, where its row was shown and that row. */
   const [deleteAsk, setDeleteAsk] = useState<{ threadId: ThreadId; label: string; saving: boolean; index: number; row: HTMLElement | null } | null>(null)
-  /** What the last deletion here did, until the next one or a reload. */
+  /** What the last deletion here did, until the next one or a reload; success also ends on leaving. */
   const [done, setDone] = useState<{ label: string; cacheCleanup: 'complete' | 'failed' } | null>(null)
+  useLayoutEffect(() => {
+    if (!displayed && done?.cacheCleanup === 'complete') setDone(null)
+  }, [displayed, done])
   /** After a deletion: focus the row now at this position, else the heading. */
   const [focusAfter, setFocusAfter] = useState<{ index: number; seq: number } | null>(null)
   useLayoutEffect(() => {

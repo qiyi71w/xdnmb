@@ -89,11 +89,13 @@ function elsewhereText(operation: SubscriptionOperation, overview: SubscriptionO
  */
 export function SubscriptionPane({
   entryKey,
+  pageDisplayed,
   forumNames,
   selectedThreadId,
   onOpenThread
 }: {
   entryKey: number
+  pageDisplayed: boolean
   forumNames: ReadonlyMap<ForumId, string>
   selectedThreadId: string | null
   onOpenThread: (thread: ThreadSummary) => void
@@ -450,7 +452,7 @@ export function SubscriptionPane({
   /** Whether a row event comes from its unsettled line (核对订阅), which is not part of the row's menu or link. */
   const fromInline = (event: { target: EventTarget }) => event.target instanceof Element && event.target.closest('.sub-inline') !== null
   const menuThread = rowMenu === null ? undefined : threads.find((thread) => thread.head.id === rowMenu.threadId)
-  const offline = useSubscriptionOffline()
+  const offline = useSubscriptionOffline(pageDisplayed && view === 'list')
   const readInFlight = state.activity === 'first' || state.activity === 'next'
   // Before the early return below: hooks run in the same order on every render.
   const refreshTurn = useRefreshTurn(readInFlight)
@@ -584,8 +586,8 @@ export function SubscriptionPane({
             </div>
           )}
 
-          <ReconcileResult onView={(planId) => setHistory({ planId })} />
-          <WriteStatus placed={placed} />
+          <ReconcileResult displayed={pageDisplayed && view === 'list'} onView={(planId) => setHistory({ planId })} />
+          <WriteStatus displayed={pageDisplayed && view === 'list'} placed={placed} />
 
           <AddForm
             disabled={writeBlocked}
@@ -732,6 +734,7 @@ export function SubscriptionPane({
       {viewer}
       {view === 'reconcile' && (
         <ReconcileView
+          displayed={pageDisplayed}
           headingRef={reconcileHeadingRef}
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}

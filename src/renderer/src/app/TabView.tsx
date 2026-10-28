@@ -107,6 +107,7 @@ export function TabView({
   const pane: Region = entry.kind === 'list' && entry.thread !== null ? entry.pane : 'list'
   const listVisible = !single || pane === 'list'
   const readerVisible = !single || pane === 'reader'
+  const displayed = active && !composeHidden
 
   // Switching the single pane (or entering it) must not strand keyboard focus in the hidden pane.
   useLayoutEffect(() => {
@@ -140,7 +141,7 @@ export function TabView({
           key={`${entry.thread.readerKey ?? entry.key}:${entry.thread.threadId}`}
           entryKey={entry.key}
           open={entry.thread}
-          displayed={active}
+          displayed={displayed}
           forumName={forumName}
           onBackToList={null}
           compose={composeEntry(tab.id, target, READER_ENTRY)}
@@ -154,7 +155,7 @@ export function TabView({
         key={entry.key}
         tabId={tab.id}
         entryKey={entry.key}
-        displayed={active}
+        displayed={displayed}
         directory={directory.directory}
         onOpen={onOpenFromOnlineSearch}
       />
@@ -174,6 +175,7 @@ export function TabView({
           tabId={tab.id}
           entryKey={entry.key}
           kind={feed.kind}
+          displayed={displayed && listVisible}
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}
           onOpenThread={(threadId, head) => onSelectThread(tab.id, threadId, head)}
@@ -195,6 +197,7 @@ export function TabView({
         <SubscriptionPane
           key={`${entry.key}:subscriptions`}
           entryKey={entry.key}
+          pageDisplayed={displayed && listVisible}
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}
           onOpenThread={(summary) => onSelectThread(tab.id, summary.head.id, summary.head)}
@@ -254,7 +257,7 @@ export function TabView({
               key={`${entry.thread.readerKey ?? entry.key}:${entry.thread.threadId}`}
               entryKey={entry.key}
               open={entry.thread}
-              displayed={active && readerVisible}
+              displayed={displayed && readerVisible}
               forumName={forumName}
               onBackToList={single ? () => onShowPane(tab.id, 'list') : null}
               compose={composeEntry(tab.id, { kind: 'reply', threadId: entry.thread.threadId }, READER_ENTRY)}

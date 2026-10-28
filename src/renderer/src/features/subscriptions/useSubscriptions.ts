@@ -23,6 +23,7 @@ import {
   type ReconcileMode,
   type ReconcileTask
 } from './reconcileState'
+import { clearSuccessfulWriteOnLeave } from './subscriptionListState'
 
 /** Local history is re-read this often while a plan runs in this window; never any remote call. */
 const PLAN_POLL_MS = 1000
@@ -79,6 +80,7 @@ export interface SubscriptionsState {
   active: ActiveWrite | null
   lastWrite: WriteNotice | null
   dismissLastWrite: () => void
+  clearSuccessfulWrite: (displayed: WriteNotice | null) => void
   change: (request: ChangeRequest) => Promise<void>
   reconcile: (operation: SubscriptionOperation) => Promise<void>
   /** Cancels the readback / 核对 reads of the active write; the write request itself is not withdrawn. */
@@ -101,6 +103,7 @@ export interface SubscriptionsState {
   stopTask: () => void
   /** Drops a preview (a running preview read is cancelled), a failed preview or a finished result. A running plan stays. */
   dismissTask: () => void
+  clearSuccessfulTask: (displayed: ReconcileTask) => void
   /** Asks a subscription pane to show the 同步与合并 view (an entry outside the pane started a preview). */
   revealSeq: number
   requestReveal: () => void
@@ -128,6 +131,9 @@ export function useSubscriptions(): SubscriptionsState {
   const [operationsFailed, setOperationsFailed] = useState(false)
   const [active, setActive] = useState<ActiveWrite | null>(null)
   const [lastWrite, setLastWrite] = useState<WriteNotice | null>(null)
+  const clearSuccessfulWrite = useCallback((displayed: WriteNotice | null) => {
+    setLastWrite((current) => clearSuccessfulWriteOnLeave(current, displayed))
+  }, [])
   const latestOverview = useRef(0)
   const latestOperations = useRef(0)
   const alive = useRef(true)
@@ -409,6 +415,10 @@ export function useSubscriptions(): SubscriptionsState {
     setTask(null)
   }, [setTask])
 
+  const clearSuccessfulTask = useCallback((displayed: ReconcileTask) => {
+    if (taskRef.current === displayed) setTask(null)
+  }, [setTask])
+
   const [revealSeq, setRevealSeq] = useState(0)
   const claimedReveal = useRef(0)
   const requestReveal = useCallback(() => setRevealSeq((seq) => seq + 1), [])
@@ -429,6 +439,7 @@ export function useSubscriptions(): SubscriptionsState {
     active,
     lastWrite,
     dismissLastWrite,
+    clearSuccessfulWrite,
     change,
     reconcile,
     stopReadback,
@@ -439,6 +450,7 @@ export function useSubscriptions(): SubscriptionsState {
     execute,
     stopTask,
     dismissTask,
+    clearSuccessfulTask,
     revealSeq,
     requestReveal,
     claimReveal,
