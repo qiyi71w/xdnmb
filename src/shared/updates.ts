@@ -63,9 +63,17 @@ export interface ReleaseInfo {
  * - `source`: no usable release metadata for this system, or a request left the allowed addresses;
  * - `integrity`: the downloaded file does not match the release's checksum (it is discarded);
  * - `storage`: the package could not be written or read locally (disk full, permission);
- * - `install`: the installer / DMG could not be started or opened.
+ * - `install`: the installer / DMG could not be started or opened;
+ * - `incomplete`: the installer ran but the version did not change (for example administrator
+ *   approval for an installation for all users was refused).
  */
-export type UpdateFailure = 'network' | 'source' | 'integrity' | 'storage' | 'install'
+export type UpdateFailure = 'network' | 'source' | 'integrity' | 'storage' | 'install' | 'incomplete'
+
+/** An installation that did not happen: before this launch (`start`), or when the app last quit (`exit`). */
+export interface InstallFailure {
+  when: 'start' | 'exit'
+  failure: UpdateFailure
+}
 
 export type UpdateDownload =
   /** Not downloaded. `failure`: the last attempt failed; `cancelled`: the user cancelled the last attempt. */
@@ -99,8 +107,8 @@ export interface UpdateState {
   release: { info: ReleaseInfo; download: UpdateDownload } | null
   /** Windows: the ready package will be installed when the user quits (setting on, package ready). */
   installOnQuit: boolean
-  /** Why the one-shot installation before this launch failed; independent of later update checks. */
-  startupFailure: UpdateFailure | null
+  /** Why the last installation attempt did not install; independent of later update checks. */
+  lastInstallFailure: InstallFailure | null
   /**
    * A one-time in-app notice owed for `release`: `available` when a version is found for the first
    * time, `ready` after verification or at launch with a waiting package. Each kind is acknowledged separately.

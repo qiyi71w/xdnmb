@@ -1,4 +1,4 @@
-# Installers: Windows x64 NSIS (current user) and macOS x64 / arm64 DMG, using prebuilt Electron.
+# Installers: Windows x64 NSIS (assisted: for me or for all users) and macOS x64 / arm64 DMG, using prebuilt Electron.
 # The identity below is permanent: it keeps the data directory, the Windows install/uninstall entry,
 # taskbar and notification identity, and the macOS bundle identifier stable across versions.
 appId: io.github.qiyi71w.xidao
@@ -31,9 +31,21 @@ win:
   signAndEditExecutable: true
   verifyUpdateCodeSignature: false
 nsis:
-  oneClick: true
+  # Assisted installer: mode (only for me by default, or all users with administrator approval),
+  # location, the desktop shortcut option and a finish page; an existing installation keeps its
+  # mode. In-app updates (`--updated`) skip every page. See resources/installer.nsh.
+  oneClick: false
   perMachine: false
-  allowElevation: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  include: resources/installer.nsh
+  # A single installer language (no language selector); electron-builder needs the multi-language
+  # path to use any language other than en_US.
+  installerLanguages: [zh_CN]
+  language: '2052'
+  # The start menu shortcut is always created; the desktop one follows the installer option.
+  createStartMenuShortcut: true
+  createDesktopShortcut: true
   # Uninstalling keeps the data directory; updates never touch it.
   deleteAppDataOnUninstall: false
   # The client always downloads whole installers.

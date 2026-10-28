@@ -1,6 +1,6 @@
 import type { AppSettings } from '../../shared/settings'
 import {
-  UPDATE_CHECK_INTERVAL_MS, type InstallResult, type ReleaseInfo, type UpdateCheckResult, type UpdateDownload,
+  UPDATE_CHECK_INTERVAL_MS, type InstallFailure, type InstallResult, type ReleaseInfo, type UpdateCheckResult, type UpdateDownload,
   type UpdateFailure, type UpdatePlatform, type UpdateState, type UpdateUnavailable
 } from '../../shared/updates'
 import type { UpdateEngine } from './engine'
@@ -21,6 +21,13 @@ export interface UpdateRecordStore {
   save(record: UpdateRecord): Promise<void>
 }
 
+/** Written just before an installer starts at exit, so the next start can tell whether it installed. */
+export interface InstallMarkerStore {
+  save(target: string): void
+  /** Removes the marker before returning its version. Throws if it cannot be read or removed. */
+  take(): string | null
+}
+
 export type UpdateSettings = Pick<AppSettings, 'updateAutoCheck' | 'updateAutoInstall' | 'updateAutoDownload' | 'updateNetwork'>
 
 export interface UpdateServiceDeps {
@@ -31,12 +38,13 @@ export interface UpdateServiceDeps {
   engine: UpdateEngine | null
   records: UpdateRecordStore
   pendingInstall: PendingInstallStore
-  startupFailure: UpdateFailure | null
+  installMarker: InstallMarkerStore
+  lastInstallFailure: InstallFailure | null
   /** SHA-512 (base64) of a file; null when it cannot be read. */
   sha512(path: string): Promise<string | null>
   /** Best effort; a missing file is fine. */
   remove(path: string): Promise<void>
-  /** Starts the Windows installer (silent; `restart` reopens the app afterwards). Rejects if it cannot start. */
+  /** Starts the Windows installer at exit (silent; `restart` reopens the app afterwards). Rejects if it cannot start. */
   runInstaller(path: string, restart: boolean): Promise<void>
   /** Opens the macOS DMG. Rejects if it cannot be opened. */
   openPackage(path: string): Promise<void>
@@ -91,7 +99,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
   let downloading: AbortController | null = null
   /** Versions whose download the user cancelled: not restarted automatically in this run. */
   const cancelled = new Set<string>()
-  let armed: { path: string; restart: boolean } | null = null
+  let armed: { path: string; restart: boolean; version: string } | null = null
   /** The operating system is ending the session: no installer starts in this process any more. */
   let sessionEnded = false
   /** The version the engine's last successful check offered; it can only download that one. */
@@ -106,7 +114,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       lastCheck,
       release: release === null ? null : { info: release.info, download: release.download },
       installOnQuit: deps.platform === 'windows' && settings?.updateAutoInstall === true && release?.download.status === 'ready',
-      startupFailure: deps.startupFailure,
+      lastInstallFailure: deps.lastInstallFailure,
       notice
     }
   }
@@ -337,7 +345,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       const allowed = reason === 'install' || (reason === 'quit' && settings?.updateAutoInstall === true)
       if (deps.platform !== 'windows' || sessionEnded || !allowed || release?.download.status !== 'ready') return
       const confirmed = await confirmedPackage()
-      if (confirmed.ok && !sessionEnded) armed = { path: confirmed.path, restart: reason === 'install' }
+      if (confirmed.ok && !sessionEnded && release !== null) armed = { path: confirmed.path, restart: reason === 'install', version: release.info.version }
     },
 
     async launchInstaller() {
@@ -345,9 +353,15 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       armed = null
       if (pending === null || sessionEnded) return
       try {
+        deps.installMarker.save(pending.version)
+      } catch {
+        // Without the marker the next start cannot report a failed installation; installing still goes ahead.
+        console.error('[updates] install marker not saved')
+      }
+      try {
         await deps.runInstaller(pending.path, pending.restart)
       } catch {
-        // The package stays; the next start shows it ready again and the running version is unchanged.
+        // The package stays; the next start reports it (marker) and shows it ready again.
         console.error('[updates] installer did not start')
       }
     },

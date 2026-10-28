@@ -5,7 +5,7 @@ import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { UPDATE_REPOSITORY_URL, type NoteBlock, type NoteInline, type ReleaseInfo } from '../../shared/updates'
 import { isStableVersion } from './release'
-import type { UpdateRecord, UpdateRecordStore } from './service'
+import type { InstallMarkerStore, UpdateRecord, UpdateRecordStore } from './service'
 import type { PendingInstallStore, ReadyPackage } from './startup'
 
 /** SHA-512 (base64) of a file, or null when it cannot be read. */
@@ -120,23 +120,65 @@ export function createPendingInstallStore(path: string): PendingInstallStore {
   }
 }
 
+/** The version an installer started at exit was to install; taken once at the next start. */
+export function createInstallMarkerStore(path: string): InstallMarkerStore {
+  return {
+    save(target) {
+      const temporary = `${path}.tmp`
+      writeFileSync(temporary, JSON.stringify({ version: 1, target }), { encoding: 'utf8', flush: true })
+      renameSync(temporary, path)
+    },
+    take(): string | null {
+      let text: string
+      try {
+        text = readFileSync(path, 'utf8')
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+        throw error
+      }
+      unlinkSync(path)
+      try {
+        const value: unknown = JSON.parse(text)
+        return isRecordObject(value) && typeof value.target === 'string' && isStableVersion(value.target) ? value.target : null
+      } catch {
+        return null
+      }
+    }
+  }
+}
+
 export async function removeFile(path: string): Promise<void> {
   await rm(path, { force: true }).catch(() => undefined)
 }
 
 /**
- * Starts the downloaded NSIS installer the way electron-updater's NSIS updater does: `--updated`
- * (an update of the installed app: data kept, the running app is closed if still there). Normal exit
- * uses `/S`; startup uses visible native progress. `--force-run` opens the new version afterwards.
- * Resolves once the process has started; rejects when it cannot start.
+ * Starts the downloaded NSIS installer at exit the way electron-updater's NSIS updater does:
+ * `--updated` (an update of the installed app: its installation mode, location and shortcuts are
+ * kept, no page is shown) and `/S`. `--force-run` opens the new version afterwards. An installation
+ * for all users asks Windows for administrator approval first. Resolves once the process has
+ * started; rejects when it cannot start.
  */
-export function runWindowsInstaller(path: string, restart: boolean, visible = false): Promise<void> {
+export function runWindowsInstaller(path: string, restart: boolean): Promise<void> {
   const { promise, resolve, reject } = Promise.withResolvers<void>()
-  const child = spawn(path, ['--updated', ...(visible ? [] : ['/S']), ...(restart ? ['--force-run'] : [])], { detached: true, stdio: 'ignore' })
+  const child = spawn(path, ['--updated', '/S', ...(restart ? ['--force-run'] : [])], { detached: true, stdio: 'ignore' })
   child.once('error', reject)
   child.once('spawn', () => {
     child.unref()
     resolve()
   })
+  return promise
+}
+
+/**
+ * The installation before storage and windows open: visible NSIS progress, then `--force-run` opens
+ * the installed version. Once installing begins the installer closes this process, so resolving
+ * means it ended without installing (for example administrator approval was refused). Rejects when
+ * it cannot start.
+ */
+export function runWindowsInstallerAndWait(path: string): Promise<void> {
+  const { promise, resolve, reject } = Promise.withResolvers<void>()
+  const child = spawn(path, ['--updated', '--force-run'], { detached: true, stdio: 'ignore' })
+  child.once('error', reject)
+  child.once('exit', () => resolve())
   return promise
 }

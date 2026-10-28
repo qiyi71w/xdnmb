@@ -26,7 +26,7 @@ import {
   checkFailedText,
   downloadFailedText,
   packageActionLabel,
-  startupFailedText,
+  installFailedText,
   UNAVAILABLE_NEXT,
   UNAVAILABLE_TEXT
 } from './updateText'
@@ -122,11 +122,11 @@ function UpdateArea({ settings, write }: { settings: AppSettings; write: Write }
       <div className="about-check">
         <div className="about-check-status" id={statusId} role="status">
           <CheckStatus state={state} failed={failed} checking={checkRequested} />
-          {state !== null && state.startupFailure !== null && (
+          {state !== null && state.lastInstallFailure !== null && (
             <p className="notice-inline is-warning about-status-line">
               <Icon name="alert" size={14} />
               <span>
-                {startupFailedText(state.startupFailure, state.platform)}
+                {installFailedText(state.lastInstallFailure, state.platform)}
                 <KaomojiDecor state="failure" />
               </span>
             </p>

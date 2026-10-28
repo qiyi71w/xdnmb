@@ -36,9 +36,9 @@ import appIconPng from '../../resources/icons/xidao-icon-512.png?asset'
 import appIconIco from '../../resources/icons/xidao-icon.ico?asset'
 import { UPDATE_STATE_CHANNEL } from '../shared/updates'
 import { createUpdateEngine, updateAvailability } from './updates/engine'
-import { createPendingInstallStore, createRecordStore, removeFile, runWindowsInstaller, sha512OfFile } from './updates/files'
+import { createInstallMarkerStore, createPendingInstallStore, createRecordStore, removeFile, runWindowsInstaller, runWindowsInstallerAndWait, sha512OfFile } from './updates/files'
 import { createUpdateService, type UpdateService } from './updates/service'
-import { installPendingUpdate } from './updates/startup'
+import { exitInstallFailure, installPendingUpdate } from './updates/startup'
 import { REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
 import { createReminderService } from './reminders/service'
 import { createReminderNotifier } from './reminders/notifier'
@@ -258,18 +258,19 @@ async function start(): Promise<void> {
   }
   const availability = updateAvailability()
   const pendingInstall = createPendingInstallStore(join(app.getPath('userData'), 'update-on-start.json'))
-  const startup = availability.platform === 'windows' && availability.unavailable === null
+  const installMarker = createInstallMarkerStore(join(app.getPath('userData'), 'update-launched.json'))
+  const updatable = availability.platform === 'windows' && availability.unavailable === null
+  const exitFailure = updatable ? exitInstallFailure(installMarker, app.getVersion()) : null
+  // Installing closes this process; it only gets past this point running the current version.
+  const startup = updatable
     ? await installPendingUpdate({
         currentVersion: app.getVersion(), pending: pendingInstall,
         sha512: sha512OfFile, remove: removeFile,
         sessionEnding: () => sessionEnding,
-        runInstaller: (path) => runWindowsInstaller(path, true, true)
+        runInstaller: runWindowsInstallerAndWait
       })
-    : { started: false, failure: null }
-  if (startup.started) {
-    app.quit()
-    return
-  }
+    : { failure: null }
+  const lastInstallFailure = startup.failure !== null ? { when: 'start' as const, failure: startup.failure } : exitFailure
   // Only the app's own main frame may list installed fonts (asked for when the user picks a font);
   // every other permission and every other page is denied.
   const denyAll = session.defaultSession
@@ -433,7 +434,8 @@ async function start(): Promise<void> {
     engine: availability.unavailable === null && availability.target !== null ? createUpdateEngine(availability.target) : null,
     records: createRecordStore(join(app.getPath('userData'), 'update-state.json')),
     pendingInstall,
-    startupFailure: startup.failure,
+    installMarker,
+    lastInstallFailure,
     sha512: sha512OfFile,
     remove: removeFile,
     runInstaller: runWindowsInstaller,
