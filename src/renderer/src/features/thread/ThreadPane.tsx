@@ -28,7 +28,7 @@ export function ThreadPane({
   compose
 }: {
   entryKey: number
-  /** Thread, target and snapshot of the entry; read once when the pane mounts. */
+  /** Thread opening; a confirmed send can advance the history entry without replacing this pane. */
   open: ThreadOpen
   displayed: boolean
   forumName: (forumId: string | null) => string | null
@@ -73,6 +73,17 @@ export function ThreadPane({
       mounted.current = false
     }
   }, [threadId, resets])
+
+  const shownEntry = useRef(entryKey)
+  useEffect(() => {
+    if (shownEntry.current === entryKey) return
+    shownEntry.current = entryKey
+    openRef.current = open
+    setView((current) => current === null ? current : {
+      ...current,
+      ...decideView(open, readingState, current.generation)
+    })
+  }, [entryKey, open, readingState])
 
   // Browsing history: once per thread opened in a visible reader. Not a navigation step.
   useEffect(() => {
@@ -187,7 +198,7 @@ export function ThreadPane({
 
   return (
     <ThreadReader
-      key={`${view.start.mode}:${view.seq}`}
+      key={view.seq}
       entryKey={entryKey}
       threadId={threadId}
       mode={view.start.mode}

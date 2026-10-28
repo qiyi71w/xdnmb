@@ -44,6 +44,8 @@ export interface ThreadSnapshot {
 
 export interface ThreadOpen {
   threadId: ThreadId
+  /** Runtime mount identity carried only by an in-place confirmed-send navigation. */
+  readerKey?: number
   /** Main post already known from the list, shown until page 1 arrives. */
   head: Post | null
   target: ThreadTarget | null

@@ -72,6 +72,8 @@ export type ThreadAction =
   | { type: 'page-cap'; highestReadablePage: number }
   | { type: 'cap-loaded'; highestReadablePage: number; page: ThreadPage; coverage: ThreadCoverage; source: Source }
   | { type: 'cancelled' }
+  /** Restore the loaded range retained for a send's temporary reading mode. */
+  | { type: 'restore-mode'; state: ThreadState }
 
 export function initialThreadState(head: Post | null): ThreadState {
   return { head, pages: [], coverage: null, task: null, error: null, endProbe: null, pageCap: null, rangeVersion: 0 }
@@ -139,6 +141,8 @@ function placePage(pages: LoadedPage[], task: Exclude<ThreadTask, { type: 'locat
 
 export function threadReducer(state: ThreadState, action: ThreadAction): ThreadState {
   switch (action.type) {
+    case 'restore-mode':
+      return { ...action.state, task: null, rangeVersion: state.rangeVersion + 1 }
     case 'start':
       return {
         ...state,

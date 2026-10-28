@@ -678,7 +678,8 @@ export function App() {
             if (memory !== undefined && nextKey !== undefined) registry.listMemory.set(nextKey, memory)
           }
           const target = { postId: location.target.postId, page: location.target.page, mode: location.target.mode }
-          const thread: ThreadOpen = { threadId: location.threadId, head: location.head, target, snapshot: null, unlocatedPostId: null }
+          const readerKey = entry.kind === 'online-search' ? entry.key : (entry.thread?.readerKey ?? entry.key)
+          const thread: ThreadOpen = { threadId: location.threadId, head: location.head, target, snapshot: null, unlocatedPostId: null, readerKey }
           dispatch({ type: 'quote-navigate', tabId: tab.id, entryKey: entry.key, source, thread })
         },
         // A new step either way; the list was refreshed first, so it lists the new thread beside it
