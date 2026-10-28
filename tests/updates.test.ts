@@ -146,8 +146,9 @@ describe('software updates', () => {
     engine.holdDownloads()
     const { instance } = service(engine)
     const started = instance.start(settings({ updateAutoInstall: true }))
-    await settle()
-    await settle()
+    // Until the held download has reported its first bytes (startup reads files first).
+    const reported = () => { const download = instance.state().release?.download; return download?.status === 'downloading' && download.transferred > 0 }
+    for (let turn = 0; turn < 1000 && !reported(); turn++) await settle()
     expect(instance.state().release?.download).toMatchObject({ status: 'downloading', transferred: 5 })
     instance.cancelDownload()
     await started
