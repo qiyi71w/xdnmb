@@ -171,8 +171,18 @@ async function quit(app, label) {
   await exited
   return result
 }
+/** Animation frames in one second (Playwright's visibility waits poll on them). */
+const frameRate = (page) => page.evaluate(() => new Promise((resolve) => {
+  let count = 0
+  const tick = () => { count++; requestAnimationFrame(tick) }
+  requestAnimationFrame(tick)
+  setTimeout(() => resolve(count), 1000)
+}))
 async function openAbout(page) {
   if (!(await page.locator('#shell-set-about').count())) await page.keyboard.press('Meta+,')
+  log('frames before settings', { rafPerSecond: await frameRate(page) })
+  await page.waitForSelector('#shell-set-about', { state: 'attached', timeout: 20_000 })
+  log('frames with settings', { rafPerSecond: await frameRate(page) })
   await page.waitForSelector('#shell-set-about', { timeout: 20_000 })
   await page.evaluate(() => document.getElementById('shell-set-about')?.scrollIntoView())
   await sleep(300)
@@ -226,6 +236,18 @@ async function checkNoticeFocus(app, page) {
     try {
       await notice.getByRole('button', { name: '知道了', exact: true }).waitFor({ timeout: 10_000 })
     } catch (error) {
+      const frames = await page.evaluate(() => new Promise((resolve) => {
+        let count = 0
+        const start = performance.now()
+        const tick = () => { count++; requestAnimationFrame(tick) }
+        requestAnimationFrame(tick)
+        setTimeout(() => resolve({ rafPerSecond: count, elapsed: Math.round(performance.now() - start), hasFocus: document.hasFocus() }), 1000)
+      }))
+      const metrics = await app.evaluate(({ app, BrowserWindow }) => ({
+        cpu: app.getAppMetrics().map((metric) => `${metric.type}:${metric.cpu.percentCPUUsage.toFixed(1)}`),
+        window: (() => { const window = BrowserWindow.getAllWindows()[0]; return { visible: window.isVisible(), focused: window.isFocused(), minimized: window.isMinimized(), bounds: window.getBounds(), occluded: typeof window.isOccluded === 'function' ? window.isOccluded() : null } })()
+      }))
+      log('notice setup frames', { frames, metrics })
       log('notice transition setup failed', await page.evaluate(() => {
         const button = [...document.querySelectorAll('.bottom-notice button')].find((element) => element.textContent?.trim() === '知道了')
         const chain = []
