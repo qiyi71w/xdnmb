@@ -15,7 +15,12 @@ const ROOT = process.cwd()
 const DIST = join(ROOT, 'dist')
 const NEXT = join(ROOT, 'dist-next')
 const RESULTS = join(ROOT, 'mac-smoke')
-const APP_NAME = '汐岛.app'
+/** The one `.app` bundle in `dir` (its file name is whatever the build and the file system produced). */
+function appIn(dir) {
+  const apps = readdirSync(dir).filter((name) => name.endsWith('.app'))
+  if (apps.length !== 1) throw new Error(`expected one app in ${dir}: ${JSON.stringify(readdirSync(dir))}`)
+  return join(dir, apps[0])
+}
 const BUNDLE_ID = 'io.github.qiyi71w.xidao'
 mkdirSync(RESULTS, { recursive: true })
 
@@ -70,7 +75,8 @@ function inspect() {
     check(`${arch} dmg exists`, existsSync(path), { dmg })
     if (!existsSync(path)) continue
     check(`${arch} dmg checksum bound by latest-mac.yml`, entry?.sha512 === sha512(path) && entry?.size === readFileSync(path).length, { entry })
-    const app = join(DIST, arch === 'x64' ? 'mac' : 'mac-arm64', APP_NAME)
+    const app = appIn(join(DIST, arch === 'x64' ? 'mac' : 'mac-arm64'))
+    log(`${arch} app bundle`, { app, name: plist(app, 'CFBundleName'), executable: plist(app, 'CFBundleExecutable') })
     const archs = run('/usr/bin/lipo', ['-archs', executableOf(app)]).trim()
     check(`${arch} executable architecture`, archs === (arch === 'x64' ? 'x86_64' : 'arm64'), { archs })
     const sqlite = join(app, `Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/prebuilds/darwin-${arch}.node`)
@@ -121,7 +127,7 @@ async function openAbout(page) {
 const aboutText = (page) => page.locator('#shell-set-about').innerText()
 
 async function x64() {
-  const app = join(DIST, 'mac', APP_NAME)
+  const app = appIn(join(DIST, 'mac'))
   const data = mkdtempSync(join(tmpdir(), 'xidao-x64-'))
   const { app: running, page } = await launch(executableOf(app), [`--user-data-dir=${data}`])
   const arch = await running.evaluate(() => process.arch)
@@ -147,7 +153,9 @@ async function serveNextRelease(app, next) {
       const base = '/qiyi71w/xdnmb/releases'
       if (url.host === 'github.com' && url.pathname === `${base}.atom`) return new Response(fake.feed, { headers: { 'content-type': 'application/atom+xml' } })
       if (url.host === 'github.com' && url.pathname === `${base}/latest`) return new Response(JSON.stringify({ tag_name: `v${fake.next}` }), { headers: { 'content-type': 'application/json' } })
-      if (url.host === 'github.com' && url.pathname === `${base}/download/v${fake.next}/latest-mac.yml`) return new Response(fs.readFileSync(fake.yml))
+      if (url.host === 'github.com' && url.pathname === `${base}/download/v${fake.next}/latest-mac.yml`) {
+        return fake.mode === 'no-metadata' ? new Response('not found', { status: 404 }) : new Response(fs.readFileSync(fake.yml))
+      }
       if (url.host === 'github.com' && url.pathname === `${base}/download/v${fake.next}/${fake.file}`) {
         return new Response(null, { status: 302, headers: { location: `https://release-assets.githubusercontent.com/asset/${fake.file}` } })
       }
@@ -166,20 +174,28 @@ async function serveNextRelease(app, next) {
 
 async function update() {
   const next = metadataVersion(join(NEXT, 'latest-mac.yml'))
-  const installed = join('/Applications', APP_NAME)
-  rmSync(installed, { recursive: true, force: true })
   const mount = attach(join(DIST, `xidao-${version}-mac-arm64.dmg`))
-  run('/usr/bin/ditto', [join(mount, APP_NAME), installed])
+  const bundle = appIn(mount)
+  const installed = join('/Applications', bundle.slice(mount.length + 1))
+  rmSync(installed, { recursive: true, force: true })
+  run('/usr/bin/ditto', [bundle, installed])
   detach(mount)
   check('installed current version', plist(installed, 'CFBundleShortVersionString') === version)
 
   let { app, page } = await launch(executableOf(installed))
   await openAbout(page)
   const cold = await waitFor(page, (state) => !state.checking && state.lastCheck !== null, 'cold start check')
-  // The real source has no published release yet: a failure, never "up to date".
-  check('cold start check against the real source', cold.platform === 'mac' && cold.unavailable === null && cold.lastCheck.outcome !== 'up-to-date', { lastCheck: cold.lastCheck })
+  // The live source's answer depends on what is published; only that the check ran is required here.
+  check('cold start check ran', cold.platform === 'mac' && cold.unavailable === null, { lastCheck: cold.lastCheck })
 
   await serveNextRelease(app, next)
+  await app.evaluate(() => { globalThis.__fake.mode = 'no-metadata' })
+  const before = cold.lastCheck.at
+  await page.getByRole('button', { name: '检查更新' }).click()
+  const missing = await waitFor(page, (state) => !state.checking && state.lastCheck?.at !== before, 'check without metadata')
+  check('a release without usable metadata is a failed check, never up to date', missing.lastCheck.outcome === 'failed' && !(await aboutText(page)).includes('已是最新版本'), { lastCheck: missing.lastCheck })
+
+  await app.evaluate(() => { globalThis.__fake.mode = 'normal' })
   await page.getByRole('button', { name: '检查更新' }).click()
   const found = await waitFor(page, (state) => !state.checking && state.release !== null, 'found next')
   await sleep(3000)
@@ -214,7 +230,7 @@ async function update() {
   // What the user does: drag the new app over the old one.
   if (opened.length > 0) {
     rmSync(installed, { recursive: true, force: true })
-    run('/usr/bin/ditto', [join(opened[0], APP_NAME), installed])
+    run('/usr/bin/ditto', [appIn(opened[0]), installed])
     for (const point of opened) detach(point)
   }
   ;({ app, page } = await launch(executableOf(installed)))

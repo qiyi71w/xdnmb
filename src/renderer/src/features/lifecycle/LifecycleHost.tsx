@@ -210,7 +210,8 @@ export function LifecycleHost({
         setQuestion({ kind: 'save-failed', saving: true })
       }
       setQuestion(null)
-      completed = await window.xidao.lifecycle.completeQuit().then(
+      // Quitting although drafts were not saved never installs an update at this exit.
+      completed = await window.xidao.lifecycle.completeQuit({ draftsSaved: failures.size === 0 }).then(
         () => true,
         () => false
       )

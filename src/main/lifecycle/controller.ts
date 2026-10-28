@@ -38,8 +38,12 @@ export interface MainWindowHost {
  */
 export type QuitPurpose = 'quit' | 'install'
 
-/** Why the process ends: the quit's purpose, or `session-end` once the system is ending the session. */
-export type ExitReason = QuitPurpose | 'session-end'
+/**
+ * Why the process ends: the quit's purpose; `drafts-lost` when the user quit although drafts could not
+ * be saved; `session-end` once the system is ending the session. Only `install`, and `quit` with
+ * automatic installation on, may install an update.
+ */
+export type ExitReason = QuitPurpose | 'drafts-lost' | 'session-end'
 
 /** Sends that ended failed or unknown while finishing without a window. */
 export interface FinishingSummary {
@@ -76,7 +80,8 @@ export interface Lifecycle {
   requestQuit(purpose?: QuitPurpose): void
   presentQuit(): void
   cancelQuit(): void
-  completeQuit(): void
+  /** The renderer handled the editors and saved the workspace; `draftsSaved: false` after 仍退出. */
+  completeQuit(draftsSaved: boolean): void
   /** Explicit opening from the tray, the Dock or a second instance. */
   reopen(): void
   /** Notification clicks reveal/create a window without starting another check. */
@@ -96,6 +101,8 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
   let opening = false
   let openingTask: Promise<void> | null = null
   let purpose: QuitPurpose = 'quit'
+  /** The running quit continues although some drafts were not saved. */
+  let draftsLost = false
   let sessionEnding = false
 
   /** `trigger`: an explicit opening to report; `null` when the app brings its window back itself. */
@@ -159,7 +166,7 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       }
     }
     phase = 'exiting'
-    deps.exit(sessionEnding ? 'session-end' : purpose)
+    deps.exit(sessionEnding ? 'session-end' : draftsLost ? 'drafts-lost' : purpose)
   }
 
   function requestQuit(requested: QuitPurpose = 'quit'): void {
@@ -171,6 +178,7 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
     if (phase !== 'running') return
     phase = 'quitting'
     purpose = requested
+    draftsLost = false
     if (window.state() === 'none') void finish()
     else window.send({ kind: 'quit' })
   }
@@ -223,8 +231,10 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       }
     },
 
-    completeQuit() {
-      if (phase === 'quitting') void finish()
+    completeQuit(draftsSaved) {
+      if (phase !== 'quitting') return
+      draftsLost = !draftsSaved
+      void finish()
     },
 
     reopen() {

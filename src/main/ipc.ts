@@ -840,7 +840,11 @@ export function registerIpc({
   handle(IpcChannel.lifecycleRequestQuit, async () => lifecycle.requestQuit('quit'))
   handle(IpcChannel.lifecyclePresentQuit, async () => lifecycle.presentQuit())
   handle(IpcChannel.lifecycleCancelQuit, async () => lifecycle.cancelQuit())
-  handle(IpcChannel.lifecycleCompleteQuit, async () => lifecycle.completeQuit())
+  handle(IpcChannel.lifecycleCompleteQuit, async (_event, raw) => {
+    const draftsSaved = record(raw).draftsSaved
+    if (typeof draftsSaved !== 'boolean') throw new InvalidRequestError()
+    lifecycle.completeQuit(draftsSaved)
+  })
   handle(IpcChannel.loadWorkspace, async () => {
     try {
       return { ok: true, workspace: await store.loadWorkspace() }

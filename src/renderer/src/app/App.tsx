@@ -41,7 +41,7 @@ import { clearThreadReminders, RemindersContext, useReminderOverview } from '../
 import { RateLimitNotice } from '../features/reminders/RateLimitNotice'
 import { SendFailureNotices } from '../features/publication/SendFailureNotices'
 import { UpdateNotice } from '../features/updates/UpdateNotice'
-import { UpdatesContext, useUpdatesSource } from '../features/updates/updatesState'
+import { hasNewVersion, UpdatesContext, useUpdatesSource } from '../features/updates/updatesState'
 import { BottomNoticeStack } from '../components/BottomNotice'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { QuoteCard } from '../features/quote/QuoteCard'
@@ -446,8 +446,11 @@ export function App() {
     },
     [closeNav, clearSettingsStatus]
   )
-  /** Settings at the top: Ctrl/Cmd+, and the general 设置 buttons. */
+  /** Settings at the top: Ctrl/Cmd+,. */
   const openSettingsTop = useCallback(() => openSettings(), [openSettings])
+  /** The 设置 buttons: while they carry the new-version mark they lead to the update content in 关于. */
+  const newVersion = hasNewVersion(updates.state)
+  const openSettingsButton = useCallback(() => openSettings(newVersion ? 'about' : undefined), [openSettings, newVersion])
 
   /** Leaves settings; `returnFocus` (Esc, 返回) sends focus back where it came from. */
   const endSettings = useCallback(
@@ -1344,7 +1347,7 @@ export function App() {
       onRetry: directory.retry,
       features,
       settingsCurrent: settingsShown,
-      onOpenSettings: openSettingsTop
+      onOpenSettings: openSettingsButton
     }
     const props: NavProps =
       placement === 'inline'
@@ -1414,7 +1417,7 @@ export function App() {
                         onActivate={activate}
                         onClose={closeTab}
                         onNewTab={newTab}
-                        settingsTrigger={navOverlay ? { ref: settingsButtonRef, onOpen: openSettingsTop } : null}
+                        settingsTrigger={navOverlay ? { ref: settingsButtonRef, onOpen: openSettingsButton } : null}
                       />
                     )}
                     <div className="tab-host" hidden={settingsShown ? true : undefined}>

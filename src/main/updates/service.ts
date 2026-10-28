@@ -60,12 +60,13 @@ export interface UpdateService {
   resume(): void
   /**
    * The process is about to end for `reason`. On Windows, a ready package is confirmed and kept for
-   * `launchInstaller` when the reason allows installing: `install`, or `quit` with automatic install on.
-   * A system session end never installs.
+   * `launchInstaller` only for `install`, or `quit` with automatic install on; never after `endSession`.
    */
   prepareExit(reason: ExitReason): Promise<void>
   /** After storage has closed: starts the installer prepared by `prepareExit`, if any. */
   launchInstaller(): Promise<void>
+  /** The operating system is ending the session: nothing is installed from now on, whatever was prepared. */
+  endSession(): void
 }
 
 /** Timers wake at most this far apart and compare wall-clock time, so sleep or a clock change cannot stretch the 24 hours. */
@@ -87,6 +88,8 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
   /** Versions whose download the user cancelled: not restarted automatically in this run. */
   const cancelled = new Set<string>()
   let armed: { path: string; restart: boolean } | null = null
+  /** The operating system is ending the session: no installer starts in this process any more. */
+  let sessionEnded = false
   /** The version the engine's last successful check offered; it can only download that one. */
   let offered: string | null = null
 
@@ -193,6 +196,8 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     publish()
     try {
       await engine.setNetwork(settings.updateNetwork)
+      // Cancelled (or quitting) while the network was being set up: no transfer starts.
+      if (abort.signal.aborted) throw new Error('cancelled')
       const path = await engine.download((transferred, total) => {
         if (abort.signal.aborted || release !== current) return
         // All bytes are in: the checksum is being confirmed and nothing can be installed yet.
@@ -211,6 +216,8 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       if (downloading === abort) downloading = null
     }
     publish()
+    // An automatic check that fell due during the download runs now (or is scheduled as before).
+    schedule()
   }
 
   /** The waiting package, confirmed against its checksum; a missing or changed one is discarded. */
@@ -320,23 +327,27 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
 
     async prepareExit(reason) {
       armed = null
-      if (deps.platform !== 'windows' || reason === 'session-end') return
-      if (reason === 'quit' && settings?.updateAutoInstall !== true) return
-      if (release?.download.status !== 'ready') return
+      const allowed = reason === 'install' || (reason === 'quit' && settings?.updateAutoInstall === true)
+      if (deps.platform !== 'windows' || sessionEnded || !allowed || release?.download.status !== 'ready') return
       const confirmed = await confirmedPackage()
-      if (confirmed.ok) armed = { path: confirmed.path, restart: reason === 'install' }
+      if (confirmed.ok && !sessionEnded) armed = { path: confirmed.path, restart: reason === 'install' }
     },
 
     async launchInstaller() {
       const pending = armed
       armed = null
-      if (pending === null) return
+      if (pending === null || sessionEnded) return
       try {
         await deps.runInstaller(pending.path, pending.restart)
       } catch {
         // The package stays; the next start shows it ready again and the running version is unchanged.
         console.error('[updates] installer did not start')
       }
+    },
+
+    endSession() {
+      sessionEnded = true
+      armed = null
     }
   }
 }

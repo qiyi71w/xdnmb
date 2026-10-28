@@ -4,7 +4,7 @@
 
 import { useId, useState, type ReactNode } from 'react'
 import type { NoteBlock, NoteInline } from '../../../../shared/updates'
-import { EMPTY_NOTES_TEXT } from './updateText'
+import { EMPTY_NOTES_TEXT, UNKNOWN_NOTES_TEXT } from './updateText'
 import '../../components/content.css'
 
 /** Rough lines a collapsed note shows (a paragraph line is about this many characters). */
@@ -132,10 +132,11 @@ function Block({ block }: { block: NoteBlock }) {
   }
 }
 
-export function ReleaseNotes({ notes }: { notes: readonly NoteBlock[] }) {
+export function ReleaseNotes({ notes }: { notes: readonly NoteBlock[] | null }) {
   const notesId = useId()
   const [expanded, setExpanded] = useState(false)
 
+  if (notes === null) return <p className="release-notes-empty">{UNKNOWN_NOTES_TEXT}</p>
   if (notes.length === 0) return <p className="release-notes-empty">{EMPTY_NOTES_TEXT}</p>
 
   const total = notes.reduce((sum, block) => sum + blockLines(block), 0)

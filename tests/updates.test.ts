@@ -37,6 +37,9 @@ const settle = () => new Promise<void>((resolve) => setImmediate(resolve))
 function fakeEngine() {
   let next: EngineCheck | Error = FOUND
   let hold: PromiseWithResolvers<void> | null = null
+  /** Taken by the next network setup; `networkRelease` lets it continue. */
+  let networkHold: PromiseWithResolvers<void> | null = null
+  let networkRelease: (() => void) | null = null
   const engine = {
     checks: 0,
     downloads: 0,
@@ -44,8 +47,19 @@ function fakeEngine() {
     set result(value: EngineCheck | Error) { next = value },
     holdDownloads() { hold = Promise.withResolvers<void>() },
     releaseDownloads() { hold?.resolve() },
+    /** The next network setup waits until `releaseNetwork`. */
+    holdNetwork() {
+      networkHold = Promise.withResolvers<void>()
+      networkRelease = networkHold.resolve
+    },
+    releaseNetwork() { networkRelease?.() },
     api: {
-      async setNetwork(mode) { engine.networks.push(mode) },
+      async setNetwork(mode) {
+        engine.networks.push(mode)
+        const pending = networkHold
+        networkHold = null
+        await pending?.promise
+      },
       async check() {
         engine.checks++
         if (next instanceof Error) throw next
@@ -189,11 +203,12 @@ describe('software updates', () => {
     expect(existsSync(packagePath())).toBe(false)
   })
 
-  it('installs at exit only for an install quit, or an ordinary quit with automatic install on; never at a session end or with a changed package', async () => {
-    const cases: Array<[Partial<UpdateSettings>, 'quit' | 'install' | 'session-end', boolean[]]> = [
+  it('installs at exit only for an install quit, or an ordinary quit with automatic install on; never after unsaved drafts, at a session end or with a changed package', async () => {
+    const cases: Array<[Partial<UpdateSettings>, 'quit' | 'install' | 'drafts-lost' | 'session-end', boolean[]]> = [
       [{ updateAutoInstall: false }, 'quit', []],
       [{ updateAutoInstall: true }, 'quit', [false]],
       [{ updateAutoInstall: false }, 'install', [true]],
+      [{ updateAutoInstall: true }, 'drafts-lost', []],
       [{ updateAutoInstall: true }, 'session-end', []]
     ]
     for (const [patch, reason, restarts] of cases) {
@@ -212,6 +227,58 @@ describe('software updates', () => {
     await changed.instance.launchInstaller()
     expect(changed.installers).toEqual([])
     expect(changed.instance.state().release?.download).toEqual({ status: 'none', failure: 'integrity', cancelled: false })
+  })
+
+  it('starts no installer once the system is ending the session, even when the install was already prepared', async () => {
+    const s = service(fakeEngine())
+    await s.instance.start(settings({ updateAutoInstall: true }))
+    await s.instance.prepareExit('install')
+    s.instance.endSession()
+    await s.instance.launchInstaller()
+    expect(s.installers).toEqual([])
+    expect(existsSync(packagePath())).toBe(true)
+  })
+
+  it('starts no transfer when the download is cancelled while its network is being set up', async () => {
+    const engine = fakeEngine()
+    const { instance } = service(engine)
+    await instance.start(settings())
+    engine.holdNetwork()
+    const downloading = instance.download()
+    await settle()
+    expect(instance.state().release?.download.status).toBe('downloading')
+    instance.cancelDownload()
+    engine.releaseNetwork()
+    await downloading
+    expect(engine.downloads).toBe(0)
+    expect(instance.state().release?.download).toEqual({ status: 'none', failure: null, cancelled: true })
+  })
+
+  it('keeps checking every 24 hours when a download spans the time a check falls due', async () => {
+    const engine = fakeEngine()
+    const { instance } = service(engine)
+    await instance.start(settings())
+    expect(engine.checks).toBe(1)
+    await vi.advanceTimersByTimeAsync(DAY - 60_000)
+    engine.holdDownloads()
+    const downloading = instance.download()
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    // Due while downloading: no second check runs alongside it.
+    expect(engine.checks).toBe(1)
+    engine.releaseDownloads()
+    await downloading
+    await vi.advanceTimersByTimeAsync(0)
+    expect(engine.checks).toBe(2)
+    await vi.advanceTimersByTimeAsync(DAY)
+    expect(engine.checks).toBe(3)
+  })
+
+  it('keeps every record write when writes overlap', async () => {
+    const records = createRecordStore(join(dir, 'update-state.json'))
+    const ready = { release: FOUND.kind === 'newer' ? FOUND.release.info : null!, sha512: SHA, path: packagePath() }
+    const writes = Array.from({ length: 20 }, (_, index) => records.save({ notified: `0.${index + 2}.0`, ready }))
+    await expect(Promise.all(writes)).resolves.toBeDefined()
+    expect(await records.load()).toEqual({ notified: '0.21.0', ready })
   })
 
   it('starts the install quit only with a confirmed package; macOS opens the package and never installs', async () => {

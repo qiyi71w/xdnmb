@@ -48,8 +48,11 @@ export interface ReleaseInfo {
   version: string
   /** ISO time from the release metadata; `null` when absent or invalid. */
   releaseDate: string | null
-  /** The release's own notes; empty when it has none (never generated text). */
-  notes: NoteBlock[]
+  /**
+   * The release's own notes; empty when it has none (never generated text). `null` when the notes of
+   * exactly this release could not be obtained (the release page still has them).
+   */
+  notes: NoteBlock[] | null
   /** The release page, always under `UPDATE_REPOSITORY_URL`. */
   pageUrl: string
 }

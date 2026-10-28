@@ -50,7 +50,7 @@ function releaseOf(value: unknown): ReleaseInfo | null {
   if (typeof version !== 'string' || !isStableVersion(version)) return null
   if (releaseDate !== null && typeof releaseDate !== 'string') return null
   if (typeof pageUrl !== 'string' || !pageUrl.startsWith(`${UPDATE_REPOSITORY_URL}/releases/tag/`)) return null
-  if (!Array.isArray(notes) || !notes.every(isBlock)) return null
+  if (notes !== null && (!Array.isArray(notes) || !notes.every(isBlock))) return null
   return { version, releaseDate, notes, pageUrl }
 }
 
@@ -72,8 +72,9 @@ function parseRecord(text: string): UpdateRecord | null {
   return { notified, ready: { release, sha512, path } }
 }
 
-/** `update-state.json` in the user-data directory, replaced atomically. */
+/** `update-state.json` in the user-data directory, replaced atomically; writes run one at a time, in call order. */
 export function createRecordStore(path: string): UpdateRecordStore {
+  let writes: Promise<unknown> = Promise.resolve()
   return {
     async load() {
       try {
@@ -82,10 +83,15 @@ export function createRecordStore(path: string): UpdateRecordStore {
         return null
       }
     },
-    async save(record) {
-      const temporary = `${path}.tmp`
-      await writeFile(temporary, JSON.stringify({ version: 1, ...record }), 'utf8')
-      await rename(temporary, path)
+    save(record) {
+      const write = writes.then(async () => {
+        const temporary = `${path}.tmp`
+        await writeFile(temporary, JSON.stringify({ version: 1, ...record }), 'utf8')
+        await rename(temporary, path)
+      })
+      // A failed write is reported to its caller and does not stop later ones.
+      writes = write.catch(() => undefined)
+      return write
     }
   }
 }

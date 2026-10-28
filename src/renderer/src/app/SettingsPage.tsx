@@ -162,10 +162,13 @@ interface ShapeProps {
 
 function SettingsView({ headingRef, section, status, target, macos, onClose }: ShapeProps & { onClose: () => void }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const columnRef = useRef<HTMLDivElement>(null)
   const jumpRef = useRef<HTMLDivElement>(null)
   const [currentId, setCurrentId] = useState<SectionId>('appearance')
   /** Where a directory entry scrolled the pane: its choice stays current until the pane moves. */
   const chosenAt = useRef<number | null>(null)
+  /** The section that scroll landed on; kept at the top while content above it still loads. */
+  const chosenId = useRef<SectionId | null>(null)
 
   /** Height of the narrow window's sticky section control (0 while the directory column shows). */
   const stickyOffset = () => {
@@ -173,25 +176,52 @@ function SettingsView({ headingRef, section, status, target, macos, onClose }: S
     return bar !== null && bar.getClientRects().length > 0 ? bar.offsetHeight : 0
   }
 
+  /** Scrolls `id` to the top of the pane (as far as the pane scrolls) and remembers the landing. */
+  const align = (id: SectionId) => {
+    const pane = scrollRef.current
+    const item = document.getElementById(`shell-set-${id}`)
+    if (pane === null || item === null) return
+    pane.scrollTop += item.getBoundingClientRect().top - pane.getBoundingClientRect().top - stickyOffset()
+    chosenAt.current = pane.scrollTop
+    chosenId.current = id
+  }
+
   // A directory entry scrolls to its section and hands it focus: the next Tab continues inside it.
   // The section headings come from shared section components, so they become focusable here.
   const go = (id: SectionId) => {
     setCurrentId(id)
-    const pane = scrollRef.current
-    const item = document.getElementById(`shell-set-${id}`)
-    if (pane !== null && item !== null) {
-      pane.scrollTop += item.getBoundingClientRect().top - pane.getBoundingClientRect().top - stickyOffset()
-      chosenAt.current = pane.scrollTop
-    }
-    const heading = item?.querySelector<HTMLElement>('.settings-section-title')
+    align(id)
+    const heading = document.getElementById(`shell-set-${id}`)?.querySelector<HTMLElement>('.settings-section-title')
     if (heading == null) return
     heading.tabIndex = -1
     heading.focus({ preventScroll: true })
   }
   const goRef = useRef(go)
+  const alignRef = useRef(align)
   useLayoutEffect(() => {
     goRef.current = go
+    alignRef.current = align
   })
+
+  // Sections above the landing fill in after opening (storage figures, lists) and push it down,
+  // with or without a scroll event: until the user acts on the page, the chosen section stays
+  // where the entry put it. Pointer, key and wheel input in the pane end the hold.
+  useEffect(() => {
+    const pane = scrollRef.current
+    const column = columnRef.current
+    if (pane === null || column === null) return
+    const observer = new ResizeObserver(() => {
+      if (chosenAt.current !== null && chosenId.current !== null) alignRef.current(chosenId.current)
+    })
+    observer.observe(column)
+    const release = () => { chosenId.current = null }
+    const events = ['pointerdown', 'keydown', 'wheel'] as const
+    for (const name of events) pane.addEventListener(name, release, { passive: true })
+    return () => {
+      observer.disconnect()
+      for (const name of events) pane.removeEventListener(name, release)
+    }
+  }, [])
 
   // Each opening lands where its entry points: that section and its heading, else the page title
   // at the top. Focus returns to the opener when the page is left (App).
@@ -203,6 +233,7 @@ function SettingsView({ headingRef, section, status, target, macos, onClose }: S
     const pane = scrollRef.current
     if (pane !== null) pane.scrollTop = 0
     chosenAt.current = null
+    chosenId.current = null
     setCurrentId('appearance')
     headingRef.current?.focus({ preventScroll: true })
   }, [target.seq, target.section, headingRef])
@@ -227,6 +258,11 @@ function SettingsView({ headingRef, section, status, target, macos, onClose }: S
   const onScroll = () => {
     const pane = scrollRef.current
     if (pane === null) return
+    // Not the user (they end the hold first): content above moved the landing; put it back.
+    if (chosenId.current !== null) {
+      align(chosenId.current)
+      return
+    }
     if (chosenAt.current !== null && Math.abs(pane.scrollTop - chosenAt.current) < 1) return
     chosenAt.current = null
     if (pane.scrollTop > 0 && pane.scrollTop + pane.clientHeight >= pane.scrollHeight - BOTTOM_SLACK) {
@@ -277,7 +313,7 @@ function SettingsView({ headingRef, section, status, target, macos, onClose }: S
         </nav>
         <div className="shell-settings-scroll" ref={scrollRef} onScroll={onScroll}>
           <SectionJump barRef={jumpRef} currentId={currentId} onGo={go} />
-          <div className="shell-settings-column">
+          <div className="shell-settings-column" ref={columnRef}>
             <SettingsStatusNotices status={status} />
             {CATEGORIES.map((category) => (
               <section key={category.id} className="shell-category" aria-labelledby={`shell-cat-${category.id}`}>

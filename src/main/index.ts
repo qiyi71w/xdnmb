@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, powerMonitor, protocol, session, shell, Tray,
+  app, BaseWindow, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, powerMonitor, protocol, session, shell, Tray,
   type IpcMainInvokeEvent, type MenuItemConstructorOptions
 } from 'electron'
 import { createReadStream } from 'node:fs'
@@ -75,6 +75,11 @@ let lifecycle: Lifecycle | null = null
 let tray: Tray | null = null
 let search: SearchService | null = null
 let updates: UpdateService | null = null
+/**
+ * Windows: a hidden window that exists for the whole run, so a shutdown, restart or log-off is noticed
+ * even after the main window has closed while a quit finishes (the system asks every top-level window).
+ */
+let sessionSentinel: BaseWindow | null = null
 
 // Every renderer runs sandboxed; one main process owns the database worker.
 app.enableSandbox()
@@ -167,9 +172,6 @@ function createWindow(): BrowserWindow {
     event.preventDefault()
     void lifecycle.closeRequested()
   })
-  // Shutdown, restart or log-off (Windows): never install, save what can be saved at once.
-  window.on('query-session-end', () => lifecycle?.endSession())
-  window.on('session-end', () => lifecycle?.endSession())
   window.webContents.on('before-input-event', (event, input) => {
     const action = zoomActionOf(input, platform)
     if (action === null) return
@@ -470,6 +472,16 @@ async function start(): Promise<void> {
     onTrigger: () => { void reminders.request().catch(() => console.error('[reminders] check unavailable')) }
   })
   lifecycle = controller
+  if (platform === 'win32') {
+    sessionSentinel = new BaseWindow({ show: false, skipTaskbar: true, width: 1, height: 1 })
+    const endSession = () => {
+      // Never install from now on; save what can be saved at once.
+      updateService.endSession()
+      controller.endSession()
+    }
+    sessionSentinel.on('query-session-end', endSession)
+    sessionSentinel.on('session-end', endSession)
+  }
 
   ipc = registerIpc({
     reading,

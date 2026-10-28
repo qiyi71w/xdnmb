@@ -58,11 +58,12 @@ export interface LifecycleApi {
   /** The quit was cancelled or could not save; the app keeps running unchanged. */
   cancelQuit(): Promise<void>
   /**
-   * Every unsaved editor was saved or discarded and the workspace was saved: the window closes and
-   * the main process finishes sends that already started, then exits. Opening the app again before
-   * that cancels the exit.
+   * The unsaved editors were handled and the workspace was saved: the window closes and the main
+   * process finishes sends that already started, then exits. Opening the app again before that
+   * cancels the exit. `draftsSaved: false`: the user quit although some drafts could not be saved;
+   * no update is installed at this exit.
    */
-  completeQuit(): Promise<void>
+  completeQuit(input: { draftsSaved: boolean }): Promise<void>
   /** The workspace saved at the last real quit, as written by `saveWorkspace`; `null` when none. */
   loadWorkspace(): Promise<WorkspaceLoadResult>
   /** Replaces the saved workspace. `ok: false`: not saved (storage unavailable, read-only or failed). */

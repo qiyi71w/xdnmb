@@ -5,7 +5,7 @@ import { BaseUpdater, CancellationToken, type ProgressInfo } from 'electron-upda
 import type { DownloadUpdateOptions } from 'electron-updater/out/AppUpdater'
 import { ElectronHttpExecutor } from 'electron-updater/out/electronHttpExecutor.js'
 import type { ReleaseInfo, UpdateNetwork, UpdatePlatform, UpdateUnavailable } from '../../shared/updates'
-import { releaseNotesFromHtml } from './notes'
+import { releaseNotesFor } from './notes'
 import {
   compareVersions, isAllowedUpdateRequest, isStableVersion, releaseDateOf, releasePageUrl, ReleaseSourceError,
   selectPackage, UPDATE_OWNER, UPDATE_REPO, type PackageTarget
@@ -49,7 +49,8 @@ class ReleasePackageUpdater extends BaseUpdater {
     this.autoRunAppAfterInstall = false
     this.allowPrerelease = false
     this.allowDowngrade = false
-    this.fullChangelog = false
+    // Notes per feed entry, keyed by each entry's own tag (see `check`).
+    this.fullChangelog = true
     this.disableWebInstaller = true
     // Always the whole file, so the one SHA-512 of the metadata covers every byte installed.
     this.disableDifferentialDownload = true
@@ -137,11 +138,12 @@ export function createUpdateEngine(target: PackageTarget): UpdateEngine {
       const tag = 'tag' in metadata ? metadata.tag : undefined
       const pageUrl = releasePageUrl(tag, version)
       if (file === null || pageUrl === null) throw new ReleaseSourceError('package not offered for this installation')
-      const notes = releaseNotesFromHtml(typeof metadata.releaseNotes === 'string' ? metadata.releaseNotes : null, pageUrl)
+      const notes = releaseNotesFor(metadata.releaseNotes, version, pageUrl)
       return { kind: 'newer', release: { info: { version, releaseDate: releaseDateOf(metadata.releaseDate), notes, pageUrl }, sha512: file.sha512 } }
     },
 
     async download(onProgress, signal) {
+      if (signal.aborted) throw new Error('cancelled')
       const token = new CancellationToken()
       const abort = () => token.cancel()
       signal.addEventListener('abort', abort)

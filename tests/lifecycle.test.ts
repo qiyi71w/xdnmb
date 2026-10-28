@@ -150,7 +150,7 @@ describe('window lifecycle', () => {
     const result = deferred<PublicationAttempt | null>()
     s.runs.push({ attempt: sendAttempt('notice', 'sending', new Date(s.now()).toISOString()), deadline: s.now() + 60_000, done: result.promise })
     s.lifecycle.requestQuit()
-    s.lifecycle.completeQuit()
+    s.lifecycle.completeQuit(true)
     await flush()
     const reveal = s.lifecycle.revealWithoutTrigger()
     await s.showWindow()
@@ -192,7 +192,7 @@ describe('window lifecycle', () => {
     s.runs.push({ attempt: sendAttempt('7', 'sending', new Date(createdAt).toISOString()), deadline: createdAt + 60_000, done: run.promise })
     s.advance(45_000)
     s.lifecycle.requestQuit()
-    s.lifecycle.completeQuit()
+    s.lifecycle.completeQuit(true)
     await flush()
 
     expect(s.windowState).toBe('none')
@@ -217,7 +217,7 @@ describe('window lifecycle', () => {
     const run = deferred<PublicationAttempt | null>()
     s.runs.push({ attempt: sendAttempt('8', 'sending', new Date(s.now()).toISOString()), deadline: s.now() + 60_000, done: run.promise })
     s.lifecycle.requestQuit()
-    s.lifecycle.completeQuit()
+    s.lifecycle.completeQuit(true)
     await flush()
     run.resolve(sendAttempt('8', 'failed', new Date(s.now()).toISOString()))
     await flush()
@@ -232,7 +232,7 @@ describe('window lifecycle', () => {
     const run = deferred<PublicationAttempt | null>()
     s.runs.push({ attempt: sendAttempt('9', 'sending', new Date(s.now()).toISOString()), deadline: s.now() + 60_000, done: run.promise })
     s.lifecycle.requestQuit()
-    s.lifecycle.completeQuit()
+    s.lifecycle.completeQuit(true)
     await flush()
     expect(s.windowState).toBe('none')
 
@@ -259,7 +259,7 @@ describe('window lifecycle', () => {
     const run = deferred<PublicationAttempt | null>()
     s.runs.push({ attempt: sendAttempt('10', 'sending', new Date(s.now()).toISOString()), deadline: s.now() + 60_000, done: run.promise })
     s.lifecycle.requestQuit()
-    s.lifecycle.completeQuit()
+    s.lifecycle.completeQuit(true)
     await flush()
     s.setStorageUp(false)
     s.unstored.push(sendAttempt('10', 'confirmed', new Date(s.now()).toISOString()))
@@ -277,7 +277,7 @@ describe('window lifecycle', () => {
     s.runs.length = 0
     s.setStorageUp(true)
     s.lifecycle.requestQuit()
-    s.lifecycle.completeQuit()
+    s.lifecycle.completeQuit(true)
     await flush()
     expect(s.unstored).toEqual([])
     expect(s.exits).toBe(1)
@@ -287,7 +287,7 @@ describe('window lifecycle', () => {
     const s = setup()
     await s.started()
     s.lifecycle.requestQuit()
-    s.lifecycle.completeQuit()
+    s.lifecycle.completeQuit(true)
     await flush()
     expect(s.sleeps).toEqual([])
     expect(s.notified).toEqual([])
@@ -301,7 +301,7 @@ describe('window lifecycle', () => {
     // A draft could not be saved / the user cancelled: no install, and the next quit is an ordinary one.
     s.lifecycle.cancelQuit()
     s.lifecycle.requestQuit()
-    s.lifecycle.completeQuit()
+    s.lifecycle.completeQuit(true)
     await flush()
     expect(s.exitReasons).toEqual(['quit'])
 
@@ -310,7 +310,7 @@ describe('window lifecycle', () => {
     const run = deferred<PublicationAttempt | null>()
     reopened.runs.push({ attempt: sendAttempt('11', 'sending', new Date(reopened.now()).toISOString()), deadline: reopened.now() + 60_000, done: run.promise })
     reopened.lifecycle.requestQuit('install')
-    reopened.lifecycle.completeQuit()
+    reopened.lifecycle.completeQuit(true)
     await flush()
     reopened.lifecycle.reopen()
     await reopened.showWindow()
@@ -319,16 +319,24 @@ describe('window lifecycle', () => {
     expect(reopened.exits).toBe(0)
     reopened.runs.length = 0
     reopened.lifecycle.requestQuit()
-    reopened.lifecycle.completeQuit()
+    reopened.lifecycle.completeQuit(true)
     await flush()
     expect(reopened.exitReasons).toEqual(['quit'])
 
     const installing = setup()
     await installing.started()
     installing.lifecycle.requestQuit('install')
-    installing.lifecycle.completeQuit()
+    installing.lifecycle.completeQuit(true)
     await flush()
     expect(installing.exitReasons).toEqual(['install'])
+
+    // 仍退出 after drafts could not be saved: the quit ends, but not as an install.
+    const lossy = setup()
+    await lossy.started()
+    lossy.lifecycle.requestQuit('install')
+    lossy.lifecycle.completeQuit(false)
+    await flush()
+    expect(lossy.exitReasons).toEqual(['drafts-lost'])
   })
 
   it('never exits for installing once the session is ending, and asks a running window to save at once', async () => {
@@ -338,7 +346,7 @@ describe('window lifecycle', () => {
     expect(s.sent).toEqual([{ kind: 'session-end' }])
     // The system closes the window while ending the session; whatever quit follows is not an install.
     s.lifecycle.requestQuit('install')
-    s.lifecycle.completeQuit()
+    s.lifecycle.completeQuit(true)
     await flush()
     expect(s.exitReasons).toEqual(['session-end'])
   })

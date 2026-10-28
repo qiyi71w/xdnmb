@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { releaseNotesFromHtml } from '../src/main/updates/notes'
+import { releaseNotesFor, releaseNotesFromHtml } from '../src/main/updates/notes'
 import { classifyUpdateError, isAllowedUpdateRequest, ReleaseSourceError, selectPackage } from '../src/main/updates/release'
 
 const PAGE = 'https://github.com/qiyi71w/xdnmb/releases/tag/v0.2.0'
@@ -37,6 +37,18 @@ describe('release notes', () => {
     expect(releaseNotesFromHtml('No content.', PAGE)).toEqual([])
     expect(releaseNotesFromHtml(null, PAGE)).toEqual([])
     expect(releaseNotesFromHtml('<p> </p><script>x()</script>', PAGE)).toEqual([])
+  })
+
+  it('shows only the offered release’s own notes: another release’s are never substituted', () => {
+    const changelog = [
+      { version: '0.3.0', note: '<p>预发布说明</p>' },
+      { version: '0.2.0', note: '<p>稳定版说明</p>' },
+      { version: '0.1.5', note: null }
+    ]
+    expect(releaseNotesFor(changelog, '0.2.0', PAGE)).toEqual([{ kind: 'paragraph', content: [{ kind: 'text', text: '稳定版说明' }] }])
+    expect(releaseNotesFor(changelog, '0.1.5', PAGE)).toEqual([])
+    expect(releaseNotesFor([{ version: '0.3.0', note: '<p>预发布说明</p>' }], '0.2.0', PAGE)).toBeNull()
+    expect(releaseNotesFor(undefined, '0.2.0', PAGE)).toBeNull()
   })
 })
 

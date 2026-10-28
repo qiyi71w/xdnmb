@@ -228,3 +228,17 @@ export function releaseNotesFromHtml(html: string | null, base: string): NoteBlo
   builder.flushParagraph()
   return builder.blocks
 }
+
+/** Release notes as the updater reports them: one body, or (full changelog) one entry per feed release by its own tag. */
+export type ReportedNotes = string | ReadonlyArray<{ version: string; note: string | null }> | null | undefined
+
+/**
+ * The notes of exactly release `version`, or null when they are unknown: never another release's.
+ * A single body comes from the metadata of the release's own tag; in a changelog only the entry of
+ * `version` counts, so a release missing from the feed has unknown notes.
+ */
+export function releaseNotesFor(reported: ReportedNotes, version: string, base: string): NoteBlock[] | null {
+  if (typeof reported === 'string') return releaseNotesFromHtml(reported, base)
+  const entry = reported?.find((candidate) => candidate.version === version)
+  return entry === undefined ? null : releaseNotesFromHtml(entry.note, base)
+}
