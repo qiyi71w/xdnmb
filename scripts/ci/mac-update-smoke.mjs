@@ -1,9 +1,12 @@
 // macOS package and update checks for CI (Apple Silicon runner):
 //   inspect  both DMGs: architecture, native module, identity, icon, ad-hoc signature, latest-mac.yml checksums
 //   x64      the Intel app starts under Rosetta with working storage
-//   update   install the current DMG, find / download / verify the next version from a controlled
-//            GitHub stand-in, open the DMG, replace the app as a user would, and start the new version
-// The stand-in answers only inside the app's update network session; nothing is published.
+//   update   install the chain's current DMG, find / download / verify the next version from a
+//            controlled GitHub stand-in, open the DMG, replace the app as a user would, and start
+//            the new version
+// The stand-in answers only inside the app's update network session; nothing is published. The
+// update chain is built far above any published version (see the workflow), so whatever the live
+// source holds, its automatic checks never offer, or download, a real release.
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -13,6 +16,7 @@ import { join } from 'node:path'
 
 const ROOT = process.cwd()
 const DIST = join(ROOT, 'dist')
+const CHAIN = join(ROOT, 'dist-chain')
 const NEXT = join(ROOT, 'dist-next')
 const RESULTS = join(ROOT, 'mac-smoke')
 /** The one `.app` bundle in `dir` (its file name is whatever the build and the file system produced). */
@@ -222,14 +226,15 @@ async function serveNextRelease(app, next) {
 }
 
 async function update() {
+  const current = metadataVersion(join(CHAIN, 'latest-mac.yml'))
   const next = metadataVersion(join(NEXT, 'latest-mac.yml'))
-  const mount = attach(join(DIST, `xidao-${version}-mac-arm64.dmg`))
+  const mount = attach(join(CHAIN, `xidao-${current}-mac-arm64.dmg`))
   const bundle = appIn(mount)
   const installed = join('/Applications', bundle.slice(mount.length + 1))
   rmSync(installed, { recursive: true, force: true })
   run('/usr/bin/ditto', [bundle, installed])
   detach(mount)
-  check('installed current version', plist(installed, 'CFBundleShortVersionString') === version)
+  check('installed current version', plist(installed, 'CFBundleShortVersionString') === current)
 
   let { app, page } = await launch(executableOf(installed))
   await openAbout(page)
@@ -272,7 +277,7 @@ async function update() {
     opened = mountedImages(`xidao-${next}-mac-arm64.dmg`)
   }
   const afterOpen = await updateState(page)
-  check('opening the package mounts the verified DMG, still the old version', opened.length > 0 && afterOpen.currentVersion === version && (await aboutText(page)).includes(`版本 ${version}`), { opened })
+  check('opening the package mounts the verified DMG, still the old version', opened.length > 0 && afterOpen.currentVersion === current && (await aboutText(page)).includes(`版本 ${current}`), { opened })
   await page.screenshot({ path: join(RESULTS, 'mac-opened.png') })
   check('quit before replacing', (await quit(app, 'opened')) === 0)
 

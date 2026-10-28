@@ -463,8 +463,11 @@ async function start(): Promise<void> {
     },
     notify: notifyUnfinished,
     exit: (reason) => {
+      // Storage closes and the installer decision runs before `app.quit()` closes every window,
+      // so the session sentinel still sees a Windows shutdown that starts meanwhile.
       void updateService.prepareExit(reason)
         .catch(() => console.error('[updates] package not confirmed'))
+        .then(finishStorage)
         .finally(() => app.quit())
     },
     now: () => Date.now(),
@@ -567,15 +570,23 @@ app.on('before-quit', (event) => {
   lifecycle.requestQuit()
 })
 
+/**
+ * Closes search, retained content and the store once, then starts an installer the quit armed.
+ * Only after storage is closed: the installer closes nothing the app still writes.
+ */
+async function finishStorage(): Promise<void> {
+  const opened = store
+  if (!opened || storeClosed) return
+  storeClosed = true
+  await search?.stop()
+  await content?.stop()
+  await opened.close()
+  await updates?.launchInstaller()
+}
+
+// Quits that bypass the lifecycle's exit still close storage before the process ends.
 app.on('will-quit', (event) => {
   if (!store || storeClosed) return
   event.preventDefault()
-  storeClosed = true
-  void (async () => {
-    await search?.stop()
-    await content?.stop()
-    await store?.close()
-    // Only after storage is closed; the installer closes nothing the app still writes.
-    await updates?.launchInstaller()
-  })().finally(() => app.quit())
+  void finishStorage().finally(() => app.quit())
 })

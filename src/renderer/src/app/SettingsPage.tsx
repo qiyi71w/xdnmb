@@ -205,7 +205,8 @@ function SettingsView({ headingRef, section, status, target, macos, onClose }: S
 
   // Sections above the landing fill in after opening (storage figures, lists) and push it down,
   // with or without a scroll event: until the user acts on the page, the chosen section stays
-  // where the entry put it. Pointer, key and wheel input in the pane end the hold.
+  // where the entry put it. Pointer, key and wheel input in the pane end the hold, and so does
+  // focus reaching anything there but the landing's heading (Tab from outside, a screen reader).
   useEffect(() => {
     const pane = scrollRef.current
     const column = columnRef.current
@@ -215,11 +216,19 @@ function SettingsView({ headingRef, section, status, target, macos, onClose }: S
     })
     observer.observe(column)
     const release = () => { chosenId.current = null }
+    const focusIn = (event: FocusEvent) => {
+      const id = chosenId.current
+      if (id === null) return
+      const heading = document.getElementById(`shell-set-${id}`)?.querySelector('.settings-section-title')
+      if (event.target !== heading) release()
+    }
     const events = ['pointerdown', 'keydown', 'wheel'] as const
     for (const name of events) pane.addEventListener(name, release, { passive: true })
+    pane.addEventListener('focusin', focusIn)
     return () => {
       observer.disconnect()
       for (const name of events) pane.removeEventListener(name, release)
+      pane.removeEventListener('focusin', focusIn)
     }
   }, [])
 

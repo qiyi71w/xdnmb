@@ -44,5 +44,5 @@ export function packageActionLabel(platform: UpdatePlatform): string {
 }
 
 export const EMPTY_NOTES_TEXT = '此版本未提供更新说明'
-/** The notes of exactly this release could not be obtained; the release page below still has them. */
-export const UNKNOWN_NOTES_TEXT = '未能取得此版本的更新说明，请在 GitHub 查看'
+/** The notes of exactly this release could not be obtained; 「在 GitHub 查看」 right below has them. */
+export const UNKNOWN_NOTES_TEXT = '未能取得此版本的更新说明'

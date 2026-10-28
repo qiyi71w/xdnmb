@@ -33,10 +33,11 @@ jobs:
       - name: Build DMGs (x64, arm64)
         run: npm run dist:mac
 
-      - name: Build the next patch version (arm64) for the update check
+      - name: Build the update-chain versions (arm64)
+        # Far above any published release: the live source never offers these apps a newer version.
         run: |
-          next=$(node -p "const [a, b, c] = require('./package.json').version.split('.'); [a, b, Number(c) + 1].join('.')")
-          npx electron-builder --mac dmg --arm64 --publish never "-c.extraMetadata.version=$next" -c.directories.output=dist-next
+          npx electron-builder --mac dmg --arm64 --publish never -c.extraMetadata.version=9000.0.0 -c.directories.output=dist-chain
+          npx electron-builder --mac dmg --arm64 --publish never -c.extraMetadata.version=9000.0.1 -c.directories.output=dist-next
 
       - name: Install check tools
         run: |
