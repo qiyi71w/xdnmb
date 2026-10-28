@@ -1,16 +1,19 @@
-﻿; Additions to electron-builder's assisted NSIS installer (`nsis.include` in electron-builder.yml).
+﻿﻿; Additions to electron-builder's assisted NSIS installer (`nsis.include` in electron-builder.yml).
 ; Pages: installation mode, location, options (desktop shortcut), progress, finish. An in-app update
 ; (`--updated`) skips every choice and keeps the existing mode, location and shortcuts.
 
 !include nsDialogs.nsh
 
-; An existing installation fixes the mode, so a second copy never appears beside it. A fresh
-; installation asks: only for me (default) or for all users.
+; An in-app update keeps the existing mode without showing the page. Otherwise the page is shown;
+; with an existing installation (see xidaoModeShow) its mode is preselected and the other one
+; cannot be chosen, so a second copy never appears beside it.
 !macro customInstallMode
-  ${if} $hasPerUserInstallation == "1"
-    StrCpy $isForceCurrentInstall "1"
-  ${elseif} $hasPerMachineInstallation == "1"
-    StrCpy $isForceMachineInstall "1"
+  ${if} ${isUpdated}
+    ${if} $hasPerUserInstallation == "1"
+      StrCpy $isForceCurrentInstall "1"
+    ${elseif} $hasPerMachineInstallation == "1"
+      StrCpy $isForceMachineInstall "1"
+    ${endif}
   ${endif}
 !macroend
 
@@ -19,7 +22,27 @@
   Var xidaoDesktopShortcut
   Var xidaoDesktopCheckbox
 
+  ; No welcome page: this only hooks the show step of the installation mode page that follows.
+  !macro customWelcomePage
+    !define MUI_PAGE_CUSTOMFUNCTION_SHOW xidaoModeShow
+  !macroend
+
   !macro customPageAfterChangeDir
+    ; Defined here, after the installation mode page has declared its controls.
+    Function xidaoModeShow
+      ${if} $hasPerUserInstallation == "1"
+      ${andIf} $hasPerMachineInstallation == "0"
+        EnableWindow $MultiUser.InstallModePage.AllUsers 0
+        ${NSD_CreateLabel} 0u 75u 100% 24u "已为当前用户安装汐岛。要改为为所有用户安装，请先卸载。"
+        Pop $0
+      ${elseIf} $hasPerMachineInstallation == "1"
+      ${andIf} $hasPerUserInstallation == "0"
+        EnableWindow $MultiUser.InstallModePage.CurrentUser 0
+        ${NSD_CreateLabel} 0u 75u 100% 24u "已为所有用户安装汐岛。要改为仅为我安装，请先卸载。"
+        Pop $0
+      ${endif}
+    FunctionEnd
+
     Page custom xidaoOptionsShow xidaoOptionsLeave
 
     Function xidaoOptionsShow
