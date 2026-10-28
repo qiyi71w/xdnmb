@@ -1,7 +1,7 @@
 // User-facing words of the About section's update area and the update notices. Nothing here may
 // say an update was installed: only the running version (`currentVersion`) is installed.
 
-import type { InstallResult, UpdateFailure, UpdatePlatform, UpdateUnavailable } from '../../../../shared/updates'
+import type { InstallFailure, InstallResult, UpdateFailure, UpdatePlatform, UpdateUnavailable } from '../../../../shared/updates'
 
 export const UNAVAILABLE_TEXT: Record<UpdateUnavailable, string> = {
   'not-installed': '当前不是安装版（例如解压即用的试用副本），不能在应用内检查和安装更新',
@@ -15,7 +15,8 @@ const REASON: Record<Exclude<UpdateFailure, 'install'>, string> = {
   network: '连不上 GitHub，请检查网络或“更新网络”设置',
   source: '没有从 GitHub 取得可用的更新信息',
   integrity: '下载的文件校验未通过，已删除',
-  storage: '无法在本机保存或读取安装包，请检查磁盘空间和权限'
+  storage: '无法在本机保存或读取安装包，请检查磁盘空间和权限',
+  incomplete: '安装没有完成'
 }
 
 export function failureReason(failure: UpdateFailure, platform: UpdatePlatform): string {
@@ -62,9 +63,10 @@ export function readyLaterText(platform: UpdatePlatform, installOnQuit: boolean)
   return '稍后可在“设置 › 系统 › 关于”中安装'
 }
 
-/** The install tried at this start, before the window opened, did not run (not tried again). */
-export function startupFailedText(failure: UpdateFailure, platform: UpdatePlatform): string {
-  return `启动时未能安装新版本：${failureReason(failure, platform)}`
+/** The last installation attempt did not install: at this start (not tried again) or when the app last quit. */
+export function installFailedText({ when, failure }: InstallFailure, platform: UpdatePlatform): string {
+  const reason = failureReason(failure, platform)
+  return when === 'start' ? `启动时未能安装新版本：${reason}` : `上次退出时未能安装新版本：${reason}`
 }
 
 export const EMPTY_NOTES_TEXT = '此版本未提供更新说明'

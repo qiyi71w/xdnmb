@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EngineCheck, UpdateEngine } from '../src/main/updates/engine'
-import { createPendingInstallStore, createRecordStore, removeFile, sha512OfFile } from '../src/main/updates/files'
+import { createInstallMarkerStore, createPendingInstallStore, createRecordStore, removeFile, sha512OfFile } from '../src/main/updates/files'
 import { createUpdateService, type UpdateSettings } from '../src/main/updates/service'
 import { createLifecycle } from '../src/main/lifecycle/controller'
 import type { UpdatePlatform, UpdateState } from '../src/shared/updates'
@@ -104,7 +104,8 @@ function service(engine: ReturnType<typeof fakeEngine>, options: { platform?: Up
     engine: engine.api,
     records: createRecordStore(join(dir, 'update-state.json')),
     pendingInstall: createPendingInstallStore(join(dir, 'update-on-start.json')),
-    startupFailure: null,
+    installMarker: createInstallMarkerStore(join(dir, 'update-launched.json')),
+    lastInstallFailure: null,
     sha512: sha512OfFile,
     remove: removeFile,
     async runInstaller(path, restart) { installers.push({ path, restart }) },
@@ -214,6 +215,7 @@ describe('software updates', () => {
       [{ updateAutoInstall: true }, 'drafts-lost', []],
       [{ updateAutoInstall: true }, 'session-end', []]
     ]
+    const marker = createInstallMarkerStore(join(dir, 'update-launched.json'))
     for (const [patch, reason, restarts] of cases) {
       const s = service(fakeEngine())
       await s.instance.start(settings({ updateAutoInstall: true }))
@@ -221,6 +223,8 @@ describe('software updates', () => {
       await s.instance.prepareExit(reason)
       await s.instance.launchInstaller()
       expect(s.installers.map(({ restart }) => restart)).toEqual(restarts)
+      // The next start can only tell whether a launched installer replaced this version.
+      expect(marker.take()).toBe(restarts.length > 0 ? '0.2.0' : null)
     }
 
     const changed = service(fakeEngine())

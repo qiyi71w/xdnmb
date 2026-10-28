@@ -1,5 +1,5 @@
-import type { UpdateFailure } from '../../shared/updates'
-import type { UpdateRecord } from './service'
+import type { InstallFailure, UpdateFailure } from '../../shared/updates'
+import type { InstallMarkerStore, UpdateRecord } from './service'
 import { compareVersions, isStableVersion } from './release'
 
 export type ReadyPackage = NonNullable<UpdateRecord['ready']>
@@ -17,33 +17,59 @@ interface StartupInstallDeps {
   pending: PendingInstallStore
   sha512(path: string): Promise<string | null>
   remove(path: string): Promise<void>
-  /** Visible NSIS progress, then opens the installed version; resolves only when the process starts. */
+  /**
+   * Visible NSIS progress, then the installer opens the installed version. Installing closes this
+   * process, so it resolves only when the installer ended without installing; rejects when it cannot start.
+   */
   runInstaller(path: string): Promise<void>
 }
 
-/** Called only by the primary, installed Windows process, before storage or application windows open. */
-export async function installPendingUpdate(deps: StartupInstallDeps): Promise<{ started: boolean; failure: UpdateFailure | null }> {
+/**
+ * Called only by the primary, installed Windows process, before storage or application windows open.
+ * Returns only when this process goes on running the current version (nothing to install, or the
+ * installation did not happen).
+ */
+export async function installPendingUpdate(deps: StartupInstallDeps): Promise<{ failure: UpdateFailure | null }> {
   let ready: ReadyPackage | null
   try {
     ready = deps.pending.consume()
   } catch {
-    return { started: false, failure: 'storage' }
+    return { failure: 'storage' }
   }
-  if (ready === null) return { started: false, failure: null }
+  if (ready === null) return { failure: null }
   if (!isStableVersion(deps.currentVersion) || compareVersions(ready.release.version, deps.currentVersion) <= 0) {
     await deps.remove(ready.path)
-    return { started: false, failure: null }
+    return { failure: null }
   }
   const digest = await deps.sha512(ready.path)
   if (digest !== ready.sha512) {
     await deps.remove(ready.path)
-    return { started: false, failure: digest === null ? 'storage' : 'integrity' }
+    return { failure: digest === null ? 'storage' : 'integrity' }
   }
-  if (deps.sessionEnding()) return { started: false, failure: null }
+  if (deps.sessionEnding()) return { failure: null }
   try {
     await deps.runInstaller(ready.path)
-    return { started: true, failure: null }
+    // Still running: the installer ended before replacing this version (e.g. approval refused).
+    // The package stays for 「安装并重启」 or the next quit; this start does not try again.
+    return { failure: 'incomplete' }
   } catch {
-    return { started: false, failure: 'install' }
+    return { failure: 'install' }
   }
+}
+
+/**
+ * Whether the installer started when the app last quit replaced it: the version it was to install
+ * is newer than the one now running when it did not (approval refused, the installer failed or was
+ * stopped). Consumes the marker either way.
+ */
+export function exitInstallFailure(marker: InstallMarkerStore, currentVersion: string): InstallFailure | null {
+  let target: string | null
+  try {
+    target = marker.take()
+  } catch {
+    console.error('[updates] install marker not read')
+    return null
+  }
+  if (target === null || !isStableVersion(currentVersion) || compareVersions(target, currentVersion) <= 0) return null
+  return { when: 'exit', failure: 'incomplete' }
 }
