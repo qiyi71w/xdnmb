@@ -1,7 +1,8 @@
 // The 新串 and 回复 pages of 历史: the successful sends to that kind of target, newest first, in the
 // thread lists' row; those without a number included. Failed sends are not listed: their content
-// lives in 草稿. Everything shown comes from the attempt's own payload and the local cookies;
-// nothing is fetched to complete a row, and nothing here sends.
+// lives in 草稿. Everything shown comes from the attempt's own payload, the local cookies and, for
+// its excerpt and thumbnail, the sent post when it is held on this machine; nothing is fetched to
+// complete a row, and nothing here sends.
 
 import {
   useCallback,
@@ -30,6 +31,10 @@ import { forumLabel } from '../../../../shared/drafts'
 import { useEditorWorkspace } from '../editor/workspace'
 import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { ContentRegistryContext } from '../tabs/contentRegistry'
+import { RowExcerpt } from '../feed/ThreadRow'
+import { RowThumbnail } from '../image/RowThumbnail'
+import { useImageScope } from '../image/useImageLoad'
+import { useListImageViewer } from '../image/useListImageViewer'
 import { listRowGestures } from '../tabs/ThreadTabMenu'
 import type { EntryInit, ThreadOpen } from '../tabs/tabsState'
 import { recordCookie, recordPlace, type SentKind } from './sentRecords'
@@ -119,7 +124,8 @@ export function SentPage({
   onReload,
   onOpenThread,
   openStep,
-  openInTab
+  openInTab,
+  onViewerOpenChange
 }: {
   kind: SentKind
   entryKey: number
@@ -134,12 +140,16 @@ export function SentPage({
   openStep: (init: EntryInit) => boolean
   /** Opens a place in a new tab; null outside the app shell. */
   openInTab: ((init: EntryInit) => void) | null
+  /** Told when the image viewer opens or closes, so the 历史 page header can be made inert. */
+  onViewerOpenChange?: (open: boolean) => void
 }) {
   const registry = useContext(ContentRegistryContext)
   const { identities } = useEditorWorkspace()
   const view = kind === 'thread' ? 'threads' : 'replies'
   const text = PAGE_TEXT[kind]
   const bodyRef = useRef<HTMLDivElement>(null)
+  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(bodyRef), bodyRef)
+  useLayoutEffect(() => onViewerOpenChange?.(viewerOpen), [onViewerOpenChange, viewerOpen])
   const attempts = useMemo(() => (list.status === 'ready' ? list.attempts.filter((attempt) => attempt.payload.target.kind === kind) : []), [list, kind])
   const records = useMemo(() => attempts.filter(isSent), [attempts])
   const recordIds = useMemo(() => records.map((attempt) => attempt.id), [records])
@@ -267,7 +277,7 @@ export function SentPage({
 
   return (
     <section className="list-pane retained-page sent-page" aria-label={text.title} aria-busy={list.status === 'loading' || undefined}>
-      <div className="list-scroll" ref={bodyRef} onScroll={onScroll} tabIndex={-1}>
+      <div className="list-scroll" ref={bodyRef} onScroll={onScroll} tabIndex={-1} inert={viewerOpen}>
         <div className="list-status">
           {(list.status === 'failed' || readFailed) && (
             <div className="notice notice-error is-compact" role="alert">
@@ -288,37 +298,48 @@ export function SentPage({
 
         {records.length > 0 && (
           <ul className="thread-list" aria-label={`${text.title}发送记录`} onKeyDown={roving.onKeyDown}>
-            {records.map((attempt) => (
-              <li
-                key={attempt.id}
-                className={rowMenu?.attemptId === attempt.id ? 'history-row is-menu-open' : 'history-row'}
-                {...listRowGestures((event) => openRowMenu(attempt, event), openInTab === null ? null : () => open(attempt, true))}
-              >
-                <button
-                  type="button"
-                  className="thread-row"
-                  aria-busy={locating === attempt.id || undefined}
-                  onClick={() => open(attempt, false)}
-                  {...roving.itemProps(attempt.id)}
+            {records.map((attempt) => {
+              const itemProps = roving.itemProps(attempt.id)
+              // The held sent post's image; a send whose image is no longer held shows no thumbnail.
+              const thumbPost = attempt.preview?.image != null ? attempt.preview.id : null
+              return (
+                <li
+                  key={attempt.id}
+                  className={rowMenu?.attemptId === attempt.id ? 'history-row is-menu-open' : 'history-row'}
+                  {...listRowGestures((event) => openRowMenu(attempt, event), openInTab === null ? null : () => open(attempt, true))}
                 >
-                  <RecordSummary
-                    attempt={attempt}
-                    metaEnd={
-                      locating === attempt.id && (
-                        <span className="sent-locating">
-                          <Spinner />
-                          正在定位…
-                        </span>
-                      )
-                    }
-                  />
-                </button>
-              </li>
-            ))}
+                  {/* The row button and the thumbnail's 查看原图 button side by side, as in ThreadRow. */}
+                  <div className={thumbPost !== null ? 'thread-row has-thumb' : 'thread-row'}>
+                    <button
+                      type="button"
+                      className="row-open"
+                      aria-busy={locating === attempt.id || undefined}
+                      onClick={() => open(attempt, false)}
+                      {...itemProps}
+                    >
+                      <RecordSummary
+                        attempt={attempt}
+                        hasThumb={thumbPost !== null}
+                        metaEnd={
+                          locating === attempt.id && (
+                            <span className="sent-locating">
+                              <Spinner />
+                              正在定位…
+                            </span>
+                          )
+                        }
+                      />
+                    </button>
+                    {thumbPost !== null && <RowThumbnail postId={thumbPost} images={images} tabIndex={itemProps.tabIndex} />}
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         )}
         <div className="list-footer" />
       </div>
+      {viewer}
       {rowMenu !== null && menuAttempt !== undefined && (
         <ContextMenu
           key={`menu:${rowMenu.attemptId}`}
@@ -340,12 +361,14 @@ function recordLabel(attempt: PublicationAttempt): string {
 
 /**
  * The thread lists' row text for an attempt: its 饼干 ID (from the local cookie it was sent with)
- * and time, bold title and name when given, the content with its line breaks, then the target (forum
- * or 回复 No.x) and whether it had an image.
+ * and time, bold title and name when given, the excerpt, then the target (forum or 回复 No.x) and
+ * whether it had an image. The excerpt is the sent post as held on this machine (`preview`, the same
+ * post the attempt created) when there is one, else the sent text with its line breaks, never as
+ * markup. Everything else comes from the attempt itself, never from the thread's main post.
  */
-function RecordSummary({ attempt, metaEnd }: { attempt: PublicationAttempt; metaEnd?: ReactNode }) {
+function RecordSummary({ attempt, metaEnd, hasThumb }: { attempt: PublicationAttempt; metaEnd?: ReactNode; hasThumb: boolean }) {
   const { identities, forumName } = useEditorWorkspace()
-  const { payload } = attempt
+  const { payload, preview } = attempt
   const cookie = recordCookie(attempt, identities.overview)
   const title = meaningfulTitle(payload.fields.title)
   const name = meaningfulName(payload.fields.name)
@@ -362,14 +385,24 @@ function RecordSummary({ attempt, metaEnd }: { attempt: PublicationAttempt; meta
       </span>
       {title !== null && <span className="row-title">{title}</span>}
       {name !== null && <span className="row-name">{name}</span>}
-      {content !== '' && <TextExcerpt text={content} className="row-excerpt is-plain" />}
+      {/* The sent post as held here (same content, its formatting); else the sent text, literally. */}
+      {preview !== undefined && preview.content.length > 0 ? (
+        <RowExcerpt post={preview} />
+      ) : (
+        content !== '' && <TextExcerpt text={content} className="row-excerpt" />
+      )}
       <span className="row-meta">
         <span className="row-forum">{target.kind === 'thread' ? forumLabel(target.forumId, forumName) : `回复 No.${target.threadId}`}</span>
-        {payload.attachmentId !== null && (
-          <span className="row-image">
-            <Icon name="image" size={13} />
-            附图
-          </span>
+        {hasThumb ? (
+          // Arrow keys move between row buttons only: this tells them the record has an image.
+          <span className="visually-hidden">附图</span>
+        ) : (
+          payload.attachmentId !== null && (
+            <span className="row-image">
+              <Icon name="image" size={13} />
+              附图
+            </span>
+          )
         )}
         {metaEnd}
       </span>

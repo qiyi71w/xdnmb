@@ -84,9 +84,15 @@ export class OnlineSearchSession {
     if (!this.disposed && draft !== this.state.draft) this.set({ ...this.state, draft })
   }
 
-  /** Starts a new query chain (explicit submit, retry or 重新搜索). `query` is already trimmed. */
+  /**
+   * Starts a new query chain (explicit submit, retry or 重新搜索). `query` is already trimmed. The
+   * same query while its own run is still awaited does nothing (no second request, nothing changes):
+   * `pending` is set synchronously, so repeated Enter or clicks before a re-render are dropped too.
+   * A different query replaces the awaited one, as before.
+   */
   run(query: string): void {
-    if (this.disposed || query === '') return
+    const { pending } = this.state
+    if (this.disposed || query === '' || (pending?.kind === 'run' && pending.query === query)) return
     const seq = ++this.seq
     const request: OnlineSearchRequest = { kind: 'run', query }
     const { results } = this.state

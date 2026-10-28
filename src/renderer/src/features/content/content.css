@@ -330,20 +330,6 @@
   margin: 6px 0;
 }
 
-/* A row's text kept as plain text (历史: the visited head post's excerpt, a sent post's content):
-   the thread lists' clamp, original line breaks kept. */
-.row-excerpt.is-plain {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 20;
-  overflow: hidden;
-  white-space: pre-line;
-  overflow-wrap: anywhere;
-  font-size: var(--text-sm);
-  line-height: 1.55;
-  color: var(--ink-2);
-}
-
 /* The 历史 row whose context menu is open keeps the hover layer while the pointer is on the menu. */
 .history-row.is-menu-open > .thread-row:not(.is-selected) {
   background: var(--hover);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { DEFAULT_CACHE_LIMIT, type ContentUsage } from '../../../../shared/content'
 import { Icon } from '../../components/Icon'
+import { singleFlight } from '../../lib/singleFlight'
 import { attempt, contentFailureText, exactBytes, formatBytes, limitToGbText, parseLimitGb, type Refused } from './contentText'
 import './content.css'
 
@@ -57,43 +58,50 @@ export function CacheSection() {
   const parsed = parseLimitGb(limitText)
   const usage = state.status === 'ready' ? state.usage : null
   const unchanged = usage !== null && parsed === usage.limitBytes
+  /** 应用 has nothing to save (empty, invalid or the current limit) or something is saving. */
+  const applyUnavailable = parsed === null || unchanged || busy !== null
+  /** Taken synchronously: a second Enter or click before the busy state renders does nothing. */
+  const [flight] = useState(singleFlight)
 
-  const saveLimit = async (bytes: number) => {
-    if (busy !== null) return
-    setBusy('limit')
-    setMessage(null)
-    const result = await attempt(() => window.xidao.content.setCacheLimit({ bytes }))
-    if (!alive.current) return
-    setBusy(null)
-    if (result?.ok === true) {
-      apply(result.value)
-      setMessage({ error: false, text: `上限已设为 ${formatBytes(result.value.limitBytes)}（${exactBytes(result.value.limitBytes)}）` })
-    } else {
-      setMessage({ error: true, text: `上限未保存：${contentFailureText(result?.ok === false ? result : null)}` })
-    }
-  }
+  const saveLimit = (bytes: number) =>
+    flight.run(async () => {
+      if (busy !== null) return
+      setBusy('limit')
+      setMessage(null)
+      const result = await attempt(() => window.xidao.content.setCacheLimit({ bytes }))
+      if (!alive.current) return
+      setBusy(null)
+      if (result?.ok === true) {
+        apply(result.value)
+        setMessage({ error: false, text: `上限已设为 ${formatBytes(result.value.limitBytes)}（${exactBytes(result.value.limitBytes)}）` })
+      } else {
+        setMessage({ error: true, text: `上限未保存：${contentFailureText(result?.ok === false ? result : null)}` })
+      }
+    })
 
+  // The button, Enter in the field and any other implicit submission all end here.
   const onSubmit = (event: FormEvent) => {
     event.preventDefault()
-    if (parsed !== null && !unchanged) void saveLimit(parsed)
+    if (!applyUnavailable && parsed !== null) void saveLimit(parsed)
   }
 
-  const clear = async () => {
-    if (busy !== null) return
-    setBusy('clear')
-    setMessage(null)
-    const result = await attempt(() => window.xidao.content.clearCache())
-    if (!alive.current) return
-    setBusy(null)
-    setConfirming(false)
-    if (result?.ok === true) {
-      apply(result.value)
-      const left = result.value.cacheTextBytes + result.value.cacheImageBytes
-      setMessage({ error: false, text: left === 0 ? '普通缓存已清理' : `普通缓存已清理，${formatBytes(left)} 暂时无法删除` })
-    } else {
-      setMessage({ error: true, text: `清理未完成：${contentFailureText(result?.ok === false ? result : null)}` })
-    }
-  }
+  const clear = () =>
+    flight.run(async () => {
+      if (busy !== null) return
+      setBusy('clear')
+      setMessage(null)
+      const result = await attempt(() => window.xidao.content.clearCache())
+      if (!alive.current) return
+      setBusy(null)
+      setConfirming(false)
+      if (result?.ok === true) {
+        apply(result.value)
+        const left = result.value.cacheTextBytes + result.value.cacheImageBytes
+        setMessage({ error: false, text: left === 0 ? '普通缓存已清理' : `普通缓存已清理，${formatBytes(left)} 暂时无法删除` })
+      } else {
+        setMessage({ error: true, text: `清理未完成：${contentFailureText(result?.ok === false ? result : null)}` })
+      }
+    })
 
   const cacheBytes = usage === null ? 0 : usage.cacheTextBytes + usage.cacheImageBytes
   const ratio = usage === null || usage.limitBytes === 0 ? (cacheBytes > 0 ? 1 : 0) : Math.min(1, cacheBytes / usage.limitBytes)
@@ -195,7 +203,8 @@ export function CacheSection() {
                 aria-invalid={invalid || undefined}
                 aria-describedby={invalid ? `${errorId} ${hintId}` : hintId}
               />
-              <button type="submit" className="btn btn-page" disabled={parsed === null || unchanged || busy !== null} aria-busy={busy === 'limit' || undefined}>
+              {/* 应用 stays focusable while unavailable (focus is kept while saving); the form's submit checks it. */}
+              <button type="submit" className="btn btn-page" aria-disabled={applyUnavailable || undefined} aria-busy={busy === 'limit' || undefined}>
                 {busy === 'limit' ? '正在保存…' : '应用'}
               </button>
               <button
@@ -226,7 +235,14 @@ export function CacheSection() {
                 <button ref={confirmRef} type="button" className="btn btn-small btn-danger btn-page" aria-busy={busy === 'clear' || undefined} onClick={() => void clear()}>
                   {busy === 'clear' ? '正在清理…' : '确认清理'}
                 </button>
-                <button type="button" className="btn btn-small btn-page" disabled={busy === 'clear'} onClick={() => setConfirming(false)}>
+                <button
+                  type="button"
+                  className="btn btn-small btn-page"
+                  aria-disabled={busy === 'clear' || undefined}
+                  onClick={() => {
+                    if (busy !== 'clear') setConfirming(false)
+                  }}
+                >
                   取消
                 </button>
               </div>
@@ -237,8 +253,9 @@ export function CacheSection() {
                 ref={clearRef}
                 type="button"
                 className="btn btn-danger btn-page"
-                disabled={busy !== null}
+                aria-disabled={busy !== null || undefined}
                 onClick={() => {
+                  if (busy !== null) return
                   setMessage(null)
                   setConfirming(true)
                 }}

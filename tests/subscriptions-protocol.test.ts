@@ -37,6 +37,18 @@ describe('App subscription JSON adapter', () => {
 })
 
 describe('web subscription HTML adapter', () => {
+  it('preserves safe formatted preview content and only controlled forum images', () => {
+    const body = '第一行<br><br><span style="color:red"><b>红字</b></span><font color="#789922">绿字</font><br>&gt;&gt;No.123 [h]隐藏[/h]&lt;b&gt;原文&lt;/b&gt;<script>bad()</script>'
+    const markup = `<div class="h-threads-item-main"><a class="h-threads-info-id" href="/t/100">No.100</a><span class="h-threads-info-uid">ID: AbC123</span><div class="h-threads-img-box"><a href="https://image.nmb.best/image/2026-10-27/sample.png"><img class="h-threads-img" src="https://image.nmb.best/thumb/2026-10-27/sample.png"></a></div><div class="h-threads-content">${body}</div></div>`
+    const head = parseWebList(normal(markup))[0]!.head
+    expect(head.userHash).toBe('AbC123')
+    expect(head.plainText).toBe('第一行\n\n红字绿字\n>>No.123 [h]隐藏[/h]<b>原文</b>')
+    expect(head.content).toContainEqual({ type: 'redtext', children: [{ type: 'emphasis', style: 'bold', children: [{ type: 'text', text: '红字' }] }] })
+    expect(head.content).toContainEqual({ type: 'quoteRef', postId: '123', raw: '>>No.123' })
+    expect(head.image).toEqual({ path: '2026-10-27/sample', ext: '.png' })
+    expect(parseWebList(normal(markup.replaceAll('image.nmb.best', 'untrusted.example')))[0]!.head.image).toBeNull()
+  })
+
   it('requires normal markers and valid item structure; preserves unknown fields', () => {
     expect(parseWebList(normal())).toEqual([])
     const result = parseWebList(normal(item('1001')))

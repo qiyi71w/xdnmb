@@ -148,13 +148,13 @@ export interface RetainedHeading {
 
 /**
  * How a 浏览 row of 历史 names its thread: the title, else the first line of the head post held
- * locally (`excerpt`, shown on one line), else the number.
+ * locally (its plain text, shown on one line), else the number.
  */
-export function retainedHeading(entry: RetainedEntry): RetainedHeading {
-  const title = meaningfulTitle(entry.title)
+export function retainedHeading(entry: Pick<RetainedEntry, 'threadId' | 'title' | 'head'>): RetainedHeading {
+  const title = meaningfulTitle(entry.title) ?? meaningfulTitle(entry.head?.title ?? null)
   if (title !== null) return { text: title, source: 'title' }
-  const line = entry.excerpt
-    ?.split('\n')
+  const line = entry.head?.plainText
+    .split('\n')
     .map((part) => part.trim())
     .find((part) => part !== '')
   if (line !== undefined) return { text: line, source: 'excerpt' }

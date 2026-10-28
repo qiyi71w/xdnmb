@@ -1,5 +1,5 @@
 import { Parser } from 'htmlparser2'
-import type { Post, ThreadSummary } from '../../shared/forum'
+import type { Post, PostImage, ThreadSummary } from '../../shared/forum'
 import type { SubscriptionAction } from '../../shared/subscriptions'
 import { ForumReadError } from '../forum/contract'
 import type { TransportResponse } from '../forum/contract'
@@ -62,15 +62,19 @@ export function parseAppList(response: TransportResponse): ThreadSummary[] {
   })
 }
 
-interface Element { tag: string; attrs: Record<string, string>; children: Array<Element | string> }
+interface Element { tag: string; attrs: Record<string, string>; children: Array<Element | string>; start: number; end: number }
 function document(response: TransportResponse): Element {
   if (response.mediaType !== 'text/html') throw shape()
-  const root: Element = { tag: '', attrs: {}, children: [] }
+  const root: Element = { tag: '', attrs: {}, children: [], start: 0, end: response.text.length }
   const stack = [root]
   const parser = new Parser({
-    onopentag(tag, attrs) { const node = { tag, attrs, children: [] }; stack.at(-1)!.children.push(node); stack.push(node) },
+    onopentag(tag, attrs) {
+      const node: Element = { tag, attrs, children: [], start: parser.endIndex + 1, end: response.text.length }
+      stack.at(-1)!.children.push(node)
+      stack.push(node)
+    },
     ontext(text) { stack.at(-1)!.children.push(text) },
-    onclosetag() { if (stack.length > 1) stack.pop() }
+    onclosetag() { if (stack.length > 1) stack.pop()!.end = parser.startIndex }
   }, { decodeEntities: true })
   parser.end(response.text)
   return root
@@ -120,6 +124,19 @@ function errors(root: Element): void {
   if (/请确认饼干是否应用正确|请(?:先)?(?:登录|登入)|权限不足|无权访问|验证码|captcha|challenge/i.test(message)) throw business(message)
 }
 
+/** Accept only the forum image service's managed paths, never arbitrary page image URLs. */
+function webImage(item: Element): PostImage | null {
+  for (const image of nodes(item, (node) => node.tag === 'img' && hasClass(node, 'h-threads-img'))) {
+    try {
+      const url = new URL(image.attrs.src ?? '', 'https://www.nmbxd1.com')
+      if (url.protocol !== 'https:' || url.hostname !== 'image.nmb.best' || url.port || url.username || url.password || url.search || url.hash) continue
+      const match = /^\/(?:thumb|image)\/(\d{4}-\d{2}-\d{2}\/[A-Za-z0-9_]{1,64})(\.[A-Za-z0-9]{1,8})$/.exec(url.pathname)
+      if (match) return { path: match[1]!, ext: match[2]! }
+    } catch { /* An invalid or foreign URL does not establish image metadata. */ }
+  }
+  return null
+}
+
 export function parseWebList(response: TransportResponse): ThreadSummary[] {
   const root = document(response)
   errors(root)
@@ -139,11 +156,11 @@ export function parseWebList(response: TransportResponse): ThreadSummary[] {
     if (!id || (linkId && labelId && linkId !== labelId) || (item.attrs['data-threads-id'] && item.attrs['data-threads-id'] !== id)) throw shape()
     const bodies = nodes(item, (node) => hasClass(node, 'h-threads-content'))
     if (bodies.length !== 1) throw shape()
-    const body = text(bodies[0]!)
+    const body = parseContent(response.text.slice(bodies[0]!.start, bodies[0]!.end))
     const field = (name: string) => { const value = nodes(item, (node) => hasClass(node, name))[0]; return value ? text(value) : null }
-    return { head: { id, forumId: null, createdAt: field('h-threads-info-createdat'), userHash: field('h-threads-info-uid'),
+    return { head: { id, forumId: null, createdAt: field('h-threads-info-createdat'), userHash: field('h-threads-info-uid')?.replace(/^ID:\s*/i, '') || null,
       name: field('h-threads-info-name'), title: field('h-threads-info-title'), isAdmin: null, isSage: null,
-      content: body === '' ? [] : [{ type: 'text' as const, text: body }], plainText: body, image: null },
+      content: body.nodes, plainText: body.plainText, image: webImage(item) },
       replyCount: null, recentReplies: [], remainReplies: null }
   })
 }

@@ -95,6 +95,6 @@ describe('spoiler segments', () => {
     expect(excerpt).toContain('隐藏内容')
     expect(excerpt).not.toContain('[h]')
     expect(excerpt).not.toMatch(/role="button"|tabindex/i)
-    expect(excerpt).toContain('回复[1,5]\n')
+    expect(excerpt).toContain('回复[1,5]<br/>')
   })
 })

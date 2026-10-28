@@ -10,11 +10,12 @@ import { failureText, type LoadFailure } from '../reminders/useReminders'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 
 /**
- * Context menu of one subscription row: 在新标签页打开, 复制串号, 饼干颜色… (the 串主's), then the three
- * 提醒 kinds as checkable items (saved through `useReminderToggle` like the thread's 更多 › 提醒: one
- * rule at a time, never starting a check) and 取消订阅, which sends the write at once (no
- * confirmation; the thread's reminders stay as they are). While the rules are unknown the kinds
- * cannot be toggled; a failed read offers a retry. 复制选中文字 (taken when the menu opened) comes first.
+ * Context menu of one subscription row (App and 网页 alike): 在新标签页打开, 复制串号, 饼干颜色… (the
+ * 串主's), then the three 提醒 kinds as checkable items (saved through `useReminderToggle` like the
+ * thread's 更多 › 提醒: one rule at a time, never starting a check), 离线保存…, which opens the thread's
+ * own 离线副本 dialog, and 取消订阅, which sends the write at once (no confirmation; the thread's
+ * reminders stay as they are). While the rules are unknown the kinds cannot be toggled; a failed
+ * read offers a retry. 复制选中文字 (taken when the menu opened) comes first.
  */
 export function SubscriptionRowMenu({
   point,
@@ -29,6 +30,7 @@ export function SubscriptionRowMenu({
   onUpdated,
   removeBlocked,
   onRemove,
+  onOfflineSave,
   onClose
 }: {
   point: ContextMenuPoint
@@ -47,6 +49,8 @@ export function SubscriptionRowMenu({
   /** Why 取消订阅 cannot start now; null when it can. */
   removeBlocked: string | null
   onRemove: () => void
+  /** Opens the thread's 离线副本 dialog (save, update, details) by its number. */
+  onOfflineSave: () => void
   onClose: (returnFocus: boolean) => void
 }) {
   const saving = useReminderToggle(threadId, onUpdated, true)
@@ -71,6 +75,8 @@ export function SubscriptionRowMenu({
       }
     })),
     ...(unknownFailed ? [{ type: 'action', key: 'retry', label: '重新读取提醒', keepOpen: true, onSelect: onRetry } as const] : []),
+    { type: 'separator', key: 'offline-separator' },
+    { type: 'action', key: 'offline', label: '离线保存…', onSelect: onOfflineSave },
     { type: 'separator', key: 'separator' },
     {
       type: 'action',

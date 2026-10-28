@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { targetText, type DraftId, type SavedDraft } from '../../../../shared/drafts'
 import { isUnsettled } from '../../../../shared/publication'
 import { Icon } from '../../components/Icon'
 import { Modal, ModalHeader } from '../../components/Modal'
 import { formatRecordTime } from '../../lib/time'
 import { editorForDraft } from '../editor/editorsState'
-import { credentialLine, excerpt } from '../editor/editorText'
+import { credentialLine, excerpt, SAVE_FAILURE_TEXT } from '../editor/editorText'
+import type { SaveFailure } from '../editor/useEditorsStore'
 import { useEditorWorkspace } from '../editor/workspace'
 import './drafts.css'
 
@@ -16,13 +17,16 @@ type Locks = ReadonlySet<DraftId> | null
 
 /** Why a draft whose send is still sending or being checked cannot be deleted (row and tooltip). */
 const LOCKED_TEXT = '发送结果还没确定，暂时不能删除'
+/** The send records could not be read: any draft may be held by a send, so none is deleted. */
+const UNKNOWN_LOCK_TEXT = '发送状态未知，暂时不能删除'
 
 /**
  * 草稿 library: every saved draft, most recently saved first; several may share a target.
  * 继续 hands the draft to the shell (focus its editor, load it into the editor already on its
- * target, or open it in a new tab); 删除 removes the record after confirmation, closing an editor
- * that continues it, and can be undone from its bottom notice. A draft whose send is still sending
- * or being checked is locked until that send is sent or failed: 删除 then only says why.
+ * target, or open it in a new tab); 删除 removes the record at once, closing an editor that
+ * continues it, and can be undone from its bottom notice. A draft whose send is still sending or
+ * being checked, or any draft while the send records cannot be read, cannot be deleted: 删除 is
+ * then unavailable and says why.
  */
 export function DraftLibraryDialog({
   tabTitle,
@@ -39,13 +43,16 @@ export function DraftLibraryDialog({
   const { store, identities, forumName } = useEditorWorkspace()
   const [list, setList] = useState<ListState>({ status: 'loading' })
   const [locks, setLocks] = useState<Locks>(() => new Set())
-  const [confirming, setConfirming] = useState<DraftId | null>(null)
   const [deleting, setDeleting] = useState<DraftId | null>(null)
-  const [deleteFailed, setDeleteFailed] = useState<{ draftId: DraftId; locked: boolean } | null>(null)
+  const deletingRef = useRef(false)
+  const [deleteFailed, setDeleteFailed] = useState<{ draftId: DraftId; reason: SaveFailure } | null>(null)
+  /** Target of the draft just deleted here, until the next deletion. */
+  const [deletedNote, setDeletedNote] = useState<string | null>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const closeRef = useRef<HTMLDivElement>(null)
   const alive = useRef(true)
   const focusAfterDelete = useRef<number | null>(null)
+  const unknownLockId = useId()
 
   const load = useCallback(async (quiet: boolean) => {
     if (!quiet) setList({ status: 'loading' })
@@ -75,46 +82,44 @@ export function DraftLibraryDialog({
     void load(quiet)
   }, [load, revision])
 
-  // Confirming moves focus to 确认删除; leaving the confirmation returns it to that row's 删除.
-  const confirmRef = useRef<HTMLButtonElement>(null)
-  const lastConfirmed = useRef<DraftId | null>(null)
-  useLayoutEffect(() => {
-    if (confirming !== null) {
-      lastConfirmed.current = confirming
-      confirmRef.current?.focus()
-      return
-    }
-    const draftId = lastConfirmed.current
-    lastConfirmed.current = null
-    if (draftId !== null) listRef.current?.querySelector<HTMLElement>(`[data-delete-id="${draftId}"]`)?.focus()
-  }, [confirming])
-
-  // After a deletion, keep focus in the list: the item now at the same position, else the dialog.
+  // After a deletion, keep focus in the list: the item now at the same position, else (the last
+  // one gone) the dialog's close button. The undo stays in the bottom notice once the dialog closes.
   useLayoutEffect(() => {
     const index = focusAfterDelete.current
     if (index === null || list.status !== 'ready') return
     focusAfterDelete.current = null
     const items = listRef.current?.querySelectorAll<HTMLElement>('.draft-item') ?? []
     const item = items[Math.min(index, items.length - 1)]
-    const target = item?.querySelector<HTMLElement>('button:not(:disabled)') ?? closeRef.current?.querySelector<HTMLElement>('button')
+    const target = item?.querySelector<HTMLElement>('button:not([aria-disabled="true"])') ?? closeRef.current?.querySelector<HTMLElement>('button')
     target?.focus()
   }, [list])
 
+  /**
+   * One press deletes: no confirmation; the bottom notice can undo it. `deletingRef` is taken before
+   * anything awaits, so a second press (or Enter held down) while this one runs does nothing.
+   */
   const remove = async (draft: SavedDraft, index: number) => {
-    if (deleting !== null) return
+    if (deletingRef.current) return
+    deletingRef.current = true
     setDeleting(draft.id)
     setDeleteFailed(null)
-    // An editor continuing the draft is closed with it; the deletion can be undone from its notice.
-    const outcome = await store.deleteDraft(draft, 'close')
-    if (!alive.current) return
-    setDeleting(null)
-    setConfirming(null)
-    if (!outcome.ok) {
-      setDeleteFailed({ draftId: draft.id, locked: outcome.reason === 'locked' })
-      return
+    setDeletedNote(null)
+    try {
+      // An editor continuing the draft is closed with it (that editor only); the store refuses a
+      // draft a send holds, and on failure nothing is deleted.
+      const outcome = await store.deleteDraft(draft, 'close')
+      if (!alive.current) return
+      if (!outcome.ok) {
+        setDeleteFailed({ draftId: draft.id, reason: outcome.reason })
+        return
+      }
+      focusAfterDelete.current = index
+      setDeletedNote(targetText(draft.target, forumName))
+      setList((current) => (current.status === 'ready' ? { status: 'ready', drafts: current.drafts.filter((item) => item.id !== draft.id) } : current))
+    } finally {
+      deletingRef.current = false
+      if (alive.current) setDeleting(null)
     }
-    focusAfterDelete.current = index
-    setList((current) => (current.status === 'ready' ? { status: 'ready', drafts: current.drafts.filter((item) => item.id !== draft.id) } : current))
   }
 
   const [continueFailed, setContinueFailed] = useState<{ draftId: DraftId; text: string } | null>(null)
@@ -130,6 +135,15 @@ export function DraftLibraryDialog({
         <ModalHeader title="草稿" closeLabel="关闭草稿" onClose={onClose} />
       </div>
       <div className="modal-body drafts-body" aria-busy={list.status === 'loading' || undefined}>
+        {/* The undo is the bottom notice behind this dialog: say where it is, as the deletion's result. */}
+        <div role="status" className="form-message-region">
+          {deletedNote !== null && (
+            <p className="notice-inline">
+              <Icon name="check" size={14} />
+              已删除「{deletedNote}」的草稿；关闭草稿后可在窗口底部撤销
+            </p>
+          )}
+        </div>
         {list.status === 'failed' && (
           <div className="notice notice-error" role="alert">
             <Icon name="alert" className="notice-icon" />
@@ -142,9 +156,12 @@ export function DraftLibraryDialog({
           </div>
         )}
         {list.status === 'ready' && locks === null && list.drafts.length > 0 && (
-          <p className="notice-inline is-warning" role="status">
+          <p className="notice-inline is-warning" role="status" id={unknownLockId}>
             <Icon name="alert" size={14} />
-            发送记录读取失败，锁定状态未知
+            发送记录读取失败，发送状态未知，暂时不能删除草稿
+            <button type="button" className="btn btn-small" onClick={() => void load(true)}>
+              重新读取
+            </button>
           </p>
         )}
         {list.status === 'ready' && list.drafts.length === 0 && (
@@ -157,7 +174,10 @@ export function DraftLibraryDialog({
             {list.drafts.map((draft, index) => {
               const editing = editorForDraft(store.state, draft.id)
               // A send holds it: its attempt (sending or being checked), or the editor continuing it.
-              const locked = locks?.has(draft.id) === true || (editing !== null && editing.publication !== null)
+              const sendHeld = locks?.has(draft.id) === true || (editing !== null && editing.publication !== null)
+              // Unknown sends (the records could not be read) may hold it too: deleting waits until they are known.
+              const lockText = sendHeld ? LOCKED_TEXT : locks === null ? UNKNOWN_LOCK_TEXT : null
+              const locked = lockText !== null
               const identity = credentialLine(draft.credentialId, identities.overview)
               const target = targetText(draft.target, forumName)
               const rowId = `draft-${draft.id}`
@@ -190,10 +210,10 @@ export function DraftLibraryDialog({
                     </p>
                     {editing !== null && (
                       <p className="draft-editing" id={`${rowId}-editing`}>
-                        正在「{tabTitle(editing.tabId)}」标签编辑
+                        正在「{tabTitle(editing.tabId)}」标签编辑{!sendHeld && '；删除会同时关闭这份编辑'}
                       </p>
                     )}
-                    {locked && (
+                    {sendHeld && (
                       <p className="draft-locked" id={`${rowId}-locked`}>
                         <Icon name="alert" size={13} />
                         {LOCKED_TEXT}
@@ -202,7 +222,7 @@ export function DraftLibraryDialog({
                     {deleteFailed?.draftId === draft.id && (
                       <p className="notice-inline is-warning" role="alert">
                         <Icon name="alert" size={14} />
-                        {deleteFailed.locked ? '没能删除：发送结果还没确定' : '没能删除：本地存储不可用'}
+                        没能删除：{deleteFailed.reason === 'locked' ? '发送结果还没确定' : SAVE_FAILURE_TEXT[deleteFailed.reason]}，草稿仍保留
                       </p>
                     )}
                     {continueFailed?.draftId === draft.id && (
@@ -212,65 +232,33 @@ export function DraftLibraryDialog({
                       </p>
                     )}
                   </div>
-                  {confirming === draft.id ? (
-                    <div className="draft-actions is-confirming" role="group" aria-label={`确认删除：${target}`}>
-                      {editing !== null && (
-                        <p className="draft-confirm-note" id={`${rowId}-confirm-note`}>
-                          会同时关闭「{tabTitle(editing.tabId)}」标签里的这份编辑
-                        </p>
-                      )}
-                      <button
-                        ref={confirmRef}
-                        type="button"
-                        className="btn btn-small btn-danger"
-                        aria-describedby={editing !== null ? `${rowId}-confirm-note` : undefined}
-                        aria-busy={deleting === draft.id || undefined}
-                        onClick={() => void remove(draft, index)}
-                      >
-                        {deleting === draft.id ? '正在删除…' : '确认删除'}
-                      </button>
+                  <div className="draft-actions">
+                    {sendHeld && editing === null ? null : (
                       <button
                         type="button"
                         className="btn btn-small"
-                        aria-disabled={deleting === draft.id || undefined}
-                        onClick={() => {
-                          if (deleting !== draft.id) setConfirming(null)
-                        }}
+                        aria-describedby={`${rowId}-target`}
+                        onClick={() => void continueDraft(draft)}
                       >
-                        取消
+                        <Icon name="draft" size={14} />
+                        继续
                       </button>
-                    </div>
-                  ) : (
-                    <div className="draft-actions">
-                      {locked && editing === null ? null : (
-                        <button
-                          type="button"
-                          className="btn btn-small"
-                          aria-describedby={`${rowId}-target`}
-                          onClick={() => void continueDraft(draft)}
-                        >
-                          <Icon name="draft" size={14} />
-                          继续
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="btn btn-small btn-danger"
-                        data-delete-id={draft.id}
-                        aria-describedby={locked ? `${rowId}-locked` : editing !== null ? `${rowId}-editing` : `${rowId}-target`}
-                        aria-disabled={locked || deleting !== null || undefined}
-                        title={locked ? LOCKED_TEXT : undefined}
-                        onClick={() => {
-                          if (locked || deleting !== null) return
-                          setDeleteFailed(null)
-                          setConfirming(draft.id)
-                        }}
-                      >
-                        <Icon name="trash" size={14} />
-                        删除
-                      </button>
-                    </div>
-                  )}
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-small btn-danger"
+                      aria-describedby={sendHeld ? `${rowId}-locked` : locked ? unknownLockId : editing !== null ? `${rowId}-editing` : `${rowId}-target`}
+                      aria-disabled={locked || deleting !== null || undefined}
+                      aria-busy={deleting === draft.id || undefined}
+                      title={lockText ?? undefined}
+                      onClick={() => {
+                        if (!locked && deleting === null) void remove(draft, index)
+                      }}
+                    >
+                      <Icon name="trash" size={14} />
+                      {deleting === draft.id ? '正在删除…' : '删除'}
+                    </button>
+                  </div>
                 </li>
               )
             })}

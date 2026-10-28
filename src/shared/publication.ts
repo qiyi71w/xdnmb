@@ -1,5 +1,6 @@
 import type { DraftId, DraftSaveInput, PostTarget, SavedDraft } from './drafts'
 import type { CredentialId } from './identity'
+import type { Post } from './forum'
 
 /**
  * `confirmed`: sent, its post known. `unconfirmed`: the forum reported success but the post could
@@ -48,6 +49,8 @@ export interface PublicationAttempt {
    * absent when the forum gave none and on attempts recorded before it was kept.
    */
   forumMessage?: string
+  /** Locally held confirmed post, supplied by list reads only; never changes the submission payload. */
+  preview?: Post
 }
 
 export interface SubmitInput {

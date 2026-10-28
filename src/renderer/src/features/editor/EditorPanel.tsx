@@ -170,16 +170,23 @@ export function EditorPanel({
     store.dispatch({ type: 'set-expanded', editorId, expanded: false })
   }
 
-  /** 删除草稿: the editor empties and collapses; the bottom notice offers 撤销. */
+  /** 删除草稿: the editor empties and collapses; the bottom notice offers 撤销. One press deletes once:
+   *  `deletingNow` is taken before anything awaits, so a repeat while it runs does nothing. */
+  const deletingNow = useRef(false)
   const deleteDraft = async () => {
     const draft = editor.draft
-    if (draft === null || locked || deleting) return
+    if (draft === null || locked || deletingNow.current) return
+    deletingNow.current = true
     setDeleting(true)
     setDeleteError(null)
-    const outcome = await store.deleteDraft(draft, 'empty')
-    setDeleting(false)
-    if (outcome.ok) focusBar.current = true
-    else setDeleteError(outcome.reason)
+    try {
+      const outcome = await store.deleteDraft(draft, 'empty')
+      if (outcome.ok) focusBar.current = true
+      else setDeleteError(outcome.reason)
+    } finally {
+      deletingNow.current = false
+      setDeleting(false)
+    }
   }
 
   const report = editor.report

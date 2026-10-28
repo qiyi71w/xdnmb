@@ -1078,9 +1078,15 @@ class SqliteReadingDatabase implements ReadingDatabase {
   }
 
   listPublications(): PublicationAttempt[] {
-    return this.publicationDatabase().prepare<[], PublicationRow>(
+    const db = this.publicationDatabase()
+    const post = db.prepare<[string], PostRow>('SELECT * FROM posts WHERE id = ?')
+    return db.prepare<[], PublicationRow>(
       'SELECT * FROM publication_attempts ORDER BY created_at DESC, id DESC'
-    ).all().map(publicationAttempt)
+    ).all().map((row) => {
+      const attempt = publicationAttempt(row)
+      const cached = attempt.state === 'confirmed' && attempt.postId !== null ? post.get(attempt.postId) : undefined
+      return cached === undefined ? attempt : { ...attempt, preview: postFromRow(cached) }
+    })
   }
 
   getPublication(id: string): PublicationAttempt | null {

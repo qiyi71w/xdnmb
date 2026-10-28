@@ -6,20 +6,17 @@ import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, use
 import { createPortal } from 'react-dom'
 import type { ForumId, Post, ThreadId } from '../../../../shared/forum'
 import { ContextMenu, contextMenuPoint, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
-import { CookieId } from '../../components/CookieId'
 import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { copyNumberItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
-import { TextExcerpt } from '../../components/Content'
 import { Icon } from '../../components/Icon'
-import { meaningfulName, meaningfulTitle } from '../../lib/format'
-import { formatForumTime, formatRecordTime } from '../../lib/time'
+import { formatRecordTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
-import { RowThumbnail } from '../image/RowThumbnail'
+import { ThreadRow } from '../feed/ThreadRow'
 import { useImageScope } from '../image/useImageLoad'
 import { useListImageViewer } from '../image/useListImageViewer'
 import { SentPage, useSentAttempts } from '../publication/SentPage'
 import type { SentKind } from '../publication/sentRecords'
-import { ListFilterPanel, ListFilterToggle, UncertainTag, useListFilter } from '../search/FilterFields'
+import { ListFilterPanel, ListFilterToggle, useListFilter } from '../search/FilterFields'
 import { contentFilterCount, filterList } from '../search/listFilters'
 import { useThreadMetadata } from '../search/useThreadMetadata'
 import { ContentRegistryContext, useRegisterContent, type HistoryView } from '../tabs/contentRegistry'
@@ -90,7 +87,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
   const [sentShown, setSentShown] = useState(view !== 'browsing')
   const [sentRefresh, setSentRefresh] = useState(0)
   const sent = useSentAttempts(sentShown, sentRefresh)
-  /** 浏览's original-image viewer covers the whole page, header included; nothing behind it is operable. */
+  /** A page's original-image viewer covers the whole page, header included; nothing behind it is operable. */
   const [viewerOpen, setViewerOpen] = useState(false)
 
   const show = (next: HistoryView) => {
@@ -148,6 +145,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
                     onOpenThread={props.onOpenThread}
                     openStep={(init) => host.openStep(props.entryKey, init)}
                     openInTab={host.openInTab}
+                    onViewerOpenChange={setViewerOpen}
                   />
                 </div>
               ]
@@ -310,61 +308,46 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, ac
             aria-label={filtering ? '浏览（已筛选）' : '浏览'}
             onKeyDown={roving.onKeyDown}
           >
-            {filtered.shown.map(({ item: entry, uncertain }) => {
-              const head = entry.head
-              const title = meaningfulTitle(head?.title ?? entry.title)
-              const name = meaningfulName(head?.name ?? null)
-              const hasImage = head?.image != null
-              const excerpt = entry.excerpt?.trim() || null
-              const selected = entry.threadId === selectedThreadId
-              const rowClass = ['thread-row', hasImage && 'has-thumb', selected && 'is-selected'].filter(Boolean).join(' ')
-              const itemProps = roving.itemProps(entry.threadId)
-              return (
-                <li
-                  key={entry.threadId}
-                  className={rowMenu?.threadId === entry.threadId ? 'history-row is-menu-open' : 'history-row'}
-                  data-retained-row=""
-                  {...listRowGestures(
-                    (event) => openRowMenu(entry.threadId, event),
-                    openInTab === null ? null : () => openInTab(entry.threadId, null)
-                  )}
-                >
-                  {/* The row button and the thumbnail's 查看原图 button side by side, as in ThreadRow. */}
-                  <div className={rowClass}>
-                    <button
-                      type="button"
-                      className="row-open"
-                      aria-current={selected ? 'true' : undefined}
-                      onClick={() => onOpenThread(entry.threadId, null)}
-                      {...itemProps}
-                    >
-                      <span className="row-text">
-                        {head !== null && <span className="row-byline">
-                          <span className="row-author">
-                            {head.userHash !== null && <CookieId cookieId={head.userHash} admin={head.isAdmin === true} />}
-                            {head.isSage === true && <span className="tag tag-sage">SAGE</span>}
-                          </span>
-                          {head.createdAt !== null && <span className="row-time">{formatForumTime(head.createdAt)}</span>}
-                        </span>}
-                        {title !== null && <span className="row-title">{title}</span>}
-                        {name !== null && <span className="row-name">{name}</span>}
-                        {excerpt !== null && <TextExcerpt text={excerpt} className="row-excerpt is-plain" />}
-                        <span className="row-meta">
-                          <span>No.{entry.threadId}</span>
-                          <span>{PAGE.at} {formatRecordTime(entry.at)}</span>
-                          {entry.offline !== null && (
-                            <span className="retained-tag"><Icon name="download" size={13} />有离线副本</span>
-                          )}
-                          {hasImage && <span className="visually-hidden">附图</span>}
-                          {uncertain && <UncertainTag />}
-                        </span>
+            {filtered.shown.map(({ item: entry, uncertain }) => (
+              <li
+                key={entry.threadId}
+                className={rowMenu?.threadId === entry.threadId ? 'history-row is-menu-open' : 'history-row'}
+                data-retained-row=""
+                {...listRowGestures(
+                  (event) => openRowMenu(entry.threadId, event),
+                  openInTab === null ? null : () => openInTab(entry.threadId, entry.head)
+                )}
+              >
+                {/* The shared list row; this list's menu and gestures are on the item (tabMenu off). */}
+                <ThreadRow
+                  thread={
+                    entry.head === null
+                      ? { head: null, id: entry.threadId, title: entry.title, replyCount: entry.replyCount }
+                      : { head: entry.head, replyCount: entry.replyCount }
+                  }
+                  forumName={entry.head !== null && entry.head.forumId !== null ? (forumNames.get(entry.head.forumId) ?? null) : null}
+                  selected={entry.threadId === selectedThreadId}
+                  uncertain={uncertain}
+                  images={images}
+                  onOpen={() => onOpenThread(entry.threadId, entry.head)}
+                  itemProps={roving.itemProps(entry.threadId)}
+                  tabMenu={false}
+                  metaEnd={
+                    <>
+                      <span>
+                        {PAGE.at} {formatRecordTime(entry.at)}
                       </span>
-                    </button>
-                    {hasImage && <RowThumbnail postId={entry.threadId} images={images} tabIndex={itemProps.tabIndex} />}
-                  </div>
-                </li>
-              )
-            })}
+                      {entry.offline !== null && (
+                        <span className="retained-tag">
+                          <Icon name="download" size={13} />
+                          有离线副本
+                        </span>
+                      )}
+                    </>
+                  }
+                />
+              </li>
+            ))}
           </ul>
         )}
         <div className="list-footer" />

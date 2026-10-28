@@ -321,7 +321,9 @@
   overflow-wrap: anywhere;
 }
 
-/* Grows with the head post up to about twenty lines; the post's line breaks are kept. */
+/* Every list row's excerpt (版面, 订阅, 历史, 发送记录, 离线, 提醒, 同步预览): grows with the post up to
+   about twenty lines. Line breaks and blank lines are line break nodes (plain text included, see
+   `TextExcerpt`), so whitespace in text collapses and no other stylesheet's order can flatten them. */
 .row-excerpt.content-excerpt {
   display: -webkit-box;
   -webkit-box-orient: vertical;
