@@ -2,8 +2,8 @@
 //   inspect  both DMGs: architecture, native module, identity, icon, ad-hoc signature, latest-mac.yml checksums
 //   x64      the Intel app starts under Rosetta with working storage
 //   update   install the chain's current DMG, find / download / verify the next version from a
-//            controlled GitHub stand-in, open the DMG, replace the app as a user would, and start
-//            the new version
+//            controlled GitHub stand-in, answer the ready notice (稍后, then 打开安装包 at the next
+//            start), replace the app as a user would, and start the new version
 // The stand-in answers only inside the app's update network session; nothing is published. The
 // update chain is built far above any published version (see the workflow), so whatever the live
 // source holds, its automatic checks never offer, or download, a real release.
@@ -177,6 +177,18 @@ async function openAbout(page) {
   await sleep(300)
 }
 const aboutText = (page) => page.locator('#shell-set-about').innerText()
+/** The bottom notice of a verified package of `version` (the About section has its own 打开安装包). */
+const readyNotice = (page, version) => page.locator('.bottom-notice', { hasText: `新版本 ${version} 的安装包已下载` })
+const focusInNotice = (page) => page.evaluate(() => document.activeElement?.closest('.bottom-notice') != null)
+async function checkReadyNotice(page, version, label) {
+  const notice = readyNotice(page, version)
+  await notice.waitFor({ timeout: 20_000 })
+  const buttons = (await notice.getByRole('button').allInnerTexts()).map((text) => text.trim())
+  const text = await notice.innerText()
+  check(`${label}: ready notice offers 打开安装包 and 稍后, says what 稍后 leaves, takes no focus`,
+    JSON.stringify(buttons) === JSON.stringify(['打开安装包', '稍后']) && text.includes('稍后可在') && !(await focusInNotice(page)), { buttons, text })
+  return notice
+}
 
 async function x64() {
   const app = appIn(join(DIST, 'mac'))
@@ -270,14 +282,36 @@ async function update() {
   check('turning on automatic download downloads and verifies the DMG', ready.installOnQuit === false)
   await page.screenshot({ path: join(RESULTS, 'mac-ready.png') })
 
-  await page.getByRole('button', { name: '打开安装包' }).click()
+  // 稍后 by keyboard: closes the notice for this run, opens nothing, keeps the package.
+  const notice = await checkReadyNotice(page, next, 'after download')
+  await notice.getByRole('button', { name: '稍后', exact: true }).focus()
+  await page.keyboard.press('Enter')
+  await notice.waitFor({ state: 'detached', timeout: 10_000 })
+  const later = await waitFor(page, (state) => state.notice === null, 'ready notice acknowledged', 10_000)
+  await sleep(3000)
+  const focusAfterLater = await page.evaluate(() => document.activeElement !== null && document.activeElement !== document.body)
+  check('稍后 closes the notice for this run, focus stays in the app, nothing opened, package kept',
+    (await readyNotice(page, next).count()) === 0 && focusAfterLater && later.release?.download.status === 'ready' &&
+    mountedImages(`xidao-${next}-mac-arm64.dmg`).length === 0 &&
+    (await page.locator('#shell-set-about').getByRole('button', { name: '打开安装包', exact: true }).count()) === 1,
+    { notice: later.notice, download: later.release?.download })
+  check('quit with the package waiting', (await quit(app, 'later')) === 0)
+
+  // The next start finds the waiting package and shows the ready notice again; 打开安装包 there.
+  ;({ app, page } = await launch(executableOf(installed)))
+  await waitFor(page, (state) => state.release?.download.status === 'ready', 'package restored at launch', 30_000)
+  const restored = await checkReadyNotice(page, next, 'at launch')
+  await restored.getByRole('button', { name: '打开安装包', exact: true }).click()
   let opened = []
   for (let attempt = 0; attempt < 60 && opened.length === 0; attempt++) {
     await sleep(500)
     opened = mountedImages(`xidao-${next}-mac-arm64.dmg`)
   }
+  await openAbout(page)
   const afterOpen = await updateState(page)
-  check('opening the package mounts the verified DMG, still the old version', opened.length > 0 && afterOpen.currentVersion === current && (await aboutText(page)).includes(`版本 ${current}`), { opened })
+  check('the notice\'s 打开安装包 mounts the verified DMG and closes the notice, still the old version',
+    opened.length > 0 && afterOpen.currentVersion === current && afterOpen.notice === null && (await readyNotice(page, next).count()) === 0 &&
+    (await aboutText(page)).includes(`版本 ${current}`), { opened, notice: afterOpen.notice })
   await page.screenshot({ path: join(RESULTS, 'mac-opened.png') })
   check('quit before replacing', (await quit(app, 'opened')) === 0)
 

@@ -6,6 +6,7 @@ import {
 import type { UpdateEngine } from './engine'
 import type { ExitReason } from '../lifecycle/controller'
 import { classifyUpdateError, compareVersions, isStableVersion } from './release'
+import type { PendingInstallStore } from './startup'
 
 /** What survives a restart: the verified package waiting to be installed and the last notified version. */
 export interface UpdateRecord {
@@ -29,6 +30,8 @@ export interface UpdateServiceDeps {
   /** Null exactly when `unavailable` is set. */
   engine: UpdateEngine | null
   records: UpdateRecordStore
+  pendingInstall: PendingInstallStore
+  startupFailure: UpdateFailure | null
   /** SHA-512 (base64) of a file; null when it cannot be read. */
   sha512(path: string): Promise<string | null>
   /** Best effort; a missing file is fine. */
@@ -53,7 +56,7 @@ export interface UpdateService {
   cancelDownload(): void
   installAndRestart(): Promise<InstallResult>
   openInstaller(): Promise<InstallResult>
-  acknowledgeNotice(version: string): Promise<void>
+  acknowledgeNotice(version: string, kind: 'available' | 'ready'): Promise<void>
   /** Finishing a quit: timers stop and a running download is abandoned (nothing is downloaded at quit). */
   stop(): void
   /** The quit was called off by reopening: automatic checks continue. */
@@ -83,6 +86,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
   let release: { info: ReleaseInfo; sha512: string; download: UpdateDownload; path: string | null } | null = null
   let record: UpdateRecord = { notified: null, ready: null }
   let notice: UpdateState['notice'] = null
+  const readyNotified = new Set<string>()
   let timer: NodeJS.Timeout | undefined
   let downloading: AbortController | null = null
   /** Versions whose download the user cancelled: not restarted automatically in this run. */
@@ -90,6 +94,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
   let armed: { path: string; restart: boolean } | null = null
   /** The operating system is ending the session: no installer starts in this process any more. */
   let sessionEnded = false
+  let draftsLost = false
   /** The version the engine's last successful check offered; it can only download that one. */
   let offered: string | null = null
 
@@ -102,6 +107,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       lastCheck,
       release: release === null ? null : { info: release.info, download: release.download },
       installOnQuit: deps.platform === 'windows' && settings?.updateAutoInstall === true && release?.download.status === 'ready',
+      startupFailure: deps.startupFailure,
       notice
     }
   }
@@ -164,7 +170,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
           if (release?.download.status === 'ready') await discardReady()
           release = { info: found.info, sha512: found.sha512, download: { status: 'none', failure: null, cancelled: false }, path: null }
         }
-        if (record.notified !== found.info.version) notice = { version: found.info.version, kind: 'available' }
+        if (record.notified !== found.info.version && release.download.status !== 'ready') notice = { version: found.info.version, kind: 'available' }
         outcome = { at: new Date().toISOString(), outcome: 'available', failure: null }
       }
     } catch (error) {
@@ -208,6 +214,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       current.path = path
       current.download = { status: 'ready' }
       await persist({ ...record, ready: { release: current.info, sha512: current.sha512, path } })
+      if (!readyNotified.has(current.info.version)) notice = { version: current.info.version, kind: 'ready' }
     } catch (error) {
       current.download = abort.signal.aborted
         ? { status: 'none', failure: null, cancelled: true }
@@ -304,12 +311,13 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       }
     },
 
-    async acknowledgeNotice(version) {
-      if (notice === null || notice.version !== version) return
-      const { kind } = notice
+    async acknowledgeNotice(version, kind) {
+      // A discovery notice can be acted on just as a download finishes; it must not clear ready.
+      if (kind === 'available' && record.notified !== version) await persist({ ...record, notified: version })
+      if (notice === null || notice.version !== version || notice.kind !== kind) return
+      if (kind === 'ready') readyNotified.add(version)
       notice = null
       publish()
-      if (kind === 'available' && record.notified !== version) await persist({ ...record, notified: version })
     },
 
     stop() {
@@ -327,6 +335,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
 
     async prepareExit(reason) {
       armed = null
+      draftsLost = reason === 'drafts-lost'
       const allowed = reason === 'install' || (reason === 'quit' && settings?.updateAutoInstall === true)
       if (deps.platform !== 'windows' || sessionEnded || !allowed || release?.download.status !== 'ready') return
       const confirmed = await confirmedPackage()
@@ -346,8 +355,16 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     },
 
     endSession() {
+      if (sessionEnded) return
       sessionEnded = true
       armed = null
+      if (deps.platform !== 'windows' || deps.unavailable !== null || draftsLost ||
+          settings?.updateAutoInstall !== true || release?.download.status !== 'ready' || record.ready === null) return
+      try {
+        deps.pendingInstall.save(record.ready)
+      } catch {
+        console.error('[updates] startup installation not saved')
+      }
     }
   }
 }

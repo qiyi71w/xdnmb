@@ -881,9 +881,9 @@ export function registerIpc({
   handle(IpcChannel.updateInstallAndRestart, async () => updates.installAndRestart())
   handle(IpcChannel.updateOpenInstaller, async () => updates.openInstaller())
   handle(IpcChannel.updateAcknowledgeNotice, async (_event, raw) => {
-    const version = record(raw).version
-    if (typeof version !== 'string' || version.length > 32) throw new InvalidRequestError()
-    await updates.acknowledgeNotice(version)
+    const { version, kind } = record(raw)
+    if (typeof version !== 'string' || version.length > 32 || (kind !== 'available' && kind !== 'ready')) throw new InvalidRequestError()
+    await updates.acknowledgeNotice(version, kind)
   })
 
   handle(IpcChannel.getStatus, async () => getStatus())

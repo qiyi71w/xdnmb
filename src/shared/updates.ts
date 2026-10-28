@@ -5,7 +5,8 @@
  * - Windows downloads the NSIS installer and installs it only when the user really quits (with
  *   「退出时自动安装更新」, after every editor, the workspace and started sends are settled) or
  *   through 「安装并重启」, which goes through the same quit. Hiding to the tray, a system
- *   shutdown/restart or a cancelled quit never installs.
+ *   shutdown/restart or a cancelled quit never installs. An eligible session end queues one
+ *   installation attempt before the next launch opens its database or windows.
  * - macOS downloads the DMG for the running architecture; the user opens it and replaces the app.
  *   Opening it is not an upgrade: only the version actually running counts.
  */
@@ -98,9 +99,11 @@ export interface UpdateState {
   release: { info: ReleaseInfo; download: UpdateDownload } | null
   /** Windows: the ready package will be installed when the user quits (setting on, package ready). */
   installOnQuit: boolean
+  /** Why the one-shot installation before this launch failed; independent of later update checks. */
+  startupFailure: UpdateFailure | null
   /**
    * A one-time in-app notice owed for `release`: `available` when a version is found for the first
-   * time, `ready` at launch when a downloaded package is still waiting. Cleared by `acknowledgeNotice`.
+   * time, `ready` after verification or at launch with a waiting package. Each kind is acknowledged separately.
    */
   notice: { version: string; kind: 'available' | 'ready' } | null
 }
@@ -126,7 +129,7 @@ export interface UpdatesApi {
   /** macOS 「打开安装包」: confirms the DMG and opens it. Not an upgrade. */
   openInstaller(): Promise<InstallResult>
   /** The notice for `version` was shown and dismissed or acted on. */
-  acknowledgeNotice(input: { version: string }): Promise<void>
+  acknowledgeNotice(input: { version: string; kind: 'available' | 'ready' }): Promise<void>
 }
 
 export const UPDATE_STATE_CHANNEL = 'updates:state'

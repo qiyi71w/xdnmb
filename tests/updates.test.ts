@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EngineCheck, UpdateEngine } from '../src/main/updates/engine'
-import { createRecordStore, removeFile, sha512OfFile } from '../src/main/updates/files'
+import { createPendingInstallStore, createRecordStore, removeFile, sha512OfFile } from '../src/main/updates/files'
 import { createUpdateService, type UpdateSettings } from '../src/main/updates/service'
 import type { UpdatePlatform, UpdateState } from '../src/shared/updates'
 
@@ -102,6 +102,8 @@ function service(engine: ReturnType<typeof fakeEngine>, options: { platform?: Up
     currentVersion: options.version ?? '0.1.0',
     engine: engine.api,
     records: createRecordStore(join(dir, 'update-state.json')),
+    pendingInstall: createPendingInstallStore(join(dir, 'update-on-start.json')),
+    startupFailure: null,
     sha512: sha512OfFile,
     remove: removeFile,
     async runInstaller(path, restart) { installers.push({ path, restart }) },
@@ -229,6 +231,43 @@ describe('software updates', () => {
     expect(changed.instance.state().release?.download).toEqual({ status: 'none', failure: 'integrity', cancelled: false })
   })
 
+  it('records the ready package only at eligible Windows session end, once per process', async () => {
+    const pending = createPendingInstallStore(join(dir, 'update-on-start.json'))
+    const ready = service(fakeEngine())
+    await ready.instance.start(settings({ updateAutoInstall: true }))
+    expect(pending.consume()).toBeNull()
+    ready.instance.endSession()
+    expect(pending.consume()).toMatchObject({ path: packagePath(), sha512: SHA, release: { version: '0.2.0' } })
+    ready.instance.endSession()
+    expect(pending.consume()).toBeNull()
+    await ready.instance.launchInstaller()
+    expect(ready.installers).toEqual([])
+
+    for (const reason of ['quit', 'drafts-lost'] as const) {
+      const s = service(fakeEngine())
+      await s.instance.start(settings({ updateAutoInstall: true }))
+      await s.instance.prepareExit(reason)
+      expect(pending.consume()).toBeNull()
+      if (reason === 'drafts-lost') {
+        s.instance.endSession()
+        expect(pending.consume()).toBeNull()
+      }
+    }
+    const disabled = service(fakeEngine())
+    await disabled.instance.start(settings({ updateAutoInstall: true }))
+    disabled.instance.configure(settings({ updateAutoInstall: false }))
+    disabled.instance.endSession()
+    expect(pending.consume()).toBeNull()
+    const absent = service(fakeEngine())
+    await absent.instance.start(settings({ updateAutoCheck: false, updateAutoInstall: true }))
+    absent.instance.endSession()
+    expect(pending.consume()).toBeNull()
+    const mac = service(fakeEngine(), { platform: 'mac' })
+    await mac.instance.start(settings({ updateAutoDownload: true, updateAutoInstall: true }))
+    mac.instance.endSession()
+    expect(pending.consume()).toBeNull()
+  })
+
   it('starts no installer once the system is ending the session, even when the install was already prepared', async () => {
     const s = service(fakeEngine())
     await s.instance.start(settings({ updateAutoInstall: true }))
@@ -303,11 +342,24 @@ describe('software updates', () => {
     expect(await mac.instance.openInstaller()).toEqual({ started: true })
   })
 
+  it('offers a verified download separately from discovery and ignores a stale discovery dismissal', async () => {
+    const { instance } = service(fakeEngine())
+    await instance.start(settings())
+    await instance.download()
+    expect(instance.state().notice).toEqual({ version: '0.2.0', kind: 'ready' })
+    await instance.acknowledgeNotice('0.2.0', 'available')
+    expect(instance.state().notice?.kind).toBe('ready')
+    await instance.acknowledgeNotice('0.2.0', 'ready')
+    await instance.check()
+    expect(instance.state().notice).toBeNull()
+    expect(instance.state().release?.download.status).toBe('ready')
+  })
+
   it('shows the new-version notice once per version, also across restarts', async () => {
     const first = service(fakeEngine())
     await first.instance.start(settings())
     expect(first.instance.state().notice).toEqual({ version: '0.2.0', kind: 'available' })
-    await first.instance.acknowledgeNotice('0.2.0')
+    await first.instance.acknowledgeNotice('0.2.0', 'available')
     expect(first.instance.state().notice).toBeNull()
     await first.instance.check()
     expect(first.instance.state().notice).toBeNull()

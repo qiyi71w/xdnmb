@@ -1,5 +1,5 @@
-// User-facing words of the About section's update area and the new-version notice. Nothing here
-// may say an update was installed: only the running version (`currentVersion`) is installed.
+// User-facing words of the About section's update area and the update notices. Nothing here may
+// say an update was installed: only the running version (`currentVersion`) is installed.
 
 import type { InstallResult, UpdateFailure, UpdatePlatform, UpdateUnavailable } from '../../../../shared/updates'
 
@@ -41,6 +41,30 @@ export function actionFailedText(failure: Extract<InstallResult, { started: fals
 /** The action that uses a verified package on this platform. */
 export function packageActionLabel(platform: UpdatePlatform): string {
   return platform === 'mac' ? '打开安装包' : '安装并重启'
+}
+
+/** The ready notice's action: the same step as `packageActionLabel`, taken now. */
+export function readyActionLabel(platform: UpdatePlatform): string {
+  return platform === 'mac' ? '打开安装包' : '立即安装并重启'
+}
+
+export function readyNoticeText(platform: UpdatePlatform, version: string): string {
+  return platform === 'mac' ? `新版本 ${version} 的安装包已下载` : `新版本 ${version} 已下载`
+}
+
+/**
+ * What 稍后 leaves to happen. `installOnQuit` (Windows, automatic install on): a quit installs it,
+ * and a session ended by shutting the system down installs it at the next start.
+ */
+export function readyLaterText(platform: UpdatePlatform, installOnQuit: boolean): string {
+  if (platform === 'mac') return '稍后可在“设置 › 系统 › 关于”中打开'
+  if (installOnQuit) return '稍后会在退出汐岛时安装；如果直接关机，下次启动时安装'
+  return '稍后可在“设置 › 系统 › 关于”中安装'
+}
+
+/** The install tried at this start, before the window opened, did not run (not tried again). */
+export function startupFailedText(failure: UpdateFailure, platform: UpdatePlatform): string {
+  return `启动时未能安装新版本：${failureReason(failure, platform)}`
 }
 
 export const EMPTY_NOTES_TEXT = '此版本未提供更新说明'

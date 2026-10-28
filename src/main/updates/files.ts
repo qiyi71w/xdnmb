@@ -1,11 +1,12 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
+import { createReadStream, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { UPDATE_REPOSITORY_URL, type NoteBlock, type NoteInline, type ReleaseInfo } from '../../shared/updates'
 import { isStableVersion } from './release'
 import type { UpdateRecord, UpdateRecordStore } from './service'
+import type { PendingInstallStore, ReadyPackage } from './startup'
 
 /** SHA-512 (base64) of a file, or null when it cannot be read. */
 export async function sha512OfFile(path: string): Promise<string | null> {
@@ -96,19 +97,42 @@ export function createRecordStore(path: string): UpdateRecordStore {
   }
 }
 
+/** A self-contained snapshot, separate from queued update-state writes which shutdown may interrupt. */
+export function createPendingInstallStore(path: string): PendingInstallStore {
+  return {
+    save(ready) {
+      const temporary = `${path}.tmp`
+      writeFileSync(temporary, JSON.stringify({ version: 1, notified: null, ready }), { encoding: 'utf8', flush: true })
+      renameSync(temporary, path)
+    },
+    consume(): ReadyPackage | null {
+      let text: string
+      try {
+        text = readFileSync(path, 'utf8')
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+        throw error
+      }
+      // Also consume malformed records. Nothing can execute unless this removal succeeds.
+      unlinkSync(path)
+      return parseRecord(text)?.ready ?? null
+    }
+  }
+}
+
 export async function removeFile(path: string): Promise<void> {
   await rm(path, { force: true }).catch(() => undefined)
 }
 
 /**
  * Starts the downloaded NSIS installer the way electron-updater's NSIS updater does: `--updated`
- * (an update of the installed app: data kept, the running app is closed if still there) and `/S`
- * (silent); `--force-run` opens the new version afterwards. Detached, so it outlives this process.
+ * (an update of the installed app: data kept, the running app is closed if still there). Normal exit
+ * uses `/S`; startup uses visible native progress. `--force-run` opens the new version afterwards.
  * Resolves once the process has started; rejects when it cannot start.
  */
-export function runWindowsInstaller(path: string, restart: boolean): Promise<void> {
+export function runWindowsInstaller(path: string, restart: boolean, visible = false): Promise<void> {
   const { promise, resolve, reject } = Promise.withResolvers<void>()
-  const child = spawn(path, ['--updated', '/S', ...(restart ? ['--force-run'] : [])], { detached: true, stdio: 'ignore' })
+  const child = spawn(path, ['--updated', ...(visible ? [] : ['/S']), ...(restart ? ['--force-run'] : [])], { detached: true, stdio: 'ignore' })
   child.once('error', reject)
   child.once('spawn', () => {
     child.unref()

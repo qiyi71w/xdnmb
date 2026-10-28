@@ -36,8 +36,9 @@ import appIconPng from '../../resources/icons/xidao-icon-512.png?asset'
 import appIconIco from '../../resources/icons/xidao-icon.ico?asset'
 import { UPDATE_STATE_CHANNEL } from '../shared/updates'
 import { createUpdateEngine, updateAvailability } from './updates/engine'
-import { createRecordStore, removeFile, runWindowsInstaller, sha512OfFile } from './updates/files'
+import { createPendingInstallStore, createRecordStore, removeFile, runWindowsInstaller, sha512OfFile } from './updates/files'
 import { createUpdateService, type UpdateService } from './updates/service'
+import { installPendingUpdate } from './updates/startup'
 import { REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
 import { createReminderService } from './reminders/service'
 import { createReminderNotifier } from './reminders/notifier'
@@ -84,7 +85,8 @@ let sessionSentinel: BaseWindow | null = null
 // Every renderer runs sandboxed; one main process owns the database worker.
 app.enableSandbox()
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
-if (!app.requestSingleInstanceLock()) app.quit()
+const primaryInstance = app.requestSingleInstanceLock()
+if (!primaryInstance) app.quit()
 // Managed image files are shown through the app's own scheme, never by file path or remote URL.
 protocol.registerSchemesAsPrivileged([{ scheme: IMAGE_SCHEME, privileges: { standard: true, secure: true } }])
 
@@ -241,6 +243,33 @@ function serveManagedImages(directories: Record<'file' | 'draft', ManagedImageFi
 }
 
 async function start(): Promise<void> {
+  if (!primaryInstance) return
+  let sessionEnding = false
+  if (platform === 'win32') {
+    // Native event receiver only, not an application window; also protects startup verification.
+    sessionSentinel = new BaseWindow({ show: false, skipTaskbar: true, width: 1, height: 1 })
+    const endSession = () => {
+      sessionEnding = true
+      updates?.endSession()
+      lifecycle?.endSession()
+    }
+    sessionSentinel.on('query-session-end', endSession)
+    sessionSentinel.on('session-end', endSession)
+  }
+  const availability = updateAvailability()
+  const pendingInstall = createPendingInstallStore(join(app.getPath('userData'), 'update-on-start.json'))
+  const startup = availability.platform === 'windows' && availability.unavailable === null
+    ? await installPendingUpdate({
+        currentVersion: app.getVersion(), pending: pendingInstall,
+        sha512: sha512OfFile, remove: removeFile,
+        sessionEnding: () => sessionEnding,
+        runInstaller: (path) => runWindowsInstaller(path, true, true)
+      })
+    : { started: false, failure: null }
+  if (startup.started) {
+    app.quit()
+    return
+  }
   // Only the app's own main frame may list installed fonts (asked for when the user picks a font);
   // every other permission and every other page is denied.
   const denyAll = session.defaultSession
@@ -397,13 +426,14 @@ async function start(): Promise<void> {
     window.on('restore', () => failures.windowShown())
     window.on('focus', () => failures.windowShown())
   }
-  const availability = updateAvailability()
   const updateService = createUpdateService({
     platform: availability.platform,
     unavailable: availability.unavailable,
     currentVersion: app.getVersion(),
     engine: availability.unavailable === null && availability.target !== null ? createUpdateEngine(availability.target) : null,
     records: createRecordStore(join(app.getPath('userData'), 'update-state.json')),
+    pendingInstall,
+    startupFailure: startup.failure,
     sha512: sha512OfFile,
     remove: removeFile,
     runInstaller: runWindowsInstaller,
@@ -475,15 +505,9 @@ async function start(): Promise<void> {
     onTrigger: () => { void reminders.request().catch(() => console.error('[reminders] check unavailable')) }
   })
   lifecycle = controller
-  if (platform === 'win32') {
-    sessionSentinel = new BaseWindow({ show: false, skipTaskbar: true, width: 1, height: 1 })
-    const endSession = () => {
-      // Never install from now on; save what can be saved at once.
-      updateService.endSession()
-      controller.endSession()
-    }
-    sessionSentinel.on('query-session-end', endSession)
-    sessionSentinel.on('session-end', endSession)
+  if (sessionEnding) {
+    updateService.endSession()
+    controller.endSession()
   }
 
   ipc = registerIpc({

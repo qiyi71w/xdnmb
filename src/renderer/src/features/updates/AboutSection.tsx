@@ -25,6 +25,7 @@ import {
   checkFailedText,
   downloadFailedText,
   packageActionLabel,
+  startupFailedText,
   UNAVAILABLE_NEXT,
   UNAVAILABLE_TEXT
 } from './updateText'
@@ -117,6 +118,12 @@ function UpdateArea({ settings, write }: { settings: AppSettings; write: Write }
       <div className="about-check">
         <div className="about-check-status" id={statusId} role="status">
           <CheckStatus state={state} failed={failed} checking={checkRequested} />
+          {state !== null && state.startupFailure !== null && (
+            <p className="notice-inline is-warning about-status-line">
+              <Icon name="alert" size={14} />
+              <span>{startupFailedText(state.startupFailure, state.platform)}</span>
+            </p>
+          )}
         </div>
         <button
           type="button"
@@ -167,7 +174,7 @@ function UpdateArea({ settings, write }: { settings: AppSettings; write: Write }
         <SettingRow
           labelId="setting-update-auto-install"
           label="退出时自动安装更新"
-          help="发现新版后自动下载，主动退出汐岛时安装，安装后不自动重新打开；收进托盘或系统关机／重启时不安装"
+          help="发现新版后自动下载，主动退出汐岛时安装，安装后不自动重新打开；收进托盘时不安装，直接关机或重启的，下次启动时先安装"
           helpId="setting-update-auto-install-help"
         >
           <Switch
@@ -360,7 +367,7 @@ function PackageActions({ state, download }: { state: UpdateState; download: Upd
             ) : (
               <>
                 <p className="setting-help">安装并重启会正常退出汐岛，安装完成后重新打开</p>
-                {state.installOnQuit && <p className="setting-help">已开启退出时自动安装：退出汐岛时会安装，安装后不会自动重新打开</p>}
+                {state.installOnQuit && <p className="setting-help">已开启退出时自动安装：退出汐岛时安装，安装后不自动重新打开；直接关机的，下次启动时安装</p>}
               </>
             )}
           </>
