@@ -51,8 +51,10 @@ async function setup(response: (page: number, request: IncomingMessage, reply: S
   await service.recover()
   return { folder, path, db, service, api: service.forOwner('one'), requests }
 }
+/** Polls until the fetch leaves `running`. Bounded by time: real HTTP replies arrive late on a loaded machine. */
 async function settled(api: SearchApi, operationId = 'fetch'): Promise<SearchFetch> {
-  for (let count = 0; count < 1000; count++) {
+  const deadline = performance.now() + 4000
+  while (performance.now() < deadline) {
     const result = await api.fetchStatus({ operationId })
     if (result.ok && result.value.state !== 'running') return result.value
     await yieldToLoop()
