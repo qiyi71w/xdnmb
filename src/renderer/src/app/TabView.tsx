@@ -136,7 +136,7 @@ export function TabView({
     body = (
       <main className="reader-wrap is-page" ref={readerRef} tabIndex={-1}>
         <ThreadPane
-          key={`${entry.key}:${entry.thread.threadId}`}
+          key={`${entry.thread.readerKey ?? entry.key}:${entry.thread.threadId}`}
           entryKey={entry.key}
           open={entry.thread}
           displayed={active}
@@ -247,7 +247,7 @@ export function TabView({
             </div>
           ) : (
             <ThreadPane
-              key={`${entry.key}:${entry.thread.threadId}`}
+              key={`${entry.thread.readerKey ?? entry.key}:${entry.thread.threadId}`}
               entryKey={entry.key}
               open={entry.thread}
               displayed={active && readerVisible}

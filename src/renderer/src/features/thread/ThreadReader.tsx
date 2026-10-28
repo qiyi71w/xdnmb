@@ -367,6 +367,28 @@ export function ThreadReader({
   }, [])
   useEffect(() => () => window.clearTimeout(highlightTimer.current), [])
 
+  // A confirmed send advances history but retains this reader, including its other loaded pages.
+  const [followPosition, setFollowPosition] = useState<ReaderPosition | null>(null)
+  useEffect(() => {
+    if (startRef.current === start) return
+    startRef.current = start
+    let cancelled = false
+    nextPosition.current = start
+    void thread.reveal(startPage(start), mode).then(() => {
+      if (!cancelled) setFollowPosition(start)
+    })
+    return () => { cancelled = true }
+  }, [start, mode, thread.reveal])
+  useLayoutEffect(() => {
+    if (followPosition === null || !displayed) return
+    setFollowPosition(null)
+    nextPosition.current = null
+    setPrependArmed(false)
+    hidePills()
+    position(followPosition)
+    if (followPosition.kind === 'post' && hasPost(followPosition.postId)) highlight(followPosition.postId)
+  }, [followPosition, displayed, hidePills, position, hasPost, highlight])
+
   /** Quote target of the opening: marked once the first position is placed on screen. */
   const pendingHighlight = useRef(highlightPostId)
   useLayoutEffect(() => {

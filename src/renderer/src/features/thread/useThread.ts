@@ -1,17 +1,17 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { ReadError, ThreadEndResult, ThreadPageResult } from '../../../../shared/api'
 import type { Post, ReadingMode, ThreadId } from '../../../../shared/forum'
 import { threadTotalPages } from '../../../../shared/threadPages'
 import { OperationScope } from '../../lib/operations'
 import { canPrependPrevious, initialThreadState, refreshThread, threadReducer, type ThreadTask } from './threadState'
 
-type PageTask = Exclude<ThreadTask, { type: 'locate' } | { type: 'refresh' }>
+type PageTask = Exclude<ThreadTask, { type: 'locate' } | { type: 'refresh' }> | { type: 'refresh'; page: number }
 
 /**
- * Continuous reading of one thread in one mode. The owning component is keyed by thread and mode:
- * switching either unmounts this hook and cancels its reads. Within a reader at most one read runs;
- * explicit actions (jump, 开头, 末尾, 刷新) cancel the running read, whose late result is
- * then discarded. `firstPage` is the page loaded first (resume, target or page 1).
+ * Continuous reading of one thread. Ordinary mode switches create a fresh reader; a confirmed
+ * send can temporarily reveal another mode in place, retaining the previous mode's loaded pages.
+ * Within a reader at most one read runs; explicit actions supersede it and discard late results.
+ * `firstPage` is the page loaded first (resume, target or page 1).
  *
  * `hold` protects the reader's content from cache eviction; every read waits for it first, so a
  * page is never fetched for an unheld reader (a cache limit of 0 would evict it at once).
@@ -24,6 +24,7 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
   const firstPageRef = useRef(firstPage)
   const stateRef = useRef(state)
   const holdRef = useRef(hold)
+  const [modeStates] = useState(() => new Map<ReadingMode, typeof state>())
   useEffect(() => {
     stateRef.current = state
     holdRef.current = hold
@@ -63,25 +64,26 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     }
   }, [readThreadPage])
 
-  const readPage = useCallback(async (task: PageTask) => {
+  const readPage = useCallback(async (task: PageTask): Promise<boolean> => {
     const page = task.type === 'initial' ? (task.page ?? 1) : task.page
     dispatch({ type: 'start', task })
     const settled = await readThreadPage(page)
     switch (settled.type) {
       case 'stale':
-        return
+        return false
       case 'cancelled':
         dispatch({ type: 'cancelled' })
-        return
+        return false
       case 'failed':
         if (settled.failure.type === 'read' && settled.failure.error.kind === 'page-cap' && settled.failure.error.highestReadablePage !== undefined) {
           await showCap(settled.failure.error.highestReadablePage, task, settled.failure.error.readablePage)
-          return
+          return false
         }
         dispatch({ type: 'failed', task, failure: settled.failure })
-        return
+        return false
       case 'ok':
         dispatch({ type: 'page-loaded', task, page: settled.data.page, coverage: settled.data.coverage, source: settled.source })
+        return true
     }
   }, [showCap, readThreadPage])
 
@@ -138,7 +140,7 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
       scope.current.cancelAll()
       if (task.type === 'locate') return locate()
       if (task.type === 'refresh') return refreshThread(stateRef.current, readThreadPage, dispatch)
-      return readPage(task)
+      return readPage(task).then(() => undefined)
     },
     [locate, readPage, readThreadPage]
   )
@@ -190,6 +192,39 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     [supersede]
   )
 
+  /** A retained reader follows a send's history target without discarding its loaded range. */
+  const reveal = useCallback(async (page: number, nextMode: ReadingMode): Promise<void> => {
+    scope.current.cancelAll()
+    let pages = stateRef.current.pages
+    if (modeRef.current !== nextMode) {
+      modeStates.set(modeRef.current, stateRef.current)
+      modeRef.current = nextMode
+      const saved = modeStates.get(nextMode)
+      if (saved === undefined) {
+        await readPage({ type: 'initial', page })
+        return
+      }
+      dispatch({ type: 'restore-mode', state: saved })
+      pages = saved.pages
+      if (pages.some((loaded) => loaded.page === page)) {
+        await readPage({ type: 'refresh', page })
+        return
+      }
+    }
+    const first = pages[0]?.page ?? page
+    const last = pages.at(-1)?.page ?? page
+    if (pages.length === 0) await readPage({ type: 'initial', page })
+    else if (page > last) {
+      for (let number = last + 1; number <= page; number++) {
+        if (!await readPage({ type: 'append', page: number })) return
+      }
+    } else if (page < first) {
+      for (let number = first - 1; number >= page; number--) {
+        if (!await readPage({ type: 'prepend', page: number })) return
+      }
+    }
+  }, [readPage, modeStates])
+
   const jump = useCallback((page: number) => {
     const total = threadTotalPages(stateRef.current.coverage?.reportedReplyCount ?? null)
     if (!Number.isSafeInteger(page) || page < 1 || (total !== null && page > total)) return
@@ -217,6 +252,7 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     prependAuto,
     refresh,
     refreshAfterSend,
+    reveal,
     jump,
     locateEnd,
     cancel,
