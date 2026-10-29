@@ -369,7 +369,7 @@ export function editorFor(state: EditorsState, target: PostTarget): Editor | nul
 
 /**
  * Whether the editor is on screen: expanded, and its target among those the active tab displays
- * now (`displayed`, empty while the settings page covers the tabs).
+ * now (`displayed`, empty while 设置 is the active tab).
  */
 export function editorOnScreen(state: EditorsState, editorId: EditorId, displayed: readonly PostTarget[]): boolean {
   const editor = state.editors.find((item) => item.id === editorId)

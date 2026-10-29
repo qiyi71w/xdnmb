@@ -237,7 +237,6 @@ export function Rail({
           className={settingsCurrent ? 'shell-rail-btn is-current' : 'shell-rail-btn'}
           aria-current={settingsCurrent ? 'page' : undefined}
           aria-label={settingsLabel}
-          data-settings-entry=""
           data-rail-tip={settingsLabel}
           onClick={onOpenSettings}
           {...rail.itemProps(SETTINGS_KEY)}

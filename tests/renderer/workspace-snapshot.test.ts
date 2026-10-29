@@ -26,6 +26,7 @@ function workspace(): Workspace {
       { id: 3, split: false, index: 0, entries: [{ kind: 'thread', key: 4, origin: null,
         thread: { threadId: '200', head: null, target: null, snapshot: null, unlocatedPostId: null } }] }
     ],
+    settings: null,
     activeId: 3,
     nextId: 4,
     nextKey: 5
@@ -38,6 +39,13 @@ function workspace(): Workspace {
       { entryKey: 2, pages: 10, anchor: null, scrollTop: 0 }
     ]
   }
+}
+
+/** The same workspace with 设置 open between the two content tabs, active, returning to tab 1. */
+function withSettings(): Workspace {
+  const value = workspace()
+  value.tabs = { ...value.tabs, settings: { kind: 'settings', id: 4, at: 1, returnTo: 1 }, activeId: 4, nextId: 5 }
+  return value
 }
 
 describe('workspace snapshot', () => {
@@ -109,5 +117,48 @@ describe('workspace snapshot', () => {
       expect(parseWorkspace(JSON.stringify(value))).toBeNull()
     }
     expect(parseWorkspace('{"version":1')).toBeNull()
+  })
+
+  it('restores a workspace saved before the 设置 tab existed, with no 设置 tab', () => {
+    const value = JSON.parse(serializeWorkspace(workspace()))
+    delete value.tabs.settings
+    const restored = parseWorkspace(JSON.stringify(value))
+    expect(restored?.tabs.settings).toBeNull()
+    expect(restored?.tabs.tabs.map((tab) => tab.id)).toEqual([1, 3])
+    expect(restored?.editors).toEqual([{ tabId: 1, draftId: '12', expanded: false }])
+  })
+
+  it('restores the one 设置 tab with its place, active state and return target; a closed return target falls back', () => {
+    expect(parseWorkspace(serializeWorkspace(withSettings()))).toEqual((() => {
+      const expected = withSettings()
+      const entry = expected.tabs.tabs[0]!.entries[1]!
+      if (entry.kind !== 'online-search' && entry.thread !== null) entry.thread.target = null
+      return expected
+    })())
+    const value = JSON.parse(serializeWorkspace(withSettings()))
+    value.tabs.settings.returnTo = 2
+    expect(parseWorkspace(JSON.stringify(value))?.tabs.settings).toEqual({ kind: 'settings', id: 4, at: 1, returnTo: null })
+  })
+
+  it('starts fresh rather than restoring a duplicated, embedded or editor-owning 设置 tab', () => {
+    const variants: Array<(value: ReturnType<typeof JSON.parse>) => void> = [
+      // A second 设置 among the content tabs, or 设置 shaped like a content tab.
+      (value) => value.tabs.tabs.push({ kind: 'settings', id: 6, at: 0, returnTo: null }),
+      (value) => value.tabs.tabs.push({ ...value.tabs.tabs[1], kind: 'settings', id: 6 }),
+      (value) => (value.tabs.settings.entries = value.tabs.tabs[1].entries),
+      (value) => (value.tabs.settings.split = true),
+      (value) => (value.tabs.settings.kind = 'list'),
+      (value) => (value.tabs.settings.id = 3),
+      (value) => (value.tabs.settings.at = 3),
+      (value) => (value.tabs.settings.returnTo = '1'),
+      (value) => (value.tabs.nextId = 4),
+      (value) => (value.editors[0].tabId = 4),
+      (value) => (value.tabs.tabs = [])
+    ]
+    for (const change of variants) {
+      const value = JSON.parse(serializeWorkspace(withSettings()))
+      change(value)
+      expect(parseWorkspace(JSON.stringify(value))).toBeNull()
+    }
   })
 })

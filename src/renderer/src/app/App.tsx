@@ -10,10 +10,9 @@ import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/direct
 import { BoardPanelEmptyPage, BoardPanelTitle, RailNavigation } from '../features/directory/RailNavigation'
 import type { FeatureHost, NavProps } from '../features/directory/navParts'
 import { RAIL_WIDTH } from '../features/directory/Rail'
-import { SettingsPage } from './SettingsPage'
+import { SettingsPage, type SettingsTarget } from './SettingsPage'
 import {
   closeBoardPanel,
-  isShown,
   ListHostContext,
   openBoardPanel,
   setBoardPanelHost,
@@ -58,10 +57,14 @@ import {
   entryThread,
   initialTabsState,
   isLocalList,
+  isSettingsTab,
   listKey,
+  navigationTab,
+  stripTabs,
   tabsReducer,
   type EntryInit,
   type ListRef,
+  type StripTab,
   type Tab,
   type TabEntry,
   type TabsAction,
@@ -190,7 +193,7 @@ export function App() {
   const updates = useUpdatesSource()
   const reminderThreads = reminderOverview?.badge ?? null
   const reminderBadge = useMemo(() => (reminderThreads === null ? null : { threads: reminderThreads }), [reminderThreads])
-  /** The app's coverage: every modal dialog (`Modal`) and the settings page cover it while open. */
+  /** The app's coverage: every modal dialog (`Modal`) covers it while open. */
   const coverage = useAppCoverage()
   const [draftsOpen, setDraftsOpen] = useState(false)
   const closeDrafts = useCallback(() => setDraftsOpen(false), [])
@@ -431,38 +434,31 @@ export function App() {
     }
   }, [restored, reopenDrafts, registry])
 
-  // ---------- Settings page ----------
+  // ---------- Settings tab ----------
   /** The top bar's 设置 (shown while the navigation is an overlay). */
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   const { clearStatus: clearSettingsStatus } = settingsWriter
-  /** The settings page is shown in place of the tabs. */
-  const [settingsShown, setSettingsShown] = useState(false)
   /**
-   * Where focus goes back when the settings page is left (Esc, 返回): the control that opened it,
-   * read before anything closes, and whether that was the top bar's 设置 (remounted with the top
-   * bar). Leaving it for other content (a list chosen) hands focus to that content instead.
+   * Where 设置 lands when an entry opens it: the section the entry is about, or the top; `keep`
+   * leaves an already open 设置 where it was. A new request (`seq`) applies while it is shown too.
    */
-  const settingsReturn = useRef<{ opener: HTMLElement | null; fromTopBar: boolean; pending: boolean } | null>(null)
-  /**
-   * Where the settings page lands — the section an entry is about, or the top. A new request
-   * (`seq`) moves the page even while it is already shown.
-   */
-  const [settingsTarget, setSettingsTarget] = useState<{ section: SettingsSectionId | null; seq: number }>({ section: null, seq: 0 })
+  const [settingsTarget, setSettingsTarget] = useState<SettingsTarget>({ section: null, seq: 0, keep: false })
 
-  /** Opens settings at `section` (the top without one). Floating editors of the tabs stay as they are, hidden. */
+  /**
+   * Shows the one 设置 tab (opening it when there is none) at `section`; without a section a new
+   * 设置 starts at the top and an open one stays where it was. Editors of the tabs stay as they are.
+   */
   const openSettings = useCallback(
     (section?: SettingsSectionId) => {
-      if (settingsReturn.current === null) {
-        const active = document.activeElement
-        const opener = active instanceof HTMLElement && active !== document.body ? active : null
-        settingsReturn.current = { opener, fromTopBar: opener !== null && opener === settingsButtonRef.current, pending: false }
-      }
-      // The page becomes the only layer: an open navigation overlay or board panel closes first.
+      const state = stateRef.current.tabs
+      if (state === null) return
+      // 设置 becomes the shown tab: an open navigation overlay or board panel closes first.
       closeBoardPanel('dismiss')
       closeNav(false)
       clearSettingsStatus()
-      setSettingsTarget((previous) => ({ section: section ?? null, seq: previous.seq + 1 }))
-      setSettingsShown(true)
+      const keep = section === undefined && state.settings !== null
+      setSettingsTarget((previous) => ({ section: section ?? null, seq: previous.seq + 1, keep }))
+      dispatch({ type: 'open-settings' })
     },
     [closeNav, clearSettingsStatus]
   )
@@ -472,46 +468,17 @@ export function App() {
   const newVersion = hasNewVersion(updates.state)
   const openSettingsButton = useCallback(() => openSettings(newVersion ? 'about' : undefined), [openSettings, newVersion])
 
-  /** Leaves settings; `returnFocus` (Esc, 返回) sends focus back where it came from. */
-  const endSettings = useCallback(
-    (returnFocus: boolean) => {
-      setSettingsShown(false)
-      if (settingsReturn.current !== null) {
-        if (returnFocus) settingsReturn.current.pending = true
-        else settingsReturn.current = null
-      }
-      // UUID, binding or source may have changed inside settings.
-      void refreshSubscriptions()
-      void refreshSubscriptionJournal()
-    },
-    [refreshSubscriptions, refreshSubscriptionJournal]
-  )
-  const closeSettings = useCallback(() => endSettings(true), [endSettings])
-  const settingsShownRef = useRef(settingsShown)
-  useLayoutEffect(() => {
-    settingsShownRef.current = settingsShown
-  })
-  /** Choosing other content leaves the settings page; the content, not the page's opener, gets focus. */
-  const leaveSettings = useCallback(() => {
-    if (settingsShownRef.current) endSettings(false)
-  }, [endSettings])
-
-  // Back from the settings page, once the content it covered is back (the top bar returns in the
-  // same commit, so the page's own cleanup would run before its buttons exist). The opener if still
-  // shown; else the stable entry: the top bar's 设置 it came from, 打开导航, or the rail's 设置.
-  useLayoutEffect(() => {
-    const back = settingsReturn.current
-    if (settingsShown || back === null || !back.pending) return
-    settingsReturn.current = null
-    const target = isShown(back.opener)
-      ? back.opener
-      : back.fromTopBar
-        ? settingsButtonRef.current
-        : navOverlay
-          ? navTriggerRef.current
-          : (inlineNavRef.current?.querySelector<HTMLElement>('[data-settings-entry]') ?? null)
-    target?.focus()
-  }, [settingsShown, navOverlay])
+  const settingsTab = tabs?.settings ?? null
+  const settingsActive = settingsTab !== null && tabs?.activeId === settingsTab.id
+  // 设置 left (another tab shown, or closed): UUID, binding or source may have changed there.
+  const settingsWasActive = useRef(false)
+  useEffect(() => {
+    const was = settingsWasActive.current
+    settingsWasActive.current = settingsActive
+    if (!was || settingsActive) return
+    void refreshSubscriptions()
+    void refreshSubscriptionJournal()
+  }, [settingsActive, refreshSubscriptions, refreshSubscriptionJournal])
 
   // ---------- Local / thread search ----------
   /** Tab whose reader takes focus after a search hit was opened in it. */
@@ -586,21 +553,34 @@ export function App() {
     return { tabs: state, editors: editorsList, lists: captureLists(state, registry) }
   }, [registry, currentEditors])
 
+  /** Runs `run` on the active content tab; nothing while 设置 is the active tab. */
   const withActive = useCallback((run: (tab: Tab) => void) => {
     const state = stateRef.current.tabs
-    if (state !== null) run(activeTab(state))
+    const tab = state === null ? null : activeTab(state)
+    if (tab !== null) run(tab)
   }, [])
 
   /**
-   * Shows `ref` in the active tab, leaving the settings page. Focus: `nav` — an open navigation
-   * overlay closes back to 打开导航 (an inline navigation keeps it); `list` — the active tab's list
-   * takes it, for openers that are going away (the 更多 panel, content of a page).
+   * Runs navigation chosen outside the tabs (rail, search, a list opener) on the content tab it shows
+   * in (`navigationTab`): while 设置 is active, that tab is shown again and 设置 stays open beside it.
+   */
+  const withNavigationTab = useCallback((run: (tab: Tab) => void) => {
+    const state = stateRef.current.tabs
+    if (state === null) return
+    const tab = navigationTab(state)
+    if (tab.id !== state.activeId) dispatch({ type: 'activate', tabId: tab.id })
+    run(tab)
+  }, [])
+
+  /**
+   * Shows `ref` in the active content tab (the one 设置 returns to while it is active). Focus:
+   * `nav` — an open navigation overlay closes back to 打开导航 (an inline navigation keeps it);
+   * `list` — the tab's list takes it, for openers that are going away (the 更多 panel, content of a page).
    */
   const selectFeed = useCallback(
     (ref: ListRef, focus: 'nav' | 'list' = 'nav') => {
-      leaveSettings()
       closeNav(focus === 'nav')
-      withActive((tab) => {
+      withNavigationTab((tab) => {
         const entry = currentEntry(tab)
         if (entry.kind === 'list' && entry.feed !== null && listKey(entry.feed) === listKey(ref)) return
         leave(tab)
@@ -613,7 +593,7 @@ export function App() {
         })
       }
     },
-    [leaveSettings, closeNav, withActive, leave]
+    [closeNav, withNavigationTab, leave]
   )
 
   /**
@@ -834,6 +814,12 @@ export function App() {
     [currentEditors, finishCloseTab, flushEditors]
   )
 
+  /** Closes 设置 (its Esc): the tab it returns to is shown again. */
+  const closeSettingsTab = useCallback(() => {
+    const settingsId = stateRef.current.tabs?.settings?.id
+    if (settingsId !== undefined) closeTab(settingsId)
+  }, [closeTab])
+
   /** Activates the tab and makes it show `target` where its editor lives. */
   const showTarget = useCallback(
     (tabId: number, target: PostTarget) => {
@@ -868,7 +854,8 @@ export function App() {
       const editor = state.editors.find((item) => item.id === editorId)
       if (editor === undefined) return 'done'
       if (editorFor(state, target) !== null) return 'occupied'
-      const tabId = stateRef.current.tabs?.activeId ?? editor.tabId
+      const tabs = stateRef.current.tabs
+      const tabId = (tabs === null ? null : activeTab(tabs)?.id) ?? editor.tabId
       dispatchEditors({ type: 'retarget', editorId, target })
       showTarget(tabId, target)
       requestFocus(focusKey(tabId, target))
@@ -891,7 +878,6 @@ export function App() {
         if (!outcome.ok) return loadFailureText(outcome.reason)
       }
       setDraftsOpen(false)
-      leaveSettings()
       if (existing !== null) {
         showTarget(existing.tabId, existing.target)
         dispatchEditors({ type: 'set-expanded', editorId: existing.id, expanded: true })
@@ -907,7 +893,7 @@ export function App() {
       requestFocus(focusKey(tabId, draft.target))
       return null
     },
-    [leaveSettings, currentEditors, loadDraft, showTarget, dispatchEditors, requestFocus]
+    [currentEditors, loadDraft, showTarget, dispatchEditors, requestFocus]
   )
 
   const openDrafts = useCallback(() => {
@@ -920,9 +906,11 @@ export function App() {
     (view: HistoryView) => {
       const state = stateRef.current.tabs
       if (state === null) return
+      // The tab `selectFeed` shows 历史 in.
+      const tabId = navigationTab(state).id
       selectFeed({ kind: 'history' }, 'list')
-      dispatch({ type: 'show-pane', tabId: state.activeId, pane: 'list' })
-      setHistoryRequest((current) => ({ tabId: state.activeId, view, seq: (current?.seq ?? 0) + 1 }))
+      dispatch({ type: 'show-pane', tabId, pane: 'list' })
+      setHistoryRequest((current) => ({ tabId, view, seq: (current?.seq ?? 0) + 1 }))
     },
     [selectFeed]
   )
@@ -959,14 +947,13 @@ export function App() {
     const state = stateRef.current.tabs
     if (state === null) return
     closeNav(false)
-    leaveSettings()
     void reloadReminders()
     const shows = (tab: Tab) => {
       const entry = currentEntry(tab)
       return entry.kind === 'list' && entry.feed?.kind === 'reminders'
     }
     const active = activeTab(state)
-    const existing = shows(active) ? active : state.tabs.find(shows)
+    const existing = active !== null && shows(active) ? active : state.tabs.find(shows)
     if (existing !== undefined) {
       dispatch({ type: 'activate', tabId: existing.id })
       if (existing.split && stateRef.current.singlePane) dispatch({ type: 'show-pane', tabId: existing.id, pane: 'list' })
@@ -977,7 +964,7 @@ export function App() {
       entry: { kind: 'list', feed: { kind: 'reminders' } },
       split: stateRef.current.settings.newTabSplitDefault
     })
-  }, [closeNav, leaveSettings, reloadReminders])
+  }, [closeNav, reloadReminders])
 
   useEffect(
     () => window.xidao.reminders.onOpenList(() => void whenRestored().then(openRemindersList)),
@@ -1009,15 +996,16 @@ export function App() {
 
   /**
    * The failed send's editor is on screen now (expanded among the active tab's editor panels, which
-   * float over either pane of the single-pane fallback; settings page not over them): it already
-   * shows the failure and holds the draft, so no bottom notice is added. The report editor is
-   * displayed whenever the tab displays any target (see `ComposeFrame`).
+   * float over either pane of the single-pane fallback; never while 设置 is the active tab): it
+   * already shows the failure and holds the draft, so no bottom notice is added. The report editor
+   * is displayed whenever the tab displays any target (see `ComposeFrame`).
    */
   const failureShownInEditor = useCallback(
     (notice: SendFailureNotice): boolean => {
       const tabs = stateRef.current.tabs
-      if (tabs === null || settingsShownRef.current) return false
-      const displayed = composeTargetsOf(activeTab(tabs))
+      const tab = tabs === null ? null : activeTab(tabs)
+      if (tab === null) return false
+      const displayed = composeTargetsOf(tab)
       if (displayed.length > 0) displayed.push({ kind: 'thread', forumId: '18' })
       return editorOnScreen(currentEditors(), notice.editorId, displayed)
     },
@@ -1028,8 +1016,6 @@ export function App() {
   const closeForQuit = useCallback(() => {
     closeBoardPanel('dismiss')
     closeNav(false)
-    setSettingsShown(false)
-    settingsReturn.current = null
     setDraftsOpen(false)
     setClosing(null)
     searchCommands.close()
@@ -1062,6 +1048,7 @@ export function App() {
     const state = stateRef.current.tabs
     if (state === null) return
     const tab = activeTab(state)
+    if (tab === null) return
     if (document.getElementById(`tabpanel-${tab.id}`)?.querySelector('.image-viewer') != null) return
     const editorsState = currentEditors()
     const focused = document.activeElement?.closest<HTMLElement>('[data-editor-id]')?.dataset.editorId
@@ -1118,14 +1105,14 @@ export function App() {
   }, [tabs])
 
   /**
-   * The 搜索 page as a new step of the active tab, on 本机 and focused there. On such a page
-   * already: `local` shows 本机, `shown` keeps the side; that side's search box takes focus.
+   * The 搜索 page as a new step of the active tab (the tab 设置 returns to while 设置 is active), on
+   * 本机 and focused there. On such a page already: `local` shows 本机, `shown` keeps the side; that
+   * side's search box takes focus.
    */
   const openSearchPage = useCallback(
     (side: 'local' | 'shown') => {
       closeNav(false)
-      leaveSettings()
-      withActive((tab) => {
+      withNavigationTab((tab) => {
         const entry = currentEntry(tab)
         if (entry.kind === 'online-search') {
           const shown: SearchPageSide = side === 'local' ? 'local' : (registry.searchPageMemory.get(entry.key)?.side ?? 'local')
@@ -1138,7 +1125,7 @@ export function App() {
         dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'online-search' } })
       })
     },
-    [closeNav, leaveSettings, withActive, registry, leave, searchCommands]
+    [closeNav, withNavigationTab, registry, leave, searchCommands]
   )
 
   /**
@@ -1161,26 +1148,27 @@ export function App() {
     [openSearchPage, closeNav, withActive, searchCommands]
   )
 
-  /** Ctrl/Cmd+F: the thread on screen, else the 搜索 page. */
-  const searchShownThread = useCallback(
-    () =>
-      withActive((tab) => {
-        const entry = currentEntry(tab)
-        const shown =
-          entryThread(entry) !== null && readerShown(tab, entry, stateRef.current.singlePane)
-            ? (registry.readers.get(entry.key)?.current.shown() ?? null)
-            : null
-        openSearch(shown === null ? { view: 'local' } : { view: 'thread', entryKey: entry.key, ...shown })
-      }),
-    [withActive, registry, openSearch]
-  )
+  /** Ctrl/Cmd+F: the thread on screen, else the 搜索 page (from 设置 too). */
+  const searchShownThread = useCallback(() => {
+    const state = stateRef.current.tabs
+    const tab = state === null ? null : activeTab(state)
+    const entry = tab === null ? null : currentEntry(tab)
+    const shown =
+      tab !== null && entry !== null && entryThread(entry) !== null && readerShown(tab, entry, stateRef.current.singlePane)
+        ? (registry.readers.get(entry.key)?.current.shown() ?? null)
+        : null
+    openSearch(shown === null || entry === null ? { view: 'local' } : { view: 'thread', entryKey: entry.key, ...shown })
+  }, [registry, openSearch])
 
   // ---------- Keyboard (spec I11): one app-level dispatcher ----------
   const actions = useRef<Record<ShortcutAction, () => void> | null>(null)
   useLayoutEffect(() => {
     actions.current = {
       'new-tab': newTab,
-      'close-tab': () => withActive((tab) => closeTab(tab.id)),
+      'close-tab': () => {
+        const state = stateRef.current.tabs
+        if (state !== null) closeTab(state.activeId)
+      },
       'next-tab': () => dispatch({ type: 'cycle', delta: 1 }),
       'previous-tab': () => dispatch({ type: 'cycle', delta: -1 }),
       refresh,
@@ -1215,7 +1203,8 @@ export function App() {
 
   // ---------- Render ----------
   const titleOf = useCallback(
-    (tab: Tab) => {
+    (tab: StripTab) => {
+      if (isSettingsTab(tab)) return '设置'
       const entry = currentEntry(tab)
       if (entry.kind === 'thread') return threadTitle(entry.thread)
       if (entry.kind === 'online-search') return '搜索'
@@ -1288,11 +1277,11 @@ export function App() {
   const features = useMemo<FeatureHost>(
     () => ({
       open: openFeature,
-      current: settingsShown ? null : searchCurrent ? 'search' : selectedFeed !== null && isLocalList(selectedFeed) ? selectedFeed.kind : null,
+      current: searchCurrent ? 'search' : selectedFeed !== null && isLocalList(selectedFeed) ? selectedFeed.kind : null,
       reminderBadge,
       searchShortcut: shortcutLabel('search-local', platform)
     }),
-    [openFeature, settingsShown, searchCurrent, selectedFeed, reminderBadge, platform]
+    [openFeature, searchCurrent, selectedFeed, reminderBadge, platform]
   )
 
   /**
@@ -1363,11 +1352,11 @@ export function App() {
   const navigation = (placement: 'inline' | 'overlay') => {
     const common = {
       state: directory.state,
-      selected: settingsShown ? null : selectedFeed,
+      selected: selectedFeed,
       onSelect: selectFeed,
       onRetry: directory.retry,
       features,
-      settingsCurrent: settingsShown,
+      settingsCurrent: settingsActive,
       onOpenSettings: openSettingsButton
     }
     const props: NavProps =
@@ -1416,42 +1405,39 @@ export function App() {
               )}
 
               <div className="main-column">
-                {tabs !== null && current !== null && entry !== null && (
+                {tabs !== null && (
                   <>
-                    {!settingsShown && (
-                      <TopBar
-                        tabs={tabs.tabs}
-                        activeId={tabs.activeId}
-                        titleOf={titleOf}
-                        platform={platform}
-                        canBack={current.index > 0}
-                        backLabel={
-                          current.index === 0
-                            ? null
-                            : entry.origin === 'quote'
-                              ? '返回引用处'
-                              : entry.origin === 'local-search' || entry.origin === 'online-search'
-                                ? '返回搜索结果'
-                                : null
-                        }
-                        canForward={current.index < current.entries.length - 1}
-                        splitToggle={entry.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
-                        navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
-                        onBack={goBack}
-                        onForward={goForward}
-                        onActivate={activate}
-                        onClose={closeTab}
-                        onNewTab={newTab}
-                        settingsTrigger={navOverlay ? { ref: settingsButtonRef, onOpen: openSettingsButton } : null}
-                      />
-                    )}
-                    <div className="tab-host" hidden={settingsShown ? true : undefined}>
+                    <TopBar
+                      tabs={stripTabs(tabs)}
+                      activeId={tabs.activeId}
+                      titleOf={titleOf}
+                      platform={platform}
+                      canBack={current !== null && current.index > 0}
+                      backLabel={
+                        current === null || entry === null || current.index === 0
+                          ? null
+                          : entry.origin === 'quote'
+                            ? '返回引用处'
+                            : entry.origin === 'local-search' || entry.origin === 'online-search'
+                              ? '返回搜索结果'
+                              : null
+                      }
+                      canForward={current !== null && current.index < current.entries.length - 1}
+                      splitToggle={current !== null && entry?.kind === 'list' ? { pressed: current.split, onToggle: toggleSplit } : null}
+                      navTrigger={navOverlay ? { ref: navTriggerRef, expanded: navPopover.open, onToggle: navPopover.toggle } : null}
+                      onBack={goBack}
+                      onForward={goForward}
+                      onActivate={activate}
+                      onClose={closeTab}
+                      onNewTab={newTab}
+                      settingsTrigger={navOverlay ? { ref: settingsButtonRef, onOpen: openSettingsButton } : null}
+                    />
+                    <div className="tab-host">
                       {tabs.tabs.map((tab) => (
                         <TabView
                           key={tab.id}
                           tab={tab}
                           active={tab.id === tabs.activeId}
-                          composeHidden={settingsShown}
                           onResizeList={resizeList}
                           layout={layout}
                           directory={directory.state}
@@ -1465,21 +1451,24 @@ export function App() {
                           onOpenFromOnlineSearch={openFromOnlineSearch}
                         />
                       ))}
+                      {settingsTab !== null && (
+                        <SettingsPage
+                          key={settingsTab.id}
+                          identities={identities}
+                          subscriptions={subscriptions}
+                          settings={settings}
+                          platform={platform}
+                          status={settingsWriter.status}
+                          write={writeSettings}
+                          adopt={settingsWriter.adopt}
+                          directory={dirData}
+                          target={settingsTarget}
+                          tabId={settingsTab.id}
+                          active={settingsActive}
+                          onClose={closeSettingsTab}
+                        />
+                      )}
                     </div>
-                    {settingsShown && (
-                      <SettingsPage
-                        identities={identities}
-                        subscriptions={subscriptions}
-                        settings={settings}
-                        platform={platform}
-                        status={settingsWriter.status}
-                        write={writeSettings}
-                        adopt={settingsWriter.adopt}
-                        directory={dirData}
-                        target={settingsTarget}
-                        onClose={closeSettings}
-                      />
-                    )}
                   </>
                 )}
               </div>

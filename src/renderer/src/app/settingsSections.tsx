@@ -2,7 +2,7 @@
 // global preferences and window behavior. Global preferences go through `write` (shown at once,
 // saved by `useSettingsWriter`); the other sections keep their own APIs.
 
-import { useCallback, useEffect, useId, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { AppPlatform } from '../../../shared/api'
 import { CLOSE_ACTIONS, type CloseAction } from '../../../shared/lifecycle'
 import {
@@ -343,9 +343,21 @@ function ThemeField({
 
 /**
  * 自定义主题, collapsed until opened. Valid edits preview in this renderer at once; only 保存 writes
- * settings. 放弃修改, or leaving the page (unmount), restores the saved appearance.
+ * settings. 放弃修改, or leaving 设置 (another tab shown, or 设置 closed), restores the saved
+ * appearance and drops the unsaved edits.
  */
-export function ThemeSection({ settings, write, adopt }: { settings: AppSettings; write: Write; adopt: (settings: AppSettings) => void }) {
+export function ThemeSection({
+  settings,
+  write,
+  adopt,
+  shown
+}: {
+  settings: AppSettings
+  write: Write
+  adopt: (settings: AppSettings) => void
+  /** 设置 is the active tab. */
+  shown: boolean
+}) {
   const [draft, setDraft] = useState<CustomTheme | null>(settings.customTheme)
   const [basis, setBasis] = useState(settings.customTheme)
   const [issues, setIssues] = useState<AppearanceIssue[]>([])
@@ -373,6 +385,13 @@ export function ThemeSection({ settings, write, adopt }: { settings: AppSettings
     setIssues([])
     previewTheme(null)
   }
+  const discardRef = useRef(discard)
+  useLayoutEffect(() => {
+    discardRef.current = discard
+  })
+  useEffect(() => {
+    if (!shown) discardRef.current()
+  }, [shown])
   const save = () => {
     if (draft === null) return
     const parsed = parseCustomTheme(draft)

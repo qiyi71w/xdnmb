@@ -44,7 +44,7 @@ function readingA(): TabsState {
 }
 
 function quote(state: TabsState, source: ThreadSnapshot, target: ThreadOpen): TabsState {
-  const tab = activeTab(state)
+  const tab = activeTab(state)!
   return run(state, { type: 'quote-navigate', tabId: tab.id, entryKey: currentEntry(tab).key, source, thread: target })
 }
 
@@ -54,7 +54,7 @@ describe('quote navigation in the tab history', () => {
     const id = state.activeId
     state = quote(state, left('101', 1), open('100', '150'))
     state = quote(state, left('150', 0), open('200', '250'))
-    const tab = activeTab(state)
+    const tab = activeTab(state)!
     expect(tab.entries.map((entry) => [entry.kind, entryThread(entry)?.threadId, entry.origin])).toEqual([
       ['list', undefined, null],
       ['list', '100', null],
@@ -64,20 +64,20 @@ describe('quote navigation in the tab history', () => {
     expect(currentEntry(tab)).toMatchObject({ feed: forum4, pane: 'reader', thread: { target: { postId: '250' } } })
 
     state = run(state, { type: 'back', tabId: id })
-    expect(currentEntry(activeTab(state))).toMatchObject({ origin: 'quote', thread: { threadId: '100', target: null, snapshot: left('150', 0) } })
+    expect(currentEntry(activeTab(state)!)).toMatchObject({ origin: 'quote', thread: { threadId: '100', target: null, snapshot: left('150', 0) } })
     state = run(state, { type: 'back', tabId: id })
-    expect(currentEntry(activeTab(state))).toMatchObject({ origin: null, thread: { threadId: '100', target: null, snapshot: left('101', 1) } })
+    expect(currentEntry(activeTab(state)!)).toMatchObject({ origin: null, thread: { threadId: '100', target: null, snapshot: left('101', 1) } })
     // Leaving A again by back/forward (no quote) keeps the quote focus to return to.
-    const aKey = currentEntry(activeTab(state)).key
+    const aKey = currentEntry(activeTab(state)!).key
     const kept = run(state, { type: 'snapshot', tabId: id, entryKey: aKey, snapshot: { ...left('105'), focus: null } })
-    expect(entryThread(currentEntry(activeTab(kept)))?.snapshot).toMatchObject({ anchor: { postId: '105' }, focus: { postId: '101', quoteIndex: 1 } })
+    expect(entryThread(currentEntry(activeTab(kept)!))?.snapshot).toMatchObject({ anchor: { postId: '105' }, focus: { postId: '101', quoteIndex: 1 } })
     state = run(state, { type: 'forward', tabId: id }, { type: 'forward', tabId: id })
-    expect(entryThread(currentEntry(activeTab(state)))?.threadId).toBe('200')
+    expect(entryThread(currentEntry(activeTab(state)!))?.threadId).toBe('200')
 
     // Back to B, then quote D: the forward branch (C) is replaced.
     state = run(state, { type: 'back', tabId: id })
     state = quote(state, left('150', 2), open('300', '350'))
-    expect(activeTab(state).entries.map((entry) => entryThread(entry)?.threadId)).toEqual([undefined, '100', '100', '300'])
+    expect(activeTab(state)!.entries.map((entry) => entryThread(entry)?.threadId)).toEqual([undefined, '100', '100', '300'])
     expect(run(state, { type: 'forward', tabId: id })).toBe(state)
   })
 
@@ -89,7 +89,7 @@ describe('quote navigation in the tab history', () => {
       { type: 'navigate', tabId: id, entry: { kind: 'list', feed: forum4 } },
       { type: 'select-thread', tabId: id, thread: open('100') }
     )
-    expect(currentEntry(activeTab(quote(after, left('101'), open('200', '201'))))).toMatchObject({
+    expect(currentEntry(activeTab(quote(after, left('101'), open('200', '201')))!)).toMatchObject({
       kind: 'thread', origin: 'quote', thread: { threadId: '200' }
     })
   })
@@ -97,7 +97,7 @@ describe('quote navigation in the tab history', () => {
   it('ignores a late result once the source entry is no longer current', () => {
     let state = readingA()
     const id = state.activeId
-    const sourceKey = currentEntry(activeTab(state)).key
+    const sourceKey = currentEntry(activeTab(state)!).key
     state = run(state, { type: 'navigate', tabId: id, entry: { kind: 'list', feed: { kind: 'forum', id: '5' } } })
     expect(run(state, { type: 'quote-navigate', tabId: id, entryKey: sourceKey, source: left('101'), thread: open('200', '201') })).toBe(state)
   })
@@ -105,25 +105,25 @@ describe('quote navigation in the tab history', () => {
   it('choosing another list item ends the quote step without dropping history', () => {
     let state = quote(readingA(), left('101'), open('200', '201'))
     const id = state.activeId
-    const before = activeTab(state)
+    const before = activeTab(state)!
     state = run(state, { type: 'select-thread', tabId: id, thread: open('300') })
-    const tab = activeTab(state)
+    const tab = activeTab(state)!
     expect(tab.entries).toHaveLength(before.entries.length)
     expect(tab.index).toBe(before.index)
     expect(currentEntry(tab)).toMatchObject({ origin: null, thread: { threadId: '300' } })
-    expect(currentEntry(activeTab(run(state, { type: 'back', tabId: id })))).toMatchObject({ thread: { threadId: '100', snapshot: left('101') } })
+    expect(currentEntry(activeTab(run(state, { type: 'back', tabId: id }))!)).toMatchObject({ thread: { threadId: '100', snapshot: left('101') } })
   })
 
   it('opens a located quote in a new active tab with the global split default and no copy of the source history', () => {
     const state = quote(readingA(), left('101'), open('200', '201'))
-    const source = activeTab(state)
+    const source = activeTab(state)!
     for (const splitDefault of [true, false]) {
       const after = run(state, {
         type: 'open-tab',
         entry: newTabEntry(currentEntry(source), splitDefault, open('300', '301')),
         split: splitDefault
       })
-      const opened = activeTab(after)
+      const opened = activeTab(after)!
       expect(opened.id).not.toBe(source.id)
       expect(after.tabs.map((tab) => tab.id)).toEqual([source.id, opened.id])
       // The source tab keeps its history and place untouched for switching back.
@@ -149,22 +149,22 @@ describe('quote navigation in the tab history', () => {
     )
     state = quote(state, left('101', 1), open('200', '250'))
     // The subscription list stays beside the located target, as any split list does.
-    expect(currentEntry(activeTab(state))).toMatchObject({ kind: 'list', feed: subscriptions, origin: 'quote', pane: 'reader', thread: { threadId: '200' } })
+    expect(currentEntry(activeTab(state)!)).toMatchObject({ kind: 'list', feed: subscriptions, origin: 'quote', pane: 'reader', thread: { threadId: '200' } })
 
     state = run(state, { type: 'back', tabId: id })
-    expect(currentEntry(activeTab(state))).toMatchObject({
+    expect(currentEntry(activeTab(state)!)).toMatchObject({
       kind: 'list', feed: subscriptions, origin: null, thread: { threadId: '100', target: null, snapshot: left('101', 1) }
     })
 
     // 打开 from 离线 is a new step that replaces the forward (quote) branch.
     state = run(state, { type: 'navigate', tabId: id, entry: { kind: 'thread', thread: open('300') } })
-    const tab = activeTab(state)
+    const tab = activeTab(state)!
     expect(tab.entries.map((entry) => [entry.kind, entryThread(entry)?.threadId, entry.origin])).toEqual([
       ['list', undefined, null],
       ['list', '100', null],
       ['thread', '300', null]
     ])
-    expect(currentEntry(activeTab(run(state, { type: 'back', tabId: id })))).toMatchObject({ feed: subscriptions, thread: { threadId: '100' } })
+    expect(currentEntry(activeTab(run(state, { type: 'back', tabId: id }))!)).toMatchObject({ feed: subscriptions, thread: { threadId: '100' } })
   })
 })
 

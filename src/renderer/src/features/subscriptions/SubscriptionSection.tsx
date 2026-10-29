@@ -32,7 +32,7 @@ function MessageLine({ id, message }: { id?: string; message: Message | null }) 
  * 订阅 settings: the App UUID (shown in its field, saved with 保存) and the fixed web sync object,
  * which is chosen in 饼干 › 用途. Which source the list shows is switched on the subscription page.
  */
-export function SubscriptionSection({ subscriptions }: { subscriptions: SubscriptionsState }) {
+export function SubscriptionSection({ subscriptions, active }: { subscriptions: SubscriptionsState; active: boolean }) {
   const { overview, overviewFailed, refreshOverview } = subscriptions
   const headingId = useId()
 
@@ -58,14 +58,14 @@ export function SubscriptionSection({ subscriptions }: { subscriptions: Subscrip
               </button>
             </div>
           )}
-          <SubscriptionSettings overview={overview} subscriptions={subscriptions} />
+          <SubscriptionSettings overview={overview} subscriptions={subscriptions} active={active} />
         </>
       )}
     </section>
   )
 }
 
-function SubscriptionSettings({ overview, subscriptions }: { overview: SubscriptionOverview; subscriptions: SubscriptionsState }) {
+function SubscriptionSettings({ overview, subscriptions, active }: { overview: SubscriptionOverview; subscriptions: SubscriptionsState; active: boolean }) {
   return (
     <>
       {overview.protection === 'unavailable' && (
@@ -80,7 +80,7 @@ function SubscriptionSettings({ overview, subscriptions }: { overview: Subscript
           <p className="notice-text">本地存储不可写</p>
         </div>
       )}
-      <AppUuidForm overview={overview} busy={subscriptions.busy} onApplied={subscriptions.applyOverview} />
+      <AppUuidForm overview={overview} busy={subscriptions.busy} onApplied={subscriptions.applyOverview} active={active} />
       <MergeEntry overview={overview} subscriptions={subscriptions} />
       <div className="settings-group">
         <h4 className="settings-group-title">网页同步对象</h4>
@@ -180,12 +180,15 @@ function MergeEntry({ overview, subscriptions }: { overview: SubscriptionOvervie
 function AppUuidForm({
   overview,
   busy,
-  onApplied
+  onApplied,
+  active
 }: {
   overview: SubscriptionOverview
   /** A write, preview or plan is running: its fixed UUID must not change under it from this form. */
   busy: boolean
   onApplied: (next: SubscriptionOverview) => void
+  /** 设置 is the active tab: only then does the field hold the UUID. */
+  active: boolean
 }) {
   // Uncontrolled on purpose: React would mirror a controlled value into the `value` attribute.
   const uuidRef = useRef<HTMLInputElement>(null)
@@ -206,9 +209,18 @@ function AppUuidForm({
   const blocked = overview.protection === 'unavailable' || !overview.writable || busy
   const savedRef = overview.context.appCredentialId
 
-  // The field shows the saved UUID, read back from main (it stays encrypted at rest) on mount and
-  // whenever the saved one changes.
+  // While 设置 is shown, the field shows the saved UUID, read back from main (it stays encrypted at
+  // rest) each time 设置 is shown and whenever the saved one changes. Another tab shown, the field
+  // and this form forget it, an unsaved entry with it; a read still under way is dropped.
   useEffect(() => {
+    if (!active) {
+      if (uuidRef.current !== null) uuidRef.current.value = ''
+      setSaved(undefined)
+      setShown(true)
+      setDirty(false)
+      setInvalid(false)
+      return
+    }
     let alive = true
     window.xidao.subscriptions.revealAppUuid().then(
       (result) => {
@@ -229,9 +241,9 @@ function AppUuidForm({
     return () => {
       alive = false
     }
-  }, [savedRef])
+  }, [savedRef, active])
 
-  // The UUID never outlives this form (settings left or section unmounted).
+  // The UUID never outlives this form (设置 closed or section unmounted).
   useEffect(() => {
     const input = uuidRef.current
     return () => {

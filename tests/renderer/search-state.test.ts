@@ -175,15 +175,15 @@ describe('locating search hits', () => {
 
   it('opens a hit as a search step from an empty new tab, and back restores the source entry', () => {
     let tabs = initialTabsState(true)
-    const tab = activeTab(tabs)
+    const tab = activeTab(tabs)!
     const source = currentEntry(tab)
     const thread = { threadId: '100', head: null, target: { postId: '150', page: 3, mode: 'all' as const }, snapshot: null, unlocatedPostId: null }
     tabs = runTabs(tabs, { type: 'search-navigate', tabId: tab.id, entryKey: source.key, source: null, thread })
-    expect(currentEntry(activeTab(tabs))).toMatchObject({ kind: 'thread', origin: 'local-search', thread: { target: { postId: '150', page: 3 } } })
+    expect(currentEntry(activeTab(tabs)!)).toMatchObject({ kind: 'thread', origin: 'local-search', thread: { target: { postId: '150', page: 3 } } })
     // A stale commit (entry changed meanwhile) is ignored.
     expect(runTabs(tabs, { type: 'search-navigate', tabId: tab.id, entryKey: source.key, source: null, thread })).toBe(tabs)
     tabs = runTabs(tabs, { type: 'back', tabId: tab.id })
-    expect(currentEntry(activeTab(tabs))).toMatchObject({ key: source.key, kind: 'list', feed: null, origin: null })
+    expect(currentEntry(activeTab(tabs)!)).toMatchObject({ key: source.key, kind: 'list', feed: null, origin: null })
   })
 
   it('a retry after a failed jump only resolves: its success is shown, not jumped to; choosing the hit jumps', () => {
@@ -236,7 +236,7 @@ describe('returning to search results through history', () => {
 
   /** What the shell does when a located hit is opened: close, remember the step's search, push the hit. */
   function openHit(search: SearchState, tabs: TabsState, returns: Map<number, SearchReturn>, postId: string, threadId: string) {
-    const tab = activeTab(tabs)
+    const tab = activeTab(tabs)!
     const entryKey = currentEntry(tab).key
     let next = run(search, { type: 'locate-start', tabId: tab.id, view: 'local', postId, entryKey, intent: 'navigate' })
     next = run(next, { type: 'close' })
@@ -246,7 +246,7 @@ describe('returning to search results through history', () => {
 
   /** Back from a search step: the previous entry gets the search it had when the hit was opened. */
   function back(search: SearchState, tabs: TabsState, returns: Map<number, SearchReturn>) {
-    const tab = activeTab(tabs)
+    const tab = activeTab(tabs)!
     const sourceKey = tab.entries[tab.index - 1]!.key
     const saved = returns.get(sourceKey)!
     expect(saved.tabId).toBe(tab.id)
@@ -256,7 +256,7 @@ describe('returning to search results through history', () => {
   it('each back step shows the search of its own step, focused on the hit opened from it', () => {
     const returns = new Map<number, SearchReturn>()
     let tabs = initialTabsState(true)
-    const tabId = activeTab(tabs).id
+    const tabId = activeTab(tabs)!.id
     let search = run(
       initialSearchState,
       { type: 'open', tabId, view: 'local' },
@@ -277,7 +277,7 @@ describe('returning to search results through history', () => {
     search = run(search, { type: 'close' })
 
     ;({ search, tabs } = back(search, tabs, returns))
-    expect(currentEntry(activeTab(tabs))).toMatchObject({ kind: 'list', feed: null })
+    expect(currentEntry(activeTab(tabs)!)).toMatchObject({ kind: 'list', feed: null })
     // 松果 was replaced (and cancelled) by the later search: back with its hits, stopped, not re-run.
     expect(search).toMatchObject({
       openTab: tabId,
@@ -295,7 +295,7 @@ describe('returning to search results through history', () => {
   it('a session still current is kept as it is now; text from a sheet replaced by a restore is dropped', () => {
     const returns = new Map<number, SearchReturn>()
     let tabs = initialTabsState(false)
-    const tabId = activeTab(tabs).id
+    const tabId = activeTab(tabs)!.id
     let search = run(
       initialSearchState,
       { type: 'open', tabId, view: 'local' },
@@ -316,17 +316,17 @@ describe('returning to search results through history', () => {
   it('a step leaving the history or its tab closing forgets its search; other tabs never use it', () => {
     const returns = new Map<number, SearchReturn>()
     let tabs = initialTabsState(true)
-    const tabId = activeTab(tabs).id
-    const firstKey = currentEntry(activeTab(tabs)).key
+    const tabId = activeTab(tabs)!.id
+    const firstKey = currentEntry(activeTab(tabs)!).key
     let search = run(initialSearchState, { type: 'open', tabId, view: 'local' }, start('a', 'x'))
     ;({ search, tabs } = openHit(search, tabs, returns, '1', '100'))
-    const secondKey = currentEntry(activeTab(tabs)).key
+    const secondKey = currentEntry(activeTab(tabs)!).key
     ;({ search, tabs } = openHit(run(search, { type: 'open', tabId, view: 'local' }), tabs, returns, '2', '200'))
 
     tabs = runTabs(tabs, { type: 'open-tab', entry: { kind: 'list', feed: null }, split: true })
     pruneReturns(returns, tabs)
     expect([...returns.keys()].sort()).toEqual([firstKey, secondKey].sort())
-    expect(activeTab(tabs).entries.some((entry) => returns.has(entry.key))).toBe(false)
+    expect(activeTab(tabs)!.entries.some((entry) => returns.has(entry.key))).toBe(false)
 
     // Back to the first step, then a new navigation replaces the forward branch.
     tabs = runTabs(tabs, { type: 'activate', tabId }, { type: 'back', tabId }, { type: 'back', tabId })

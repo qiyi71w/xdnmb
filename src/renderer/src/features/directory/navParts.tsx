@@ -43,7 +43,7 @@ export interface FeatureHost {
 
 export interface NavProps {
   state: DirectoryState
-  /** The list the active tab shows; `null` while the settings page is shown. */
+  /** The list the active tab shows; `null` while 设置 (or a page that is no list) is the active tab. */
   selected: ListRef | null
   onSelect: (ref: ListRef) => void
   onRetry: () => void

@@ -106,6 +106,7 @@ export type EntryInit =
   | { kind: 'thread'; thread: ThreadOpen }
   | { kind: 'online-search' }
 
+/** A content tab: reading, lists and pages, each with its own navigation history. */
 export interface Tab {
   id: number
   /** This tab's own split preference. Window width never changes it. */
@@ -114,8 +115,33 @@ export interface Tab {
   index: number
 }
 
+/**
+ * The 设置 tool tab: at most one, in the strip beside the content tabs, with no history and no
+ * editors; navigation never happens in it. `at`: its place in the strip, as the number of content
+ * tabs before it. `returnTo`: the content tab that was active when 设置 last became active, shown
+ * again when 设置 closes (when still open).
+ */
+export interface SettingsTab {
+  kind: 'settings'
+  id: number
+  at: number
+  returnTo: number | null
+}
+
+/** A tab of the strip: a content tab or 设置. */
+export type StripTab = Tab | SettingsTab
+
+export function isSettingsTab(tab: StripTab): tab is SettingsTab {
+  return 'kind' in tab && tab.kind === 'settings'
+}
+
+/**
+ * Every tab of the strip. `activeId` names a content tab or 设置. There is always at least one
+ * content tab: closing the last one leaves a new empty tab in its place.
+ */
 export interface TabsState {
   tabs: Tab[]
+  settings: SettingsTab | null
   activeId: number
   nextId: number
   nextKey: number
@@ -124,9 +150,15 @@ export interface TabsState {
 export type TabsAction =
   /** Opens a tab after the active one and switches to it; `split` is the global “新标签默认开启分栏” value at creation time. */
   | { type: 'open-tab'; entry: EntryInit; split: boolean }
-  /** Closing the last tab leaves one new empty tab with `split`. */
+  /** Switches to 设置, opening it after the active tab when there is none yet. */
+  | { type: 'open-settings' }
+  /**
+   * Closing the last content tab leaves one new empty tab with `split`. Closing the active 设置 shows
+   * the tab it returns to, else its neighbour.
+   */
   | { type: 'close-tab'; tabId: number; split: boolean }
   | { type: 'activate'; tabId: number }
+  /** Moves through the whole strip, 设置 included. */
   | { type: 'cycle'; delta: 1 | -1 }
   | { type: 'set-split'; tabId: number; split: boolean }
   /**
@@ -184,6 +216,7 @@ export function newTabEntry(source: TabEntry, splitDefault: boolean, thread: Thr
 export function initialTabsState(split: boolean): TabsState {
   return {
     tabs: [{ id: 1, split, entries: [makeEntry({ kind: 'list', feed: null }, 1)], index: 0 }],
+    settings: null,
     activeId: 1,
     nextId: 2,
     nextKey: 2
@@ -199,8 +232,37 @@ export function currentEntry(tab: Tab): TabEntry {
   return tab.entries[tab.index] as TabEntry
 }
 
-export function activeTab(state: TabsState): Tab {
-  return state.tabs.find((tab) => tab.id === state.activeId) ?? (state.tabs[0] as Tab)
+/** The active content tab; null while 设置 is the active tab. */
+export function activeTab(state: TabsState): Tab | null {
+  return state.tabs.find((tab) => tab.id === state.activeId) ?? null
+}
+
+/**
+ * The content tab that navigation chosen outside a tab (rail, search, a notification) shows in: the
+ * active one; while 设置 is active, the tab 设置 returns to, else the content tab beside it.
+ */
+export function navigationTab(state: TabsState): Tab {
+  const active = activeTab(state)
+  if (active !== null) return active
+  const { settings } = state
+  const back = settings === null ? undefined : state.tabs.find((tab) => tab.id === settings.returnTo)
+  return back ?? (state.tabs[Math.min(settings?.at ?? 0, state.tabs.length - 1)] as Tab)
+}
+
+/** The strip in order: the content tabs, with 设置 at its place. */
+export function stripTabs(state: TabsState): StripTab[] {
+  const { settings } = state
+  return settings === null ? state.tabs : [...state.tabs.slice(0, settings.at), settings, ...state.tabs.slice(settings.at)]
+}
+
+/** Makes `tabId` active; 设置 remembers the content tab it is entered from. */
+function select(state: TabsState, tabId: number): TabsState {
+  if (state.activeId === tabId) return state
+  const { settings } = state
+  if (settings === null || settings.id !== tabId || !state.tabs.some((tab) => tab.id === state.activeId)) {
+    return { ...state, activeId: tabId }
+  }
+  return { ...state, activeId: tabId, settings: { ...settings, returnTo: state.activeId } }
 }
 
 function sameList(a: ListRef | null, b: ListRef | null): boolean {
@@ -238,35 +300,68 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
   switch (action.type) {
     case 'open-tab': {
       const tab: Tab = { id: state.nextId, split: action.split, entries: [makeEntry(action.entry, state.nextKey)], index: 0 }
-      const at = state.tabs.findIndex((item) => item.id === state.activeId)
-      const tabs = [...state.tabs.slice(0, at + 1), tab, ...state.tabs.slice(at + 1)]
+      // Right after the active tab of the strip (after 设置 when that is active).
+      const { settings } = state
+      const active = state.tabs.findIndex((item) => item.id === state.activeId)
+      const at = active < 0 ? (settings?.at ?? state.tabs.length) : active + 1
+      const tabs = [...state.tabs.slice(0, at), tab, ...state.tabs.slice(at)]
       return {
         tabs,
+        settings: settings !== null && active >= 0 && settings.at >= at ? { ...settings, at: settings.at + 1 } : settings,
         activeId: tab.id,
         nextId: state.nextId + 1,
         nextKey: state.nextKey + 1
       }
     }
+    case 'open-settings': {
+      if (state.settings !== null) return select(state, state.settings.id)
+      const active = state.tabs.findIndex((item) => item.id === state.activeId)
+      const settings: SettingsTab = { kind: 'settings', id: state.nextId, at: active < 0 ? state.tabs.length : active + 1, returnTo: null }
+      return select({ ...state, settings, nextId: state.nextId + 1 }, settings.id)
+    }
     case 'close-tab': {
+      const { settings } = state
+      if (settings !== null && settings.id === action.tabId) {
+        const closed: TabsState = { ...state, settings: null }
+        if (state.activeId !== settings.id) return closed
+        const back = state.tabs.find((tab) => tab.id === settings.returnTo) ?? (state.tabs[Math.min(settings.at, state.tabs.length - 1)] as Tab)
+        return { ...closed, activeId: back.id }
+      }
       const at = state.tabs.findIndex((tab) => tab.id === action.tabId)
       if (at < 0) return state
       const tabs = state.tabs.filter((tab) => tab.id !== action.tabId)
       if (tabs.length === 0) {
+        // In the closed tab's place, so 设置 keeps its side of it.
         const fresh: Tab = { id: state.nextId, split: action.split, entries: [makeEntry({ kind: 'list', feed: null }, state.nextKey)], index: 0 }
-        return { tabs: [fresh], activeId: fresh.id, nextId: state.nextId + 1, nextKey: state.nextKey + 1 }
+        return {
+          tabs: [fresh],
+          settings: settings === null ? null : { ...settings, returnTo: null },
+          activeId: action.tabId === state.activeId ? fresh.id : state.activeId,
+          nextId: state.nextId + 1,
+          nextKey: state.nextKey + 1
+        }
       }
-      const activeId = action.tabId === state.activeId ? (tabs[Math.min(at, tabs.length - 1)] as Tab).id : state.activeId
-      return { ...state, tabs, activeId }
+      const next: TabsState = {
+        ...state,
+        tabs,
+        settings:
+          settings === null
+            ? null
+            : { ...settings, at: settings.at > at ? settings.at - 1 : settings.at, returnTo: settings.returnTo === action.tabId ? null : settings.returnTo }
+      }
+      if (action.tabId !== state.activeId) return next
+      // The neighbour in the strip takes over: the next tab, else the one before.
+      const place = stripTabs(state).findIndex((tab) => tab.id === action.tabId)
+      const strip = stripTabs(next)
+      return select(next, (strip[Math.min(place, strip.length - 1)] as StripTab).id)
     }
     case 'activate':
-      return state.tabs.some((tab) => tab.id === action.tabId) && state.activeId !== action.tabId
-        ? { ...state, activeId: action.tabId }
-        : state
+      return state.tabs.some((tab) => tab.id === action.tabId) || state.settings?.id === action.tabId ? select(state, action.tabId) : state
     case 'cycle': {
-      if (state.tabs.length < 2) return state
-      const at = state.tabs.findIndex((tab) => tab.id === state.activeId)
-      const next = state.tabs[(at + action.delta + state.tabs.length) % state.tabs.length] as Tab
-      return { ...state, activeId: next.id }
+      const strip = stripTabs(state)
+      if (strip.length < 2) return state
+      const at = strip.findIndex((tab) => tab.id === state.activeId)
+      return select(state, (strip[(at + action.delta + strip.length) % strip.length] as StripTab).id)
     }
     case 'set-split':
       return updateTab(state, action.tabId, (tab) => (tab.split === action.split ? tab : { ...tab, split: action.split }))

@@ -291,7 +291,7 @@ describe('failed send editor on screen', () => {
     // The failure keeps the editor expanded, bound to its draft: its own notice is on screen.
     expect(only(state, 1, replyA)).toMatchObject({ expanded: true, publication: null, draft: { id: '7' } })
     expect(editorOnScreen(state, editor.id, [replyA])).toBe(true)
-    // Another tab, another thread or the settings page displays something else.
+    // Another tab, another thread or the 设置 tab displays something else.
     expect(editorOnScreen(state, editor.id, [replyB])).toBe(false)
     expect(editorOnScreen(state, editor.id, [])).toBe(false)
     // Collapsed, or gone: not on screen.

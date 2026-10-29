@@ -58,9 +58,9 @@ const OFFICIAL_COOKIE_PAGE = 'https://www.nmbxd1.com/Member/User/Index/index.htm
 /**
  * 饼干 settings: the ordered credential list (the first one is used for browsing), one import area,
  * import from the logged-in official account and the two independent role selectors. Pasted
- * secrets live only in the DOM value of their (uncontrolled) inputs while this section is mounted.
+ * secrets live only in the DOM value of their (uncontrolled) inputs while this section is shown.
  */
-export function CookieSection({ identities }: { identities: IdentitiesState }) {
+export function CookieSection({ identities, active }: { identities: IdentitiesState; active: boolean }) {
   const { overview, failed, refresh } = identities
   const headingId = useId()
 
@@ -87,14 +87,14 @@ export function CookieSection({ identities }: { identities: IdentitiesState }) {
               </button>
             </div>
           )}
-          <CookieSettings overview={overview} onChanged={refresh} />
+          <CookieSettings overview={overview} onChanged={refresh} active={active} />
         </>
       )}
     </section>
   )
 }
 
-function CookieSettings({ overview, onChanged }: { overview: IdentityOverview; onChanged: () => Promise<void> }) {
+function CookieSettings({ overview, onChanged, active }: { overview: IdentityOverview; onChanged: () => Promise<void>; active: boolean }) {
   const protectionOk = overview.protection === 'available'
   const importBlocked = !protectionOk || !overview.writable
   // An import may give the new 饼干 ID the default 饼干颜色 (main process): show it at once.
@@ -121,7 +121,7 @@ function CookieSettings({ overview, onChanged }: { overview: IdentityOverview; o
 
       <CredentialList overview={overview} onChanged={onChanged} />
 
-      <ImportArea disabled={importBlocked} onImported={onImported} />
+      <ImportArea disabled={importBlocked} onImported={onImported} active={active} />
 
       <AccountImport onImported={onImported} />
 
@@ -633,7 +633,7 @@ const IMPORT_COPY: Record<ImportEntry, { tab: string; title: string; secretLabel
 const IMPORT_ENTRIES: readonly ImportEntry[] = ['export', 'raw']
 
 /** One import area: a switch picks the format; switching clears whatever was pasted. */
-function ImportArea({ disabled, onImported }: { disabled: boolean; onImported: () => Promise<void> }) {
+function ImportArea({ disabled, onImported, active }: { disabled: boolean; onImported: () => Promise<void>; active: boolean }) {
   const [entry, setEntry] = useState<ImportEntry>('export')
   const titleId = useId()
   return (
@@ -650,7 +650,7 @@ function ImportArea({ disabled, onImported }: { disabled: boolean; onImported: (
           ))}
         </div>
       </div>
-      <ImportForm key={entry} entry={entry} disabled={disabled} onImported={onImported} />
+      <ImportForm key={entry} entry={entry} disabled={disabled} onImported={onImported} active={active} />
     </div>
   )
 }
@@ -659,11 +659,14 @@ function ImportArea({ disabled, onImported }: { disabled: boolean; onImported: (
 function ImportForm({
   entry,
   disabled,
-  onImported
+  onImported,
+  active
 }: {
   entry: ImportEntry
   disabled: boolean
   onImported: () => Promise<void>
+  /** 设置 is the active tab. */
+  active: boolean
 }) {
   const copy = IMPORT_COPY[entry]
   // Uncontrolled on purpose: React would mirror a controlled value into the `value` attribute.
@@ -688,6 +691,14 @@ function ImportForm({
       if (input !== null) input.value = ''
     }
   }, [])
+
+  // Nor stays behind while another tab is shown: settings left, it is gone and hidden again. An
+  // import already sent keeps its own copy and finishes as usual.
+  useEffect(() => {
+    if (active) return
+    if (secretRef.current !== null) secretRef.current.value = ''
+    setShown(false)
+  }, [active])
 
   const fail = (text: string, field: FailureField) => {
     setMessage({ tone: 'error', text })

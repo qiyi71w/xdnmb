@@ -59,10 +59,9 @@ describe('title-bar overlay under modal backdrops', () => {
 })
 
 describe('title-bar cover sample point', () => {
-  // The settings paper sits 8 CSS px inside the window (shell.css) at every zoom, its head and every
-  // viewer bar at least 44 CSS px tall; the controls (three 46px caption buttons, 44px tall) keep
-  // their device size, so they shrink in CSS px as the page zooms in and grow past those bars as it
-  // zooms out.
+  // A cover may sit 8 CSS px inside the window at every zoom, every viewer bar is at least 44 CSS px
+  // tall; the controls (three 46px caption buttons, 44px tall) keep their device size, so they
+  // shrink in CSS px as the page zooms in and grow past those bars as it zooms out.
   const inset = (viewport: number) => ({ left: 8, top: 8, right: viewport - 8, bottom: 8 + 44 })
   const inside = (point: { x: number; y: number }, box: { left: number; top: number; right: number; bottom: number }) =>
     point.x >= box.left && point.x < box.right && point.y >= box.top && point.y < box.bottom

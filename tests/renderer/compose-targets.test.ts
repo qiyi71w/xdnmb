@@ -4,7 +4,7 @@ import { activeTab, initialTabsState, tabsReducer, type TabsAction, type TabsSta
 
 const thread = (threadId: string): ThreadOpen => ({ threadId, head: null, target: null, snapshot: null, unlocatedPostId: null })
 const run = (state: TabsState, ...actions: TabsAction[]) => actions.reduce(tabsReducer, state)
-const targets = (state: TabsState) => composeTargetsOf(activeTab(state))
+const targets = (state: TabsState) => composeTargetsOf(activeTab(state)!)
 
 describe('editor panels a tab shows', () => {
   it('keeps both panels of a split forum list whichever pane the single-pane fallback shows', () => {

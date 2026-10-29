@@ -32,7 +32,7 @@ function composeEntry(tabId: number, target: PostTarget, className?: string) {
 const READER_ENTRY = 'btn tb-btn is-primary'
 
 /**
- * Targets whose floating editor panel the tab shows while it is active (and nothing covers it):
+ * Targets whose floating editor panel the tab shows while it is active:
  * a page thread's replies; a forum list's new threads, plus the replies of the thread beside the
  * split list. The panel floats over the tab, so it stays shown whichever pane the single-pane
  * fallback shows. New threads go to forums only; timelines and local lists have no post target.
@@ -66,7 +66,6 @@ export function TabView({
   onShowPane,
   onOpenTarget,
   onOpenFromOnlineSearch,
-  composeHidden,
   onResizeList
 }: {
   tab: Tab
@@ -91,8 +90,6 @@ export function TabView({
    * that entry is no longer current.
    */
   onOpenFromOnlineSearch: (entryKey: number, init: EntryInit) => boolean
-  /** Something covers the tab content (the settings page): its compose panels stay closed. */
-  composeHidden: boolean
   /** The list width divider of the split view changed the width (`done` at the end of a change). */
   onResizeList: (width: number, done: boolean) => void
 }) {
@@ -107,7 +104,6 @@ export function TabView({
   const pane: Region = entry.kind === 'list' && entry.thread !== null ? entry.pane : 'list'
   const listVisible = !single || pane === 'list'
   const readerVisible = !single || pane === 'reader'
-  const displayed = active && !composeHidden
 
   // Switching the single pane (or entering it) must not strand keyboard focus in the hidden pane.
   useLayoutEffect(() => {
@@ -130,7 +126,7 @@ export function TabView({
   }, [active, single, pane])
 
   /** Targets whose floating panel this tab can show. */
-  const composeTargets: ComposeTarget[] = composeTargetsOf(tab).map((target) => ({ target, displayed: active && !composeHidden }))
+  const composeTargets: ComposeTarget[] = composeTargetsOf(tab).map((target) => ({ target, displayed: active }))
 
   let body
   if (entry.kind === 'thread') {
@@ -141,7 +137,7 @@ export function TabView({
           key={`${entry.thread.readerKey ?? entry.key}:${entry.thread.threadId}`}
           entryKey={entry.key}
           open={entry.thread}
-          displayed={displayed}
+          displayed={active}
           forumName={forumName}
           onBackToList={null}
           compose={composeEntry(tab.id, target, READER_ENTRY)}
@@ -155,7 +151,7 @@ export function TabView({
         key={entry.key}
         tabId={tab.id}
         entryKey={entry.key}
-        displayed={displayed}
+        displayed={active}
         directory={directory.directory}
         onOpen={onOpenFromOnlineSearch}
       />
@@ -175,7 +171,7 @@ export function TabView({
           tabId={tab.id}
           entryKey={entry.key}
           kind={feed.kind}
-          displayed={displayed && listVisible}
+          displayed={active && listVisible}
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}
           onOpenThread={(threadId, head) => onSelectThread(tab.id, threadId, head)}
@@ -197,7 +193,7 @@ export function TabView({
         <SubscriptionPane
           key={`${entry.key}:subscriptions`}
           entryKey={entry.key}
-          pageDisplayed={displayed && listVisible}
+          pageDisplayed={active && listVisible}
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}
           onOpenThread={(summary) => onSelectThread(tab.id, summary.head.id, summary.head)}
@@ -257,7 +253,7 @@ export function TabView({
               key={`${entry.thread.readerKey ?? entry.key}:${entry.thread.threadId}`}
               entryKey={entry.key}
               open={entry.thread}
-              displayed={displayed && readerVisible}
+              displayed={active && readerVisible}
               forumName={forumName}
               onBackToList={single ? () => onShowPane(tab.id, 'list') : null}
               compose={composeEntry(tab.id, { kind: 'reply', threadId: entry.thread.threadId }, READER_ENTRY)}

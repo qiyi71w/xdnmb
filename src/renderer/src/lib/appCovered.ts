@@ -1,9 +1,9 @@
 import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useState } from 'react'
 
 /**
- * Coverage: whether a blocking layer lies over the whole app — a modal dialog (`Modal`: settings,
- * drafts, send records, quit / close questions, …), the settings page, the compose dialog or a
- * post's context menu. While covered, app shortcuts and list-level Esc stand aside for that layer.
+ * Coverage: whether a blocking layer lies over the whole app — a modal dialog (`Modal`: drafts,
+ * send records, quit / close questions, …), the compose dialog or a post's context menu. While
+ * covered, app shortcuts and list-level Esc stand aside for that layer.
  */
 export interface Coverage {
   /** Something covers the app. */

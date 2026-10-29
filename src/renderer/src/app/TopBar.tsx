@@ -1,7 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent, type RefObject } from 'react'
 import type { AppPlatform } from '../../../shared/api'
 import { Icon } from '../components/Icon'
-import type { Tab } from '../features/tabs/tabsState'
+import { isSettingsTab, type StripTab } from '../features/tabs/tabsState'
 import { hasNewVersion, settingsEntryLabel, useUpdates } from '../features/updates/updatesState'
 import { shortcutLabel } from './shortcuts'
 
@@ -10,10 +10,11 @@ function withShortcut(label: string, shortcut: string): string {
 }
 
 /**
- * D layout top bar, which is also the window's title bar: back / forward of the current tab, the tab
- * strip, the tab's 分栏 toggle (an icon button; list entries only), 新标签 and, while the navigation is an overlay,
- * its trigger first and 设置 last. Its empty space drags the window; the controls do not. It leaves
- * room for the window controls (Windows / Linux overlay on the right, macOS traffic lights on the left).
+ * D layout top bar, which is also the window's title bar on every tab, 设置 included: back / forward
+ * of the current tab, the tab strip, the tab's 分栏 toggle (an icon button; list entries only), 新标签
+ * and, while the navigation is an overlay, its trigger first and 设置 last. Its empty space drags the
+ * window; the controls do not. It leaves room for the window controls (Windows / Linux overlay on
+ * the right, macOS traffic lights on the left).
  */
 export function TopBar({
   tabs,
@@ -32,9 +33,9 @@ export function TopBar({
   onClose,
   onNewTab
 }: {
-  tabs: readonly Tab[]
+  tabs: readonly StripTab[]
   activeId: number
-  titleOf: (tab: Tab) => string
+  titleOf: (tab: StripTab) => string
   platform: AppPlatform | null
   canBack: boolean
   /**
@@ -46,7 +47,7 @@ export function TopBar({
   /** Shown only for list entries. */
   splitToggle: { pressed: boolean; onToggle: () => void } | null
   navTrigger: { ref: RefObject<HTMLButtonElement | null>; expanded: boolean; onToggle: () => void } | null
-  /** Opens the settings page (also Ctrl/Cmd+,); `null` hides it (the rail has 设置). */
+  /** Opens 设置 (also Ctrl/Cmd+,); `null` hides it (the rail has 设置). */
   settingsTrigger: { ref: RefObject<HTMLButtonElement | null>; onOpen: () => void } | null
   onBack: () => void
   onForward: () => void
@@ -137,7 +138,11 @@ export function TopBar({
                 onClick={() => onActivate(tab.id)}
                 onKeyDown={(event) => onTabKeyDown(event, index)}
               >
-                {tab.split && <Icon name="split" size={14} className="tab-icon" />}
+                {isSettingsTab(tab) ? (
+                  <Icon name="settings" size={14} className="tab-icon" />
+                ) : (
+                  tab.split && <Icon name="split" size={14} className="tab-icon" />
+                )}
                 <span className="tab-title">{title}</span>
               </button>
               <button

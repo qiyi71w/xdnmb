@@ -1,7 +1,7 @@
-// The settings page: a view in place of the tabs, with a section directory on the left (a sticky
-// section menu in narrow windows). Every entry that opens settings lands on its section.
+// The 设置 tab's content: a section directory on the left (a sticky section menu in narrow
+// windows) beside the scrolling sections. Every entry that opens settings lands on its section.
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import type { AppPlatform } from '../../../shared/api'
 import type { BoardDirectory } from '../../../shared/forum'
 import type { AppSettings } from '../../../shared/settings'
@@ -21,7 +21,6 @@ import {
 import type { SettingsWriteStatus } from './useSettingsWriter'
 import { Icon } from '../components/Icon'
 import { KaomojiDecor } from '../components/KaomojiDecor'
-import { useCover } from '../lib/appCovered'
 import { openLayer } from '../lib/layers'
 import type { SettingsSectionId } from '../lib/settingsOpener'
 import { usePopover } from '../lib/usePopover'
@@ -98,14 +97,27 @@ export interface SettingsPageProps {
   write: Write
   adopt: (settings: AppSettings) => void
   directory: BoardDirectory | null
-  /** Where the page lands: a section, or the top (`null`). A new `seq` moves an open page. */
-  target: { section: SectionId | null; seq: number }
-  /** Leaves the page. */
+  /**
+   * Where the page lands: a section, or the top (`null`). A new `seq` moves the page; with `keep`
+   * it stays where it was and only takes focus (设置 entered again without a section).
+   */
+  target: SettingsTarget
+  /** The 设置 tab's ID, naming its tab panel. */
+  tabId: number
+  /** 设置 is the active tab; it stays mounted, hidden, while another tab is. */
+  active: boolean
+  /** Closes the 设置 tab. */
   onClose: () => void
 }
 
+export interface SettingsTarget {
+  section: SectionId | null
+  seq: number
+  keep: boolean
+}
+
 export function SettingsPage(props: SettingsPageProps) {
-  const { identities, subscriptions, target, onClose } = props
+  const { identities, subscriptions, target, tabId, active, onClose } = props
   const { refresh } = identities
   const { refreshOverview } = subscriptions
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -114,16 +126,16 @@ export function SettingsPage(props: SettingsPageProps) {
     closeRef.current = onClose
   })
 
-  // The page covers the tabs as a modal would.
-  useCover(true)
-
+  // Each time 设置 becomes the active tab its identities and subscription overview are read again.
   useEffect(() => {
+    if (!active) return
     void refresh()
     void refreshOverview()
-  }, [refresh, refreshOverview])
+  }, [active, refresh, refreshOverview])
 
-  // A leave-able view: Esc goes back when nothing above it takes it.
+  // While shown, Esc closes the tab when nothing above it takes it.
   useEffect(() => {
+    if (!active) return
     const layer = openLayer()
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || !layer.isTop()) return
@@ -135,7 +147,7 @@ export function SettingsPage(props: SettingsPageProps) {
       layer.release()
       document.removeEventListener('keydown', onKeyDown)
     }
-  }, [])
+  }, [active])
 
   const section = (id: SectionId) => <SectionBody id={id} {...props} />
   return (
@@ -144,7 +156,8 @@ export function SettingsPage(props: SettingsPageProps) {
       section={section}
       status={props.status}
       target={target}
-      onClose={onClose}
+      tabId={tabId}
+      active={active}
     />
   )
 }
@@ -153,12 +166,14 @@ interface ShapeProps {
   headingRef: RefObject<HTMLHeadingElement | null>
   section: (id: SectionId) => ReactNode
   status: SettingsWriteStatus
-  target: SettingsPageProps['target']
+  target: SettingsTarget
+  tabId: number
+  active: boolean
 }
 
 // ---------- Content-area view with a section directory ----------
 
-function SettingsView({ headingRef, section, status, target, onClose }: ShapeProps & { onClose: () => void }) {
+function SettingsView({ headingRef, section, status, target, tabId, active }: ShapeProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
   const jumpRef = useRef<HTMLDivElement>(null)
@@ -167,6 +182,8 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
   const chosenAt = useRef<number | null>(null)
   /** The section that scroll landed on; kept at the top while content above it still loads. */
   const chosenId = useRef<SectionId | null>(null)
+  /** Where the pane was last scrolled while shown, put back when the tab is shown again. */
+  const shownScroll = useRef(0)
 
   /** Height of the narrow window's sticky section control (0 while the directory column shows). */
   const stickyOffset = () => {
@@ -230,9 +247,19 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
     }
   }, [])
 
-  // Each opening lands where its entry points: that section and its heading, else the page title
-  // at the top. Focus returns to the opener when the page is left (App).
+  // Shown again after another tab: the pane where it was left (a hidden pane may lose it).
   useLayoutEffect(() => {
+    const pane = scrollRef.current
+    if (active && pane !== null && pane.scrollTop !== shownScroll.current) pane.scrollTop = shownScroll.current
+  }, [active])
+
+  // Each opening lands where its entry points: that section and its heading, else the top of the
+  // page with focus on its (hidden) title; entered again without a section, it only takes focus.
+  useLayoutEffect(() => {
+    if (target.keep) {
+      headingRef.current?.focus({ preventScroll: true })
+      return
+    }
     if (target.section !== null) {
       goRef.current(target.section)
       return
@@ -243,7 +270,7 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
     chosenId.current = null
     setCurrentId('appearance')
     headingRef.current?.focus({ preventScroll: true })
-  }, [target.seq, target.section, headingRef])
+  }, [target.seq, target.section, target.keep, headingRef])
   // A modal that was open when the page opened (the compose panel's 导入饼干) keeps the page inert
   // until it closes, then drops focus on its hidden opener: take focus once the page can hold it.
   useEffect(() => {
@@ -265,6 +292,7 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
   const onScroll = () => {
     const pane = scrollRef.current
     if (pane === null) return
+    if (pane.clientHeight > 0) shownScroll.current = pane.scrollTop
     // Not the user (they end the hold first): content above moved the landing; put it back.
     if (chosenId.current !== null) {
       align(chosenId.current)
@@ -286,19 +314,12 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
   }
 
   return (
-    // Colours the window's title-bar controls with its paper (useAppearance); on macOS its top row is
-    // the transparent title band, so it adds nothing there.
-    <div className="shell-settings shell-settings-b" data-titlebar-cover="">
-      <header className="shell-settings-b-head">
-        <button type="button" className="btn btn-quiet" onClick={onClose}>
-          <Icon name="arrowLeft" />
-          返回
-        </button>
-        <h1 className="shell-settings-title" ref={headingRef} tabIndex={-1}>
-          设置
-        </h1>
-      </header>
-      <div className="shell-settings-b-body">
+    // The tab's own panel inside the shared tab content paper, under the shared top bar.
+    <div className="tab-panel shell-settings" role="tabpanel" id={`tabpanel-${tabId}`} aria-labelledby={`tab-${tabId}`} hidden={!active}>
+      <h1 className="visually-hidden" ref={headingRef} tabIndex={-1}>
+        设置
+      </h1>
+      <div className="shell-settings-body">
         <nav className="shell-settings-toc" aria-label="设置分区">
           {CATEGORIES.map((category) => (
             <div key={category.id} className="shell-toc-group">
@@ -321,7 +342,7 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
           ))}
         </nav>
         <div className="shell-settings-scroll" ref={scrollRef} onScroll={onScroll}>
-          <SectionJump barRef={jumpRef} currentId={currentId} onGo={go} />
+          <SectionJump barRef={jumpRef} currentId={currentId} onGo={go} active={active} />
           <div className="shell-settings-column" ref={columnRef}>
             <SettingsStatusNotices status={status} />
             {CATEGORIES.map((category) => (
@@ -343,6 +364,9 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
   )
 }
 
+/** Space kept between the section menu and the bottom of the scrolling pane. */
+const MENU_BOTTOM_GAP = 8
+
 /**
  * Narrow window, where the directory column is hidden: a sticky control naming the current section,
  * opening a menu of every section. Esc closes the menu only (back to the control).
@@ -350,17 +374,45 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
 function SectionJump({
   barRef,
   currentId,
-  onGo
+  onGo,
+  active
 }: {
   barRef: RefObject<HTMLDivElement | null>
   currentId: SectionId
   onGo: (id: SectionId) => void
+  /** 设置 is the active tab. */
+  active: boolean
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const menu = usePopover(triggerRef, menuRef)
+  const { close } = menu
+  // Another tab shown: the menu closes with it, giving up its Esc layer; focus stays where it went.
+  useEffect(() => {
+    if (!active) close(false)
+  }, [active, close])
   const menuId = useId()
   const current = SECTIONS.find((item) => item.id === currentId)?.title ?? ''
+
+  // The menu hangs from the sticky control inside the scrolling pane, which clips it: it keeps to
+  // the pane's visible height below the control (a wrapped top bar or a large zoom leaves little)
+  // and scrolls within that. Sized as it attaches, before the popover focuses the current item.
+  const attachMenu = useCallback((node: HTMLDivElement | null) => {
+    menuRef.current = node
+    const pane = node?.closest<HTMLElement>('.shell-settings-scroll')
+    if (node == null || pane == null) return
+    const fit = () => {
+      const room = pane.getBoundingClientRect().bottom - node.getBoundingClientRect().top - MENU_BOTTOM_GAP
+      node.style.setProperty('--jump-menu-room', `${Math.max(Math.floor(room), 0)}px`)
+    }
+    fit()
+    const observer = new ResizeObserver(fit)
+    observer.observe(pane)
+    return () => {
+      observer.disconnect()
+      menuRef.current = null
+    }
+  }, [])
 
   // A menu: arrow keys, Home and End move between its items.
   const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -400,7 +452,7 @@ function SectionJump({
         <Icon name="chevron" size={14} className="shell-settings-jump-chevron" />
       </button>
       {menu.open && (
-        <div ref={menuRef} id={menuId} className="shell-pop shell-settings-jump-menu" role="menu" aria-label="设置分区" onKeyDown={onMenuKeyDown}>
+        <div ref={attachMenu} id={menuId} className="shell-pop shell-settings-jump-menu" role="menu" aria-label="设置分区" onKeyDown={onMenuKeyDown}>
           {CATEGORIES.map((category) => (
             <div key={category.id} role="group" aria-labelledby={`${menuId}-${category.id}`}>
               <p className="shell-toc-category" id={`${menuId}-${category.id}`}>
@@ -433,12 +485,12 @@ function SectionJump({
 
 // ---------- Sections ----------
 
-function SectionBody({ id, settings, write, adopt, platform, identities, subscriptions, directory }: SettingsPageProps & { id: SectionId }) {
+function SectionBody({ id, settings, write, adopt, platform, identities, subscriptions, directory, active }: SettingsPageProps & { id: SectionId }) {
   switch (id) {
     case 'appearance':
       return <AppearanceSection settings={settings} write={write} />
     case 'theme':
-      return <ThemeSection settings={settings} write={write} adopt={adopt} />
+      return <ThemeSection settings={settings} write={write} adopt={adopt} shown={active} />
     case 'reading':
       return <ReadingSection settings={settings} write={write} />
     case 'density':
@@ -458,9 +510,9 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
     case 'cookieColors':
       return <CookieColorsSection />
     case 'cookies':
-      return <CookieSection identities={identities} />
+      return <CookieSection identities={identities} active={active} />
     case 'subscriptions':
-      return <SubscriptionSection subscriptions={subscriptions} />
+      return <SubscriptionSection subscriptions={subscriptions} active={active} />
     case 'publication':
       return <PublicationSection />
     case 'window':

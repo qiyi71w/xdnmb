@@ -1,14 +1,15 @@
 import type { DraftId } from '../../../../shared/drafts'
 import type { ContentNode, Post } from '../../../../shared/forum'
 import type { ReadingAnchor } from '../../../../shared/reading'
-import { entryThread, type ListRef, type Tab, type TabEntry, type TabsState, type ThreadOpen, type ThreadSnapshot } from './tabsState'
+import { entryThread, type ListRef, type SettingsTab, type Tab, type TabEntry, type TabsState, type ThreadOpen, type ThreadSnapshot } from './tabsState'
 
 /**
  * The workspace saved at a real quit and restored at the next start: every tab with its own
  * navigation history, current entry, split preference and single-pane side, where each shown thread
  * was left, how far each list was loaded and where it was scrolled, and which saved drafts each tab
- * was continuing. Unsaved editor content is never part of it (a real quit saves or discards it
- * first) and nothing in it sends anything.
+ * was continuing; also the 设置 tab, its place and the tab it returns to (never what it shows).
+ * Unsaved editor content is never part of it (a real quit saves or discards it first) and nothing
+ * in it sends anything.
  */
 export interface WorkspaceEditor {
   tabId: number
@@ -205,11 +206,29 @@ function entry(value: unknown): TabEntry {
 
 function tab(value: unknown): Tab {
   const input = object(value)
-  if (typeof input.split !== 'boolean') fail()
+  // Only content tabs live in the list: a 设置 tab there (or a hybrid of both) is no tab.
+  if (input.kind !== undefined || typeof input.split !== 'boolean') fail()
   const entries = array(input.entries, MAX_ENTRIES).map(entry)
   const index = integer(input.index, 0)
   if (entries.length === 0 || index >= entries.length) fail()
   return { id: integer(input.id, 1), split: input.split, entries, index }
+}
+
+const SETTINGS_FIELDS: Record<string, true> = { kind: true, id: true, at: true, returnTo: true }
+
+/**
+ * The 设置 tab, with its own fields only (no history, split or editors); none in a workspace saved
+ * before it existed. A return target that is not among the content tabs `ids` is dropped: closing
+ * 设置 then shows its neighbour.
+ */
+function settingsTab(value: unknown, count: number, ids: ReadonlySet<number>): SettingsTab | null {
+  if (value === undefined || value === null) return null
+  const input = object(value)
+  if (input.kind !== 'settings' || Object.keys(input).some((key) => !Object.hasOwn(SETTINGS_FIELDS, key))) fail()
+  const at = integer(input.at, 0)
+  if (at > count) fail()
+  const returnTo = input.returnTo === null ? null : integer(input.returnTo, 1)
+  return { kind: 'settings', id: integer(input.id, 1), at, returnTo: returnTo !== null && ids.has(returnTo) ? returnTo : null }
 }
 
 function listAnchor(value: unknown): WorkspaceList['anchor'] {
@@ -221,9 +240,10 @@ function listAnchor(value: unknown): WorkspaceList['anchor'] {
 
 /**
  * Reads a workspace written by `serializeWorkspace`. Anything malformed or inconsistent (unknown
- * version, duplicate tab IDs or entry keys, counters not past every ID, an editor of an unknown tab
- * or a draft continued twice, list context for anything but a list entry with a feed or twice for
- * one) gives `null`: the app then starts with a new workspace rather than a partly restored one.
+ * version, duplicate tab IDs or entry keys, counters not past every ID, a 设置 tab among the content
+ * tabs or with fields of one, an editor of an unknown tab or of 设置, a draft continued twice, list
+ * context for anything but a list entry with a feed or twice for one) gives `null`: the app then
+ * starts with a new workspace rather than a partly restored one.
  */
 export function parseWorkspace(text: string): Workspace | null {
   try {
@@ -235,10 +255,13 @@ export function parseWorkspace(text: string): Workspace | null {
     const ids = new Set(tabs.map((item) => item.id))
     const keys = new Set(tabs.flatMap((item) => item.entries.map((step) => step.key)))
     if (ids.size !== tabs.length || keys.size !== tabs.reduce((count, item) => count + item.entries.length, 0)) fail()
+    const settings = settingsTab(state.settings, tabs.length, ids)
+    if (settings !== null && ids.has(settings.id)) fail()
     const activeId = integer(state.activeId, 1)
     const nextId = integer(state.nextId, 1)
     const nextKey = integer(state.nextKey, 1)
-    if (!ids.has(activeId) || nextId <= Math.max(...ids) || nextKey <= Math.max(...keys)) fail()
+    const lastId = Math.max(...ids, settings?.id ?? 0)
+    if (!(ids.has(activeId) || settings?.id === activeId) || nextId <= lastId || nextKey <= Math.max(...keys)) fail()
 
     const drafts = new Set<string>()
     const editors = array(input.editors, MAX_EDITORS).map((item): WorkspaceEditor => {
@@ -266,7 +289,7 @@ export function parseWorkspace(text: string): Workspace | null {
       return { entryKey, pages, anchor: listAnchor(list.anchor), scrollTop,
         ...(list.subscriptionView === undefined ? {} : { subscriptionView: list.subscriptionView }) }
     })
-    return { tabs: { tabs, activeId, nextId, nextKey }, editors, lists }
+    return { tabs: { tabs, settings, activeId, nextId, nextKey }, editors, lists }
   } catch {
     return null
   }

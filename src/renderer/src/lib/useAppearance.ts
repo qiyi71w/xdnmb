@@ -42,7 +42,7 @@ export function titleBarColors(color: Rgba, symbol: Rgba, layers: readonly Title
   return { color: toHex(background), symbolColor: toHex(ink) }
 }
 
-/** Marks the root of a layer that covers the window with its own surface (settings, image viewers). */
+/** Marks the root of a layer that covers the window with its own surface (image viewers). */
 const COVER = '[data-titlebar-cover]'
 
 /** The part of the overlay the stylesheets reserve when the overlay reports no geometry (layout.css). */
@@ -59,11 +59,11 @@ export interface TitleBarArea {
  * Where a cover is sampled for the colour under the window controls, in CSS pixels: across the
  * controls (to the right of the title-bar area), at the bottom pixel row of the part of them that
  * lies within the nominal 44px header. The controls keep their device height at every page zoom
- * while a cover's inset (the settings paper's 8px margin) and its top bar keep their CSS size, so at
- * high zoom the controls are only a few CSS pixels tall and their bottom row is the part that still
- * lies on such a surface, and at low zoom they reach below every cover's top bar (at least 44 CSS
- * pixels tall), so the sample stays at that bar's bottom row. Without overlay geometry, the middle
- * of the box the stylesheets reserve.
+ * while a cover's inset from the window edge and its top bar keep their CSS size, so at high zoom
+ * the controls are only a few CSS pixels tall and their bottom row is the part that still lies on
+ * such a surface, and at low zoom they reach below every cover's top bar (at least 44 CSS pixels
+ * tall), so the sample stays at that bar's bottom row. Without overlay geometry, the middle of the
+ * box the stylesheets reserve.
  */
 export function controlsSamplePoint(viewportWidth: number, area: TitleBarArea | null): { x: number; y: number } {
   const left = area === null ? 0 : area.x + area.width
@@ -109,9 +109,9 @@ function coverColors(root: Element): Rgba[] | null {
 }
 
 /**
- * Layers under the controls now: in-page covers first (the settings page, the post image viewer;
- * under every modal), then each modal dialog's backdrop and, when the dialog is a cover itself, its
- * surface. A cover hidden with its tab (zero size) adds nothing.
+ * Layers under the controls now: in-page covers first (the post image viewer; under every modal),
+ * then each modal dialog's backdrop and, when the dialog is a cover itself, its surface. A cover
+ * hidden with its tab (zero size) adds nothing.
  */
 function titleBarLayers(): TitleBarLayer[] {
   const layers: TitleBarLayer[] = []
