@@ -987,6 +987,8 @@ dialog.compose-image-preview {
   margin: 0;
   padding: 0;
   border: 0;
+  /* One column no wider than the window: the bar's tools wrap instead of widening it. */
+  grid-template-columns: minmax(0, 1fr);
   color: var(--ink);
 }
 
@@ -999,22 +1001,30 @@ dialog.compose-image-preview:not([open]) {
 }
 
 /* The bar runs under the window's own title-bar controls: as tall as they are, draggable like the
-   top bar, and its tools kept clear of them (same reservation as `.topbar.is-native-titlebar`). */
-:root:has(.topbar.is-native-titlebar) .compose-image-preview .image-viewer-bar {
+   top bar, and its tools kept clear of them (same reservation as `.topbar`). */
+:root:has(.topbar) .compose-image-preview .image-viewer-bar {
   -webkit-app-region: drag;
   min-height: 44px;
 }
 
-:root:has(.topbar.is-native-titlebar) .compose-image-preview .image-viewer-bar button {
+:root:has(.topbar) .compose-image-preview .image-viewer-bar button {
   -webkit-app-region: no-drag;
 }
 
-:root:has(.topbar.is-native-titlebar:not(.is-macos)) .compose-image-preview .image-viewer-bar {
+:root:has(.topbar:not(.is-macos)) .compose-image-preview .image-viewer-bar {
   padding-right: max(148px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px));
 }
 
-:root:has(.topbar.is-native-titlebar.is-macos) .compose-image-preview .image-viewer-bar {
+:root:has(.topbar.is-macos) .compose-image-preview .image-viewer-bar {
   padding-left: 80px;
+}
+
+/* Narrow or zoomed windows leave the tools less room than one row of buttons: let the tools and
+   each group shrink below their one-row width, so their buttons wrap inside the bar's reserved
+   padding instead of running under the window controls or off-screen. */
+.compose-image-preview .image-viewer-tools,
+.compose-image-preview .image-viewer-group {
+  min-width: 0;
 }
 
 .compose-image-preview-title {
