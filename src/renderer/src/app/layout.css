@@ -17,10 +17,23 @@
 /* macOS (hiddenInset): the traffic lights keep their place in window points at every page zoom,
    inside the window's top-left corner. Their clearance, with the usual 8px gap, measured from that
    corner in CSS pixels: --page-zoom (App) is the factor. Each layer reserves only what of this box
-   falls inside it, so the reservation applies once whatever sits beside it. */
+   falls inside it, so the reservation applies once whatever sits beside it.
+   The title band: the top bar's control row (the tab strip, half its height in --mac-bar-half) is
+   centred on the lights' middle, as far down as the window edge allows, with --mac-bar-gap under it;
+   the band never ends above the lights' clearance. Rail, paper and settings start where it ends. */
 .app.is-macos {
   --mac-controls-end: calc(80px / var(--page-zoom, 1));
   --mac-controls-bottom: calc(32px / var(--page-zoom, 1));
+  --mac-controls-middle: calc(18px / var(--page-zoom, 1));
+  --mac-bar-half: 17px;
+  --mac-bar-gap: 6px;
+  --mac-bar-top: max(0px, calc(var(--mac-controls-middle) - var(--mac-bar-half)));
+  --mac-band: max(var(--mac-controls-bottom), calc(var(--mac-bar-top) + 2 * var(--mac-bar-half) + var(--mac-bar-gap)));
+}
+
+:root[data-density='compact'] .app.is-macos {
+  --mac-bar-half: 15px;
+  --mac-bar-gap: 4px;
 }
 
 /* Measures the preferred reading width at the current font size. */
@@ -77,6 +90,27 @@
   flex-direction: column;
 }
 
+/* macOS: one title band across the window. Its row is as tall as the top bar actually is (at least
+   the band, also when wrapped or absent); the rail and the tab content both start under it. */
+.app.is-macos .workspace {
+  grid-template-rows: minmax(var(--mac-band), auto) minmax(0, 1fr);
+}
+
+.app.is-macos .nav-column {
+  grid-area: 2 / 1;
+}
+
+.app.is-macos .main-column {
+  grid-row: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: subgrid;
+}
+
+.app.is-macos .tab-host {
+  grid-row: 2;
+}
+
 /* ---------- Top bar ---------- */
 
 /* Wraps when narrow (200% zoom): the tab strip then takes its own line instead of being squeezed.
@@ -91,14 +125,6 @@
   min-height: 44px;
   padding: 8px max(148px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px)) 6px 8px;
   -webkit-app-region: drag;
-}
-
-/* Beside the inline rail the traffic lights reach only past its column (--nav-width, 0 with the
-   overlay navigation); the bar stays as tall as their band at small zoom. */
-.app.is-macos .topbar {
-  min-height: max(44px, var(--mac-controls-bottom));
-  padding-left: max(8px, calc(var(--mac-controls-end) - var(--nav-width, 0px)));
-  padding-right: 8px;
 }
 
 .topbar button,
@@ -276,6 +302,15 @@
 :root[data-density='compact'] .btn-back-quote {
   min-height: 26px;
   padding: 1px 8px 1px 6px;
+}
+
+/* macOS: the control row sits on the lights' middle (the title band, above); beside the inline
+   rail the lights reach only past its column (--nav-width, 0 with the overlay navigation). Wrapped
+   lines go below the first one. After the density rules, which it replaces here. */
+.app.is-macos .topbar {
+  align-content: flex-start;
+  min-height: var(--mac-band);
+  padding: var(--mac-bar-top) 8px var(--mac-bar-gap) max(8px, calc(var(--mac-controls-end) - var(--nav-width, 0px)));
 }
 /* ---------- Tab content ---------- */
 

@@ -28,14 +28,15 @@
   background: var(--glass-strong);
 }
 
-/* macOS: the rail (inline or overlay) and the board panel beside it start below the traffic lights,
-   which then sit on the window's own title strip with the top bar's controls. */
+/* macOS: the rail (inline or overlay) starts in the workspace's second row, under the title band
+   with the traffic lights and the top bar's controls (layout.css), level with the tab content. */
 .app.is-macos .nav-column > .nav {
-  margin-top: max(8px, var(--mac-controls-bottom));
+  margin-top: 0;
 }
 
 .app.is-macos .nav.is-overlay {
-  top: max(8px, var(--mac-controls-bottom));
+  grid-row: 2;
+  top: 0;
 }
 
 .nav-overlay-layer {
@@ -511,10 +512,43 @@
   -webkit-app-region: no-drag;
 }
 
+/* macOS: the page's top row is the title band itself: no surface, 返回 and the title centred on the
+   traffic lights' middle, 返回 where the top bar's back button sits. The page takes the workspace's
+   two rows (layout.css), so a head taller than the band (the title line in compact density) moves
+   the rail down with the paper, which starts level with it. */
+.app.is-macos .shell-settings-b {
+  --mac-head-half: 14px;
+  grid-row: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: subgrid;
+  min-width: 0;
+  margin: 0 8px 8px;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  overflow: visible;
+}
+
+:root[data-density='compact'] .app.is-macos .shell-settings-b {
+  --mac-head-half: 12px;
+}
+
 .app.is-macos .shell-settings-b-head {
-  min-height: max(44px, var(--mac-controls-bottom));
-  padding-left: max(16px, calc(var(--mac-controls-end) - var(--nav-width, 0px)));
-  padding-right: 16px;
+  --mac-head-top: max(0px, calc(var(--mac-controls-middle) - var(--mac-head-half)));
+  min-height: var(--mac-band);
+  padding: var(--mac-head-top) 8px calc(var(--mac-band) - var(--mac-head-top) - 2 * var(--mac-head-half))
+    max(0px, calc(var(--mac-controls-end) - var(--nav-width, 0px) - 8px));
+  border-bottom: 0;
+  grid-row: 1;
+}
+
+.app.is-macos .shell-settings-b-body {
+  grid-row: 2;
+  border-radius: var(--radius-l);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--line-soft), var(--shadow-bar);
+  overflow: hidden;
 }
 
 .shell-settings-b-body {

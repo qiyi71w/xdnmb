@@ -306,6 +306,9 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
       ['paper'],
       ['pane'],
       ['info-bg'],
+      // The macOS settings title band's quiet return button rests directly on the window.
+      ...WINDOW_BACKDROPS,
+      ['window-tint-b', 'hover'],
       // The writing entries (回复 on the paper-coloured thread toolbar, 发新串 in the pane-coloured list
       // head) rest on accent-soft at 55% and hover on all of it. The list holds the full layer: in
       // both schemes the stronger tint is the less favourable case for accent-ink.
