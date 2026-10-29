@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { closeDialogs, noticeHost, onDialogsChange, topDialog } from '../lib/dialogs'
+import { pausableCountdown, type PausableCountdown } from '../lib/pausableCountdown'
 import { Icon, Spinner, type IconName } from './Icon'
 import { KaomojiDecor } from './KaomojiDecor'
 import { FOCUSABLE } from './Modal'
@@ -27,6 +28,8 @@ export interface BottomNoticeAction {
    * through its own close path; when one refuses (busy), the press does nothing.
    */
   leaves?: boolean
+  /** Shown as this icon alone (关闭 as ×): `label` becomes its accessible name and tip. */
+  icon?: IconName
   onAction: () => void
 }
 
@@ -85,12 +88,18 @@ export function BottomNoticeStack({ children }: { children: ReactNode }) {
 }
 
 /**
- * One in-app notice of a `BottomNoticeStack`: strong glass like menus and dialogs, a message and
- * its actions, each notice closed on its own. Not modal and never takes focus. While the window is
- * hidden nothing is shown: a notice that arrives then appears (and is announced) when the window
- * is shown again. When new actions replace the focused one, focus moves to the action now in its
- * place (else the last). When the notice goes away with focus inside, focus returns to where it
- * came from, else to `fallbackFocus`; while a dialog is open, focus stays in the topmost dialog.
+ * One in-app notice of a `BottomNoticeStack`: strong glass like menus and dialogs, a compact row of
+ * the mark, the message and its actions, each notice closed on its own. Not modal and never takes
+ * focus. While the window is hidden nothing is shown: a notice that arrives then appears (and is
+ * announced) when the window is shown again. When new actions replace the focused one, focus moves
+ * to the action now in its place (else the last). When the notice goes away with focus inside,
+ * focus returns to where it came from, else to `fallbackFocus`; while a dialog is open, focus stays
+ * in the topmost dialog.
+ *
+ * With `expiresAfter`, `onExpire` runs once the notice has been on screen that long with nobody
+ * at it: the time stands still while the pointer is over it, focus is in it, the window is hidden
+ * or not focused, a dialog keeps it below (inert), or an action is busy. Nothing counts down on
+ * screen. Without it the notice stays until an action closes it.
  */
 export function BottomNotice({
   open,
@@ -101,7 +110,9 @@ export function BottomNotice({
   context,
   detail,
   actions,
-  fallbackFocus
+  fallbackFocus,
+  expiresAfter = null,
+  onExpire
 }: {
   open: boolean
   /** The message, one sentence. */
@@ -124,6 +135,10 @@ export function BottomNotice({
   detail?: ReactNode
   actions: readonly BottomNoticeAction[]
   fallbackFocus: () => HTMLElement | null
+  /** Milliseconds of unattended time on screen before `onExpire`; null (the default) never. */
+  expiresAfter?: number | null
+  /** Closes the notice when `expiresAfter` has passed; runs at most once per `expiresAfter` set. */
+  onExpire?: () => void
 }) {
   const visible = useSyncExternalStore(subscribeVisibility, documentVisible)
   const shown = open && visible
@@ -132,6 +147,52 @@ export function BottomNotice({
   const order = useRef<number | null>(null)
   if (!open) order.current = null
   else if (shown) order.current ??= ++appeared
+
+  const root = useRef<HTMLDivElement>(null)
+  const countdown = useRef<PausableCountdown | null>(null)
+  const expire = useRef(onExpire)
+  useLayoutEffect(() => {
+    expire.current = onExpire
+  })
+  const timed = open ? expiresAfter : null
+  useLayoutEffect(() => {
+    if (timed === null) return
+    // A dialog that keeps the notices below leaves them inert, out of reach.
+    const inert = () => topDialog() !== null && noticeHost() === null
+    const element = root.current
+    const held: string[] = []
+    if (!document.hasFocus()) held.push('window')
+    if (inert()) held.push('inert')
+    if (element?.matches(':hover') === true) held.push('hover')
+    if (element?.contains(document.activeElement) === true) held.push('focus')
+    const timer = pausableCountdown(timed, () => expire.current?.(), { held })
+    countdown.current = timer
+    const onWindowFocus = () => timer.hold('window', false)
+    const onWindowBlur = () => timer.hold('window', true)
+    window.addEventListener('focus', onWindowFocus)
+    window.addEventListener('blur', onWindowBlur)
+    const stop = onDialogsChange(() => timer.hold('inert', inert()))
+    return () => {
+      stop()
+      window.removeEventListener('focus', onWindowFocus)
+      window.removeEventListener('blur', onWindowBlur)
+      timer.dispose()
+      if (countdown.current === timer) countdown.current = null
+    }
+  }, [timed])
+  // After the countdown above is made, so a new one takes the current state at once.
+  const busy = actions.some((action) => action.busy === true)
+  useLayoutEffect(() => {
+    const timer = countdown.current
+    if (timer === null) return
+    timer.hold('hidden', !visible)
+    timer.hold('busy', busy)
+    // Not on screen: no pointer over it and no focus in it any more.
+    if (!shown) {
+      timer.hold('hover', false)
+      timer.hold('focus', false)
+    }
+  })
 
   const focusInside = useRef(false)
   const returnTo = useRef<HTMLElement | null>(null)
@@ -204,6 +265,7 @@ export function BottomNotice({
     const back = returnTo.current
     if (buttons.length === 0) {
       focusInside.current = false
+      countdown.current?.hold('focus', false)
       returnTo.current = null
       restoreFocus(back)
       return
@@ -216,16 +278,22 @@ export function BottomNotice({
   if (!shown) return null
   return (
     <div
+      ref={root}
       className="bottom-notice"
       style={{ order: order.current ?? undefined }}
+      onPointerEnter={() => countdown.current?.hold('hover', true)}
+      onPointerLeave={() => countdown.current?.hold('hover', false)}
       onFocus={(event) => {
+        countdown.current?.hold('focus', true)
         if (focusInside.current) return
         focusInside.current = true
         const from = event.relatedTarget
         returnTo.current = from instanceof HTMLElement && !event.currentTarget.contains(from) ? from : null
       }}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusInside.current = false
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+        focusInside.current = false
+        countdown.current?.hold('focus', false)
       }}
     >
       {icon === 'spinner' ? (
@@ -253,7 +321,9 @@ export function BottomNotice({
               // Detached while still in the document: focused here means focus leaves with it.
               if (document.activeElement === button) replaced.current = index
             }}
-            className="btn btn-small bottom-notice-action"
+            className={action.icon === undefined ? 'btn btn-quiet bottom-notice-action' : 'icon-btn bottom-notice-action is-icon'}
+            aria-label={action.icon === undefined ? undefined : action.label}
+            title={action.icon === undefined ? undefined : action.label}
             aria-disabled={action.busy || undefined}
             aria-busy={action.busy || undefined}
             onClick={() => {
@@ -262,7 +332,7 @@ export function BottomNotice({
               action.onAction()
             }}
           >
-            {action.label}
+            {action.icon === undefined ? action.label : <Icon name={action.icon} size={14} />}
           </button>
         ))}
       </div>

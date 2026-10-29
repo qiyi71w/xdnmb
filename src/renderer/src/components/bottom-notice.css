@@ -1,7 +1,8 @@
 /* Bottom notices: a floating status layer centred over the content column. It starts after the
    inline icon rail (--nav-width, 0 when the navigation is an overlay) and stays under the overlay
    navigation and menus. Notices stack upwards in the order they appeared (each sets its `order`),
-   oldest on top. Only the notices themselves take pointer input. */
+   oldest on top. Only the notices themselves take pointer input. Its width (set by its insets, never
+   by the notices) decides whether a notice keeps its actions beside the text. */
 .bottom-notice-region {
   position: absolute;
   z-index: 25;
@@ -13,6 +14,7 @@
   gap: 8px;
   padding-inline: 16px;
   pointer-events: none;
+  container: bottom-notices / inline-size;
 }
 
 /* Where the region lives while no dialog is open: it lays nothing out itself. */
@@ -36,16 +38,20 @@
   color: inherit;
 }
 
-/* Strong glass, large radius and the float shadow, as context menus and dialogs. */
+/* Strong glass, large radius and the float shadow, as context menus and dialogs. One compact row:
+   the mark, the words, then the actions at the end; the mark and the actions line up with the
+   message's first line (`--notice-row` is the action height). */
 .bottom-notice {
+  --notice-row: 28px;
   pointer-events: auto;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 10px;
+  row-gap: 2px;
   min-width: 0;
-  max-width: 36rem;
-  padding: 8px 8px 8px 14px;
+  max-width: 32rem;
+  padding: 6px 6px 6px 14px;
   border-radius: var(--radius-l);
   background: var(--glass-strong);
   backdrop-filter: blur(24px) saturate(1.5);
@@ -60,12 +66,11 @@
    secondary ink for a plain outcome (草稿已删除) or a check still running (spinner). */
 .bottom-notice-icon {
   flex: none;
-  align-self: flex-start;
   display: inline-grid;
   place-items: center;
   width: 16px;
   height: 16px;
-  margin-top: 3px;
+  margin-block: calc((var(--notice-row) - 16px) / 2);
 }
 
 .bottom-notice-icon.is-warning {
@@ -76,12 +81,12 @@
   color: var(--ink-2);
 }
 
-/* Wide enough for one line of the message; when it is not, the action wraps below, at the end. */
+/* The first line sits in the middle of the row the actions take. */
 .bottom-notice-text {
-  flex: 1 1 14em;
   min-width: 0;
   display: grid;
   gap: 2px;
+  padding-block: max(0px, calc((var(--notice-row) - 1lh) / 2));
   overflow-wrap: anywhere;
 }
 
@@ -107,16 +112,54 @@
   color: var(--warn-ink);
 }
 
-/* Beside the text when it fits; else wrapped below it, at the end. */
+/* Light text actions in the tide ink (撤销, 查看更新, …) and icon-only ones (关闭 ×): no frame at
+   rest, the hover overlay under the pointer, the shared focus ring on keyboard focus. */
 .bottom-notice-actions {
-  flex: none;
   display: flex;
-  gap: 6px;
-  margin-inline-start: auto;
+  align-items: center;
+  gap: 2px;
 }
 
+.bottom-notice-action.btn {
+  min-height: var(--notice-row);
+  padding: 3px 9px;
+  font-weight: 500;
+}
+
+.bottom-notice-action.is-icon {
+  width: var(--notice-row);
+  height: var(--notice-row);
+}
+
+/* Scoped under the notice so these win over base.css's .btn states whatever order the sheets load.
+   Pressed deepens the hover overlay to the current-item tint; both are in TEXT_CONTRAST_PAIRS. */
+.bottom-notice .bottom-notice-action:active:not([aria-disabled='true']) {
+  background: var(--nav-current);
+}
+
+/* Under way: faded, and the pointer finds nothing to press. */
 .bottom-notice-action[aria-disabled='true'] {
   cursor: progress;
+}
+
+.bottom-notice .bottom-notice-action[aria-disabled='true']:is(:hover, :active) {
+  background: transparent;
+}
+
+.bottom-notice-action.is-icon[aria-disabled='true'] {
+  opacity: 0.55;
+}
+
+/* Too narrow for the words beside the actions: the actions go under them, at the end. */
+@container bottom-notices (max-width: 22rem) {
+  .bottom-notice {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .bottom-notice-actions {
+    grid-column: 2;
+    justify-self: end;
+  }
 }
 
 /* Rises into place from an already visible start; reduced motion (base.css) shows it at rest. */

@@ -316,7 +316,13 @@ export const TEXT_CONTRAST_PAIRS: readonly { foreground: ColorToken; surfaces: r
       ['pane', 'accent-soft'],
       ['window', 'accent-soft'],
       ['window-tint-a', 'accent-soft'],
-      ['window', 'glass-strong'],
+      // Bottom notices' text actions (撤销, 查看更新, …) sit on the strong glass over the reading paper, the
+      // list pane or the window: at rest, on the hover overlay, and pressed on the current-item tint.
+      ...(['paper', 'pane', 'window'] as const).flatMap((base): Surface[] => [
+        [base, 'glass-strong'],
+        [base, 'glass-strong', 'hover'],
+        [base, 'glass-strong', 'nav-current']
+      ]),
       ...GLASS_BACKDROPS
     ]
   },

@@ -286,7 +286,9 @@ function SettingsView({ headingRef, section, status, target, onClose }: ShapePro
   }
 
   return (
-    <div className="shell-settings shell-settings-b">
+    // Colours the window's title-bar controls with its paper (useAppearance); on macOS its top row is
+    // the transparent title band, so it adds nothing there.
+    <div className="shell-settings shell-settings-b" data-titlebar-cover="">
       <header className="shell-settings-b-head">
         <button type="button" className="btn btn-quiet" onClick={onClose}>
           <Icon name="arrowLeft" />

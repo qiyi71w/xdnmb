@@ -18,7 +18,8 @@ describe('theme preview', () => {
     const variables = new Map<string, string>()
     const root = { style: { setProperty: (name: string, value: string) => variables.set(name, value) }, dataset: {} }
     vi.stubGlobal('document', { documentElement: root, querySelectorAll: () => [] })
-    vi.stubGlobal('window', { matchMedia: () => ({ matches: false }), xidao: { view: { updateTitleBar: async () => undefined } } })
+    const events = new EventTarget()
+    vi.stubGlobal('window', { addEventListener: events.addEventListener.bind(events), matchMedia: () => ({ matches: false }), xidao: { view: { updateTitleBar: async () => undefined } } })
     try {
       const settings = { ...DEFAULT_SETTINGS, colorScheme: 'light' as const }
       applyAppearance(settings)

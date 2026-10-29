@@ -1,9 +1,10 @@
 import { flushSync } from 'react-dom'
 
 /**
- * The open modal dialogs (`Modal` and the compose dialog), in opening order. The bottom notices
- * live in the topmost one (outside it everything is inert) unless it keeps them below, and a
- * notice action that takes the user elsewhere first closes them through their own close path.
+ * The open modal dialogs (`Modal`, the compose dialog and its attachment preview), in opening
+ * order. The bottom notices live in the topmost one (outside it everything is inert) unless it
+ * keeps them below, and a notice action that takes the user elsewhere first closes them through
+ * their own close path.
  */
 interface OpenDialog {
   element: HTMLDialogElement

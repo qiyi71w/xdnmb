@@ -42,8 +42,43 @@ export function titleBarColors(color: Rgba, symbol: Rgba, layers: readonly Title
   return { color: toHex(background), symbolColor: toHex(ink) }
 }
 
-/** Marks the root of a layer that covers the window with its own surface (image viewers). */
+/** Marks the root of a layer that covers the window with its own surface (settings, image viewers). */
 const COVER = '[data-titlebar-cover]'
+
+/** The part of the overlay the stylesheets reserve when the overlay reports no geometry (layout.css). */
+const NOMINAL_CONTROLS = { width: 140, height: 44 }
+
+/** The client-area rectangle beside the window controls (`navigator.windowControlsOverlay`). */
+export interface TitleBarArea {
+  x: number
+  width: number
+  height: number
+}
+
+/**
+ * Where a cover is sampled for the colour under the window controls, in CSS pixels: across the
+ * controls (to the right of the title-bar area), at the bottom pixel row of the part of them that
+ * lies within the nominal 44px header. The controls keep their device height at every page zoom
+ * while a cover's inset (the settings paper's 8px margin) and its top bar keep their CSS size, so at
+ * high zoom the controls are only a few CSS pixels tall and their bottom row is the part that still
+ * lies on such a surface, and at low zoom they reach below every cover's top bar (at least 44 CSS
+ * pixels tall), so the sample stays at that bar's bottom row. Without overlay geometry, the middle
+ * of the box the stylesheets reserve.
+ */
+export function controlsSamplePoint(viewportWidth: number, area: TitleBarArea | null): { x: number; y: number } {
+  const left = area === null ? 0 : area.x + area.width
+  if (area !== null && area.height > 0 && left < viewportWidth) {
+    const bottom = Math.min(area.height, NOMINAL_CONTROLS.height)
+    return { x: (left + viewportWidth) / 2, y: Math.max(bottom / 2, bottom - 0.5) }
+  }
+  return { x: viewportWidth - NOMINAL_CONTROLS.width / 2, y: NOMINAL_CONTROLS.height / 2 }
+}
+
+/** The Window Controls Overlay API (Chromium, enabled by `titleBarOverlay`); absent elsewhere. */
+interface ControlsOverlay {
+  readonly visible: boolean
+  getTitlebarAreaRect(): DOMRect
+}
 
 /** A drawn background colour (a transparent or unreadable one adds nothing). */
 function drawnColor(text: string): Rgba | null {
@@ -52,12 +87,12 @@ function drawnColor(text: string): Rgba | null {
 }
 
 /**
- * The backgrounds a cover draws under the controls (the window's top-right corner), from its root
- * down to the innermost box there (its top bar); null when it does not reach that corner.
+ * The backgrounds a cover draws under the window controls, from its root down to the innermost box
+ * there (its top bar); null when it does not reach them.
  */
 function coverColors(root: Element): Rgba[] | null {
-  const x = window.innerWidth - 8
-  const y = 8
+  const overlay = (navigator as Navigator & { windowControlsOverlay?: ControlsOverlay }).windowControlsOverlay
+  const { x, y } = controlsSamplePoint(window.innerWidth, overlay?.visible === true ? overlay.getTitlebarAreaRect() : null)
   const contains = (element: Element) => {
     const rect = element.getBoundingClientRect()
     return rect.width > 0 && rect.height > 0 && x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
@@ -74,8 +109,9 @@ function coverColors(root: Element): Rgba[] | null {
 }
 
 /**
- * Layers under the controls now: in-page covers first (the post image viewer, under every modal),
- * then each modal dialog's backdrop and, when the dialog is a cover itself, its surface.
+ * Layers under the controls now: in-page covers first (the settings page, the post image viewer;
+ * under every modal), then each modal dialog's backdrop and, when the dialog is a cover itself, its
+ * surface. A cover hidden with its tab (zero size) adds nothing.
  */
 function titleBarLayers(): TitleBarLayer[] {
   const layers: TitleBarLayer[] = []
@@ -119,7 +155,11 @@ function updateTitleBar(variables: Record<string, string>, scheme: ColorScheme):
   const color = parseColor(variables['--window'] ?? '')
   const symbol = parseColor(variables['--ink'] ?? '')
   if (color === null || symbol === null) return
-  if (titleBar === null) onLayersChange(trackModals)
+  if (titleBar === null) {
+    onLayersChange(trackModals)
+    // Resizing and page zoom move the controls over a cover's other boxes.
+    window.addEventListener('resize', sendTitleBar)
+  }
   titleBar = { color, symbol, scheme }
   sendTitleBar()
 }

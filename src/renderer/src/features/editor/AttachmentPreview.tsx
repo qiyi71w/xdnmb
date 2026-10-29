@@ -7,6 +7,7 @@
 import { useId, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import type { DraftAttachment } from '../../../../shared/drafts'
 import { Icon } from '../../components/Icon'
+import { registerDialog } from '../../lib/dialogs'
 import { openLayer } from '../../lib/layers'
 import { formatBytes } from '../image/imageView'
 import { useImageZoom, ZoomControls, type Size } from '../image/imageZoom'
@@ -33,16 +34,23 @@ export function AttachmentPreview({
   const [natural, setNatural] = useState<Size>({ w: attachment.width, h: attachment.height })
   const view = useImageZoom(dialogRef, natural, true)
   const { stageRef } = view
+  const close = useRef(onClose)
+  useLayoutEffect(() => {
+    close.current = onClose
+  })
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current
     if (dialog === null) return
     const layer = openLayer()
     if (!dialog.open) dialog.showModal()
+    // An open dialog like the others; the notices stay under it, inert, their time standing still.
+    const unregister = registerDialog(dialog, () => close.current(), true)
     // The stage takes the keys, as in the post image viewer.
     stageRef.current?.focus({ preventScroll: true })
     const opener = returnFocus.current
     return () => {
+      unregister()
       layer.release()
       // Out of the top layer first: the chip behind it is inert until then.
       if (dialog.open) dialog.close()

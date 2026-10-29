@@ -11,6 +11,9 @@ const REFUSED_TEXT: Record<NonNullable<UndoneDeletion['refused']>, string> = {
   occupied: '编辑框里已有新内容，草稿留在草稿列表'
 }
 
+/** Unattended time on screen after which a deletion can no longer be undone (BottomNotice pauses it). */
+const UNDO_WINDOW = 10_000
+
 /** An undone deletion whose editor could not take the draft back: it is in 草稿 only. */
 interface NotTakenBack {
   key: string
@@ -22,9 +25,10 @@ interface NotTakenBack {
  * One bottom notice per draft deleted on request (from its editor or the library): 撤销 saves the
  * deleted content (with its image) as a draft again, back in 草稿 (an open 草稿 dialog lists it at
  * once); deleted from an editor that is still open, it goes back into that editor too. Nothing
- * opens and nothing moves. 知道了 closes the notice, after which it can no longer be undone and its
- * image copy is reclaimed. When that editor could not take it back (sending, or holding something
- * new), one more notice says so and leads to 草稿.
+ * opens and nothing moves. × closes the notice, and so does `UNDO_WINDOW` of it on screen with
+ * nobody at it; after that it can no longer be undone and its image copy is reclaimed. An undo that
+ * failed keeps its notice until it is closed. When that editor could not take it back (sending, or
+ * holding something new), one more notice says so and leads to 草稿.
  */
 export function DraftDeletedNotices({
   onOpenDrafts,
@@ -45,6 +49,8 @@ export function DraftDeletedNotices({
           tone="neutral"
           context={targetText(entry.content.target, forumName)}
           detail={entry.failure === null ? null : `没能撤销：${SAVE_FAILURE_TEXT[entry.failure]}`}
+          expiresAfter={entry.failure === null ? UNDO_WINDOW : null}
+          onExpire={() => store.forgetDeleted(entry.key)}
           actions={[
             {
               label: '撤销',
@@ -57,7 +63,7 @@ export function DraftDeletedNotices({
                 })
               }
             },
-            { label: '知道了', busy: entry.restoring, onAction: () => store.forgetDeleted(entry.key) }
+            { label: '关闭', icon: 'close', busy: entry.restoring, onAction: () => store.forgetDeleted(entry.key) }
           ]}
           fallbackFocus={fallbackFocus}
         >
