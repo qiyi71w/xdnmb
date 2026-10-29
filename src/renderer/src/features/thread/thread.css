@@ -415,7 +415,9 @@
 }
 
 /* 订阅 split: the default source's button and the arrow listing App / 网页 read as one control.
-   The source name stays when the label collapses to its icon, so the target is always visible. */
+   The source name stays when the label collapses to its icon, so the target is always visible.
+   It keeps the button's own size and line height, so action and source share one baseline;
+   only its color sets it back. */
 .subscribe-split {
   display: inline-flex;
   align-items: center;
@@ -424,7 +426,6 @@
 
 .subscribe-target {
   color: var(--ink-2);
-  font-size: var(--text-xs);
 }
 
 .subscribe-btn.is-on .subscribe-target,

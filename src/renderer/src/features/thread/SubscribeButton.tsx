@@ -243,7 +243,7 @@ export function SubscribeButton({ threadId, label, displayed }: { threadId: Thre
   /** One source in the menu: its membership as a check, or what can be done instead. */
   const menuItem = (source: SubscriptionSource): ContextMenuItem => {
     const item = states[source]
-    const name = source === target ? `${SOURCE_NAME[source]}（默认）` : SOURCE_NAME[source]
+    const name = SOURCE_NAME[source]
     const onSelect = () => press(source)
     switch (item.kind) {
       case 'in':
