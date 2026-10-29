@@ -141,6 +141,50 @@ describe('isAllowedLoginRequest guard', () => {
     expect(isAllowedLoginRequest(verifyUrl, 'GET', 'fetch')).toBe(false)
   })
 
+  it('allows repeated captcha refreshes using the official page cache-buster format', () => {
+    const verifyUrl = `${ACCOUNT_ORIGIN}/Member/User/Index/verify.html`
+    for (const query of [
+      '?code=0.123',
+      '?code=0.123?code=0.456',
+      '?code=0.123?code=0.456?code=0',
+      '?code=1e-7?code=2.220446049250313e-16'
+    ]) {
+      expect(isAllowedLoginRequest(verifyUrl + query, 'GET', 'image'), query).toBe(true)
+    }
+  })
+
+  it('rejects non-cache-buster parameters and encoded routes on the captcha endpoint', () => {
+    const verifyUrl = `${ACCOUNT_ORIGIN}/Member/User/Index/verify.html`
+    for (const query of [
+      '?code=',
+      '?code=0.1?code=',
+      '?code=NaN',
+      '?code=0.1&s=/Member/User/Cookie/delete/id/1.html',
+      '?code=0.1?code=0.2?m=User&c=Cookie&a=delete',
+      '?code=0.1%3Fcode%3D0.2',
+      '?%63ode=0.1',
+      '?code[]=0.1',
+      '?redirect=https://attacker.example.com'
+    ]) {
+      expect(isAllowedLoginRequest(verifyUrl + query, 'GET', 'image'), query).toBe(false)
+    }
+  })
+
+  it('keeps repeated captcha queries confined to official GET images', () => {
+    const path = '/Member/User/Index/verify.html?code=0.123?code=0.456'
+    for (const origin of ['https://attacker.example.com', 'http://www.nmbxd1.com', 'https://user:pass@www.nmbxd1.com']) {
+      expect(isAllowedLoginRequest(origin + path, 'GET', 'image'), origin).toBe(false)
+    }
+    expect(isAllowedLoginRequest(ACCOUNT_ORIGIN + path, 'POST', 'image')).toBe(false)
+    for (const type of ['mainFrame', 'subFrame', 'script', 'xhr', 'fetch']) {
+      expect(isAllowedLoginRequest(ACCOUNT_ORIGIN + path, 'GET', type), type).toBe(false)
+    }
+    for (const target of ['/Member/User/Index/login.html', '/Public/code.png', '/Member/User/Cookie/index.html', '/Member/User/Cookie/delete/id/1.html', '/Member/User/Index/verify%2ehtml']) {
+      expect(isAllowedLoginRequest(`${ACCOUNT_ORIGIN}${target}?code=0.123?code=0.456`, 'GET', 'image'), target).toBe(false)
+    }
+    expect(isAllowedAccountRead(new URL(ACCOUNT_ORIGIN + path))).toBe(false)
+  })
+
   it('allows safe same-origin static assets for matching resource types', () => {
     expect(isAllowedLoginRequest(`${ACCOUNT_ORIGIN}/Public/css/main.css`, 'GET', 'stylesheet')).toBe(true)
     expect(isAllowedLoginRequest(`${ACCOUNT_ORIGIN}/public/js/login.js`, 'GET', 'script')).toBe(true)

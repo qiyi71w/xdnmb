@@ -26,11 +26,17 @@ export function isAllowedAccountRead(url: URL): boolean {
 export function isAllowedLoginRequest(raw: string, method: string, resourceType: string): boolean {
   let url: URL
   try { url = new URL(raw) } catch { return false }
+  if (url.pathname === '/Member/User/Index/verify.html') {
+    // The official page appends another ?code=<Math.random()> on every refresh.
+    // Match the raw query so this exception cannot admit encoded routes or other parameters.
+    return url.origin === ACCOUNT_ORIGIN && !url.username && !url.password &&
+      method === 'GET' && resourceType === 'image' &&
+      /^(?:\?code=\d+(?:\.\d+)?(?:e-\d+)?)*$/.test(url.search)
+  }
   if (!official(url)) return false
   const path = url.pathname
   if (path === '/Member/User/Index/login.html') return method === 'GET' || method === 'POST'
   if (method !== 'GET') return false
-  if (path === '/Member/User/Index/verify.html') return resourceType === 'image'
   // Only local static assets; account HTML, scripts that fetch writes, and external QR are excluded.
   return ['stylesheet', 'script', 'image', 'font'].includes(resourceType) &&
     /^\/(?:Public|public|static|assets)\/[A-Za-z0-9_./-]+\.(?:css|js|png|jpe?g|gif|webp|svg|woff2?|ttf|ico)$/i.test(path)
