@@ -22,6 +22,57 @@
   Var xidaoDesktopShortcut
   Var xidaoDesktopCheckbox
 
+  ; Installing for all users without administrator rights puts the UAC shield on the next button
+  ; (see InstModeChange in electron-builder's multiUserUi.nsh), and the stock 50-dialog-unit button
+  ; then has no room for the shield beside 「下一步(N) >」. Once per installer window, the next button
+  ; grows leftwards by the shield's room and the back button moves with it, so back and next stay
+  ; adjacent while cancel and its gap to next keep their places. Dialog units follow the window's
+  ; font and DPI.
+  !define XIDAO_NEXT_BUTTON_EXTRA_DLU 18
+  !define MUI_CUSTOMFUNCTION_GUIINIT xidaoFooterInit
+
+  Function xidaoFooterInit
+    Push $0
+    Push $1
+    Push $2
+    Push $3
+    Push $4
+    Push $5
+    Push $6
+
+    ; $0: the extra width in pixels.
+    System::Call "*(i 0, i 0, i ${XIDAO_NEXT_BUTTON_EXTRA_DLU}, i 0) p.r1"
+    System::Call "user32::MapDialogRect(p $HWNDPARENT, p r1)"
+    System::Call "*$1(i .r3, i .r4, i .r0, i .r6)"
+
+    ; Next button (id 1): same right edge, wider to the left. 0x14 = SWP_NOZORDER | SWP_NOACTIVATE.
+    GetDlgItem $2 $HWNDPARENT 1
+    System::Call "user32::GetWindowRect(p r2, p r1)"
+    System::Call "user32::MapWindowPoints(p 0, p $HWNDPARENT, p r1, i 2)"
+    System::Call "*$1(i .r3, i .r4, i .r5, i .r6)"
+    IntOp $3 $3 - $0
+    IntOp $5 $5 - $3
+    IntOp $6 $6 - $4
+    System::Call "user32::SetWindowPos(p r2, p 0, i r3, i r4, i r5, i r6, i 0x14)"
+
+    ; Back button (id 3): moved left by the same amount. 0x15 adds SWP_NOSIZE.
+    GetDlgItem $2 $HWNDPARENT 3
+    System::Call "user32::GetWindowRect(p r2, p r1)"
+    System::Call "user32::MapWindowPoints(p 0, p $HWNDPARENT, p r1, i 2)"
+    System::Call "*$1(i .r3, i .r4, i .r5, i .r6)"
+    IntOp $3 $3 - $0
+    System::Call "user32::SetWindowPos(p r2, p 0, i r3, i r4, i 0, i 0, i 0x15)"
+
+    System::Free $1
+    Pop $6
+    Pop $5
+    Pop $4
+    Pop $3
+    Pop $2
+    Pop $1
+    Pop $0
+  FunctionEnd
+
   ; No welcome page: this only hooks the show step of the installation mode page that follows.
   !macro customWelcomePage
     !define MUI_PAGE_CUSTOMFUNCTION_SHOW xidaoModeShow
