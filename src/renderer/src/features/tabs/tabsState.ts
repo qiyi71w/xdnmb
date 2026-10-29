@@ -148,8 +148,12 @@ export interface TabsState {
 }
 
 export type TabsAction =
-  /** Opens a tab after the active one and switches to it; `split` is the global “新标签默认开启分栏” value at creation time. */
-  | { type: 'open-tab'; entry: EntryInit; split: boolean }
+  /**
+   * Opens a tab after the active one (after 设置 when that is active) and switches to it; `split` is
+   * the global “新标签默认开启分栏” value at creation time. `background`: the active tab (and the tab
+   * 设置 returns to) stays as it was.
+   */
+  | { type: 'open-tab'; entry: EntryInit; split: boolean; background?: boolean }
   /** Switches to 设置, opening it after the active tab when there is none yet. */
   | { type: 'open-settings' }
   /**
@@ -308,7 +312,7 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       return {
         tabs,
         settings: settings !== null && active >= 0 && settings.at >= at ? { ...settings, at: settings.at + 1 } : settings,
-        activeId: tab.id,
+        activeId: action.background === true ? state.activeId : tab.id,
         nextId: state.nextId + 1,
         nextKey: state.nextKey + 1
       }

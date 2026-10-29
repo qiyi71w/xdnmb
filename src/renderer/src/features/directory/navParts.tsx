@@ -28,13 +28,19 @@ export interface ReminderBadge {
   threads: number
 }
 
+/**
+ * How a page chosen in the navigation opens. In the tab it shows in (the active one; while 设置 is
+ * active, the tab 设置 returns to): `nav` keeps focus with the navigation (an open navigation
+ * overlay closes back to 打开导航), `list` gives it to the page (its opener is going away, e.g. the
+ * 更多 panel). `background` (Ctrl/Cmd+click, middle-click) opens it in a new tab after the active
+ * one and changes nothing else: the active tab, its history, the navigation and focus stay.
+ */
+export type PageOpening = 'nav' | 'list' | 'background'
+
 /** What the app gives the rail for its feature entries. */
 export interface FeatureHost {
-  /**
-   * Opens a feature. `focusTarget`: the list it shows takes focus (its opener is going away, e.g.
-   * the 更多 panel); dialogs always take focus themselves.
-   */
-  open: (id: FeatureId, focusTarget?: boolean) => void
+  /** Opens a feature as `opening` says; dialogs (草稿) ignore it and always take focus themselves. */
+  open: (id: FeatureId, opening: PageOpening) => void
   /** The feature the active tab shows (订阅, 提醒, 搜索, 历史, 离线 pages), if any. */
   current: FeatureId | null
   reminderBadge: ReminderBadge | null
@@ -45,7 +51,7 @@ export interface NavProps {
   state: DirectoryState
   /** The list the active tab shows; `null` while 设置 (or a page that is no list) is the active tab. */
   selected: ListRef | null
-  onSelect: (ref: ListRef) => void
+  onSelect: (ref: ListRef, opening: PageOpening) => void
   onRetry: () => void
   features: FeatureHost
   settingsCurrent: boolean

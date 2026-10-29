@@ -71,8 +71,10 @@ export function SearchPage({
     registry.onlineSearchPanes.get(entryKey)?.current.focusInput()
   })
 
-  // 本机 focus requests; while 联网 is shown the hidden 本机 side takes none.
+  // 本机 focus requests; while 联网 is shown the hidden 本机 side takes none, nor does a page
+  // mounted out of sight (opened in a background tab).
   useLayoutEffect(() => {
+    if (!displayed) return
     focusSearch({ input: localInputRef, list: localListRef }, tab, 'local', localFocus.target)
     // Only a new request moves focus, not every update of the results.
   }, [localFocus.seq])

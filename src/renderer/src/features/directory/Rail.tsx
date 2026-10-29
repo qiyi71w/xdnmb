@@ -4,6 +4,8 @@
 // is short the favorites scroll on their own, fading at an edge with more beyond it; the rest stay
 // in view. Every button names itself in a tooltip shortly after a hover or keyboard focus; the name
 // of the current item is announced when it changes. Order and visibility are app settings (`rail`).
+// Ctrl+click (Cmd+click on macOS) or middle-click on a favorite or a page (here or in 更多) opens it
+// in a background tab: the navigation, its panels and focus stay as they are.
 
 import {
   useCallback,
@@ -13,6 +15,7 @@ import {
   useState,
   type FocusEvent,
   type KeyboardEvent,
+  type MouseEvent,
   type PointerEvent,
   type RefObject
 } from 'react'
@@ -22,7 +25,7 @@ import { useSettings } from '../../lib/settingsContext'
 import { usePopover } from '../../lib/usePopover'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import type { ListRef } from '../tabs/tabsState'
-import { FeatureDot, featureInfo, featureIsDialog, featureLabel, featureTitle, GridIcon, type FeatureHost } from './navParts'
+import { FeatureDot, featureInfo, featureIsDialog, featureLabel, featureTitle, GridIcon, type FeatureHost, type PageOpening } from './navParts'
 import { orderedFeatures, useNavActions, type Board, type FeatureId } from './navStore'
 import { hasNewVersion, settingsEntryLabel, useUpdates } from '../updates/updatesState'
 
@@ -46,7 +49,8 @@ export interface RailFavorites {
   /** Favorites in their order, hidden boards left out; all are shown. */
   boards: readonly Board[]
   selectedKey: string | null
-  onSelect: (ref: ListRef) => void
+  /** `background` for the background-tab gestures, else `nav`. */
+  onSelect: (ref: ListRef, opening: PageOpening) => void
 }
 
 /** First character of each name; the first two for names whose first characters collide. */
@@ -54,6 +58,32 @@ function favoriteMarks(boards: readonly Board[]): string[] {
   const chars = boards.map((item) => Array.from(item.label.trim()))
   const firsts = chars.map((name) => name[0] ?? '')
   return chars.map((name, index) => (firsts.filter((first) => first === firsts[index]).length > 1 ? name.slice(0, 2).join('') : firsts[index]!))
+}
+
+/** Ctrl+click (Cmd+click on macOS): the page opens in a background tab. */
+const backgroundClick = (event: MouseEvent) => event.ctrlKey || event.metaKey
+
+/** A background-tab press (middle, Ctrl/Cmd) on a favorite or a page of the rail: 更多 stays open, focus in it. */
+const keepsMoreOpen = (event: globalThis.PointerEvent) =>
+  (event.button === 1 || (event.button === 0 && (event.ctrlKey || event.metaKey))) &&
+  event.target instanceof Element &&
+  event.target.closest('[data-rail-board], [data-rail-feature]:not([aria-haspopup])') !== null
+
+/**
+ * The press side of a page entry's background-tab gestures (its click checks `backgroundClick`):
+ * middle-click opens; a middle or Ctrl/Cmd press neither takes focus nor starts autoscrolling.
+ */
+function backgroundGestures(open: () => void) {
+  return {
+    onMouseDown(event: MouseEvent<HTMLElement>) {
+      if (event.button === 1 || (event.button === 0 && backgroundClick(event))) event.preventDefault()
+    },
+    onAuxClick(event: MouseEvent<HTMLElement>) {
+      if (event.button !== 1) return
+      event.preventDefault()
+      open()
+    }
+  }
 }
 
 export function Rail({
@@ -82,7 +112,7 @@ export function Rail({
   const favoritesRef = useRef<HTMLDivElement>(null)
   const moreTriggerRef = useRef<HTMLButtonElement>(null)
   const morePanelRef = useRef<HTMLDivElement>(null)
-  const morePopover = usePopover(moreTriggerRef, morePanelRef)
+  const morePopover = usePopover(moreTriggerRef, morePanelRef, keepsMoreOpen)
   const { close: closeMore } = morePopover
   const hasMore = hidden.length > 0
 
@@ -176,7 +206,8 @@ export function Rail({
                   aria-current={current ? 'page' : undefined}
                   data-rail-tip={item.label}
                   data-rail-board=""
-                  onClick={() => favorites.onSelect(item.ref)}
+                  onClick={(event) => favorites.onSelect(item.ref, backgroundClick(event) ? 'background' : 'nav')}
+                  {...backgroundGestures(() => favorites.onSelect(item.ref, 'background'))}
                   {...rail.itemProps(favoriteKey(item.key))}
                 >
                   <span aria-hidden="true">{mark}</span>
@@ -204,9 +235,11 @@ export function Rail({
               onPointerMove={drag.onPointerMove}
               onPointerUp={drag.onPointerUp}
               onPointerCancel={drag.cancel}
-              onClick={() => {
-                if (!drag.consumeClick()) features.open(feature.id)
+              onClick={(event) => {
+                if (drag.consumeClick()) return
+                features.open(feature.id, !featureIsDialog(feature.id) && backgroundClick(event) ? 'background' : 'nav')
               }}
+              {...(featureIsDialog(feature.id) ? {} : backgroundGestures(() => features.open(feature.id, 'background')))}
               {...rail.itemProps(feature.id)}
             >
               <Icon name={feature.icon} size={18} />
@@ -261,17 +294,21 @@ export function Rail({
                 type="button"
                 className="shell-all-item"
                 aria-label={featureLabel(feature.id, features)}
-                onClick={() => {
+                onClick={(event) => {
                   // A dialog takes focus and later returns it to its opener: leave that on 更多.
-                  // A list replaces this panel's place: it takes focus itself.
+                  // A list replaces this panel's place: it takes focus itself. A background tab
+                  // leaves the panel open and focus where it is.
                   if (featureIsDialog(feature.id)) {
                     morePopover.close()
-                    features.open(feature.id)
+                    features.open(feature.id, 'nav')
+                  } else if (backgroundClick(event)) {
+                    features.open(feature.id, 'background')
                   } else {
                     morePopover.close(false)
-                    features.open(feature.id, true)
+                    features.open(feature.id, 'list')
                   }
                 }}
+                {...(featureIsDialog(feature.id) ? {} : backgroundGestures(() => features.open(feature.id, 'background')))}
               >
                 <span className="shell-all-icon">
                   <Icon name={feature.icon} size={20} />
@@ -418,7 +455,8 @@ interface DragPress {
 /**
  * Dragging a feature button along the rail: a line shows where it will go, release puts it there
  * (`place`, saved to the settings). Esc, the window losing focus or a cancelled pointer leave the
- * order as it was. The click that ends a drag does not open the feature.
+ * order as it was. The click that ends a drag does not open the feature. Only a plain primary
+ * press drags: a Ctrl/Cmd press is a background-tab click.
  */
 function useRailDrag(railRef: RefObject<HTMLDivElement | null>, onStart: () => void, place: (id: FeatureId, before: FeatureId | null) => void) {
   const press = useRef<DragPress | null>(null)
@@ -476,7 +514,7 @@ function useRailDrag(railRef: RefObject<HTMLDivElement | null>, onStart: () => v
     onPointerDown(event: PointerEvent<HTMLElement>, id: FeatureId) {
       swallowClick.current = false
       press.current =
-        event.button === 0
+        event.button === 0 && !event.ctrlKey && !event.metaKey
           ? { id, pointerId: event.pointerId, startY: event.clientY, button: event.currentTarget, started: false, cancelled: false }
           : null
     },

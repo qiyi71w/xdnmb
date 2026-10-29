@@ -153,6 +153,47 @@ describe('tabs and per-tab history', () => {
     expect(currentEntry(tab)).toMatchObject({ kind: 'list', feed: { kind: 'subscriptions' }, thread: { threadId: '300' }, pane: 'reader' })
     expect(currentEntry(activeTab(run(after, { type: 'back', tabId: id }))!)).toMatchObject({ kind: 'list', feed: forum4 })
   })
+
+  it('opens a background tab after the active one with its own history, leaving the active tab as it was', () => {
+    let state = run(
+      initialTabsState(true),
+      { type: 'open-tab', entry: { kind: 'list', feed: forum5 }, split: true },
+      { type: 'activate', tabId: 1 },
+      { type: 'navigate', tabId: 1, entry: { kind: 'list', feed: forum4 } },
+      { type: 'select-thread', tabId: 1, thread: thread('100') }
+    )
+    const before = state
+    const reading = activeTab(before)!
+    state = run(state, { type: 'open-tab', entry: { kind: 'list', feed: { kind: 'subscriptions' } }, split: false, background: true })
+    const opened = state.tabs[1]!
+    expect(state.tabs.map((tab) => tab.id)).toEqual([1, opened.id, 2])
+    expect(state.activeId).toBe(1)
+    // The active tab, its history and the shown thread are the very same objects.
+    expect(activeTab(state)).toBe(reading)
+    expect(opened).toMatchObject({ split: false, index: 0 })
+    expect(opened.entries).toHaveLength(1)
+    expect(currentEntry(opened)).toMatchObject({ kind: 'list', feed: { kind: 'subscriptions' }, thread: null, pane: 'list' })
+    expect(before.tabs.flatMap((tab) => tab.entries).some((entry) => entry.key === currentEntry(opened).key)).toBe(false)
+    // Back and forward stay in the active tab; the new tab has no step to go back to.
+    state = run(state, { type: 'back', tabId: 1 })
+    expect(currentEntry(activeTab(state)!)).toMatchObject({ kind: 'list', feed: null })
+    expect(run(state, { type: 'back', tabId: opened.id }).tabs[1]).toBe(state.tabs[1])
+    // Cycling reaches it in its place, showing its own page.
+    state = run(state, { type: 'cycle', delta: 1 })
+    expect(state.activeId).toBe(opened.id)
+    expect(currentEntry(activeTab(state)!)).toMatchObject({ feed: { kind: 'subscriptions' } })
+  })
+
+  it('opens each later background tab right after the active one, before the earlier ones', () => {
+    const state = run(
+      initialTabsState(true),
+      { type: 'open-tab', entry: { kind: 'list', feed: { kind: 'history' } }, split: true, background: true },
+      { type: 'open-tab', entry: { kind: 'online-search' }, split: true, background: true }
+    )
+    expect(state.activeId).toBe(1)
+    expect(state.tabs.map((tab) => currentEntry(tab).kind)).toEqual(['list', 'online-search', 'list'])
+    expect(currentEntry(state.tabs[2]!)).toMatchObject({ feed: { kind: 'history' } })
+  })
 })
 
 describe('the 设置 tab', () => {
@@ -236,5 +277,22 @@ describe('the 设置 tab', () => {
     expect(currentEntry(activeTab(state)!)).toMatchObject({ kind: 'list', feed: null })
     state = run(state, { type: 'activate', tabId: 1 }, { type: 'open-tab', entry: { kind: 'list', feed: null }, split: true })
     expect(ids(state)).toEqual([1, state.activeId, settingsId, fromSettings, 2])
+  })
+
+  it('opens a background tab beside the active 设置, which stays active and returns to the tab it was entered from', () => {
+    const opened = run(twoTabs(), { type: 'activate', tabId: 1 }, { type: 'open-settings' })
+    const settings = opened.settings!
+    let state = run(opened, { type: 'open-tab', entry: { kind: 'list', feed: { kind: 'reminders' } }, split: true, background: true })
+    const background = state.tabs.find((tab) => !opened.tabs.includes(tab))!
+    expect(ids(state)).toEqual([1, settings.id, background.id, 2])
+    expect(state.activeId).toBe(settings.id)
+    expect(state.settings).toEqual(settings)
+    expect(navigationTab(state).id).toBe(1)
+    expect(run(state, { type: 'close-tab', tabId: settings.id, split: true })).toMatchObject({ settings: null, activeId: 1 })
+    // With a content tab active, 设置 after it moves along.
+    state = run(state, { type: 'activate', tabId: 1 }, { type: 'open-tab', entry: { kind: 'list', feed: forum5 }, split: true, background: true })
+    expect(state.activeId).toBe(1)
+    expect(ids(state)).toEqual([1, state.tabs[1]!.id, settings.id, background.id, 2])
+    expect(state.settings).toEqual({ ...settings, at: 2, returnTo: 1 })
   })
 })

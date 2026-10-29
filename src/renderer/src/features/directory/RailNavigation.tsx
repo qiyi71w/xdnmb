@@ -49,9 +49,10 @@ export function RailNavigation({
         favorites={{
           boards: view.favorites,
           selectedKey,
-          onSelect: (ref) => {
-            closeBoardPanel('dismiss')
-            onSelect(ref)
+          // A background tab leaves the board panel (and focus) as it is.
+          onSelect: (ref, opening) => {
+            if (opening !== 'background') closeBoardPanel('dismiss')
+            onSelect(ref, opening)
           }
         }}
       />
@@ -68,7 +69,7 @@ function BoardPanel({
 }: {
   state: NavProps['state']
   selectedKey: string | null
-  onSelect: (ref: ListRef) => void
+  onSelect: NavProps['onSelect']
   onRetry: () => void
 }) {
   const { all, view, hidden } = useBoardView(state.directory)
@@ -90,11 +91,14 @@ function BoardPanel({
       closeBoardPanel('cancel')
     }
     // On window, so it runs before a holding overlay's own document handler sees the same press.
+    // A background-tab press on a page of the rail (Ctrl/Cmd or middle) leaves it open too.
     const onPointerDown = (event: PointerEvent) => {
       pressing.current = true
       setTimeout(() => (pressing.current = false))
       const target = event.target as Element | null
       if (target === null || panelRef.current?.contains(target) || target.closest('[data-boards-trigger], [data-rail-board]') !== null) return
+      const background = event.button === 1 || (event.button === 0 && (event.ctrlKey || event.metaKey))
+      if (background && target.closest('[data-rail-feature]:not([aria-haspopup])') !== null) return
       closeBoardPanel('cancel', target)
     }
     document.addEventListener('keydown', onKeyDown, true)
@@ -118,7 +122,7 @@ function BoardPanel({
   // list's board name then takes focus.
   const choose = (ref: ListRef) => {
     closeBoardPanel('select')
-    onSelect(ref)
+    onSelect(ref, 'nav')
   }
 
   return (

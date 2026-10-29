@@ -8,7 +8,7 @@ import { DEFAULT_SETTINGS, LIST_WIDTH_LIMITS, type AppSettings } from '../../../
 import { Icon } from '../components/Icon'
 import { feedKey, findFeed, forumNames, type FeedInfo } from '../features/directory/feeds'
 import { BoardPanelEmptyPage, BoardPanelTitle, RailNavigation } from '../features/directory/RailNavigation'
-import type { FeatureHost, NavProps } from '../features/directory/navParts'
+import type { FeatureHost, NavProps, PageOpening } from '../features/directory/navParts'
 import { RAIL_WIDTH } from '../features/directory/Rail'
 import { SettingsPage, type SettingsTarget } from './SettingsPage'
 import {
@@ -573,20 +573,24 @@ export function App() {
   }, [])
 
   /**
-   * Shows `ref` in the active content tab (the one 设置 returns to while it is active). Focus:
-   * `nav` — an open navigation overlay closes back to 打开导航 (an inline navigation keeps it);
-   * `list` — the tab's list takes it, for openers that are going away (the 更多 panel, content of a page).
+   * Shows `ref` as `opening` says (`PageOpening`): in the active content tab (the one 设置 returns
+   * to while it is active), where `list` focuses the tab's list once shown; `background` opens it in
+   * a new tab (global split default) and leaves the tabs, the navigation and focus as they are.
    */
   const selectFeed = useCallback(
-    (ref: ListRef, focus: 'nav' | 'list' = 'nav') => {
-      closeNav(focus === 'nav')
+    (ref: ListRef, opening: PageOpening) => {
+      if (opening === 'background') {
+        dispatch({ type: 'open-tab', entry: { kind: 'list', feed: ref }, split: stateRef.current.settings.newTabSplitDefault, background: true })
+        return
+      }
+      closeNav(opening === 'nav')
       withNavigationTab((tab) => {
         const entry = currentEntry(tab)
         if (entry.kind === 'list' && entry.feed !== null && listKey(entry.feed) === listKey(ref)) return
         leave(tab)
         dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'list', feed: ref } })
       })
-      if (focus === 'list') {
+      if (opening === 'list') {
         // The list replaces the shown one in this commit; it exists from the next frame.
         requestAnimationFrame(() => {
           document.querySelector<HTMLElement>(`#tabpanel-${stateRef.current.tabs?.activeId} [data-pane-focus]`)?.focus()
@@ -1263,14 +1267,22 @@ export function App() {
   // ---------- Navigation: the icon rail and its board panel ----------
   /** Lists opened from inside content (e.g. the reminders empty state): focus goes to the list. */
   const openList = useCallback((ref: ListRef) => selectFeed(ref, 'list'), [selectFeed])
-  /** Lists of the tab (订阅, 提醒, 历史, 离线) and 搜索 are pages; 草稿 is a dialog. */
+  /**
+   * Lists of the tab (订阅, 提醒, 历史, 离线) and 搜索 are pages; 草稿 is a dialog. A background tab
+   * starts its page fresh and takes no focus: 历史 on 浏览, 搜索 on 本机 with its own new query.
+   */
   const openFeature = useCallback(
-    (id: FeatureId, focusTarget = false) => {
-      if (id === 'history') openHistoryView('browsing')
-      else if (id === 'subscriptions' || id === 'reminders' || id === 'offline') selectFeed({ kind: id }, focusTarget ? 'list' : 'nav')
-      // The page focuses its search box itself.
-      else if (id === 'search') openSearchPage('shown')
-      else openDrafts()
+    (id: FeatureId, opening: PageOpening) => {
+      if (id === 'drafts') openDrafts()
+      else if (id === 'search') {
+        if (opening === 'background') {
+          dispatch({ type: 'open-tab', entry: { kind: 'online-search' }, split: stateRef.current.settings.newTabSplitDefault, background: true })
+        } else {
+          // The page focuses its search box itself.
+          openSearchPage('shown')
+        }
+      } else if (id === 'history' && opening !== 'background') openHistoryView('browsing')
+      else selectFeed({ kind: id }, opening)
     },
     [selectFeed, openSearchPage, openDrafts, openHistoryView]
   )

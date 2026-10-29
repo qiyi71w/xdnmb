@@ -3,14 +3,21 @@ import { openLayer } from './layers'
 
 /**
  * Open state of a popover or overlay owned by a trigger button. While open: Escape or a pointer
- * press outside the panel and trigger closes it and returns focus to the trigger. Opening moves
- * focus into the panel (`[data-autofocus]`, else its first focusable control).
+ * press outside the panel and trigger closes it and returns focus to the trigger, unless
+ * `keepsOpen` claims that press (it acts on its own, leaving the popover and focus as they are).
+ * Opening moves focus into the panel (`[data-autofocus]`, else its first focusable control).
  */
-export function usePopover(triggerRef: RefObject<HTMLElement | null>, panelRef: RefObject<HTMLElement | null>) {
+export function usePopover(
+  triggerRef: RefObject<HTMLElement | null>,
+  panelRef: RefObject<HTMLElement | null>,
+  keepsOpen?: (event: PointerEvent) => boolean
+) {
   const [open, setOpen] = useState(false)
   const openRef = useRef(open)
+  const keepsOpenRef = useRef(keepsOpen)
   useLayoutEffect(() => {
     openRef.current = open
+    keepsOpenRef.current = keepsOpen
   })
 
   /** Closes; `returnFocus` sends focus back to the trigger. */
@@ -51,6 +58,7 @@ export function usePopover(triggerRef: RefObject<HTMLElement | null>, panelRef: 
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null
       if (target !== null && (panelRef.current?.contains(target) || triggerRef.current?.contains(target))) return
+      if (keepsOpenRef.current?.(event)) return
       close()
     }
     document.addEventListener('keydown', onKeyDown, true)
