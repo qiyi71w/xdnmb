@@ -124,16 +124,73 @@ export function isReconcilable(operation: SubscriptionOperation, active: ActiveC
   return needsReconcile(operation)
 }
 
+/** A source's stored list observation as read for the identity shown; a failed read is no evidence. */
+export type StoredObservation = { kind: 'loading' } | { kind: 'failed' } | { kind: 'read'; observation: SubscriptionObservation | null }
+
+/** An observation whose reading stopped on an error or was cancelled: a thread it lists is there, nothing else is known. */
+export function readFailed(observation: SubscriptionObservation): boolean {
+  return observation.error !== null || observation.cancelled
+}
+
+/**
+ * What a source shows after a new local read for the same identity: a failed read, or a stored
+ * observation whose reading failed or was cancelled, never replaces an earlier one read without error.
+ */
+export function nextStoredObservation(current: StoredObservation, next: StoredObservation): StoredObservation {
+  const failed = next.kind === 'failed' || (next.kind === 'read' && next.observation !== null && readFailed(next.observation))
+  const valid = current.kind === 'read' && current.observation !== null && !readFailed(current.observation)
+  return failed && valid ? current : next
+}
+
+export type ThreadMembership =
+  | { kind: 'loading' | 'failed' | 'in' | 'out' }
+  | { kind: 'unknown'; operation: SubscriptionOperation }
+
+/**
+ * Whether a thread is in one remote collection. `operations` are that collection's journal entries
+ * for the thread, newest first. An unresolved entry after the latest confirmed write wins whatever
+ * was observed later (a failed readback proves nothing), so only the read-only 核对 follows.
+ * Otherwise the newer of that confirmed write and a stored observation read without error decides.
+ * Rejected writes are no evidence; a failed or cancelled read only shows the threads it did list,
+ * never that one is absent.
+ */
+export function threadMembership(
+  threadId: ThreadId,
+  stored: StoredObservation,
+  operations: readonly SubscriptionOperation[],
+  active: ActiveChange
+): ThreadMembership {
+  let confirmed: SubscriptionOperation | undefined
+  for (const operation of operations) {
+    if (isReconcilable(operation, active)) return { kind: 'unknown', operation }
+    if (operation.state === 'settled' && operation.report !== 'rejected') {
+      confirmed = operation
+      break
+    }
+  }
+  const observation = stored.kind === 'read' ? stored.observation : null
+  const observedAt = observation !== null && !readFailed(observation) ? observation.startedAt : ''
+  if (confirmed !== undefined && confirmed.createdAt >= observedAt) {
+    if (confirmed.verification === 'present') return { kind: 'in' }
+    if (confirmed.verification === 'absent-supported') return { kind: 'out' }
+  }
+  if (stored.kind !== 'read') return { kind: stored.kind }
+  if (observation?.ids.includes(threadId) === true) return { kind: 'in' }
+  return observation !== null && readFailed(observation) ? { kind: 'failed' } : { kind: 'out' }
+}
+
 /** What a press of 订阅／已订阅／取消订阅／加入 does now: the one write itself, or why it cannot start. */
 export type ChangeDecision = { kind: 'write'; request: ChangeRequest } | { kind: 'blocked'; reason: string }
 
 /**
- * A press writes at once, with no confirmation step. The request targets the source and identity
- * combination shown at the press; it is sent once and never retried. Reminders of an unsubscribed
- * thread stay as they are (nothing is asked). Blocked presses keep their reasons.
+ * A press writes at once, with no confirmation step. The request targets `source` (given by the
+ * caller, never derived from the source the list shows) with the identity generation known at the
+ * press; it is sent once and never retried. Reminders of an unsubscribed thread stay as they are
+ * (nothing is asked). Blocked presses keep their reasons.
  */
 export function decideChange({
   overview,
+  source,
   operations,
   busy,
   action,
@@ -141,7 +198,9 @@ export function decideChange({
   label,
   unresolved
 }: {
-  overview: SubscriptionOverview | null
+  overview: SubscriptionOverview
+  /** The remote collection this press writes to. */
+  source: SubscriptionSource
   operations: readonly SubscriptionOperation[] | null
   /** A write, 核对, preview read or plan is running. */
   busy: boolean
@@ -151,18 +210,17 @@ export function decideChange({
   /** Wording for an unresolved earlier write of this thread, which only 核对 may follow. */
   unresolved: string
 }): ChangeDecision {
-  if (overview === null) return { kind: 'blocked', reason: '订阅设置尚未读取' }
-  const blocker = sourceBlocker(overview, overview.source)
+  const blocker = sourceBlocker(overview, source)
   if (blocker !== null) return { kind: 'blocked', reason: blocker }
   if (!overview.writable) return { kind: 'blocked', reason: '本地存储不可写' }
   if (busy) return { kind: 'blocked', reason: '另一项订阅操作正在进行' }
-  const objectRef = sourceObjectRef(overview.context, overview.source)
-  if (operations?.some((item) => blocksNewWrite(item, { source: overview.source, objectRef, threadId })) === true) {
+  const objectRef = sourceObjectRef(overview.context, source)
+  if (operations?.some((item) => blocksNewWrite(item, { source, objectRef, threadId })) === true) {
     return { kind: 'blocked', reason: unresolved }
   }
   return {
     kind: 'write',
-    request: { source: overview.source, threadId, action, expectedGeneration: overview.context.generation, label }
+    request: { source, threadId, action, expectedGeneration: overview.context.generation, label }
   }
 }
 

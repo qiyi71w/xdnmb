@@ -323,6 +323,22 @@ describe('settings', () => {
     expect(settingsFromStored(new Map<string, unknown>([['recentKaomoji', 'a']])).recentKaomoji).toEqual([])
   })
 
+  it('keeps the default subscription source across a restart; older settings without it use App', async () => {
+    expect(DEFAULT_SETTINGS.defaultSubscriptionSource).toBe('app')
+    expect(applySettingsPatch(DEFAULT_SETTINGS, { defaultSubscriptionSource: 'both', density: 'compact' })).toMatchObject({
+      ok: false, issues: [{ field: 'defaultSubscriptionSource', problem: 'range' }]
+    })
+    expect(settingsFromStored(new Map<string, unknown>([['defaultSubscriptionSource', 42], ['density', 'compact']]))).toEqual({
+      ...DEFAULT_SETTINGS, density: 'compact'
+    })
+    const path = join(folder(), 'settings.sqlite')
+    const first = open(path)
+    expect(await createSettingsService(storeOf(first)).update({ defaultSubscriptionSource: 'web' })).toMatchObject({ saved: true, issues: [] })
+    first.close()
+    databases.splice(databases.indexOf(first), 1)
+    expect(open(path).loadSettings()).toEqual({ ...DEFAULT_SETTINGS, defaultSubscriptionSource: 'web' })
+  })
+
   it.each([
     ['a timeline order', { boards: { ...navigation.boards, order: { timelines: ['timeline:1'] } } }, 'boards.order'],
     ['a timeline in a group order', { boards: { ...navigation.boards, order: { 'group-1': ['timeline:1'] } } }, 'boards.order'],

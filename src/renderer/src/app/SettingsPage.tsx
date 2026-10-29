@@ -512,7 +512,7 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
     case 'cookies':
       return <CookieSection identities={identities} active={active} />
     case 'subscriptions':
-      return <SubscriptionSection subscriptions={subscriptions} active={active} />
+      return <SubscriptionSection subscriptions={subscriptions} active={active} settings={settings} write={write} />
     case 'publication':
       return <PublicationSection />
     case 'window':

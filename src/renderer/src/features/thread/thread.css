@@ -414,6 +414,44 @@
   color: var(--warn-ink);
 }
 
+/* 订阅 split: the default source's button and the arrow listing App / 网页 read as one control.
+   The source name stays when the label collapses to its icon, so the target is always visible. */
+.subscribe-split {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+}
+
+.subscribe-target {
+  color: var(--ink-2);
+  font-size: var(--text-xs);
+}
+
+.subscribe-btn.is-on .subscribe-target,
+.subscribe-btn.is-warning .subscribe-target {
+  color: inherit;
+}
+
+/* After the narrow-row rules above, so the arrow stays a slim companion at every width. */
+.thread-bar .tb-btn.subscribe-menu-trigger,
+:root[data-density='compact'] .thread-bar .tb-btn.subscribe-menu-trigger {
+  padding-inline: 4px;
+  color: var(--ink-2);
+}
+
+.thread-bar .tb-btn.subscribe-menu-trigger:hover:not(:disabled, [aria-disabled='true']),
+.thread-bar .tb-btn.subscribe-menu-trigger[aria-expanded='true'] {
+  color: var(--ink);
+}
+
+.subscribe-menu-chevron {
+  transform: rotate(90deg);
+}
+
+.subscribe-menu-trigger[aria-expanded='true'] .subscribe-menu-chevron {
+  transform: rotate(-90deg);
+}
+
 /* One-line results under the toolbar (subscription writes, offline copy deletion), dismissible. */
 .subscribe-note,
 .offline-delete-note {

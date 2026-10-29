@@ -376,18 +376,6 @@ export function SubscriptionPane({
   const roving = useRovingFocus(ids, selectedThreadId)
   const rules = useThreadRules(ids)
 
-  // ---------- Explicit writes ----------
-  /** A press of 加入／取消订阅 writes at once: no confirmation, never retried, reminders untouched. */
-  const decide = (action: SubscriptionAction, threadId: ThreadId, label: string) =>
-    decideChange({ overview, operations, busy, action, threadId, label, unresolved: '这个串的上次操作待核对' })
-  /** Sends the write; returns why the press could not start, or null once sent. */
-  const writeNow = (action: SubscriptionAction, threadId: ThreadId, label: string): string | null => {
-    const decision = decide(action, threadId, label)
-    if (decision.kind === 'blocked') return decision.reason
-    void change(decision.request)
-    return null
-  }
-
   /**
    * Unsettled writes, each shown once where it belongs: in its row when the thread is listed, else
    * under 加入 (also writes to another source or an earlier UUID / binding). Newest per thread and
@@ -469,6 +457,19 @@ export function SubscriptionPane({
   }
 
   const source = overview.source
+
+  // ---------- Explicit writes ----------
+  /** A press of 加入／取消订阅 writes at once to the shown source: no confirmation, never retried, reminders untouched. */
+  const decide = (action: SubscriptionAction, threadId: ThreadId, label: string) =>
+    decideChange({ overview, source, operations, busy, action, threadId, label, unresolved: '这个串的上次操作待核对' })
+  /** Sends the write; returns why the press could not start, or null once sent. */
+  const writeNow = (action: SubscriptionAction, threadId: ThreadId, label: string): string | null => {
+    const decision = decide(action, threadId, label)
+    if (decision.kind === 'blocked') return decision.reason
+    void change(decision.request)
+    return null
+  }
+
   const shown = state.shown
   const endPage = displayed?.pages.find((page) => page.endCandidate)?.page ?? null
   const nextPage = shown !== null && shown.error === null && !readInFlight && blocker === null ? shown.nextPage : null

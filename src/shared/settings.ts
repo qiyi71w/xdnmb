@@ -1,5 +1,6 @@
 // Global preferences: one source of validation for IPC updates, stored rows and theme imports.
 import { CLOSE_ACTIONS, type CloseAction } from './lifecycle'
+import type { SubscriptionSource } from './subscriptions'
 import { UPDATE_NETWORKS, type UpdateNetwork } from './updates'
 import {
   BUILTIN_PALETTES,
@@ -116,6 +117,11 @@ export interface AppSettings {
   updateAutoDownload: boolean
   /** Network for update checks and package downloads only. */
   updateNetwork: UpdateNetwork
+  /**
+   * Where the thread toolbar's 订阅 writes. Independent of the source the subscription page shows;
+   * a write to the other source is chosen per press and never changes this.
+   */
+  defaultSubscriptionSource: SubscriptionSource
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -137,7 +143,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   updateAutoCheck: true,
   updateAutoInstall: false,
   updateAutoDownload: false,
-  updateNetwork: 'system'
+  updateNetwork: 'system',
+  defaultSubscriptionSource: 'app'
 }
 
 export const SETTING_KEYS = [
@@ -159,7 +166,8 @@ export const SETTING_KEYS = [
   'updateAutoCheck',
   'updateAutoInstall',
   'updateAutoDownload',
-  'updateNetwork'
+  'updateNetwork',
+  'defaultSubscriptionSource'
 ] as const satisfies readonly (keyof AppSettings)[]
 
 /** At most this many entries in any board list (favorites, hidden, one group's order, collapsed). */
@@ -304,6 +312,7 @@ function parseListWidth(value: unknown, field: string): Parsed<number> {
 const COLOR_SCHEMES: readonly ColorScheme[] = ['system', 'light', 'dark']
 const DENSITIES: readonly Density[] = ['comfortable', 'compact']
 const MOTIONS: readonly MotionPreference[] = ['system', 'reduce']
+const SUBSCRIPTION_SOURCES: readonly SubscriptionSource[] = ['app', 'web']
 
 function choice<T extends string>(value: unknown, values: readonly T[], field: string): Parsed<T> {
   if (typeof value !== 'string') return { ok: false, issues: [{ kind: 'field', field, problem: 'type' }] }
@@ -365,6 +374,9 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
       break
     case 'updateNetwork':
       parsed = choice(value, UPDATE_NETWORKS, key)
+      break
+    case 'defaultSubscriptionSource':
+      parsed = choice(value, SUBSCRIPTION_SOURCES, key)
       break
     default:
       parsed = { ok: false, issues: [{ kind: 'field', field: String(key), problem: 'unknown' }] }

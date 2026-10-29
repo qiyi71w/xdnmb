@@ -709,7 +709,7 @@ export function ThreadReader({
               </div>
               <div className="thread-bar-actions">
                 {compose?.entry}
-                <SubscribeButton threadId={threadId} label={title ?? `No.${threadId}`} />
+                <SubscribeButton threadId={threadId} label={title ?? `No.${threadId}`} displayed={displayed} />
                 {searchButton}
                 <ThreadMoreMenu
                   onRefresh={thread.refresh}

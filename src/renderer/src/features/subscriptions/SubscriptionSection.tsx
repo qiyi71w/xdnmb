@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import type { SubscriptionOverview, SubscriptionResult } from '../../../../shared/subscriptions'
+import type { AppSettings } from '../../../../shared/settings'
+import type { SubscriptionOverview, SubscriptionResult, SubscriptionSource } from '../../../../shared/subscriptions'
+import { Choice, SettingRow, type Write } from '../../app/settingsSections'
 import { ContextMenu, type ContextMenuPoint } from '../../components/ContextMenu'
 import { Icon } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { FailureNotice } from '../../components/Notices'
 import { singleFlight } from '../../lib/singleFlight'
 import { useListOpener } from '../reminders/openList'
-import { failureText, webObjectText } from './subscriptionText'
+import { failureText, SOURCE_NAME, webObjectText } from './subscriptionText'
 import type { SubscriptionsState } from './useSubscriptions'
 import './subscriptions.css'
 
@@ -28,11 +30,25 @@ function MessageLine({ id, message }: { id?: string; message: Message | null }) 
   )
 }
 
+const SOURCES: readonly SubscriptionSource[] = ['app', 'web']
+
 /**
- * 订阅 settings: the App UUID (shown in its field, saved with 保存) and the fixed web sync object,
- * which is chosen in 饼干 › 用途. Which source the list shows is switched on the subscription page.
+ * 订阅 settings: where the thread toolbar's 订阅 writes (a saved setting of its own, never the
+ * source the subscription page shows), the App UUID (shown in its field, saved with 保存) and the
+ * fixed web sync object, which is chosen in 饼干 › 用途. Which source the list shows is switched on
+ * the subscription page.
  */
-export function SubscriptionSection({ subscriptions, active }: { subscriptions: SubscriptionsState; active: boolean }) {
+export function SubscriptionSection({
+  subscriptions,
+  active,
+  settings,
+  write
+}: {
+  subscriptions: SubscriptionsState
+  active: boolean
+  settings: AppSettings
+  write: Write
+}) {
   const { overview, overviewFailed, refreshOverview } = subscriptions
   const headingId = useId()
 
@@ -41,6 +57,21 @@ export function SubscriptionSection({ subscriptions, active }: { subscriptions: 
       <h3 className="settings-section-title" id={headingId}>
         订阅
       </h3>
+      {/* Only saved here: choosing never reads, writes or switches any subscription. */}
+      <SettingRow
+        labelId="setting-default-subscription-source"
+        label="串工具栏默认订阅到"
+        help="按钮旁的箭头可单独订阅到另一来源"
+        helpId="setting-default-subscription-source-help"
+      >
+        <Choice<SubscriptionSource>
+          labelledBy="setting-default-subscription-source"
+          describedBy="setting-default-subscription-source-help"
+          options={SOURCES.map((value) => ({ value, label: SOURCE_NAME[value] }))}
+          value={settings.defaultSubscriptionSource}
+          onChange={(defaultSubscriptionSource) => write({ defaultSubscriptionSource })}
+        />
+      </SettingRow>
       {overview === null && overviewFailed && (
         <FailureNotice title="订阅设置读取失败" failure={{ type: 'internal' }} onRetry={() => void refreshOverview()} compact />
       )}
