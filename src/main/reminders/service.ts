@@ -189,7 +189,7 @@ export function createReminderService(deps: {
     return { accepted: true }
   }
   function notifySystem(body: string): void {
-    try { deps.notifier.show({ title: '汐岛提醒', body }) }
+    try { deps.notifier.show({ title: '汐岛', body }) }
     catch { console.error('[reminders] notification failed') }
   }
   async function stop(reason: 'quit' | 'user'): Promise<void> {

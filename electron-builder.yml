@@ -65,6 +65,8 @@ nsis:
   uninstallDisplayName: 汐岛
 
 mac:
+  # macOS uses the bundle filename in Finder and the Dock; Windows keeps xidao.exe.
+  executableName: 汐岛
   target:
     - target: dmg
       arch: [x64, arm64]

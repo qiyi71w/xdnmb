@@ -82,6 +82,7 @@ function inspect() {
     check(`${arch} dmg checksum bound by latest-mac.yml`, entry?.sha512 === sha512(path) && entry?.size === readFileSync(path).length, { entry })
     const app = appIn(join(DIST, arch === 'x64' ? 'mac' : 'mac-arm64'))
     log(`${arch} app bundle`, { app, name: plist(app, 'CFBundleName'), executable: plist(app, 'CFBundleExecutable') })
+    check(`${arch} application display name`, app.endsWith('/汐岛.app') && plist(app, 'CFBundleName') === '汐岛' && plist(app, 'CFBundleDisplayName') === '汐岛' && plist(app, 'CFBundleExecutable') === '汐岛')
     const archs = run('/usr/bin/lipo', ['-archs', executableOf(app)]).trim()
     check(`${arch} executable architecture`, archs === (arch === 'x64' ? 'x86_64' : 'arm64'), { archs })
     const sqlite = join(app, `Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/prebuilds/darwin-${arch}.node`)

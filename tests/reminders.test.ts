@@ -531,10 +531,10 @@ describe('system notification adapter', () => {
   it('creates nothing where notifications are unsupported and lets a show failure reach the caller', () => {
     const unsupported = createReminderNotifier({ isSupported: () => false,
       create() { throw new Error('must not create') }, async openList() { throw new Error('must not open') } })
-    expect(unsupported.show({ title: '汐岛提醒', body: '1 个串有新提醒' })).toBe(false)
+    expect(unsupported.show({ title: '汐岛', body: '1 个串有新提醒' })).toBe(false)
     const broken = createReminderNotifier({ isSupported: () => true,
       create: () => ({ on() {}, show() { throw new Error('desktop failure') } }), async openList() {} })
-    expect(() => broken.show({ title: '汐岛提醒', body: '1 个串有新提醒' })).toThrow('desktop failure')
+    expect(() => broken.show({ title: '汐岛', body: '1 个串有新提醒' })).toThrow('desktop failure')
   })
 
   it('opens the reminders list only on click', async () => {
@@ -543,7 +543,7 @@ describe('system notification adapter', () => {
     const notifier = createReminderNotifier({ isSupported: () => true,
       create: () => ({ on(event, listener) { listeners.set(event, listener) }, show() {} }),
       async openList() { opens++ } })
-    expect(notifier.show({ title: '汐岛提醒', body: '1 个串有新提醒' })).toBe(true)
+    expect(notifier.show({ title: '汐岛', body: '1 个串有新提醒' })).toBe(true)
     expect(opens).toBe(0)
     listeners.get('click')?.()
     await Promise.resolve()
