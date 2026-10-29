@@ -1011,12 +1011,14 @@ dialog.compose-image-preview:not([open]) {
   -webkit-app-region: no-drag;
 }
 
-:root:has(.topbar:not(.is-macos)) .compose-image-preview .image-viewer-bar {
+.app:not(.is-macos):has(.topbar) .compose-image-preview .image-viewer-bar {
   padding-right: max(148px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px));
 }
 
-:root:has(.topbar.is-macos) .compose-image-preview .image-viewer-bar {
-  padding-left: 80px;
+/* Full window: the whole traffic-light box (layout.css), not shifted by the rail. */
+.app.is-macos .compose-image-preview .image-viewer-bar {
+  min-height: max(44px, var(--mac-controls-bottom));
+  padding-left: var(--mac-controls-end);
 }
 
 /* Narrow or zoomed windows leave the tools less room than one row of buttons: let the tools and

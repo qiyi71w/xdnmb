@@ -79,7 +79,7 @@ export function TopBar({
   }
 
   return (
-    <header className={platform === 'darwin' ? 'topbar is-macos' : 'topbar'}>
+    <header className="topbar">
       {navTrigger !== null && (
         <button
           ref={navTrigger.ref}

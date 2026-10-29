@@ -28,6 +28,16 @@
   background: var(--glass-strong);
 }
 
+/* macOS: the rail (inline or overlay) and the board panel beside it start below the traffic lights,
+   which then sit on the window's own title strip with the top bar's controls. */
+.app.is-macos .nav-column > .nav {
+  margin-top: max(8px, var(--mac-controls-bottom));
+}
+
+.app.is-macos .nav.is-overlay {
+  top: max(8px, var(--mac-controls-bottom));
+}
+
 .nav-overlay-layer {
   position: absolute;
   inset: 0;
@@ -501,8 +511,9 @@
   -webkit-app-region: no-drag;
 }
 
-.shell-settings-b.is-macos .shell-settings-b-head {
-  padding-left: 72px;
+.app.is-macos .shell-settings-b-head {
+  min-height: max(44px, var(--mac-controls-bottom));
+  padding-left: max(16px, calc(var(--mac-controls-end) - var(--nav-width, 0px)));
   padding-right: 16px;
 }
 

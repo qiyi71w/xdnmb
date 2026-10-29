@@ -246,6 +246,8 @@ export function App() {
   const [readingWidth, setReadingWidth] = useState(0)
   /** Width the reader scroller's vertical scrollbar takes from its content (0 for overlay scrollbars). */
   const [scrollbarWidth, setScrollbarWidth] = useState(0)
+  /** CSS pixel size in device pixels; page zoom changes it (and resizes the app, which re-measures). */
+  const [pixelRatio, setPixelRatio] = useState(1)
   /** The list width while the divider is being dragged; the saved `listWidth` otherwise. */
   const [draggedWidth, setDraggedWidth] = useState<number | null>(null)
   const listPreference = draggedWidth ?? settings.listWidth
@@ -270,6 +272,7 @@ export function App() {
       setWidth(app.getBoundingClientRect().width)
       setReadingWidth(reading.getBoundingClientRect().width)
       setScrollbarWidth(scrollbar.offsetWidth - scrollbar.clientWidth)
+      setPixelRatio(window.devicePixelRatio)
     }
     measure()
     const observer = new ResizeObserver(measure)
@@ -277,6 +280,23 @@ export function App() {
     observer.observe(reading)
     return () => observer.disconnect()
   }, [])
+
+  // macOS draws its traffic lights at a fixed place in window points, whatever the page zoom: the
+  // shell converts their box to CSS pixels with the zoom factor (`.app.is-macos` in layout.css).
+  const [pageZoom, setPageZoom] = useState(1)
+  useEffect(() => {
+    if (platform !== 'darwin') return
+    let alive = true
+    window.xidao.view
+      .getZoom()
+      .then((state) => {
+        if (alive) setPageZoom(state.factor)
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [platform, pixelRatio])
 
   const current = tabs === null ? null : activeTab(tabs)
   /** The active tab shows a 搜索 page (its `online-search` entry); it holds the tab's local search open. */
@@ -1368,7 +1388,11 @@ export function App() {
       <ListOpenerContext value={openList}>
       <ThreadTabOpenerContext value={openThreadInTab}>
       <HistoryPageContext value={historyHost}>
-        <div className="app" ref={appRef}>
+        <div
+          className={platform === 'darwin' ? 'app is-macos' : 'app'}
+          style={platform === 'darwin' ? ({ '--page-zoom': String(pageZoom) } as CSSProperties) : undefined}
+          ref={appRef}
+        >
           <StorageBanner storage={storage} />
           <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
           <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />

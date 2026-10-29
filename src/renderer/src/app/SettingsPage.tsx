@@ -144,7 +144,6 @@ export function SettingsPage(props: SettingsPageProps) {
       section={section}
       status={props.status}
       target={target}
-      macos={props.platform === 'darwin'}
       onClose={onClose}
     />
   )
@@ -155,13 +154,11 @@ interface ShapeProps {
   section: (id: SectionId) => ReactNode
   status: SettingsWriteStatus
   target: SettingsPageProps['target']
-  /** macOS: the traffic lights sit at the left of the top row. */
-  macos: boolean
 }
 
 // ---------- Content-area view with a section directory ----------
 
-function SettingsView({ headingRef, section, status, target, macos, onClose }: ShapeProps & { onClose: () => void }) {
+function SettingsView({ headingRef, section, status, target, onClose }: ShapeProps & { onClose: () => void }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
   const jumpRef = useRef<HTMLDivElement>(null)
@@ -289,7 +286,7 @@ function SettingsView({ headingRef, section, status, target, macos, onClose }: S
   }
 
   return (
-    <div className={macos ? 'shell-settings shell-settings-b is-macos' : 'shell-settings shell-settings-b'}>
+    <div className="shell-settings shell-settings-b">
       <header className="shell-settings-b-head">
         <button type="button" className="btn btn-quiet" onClick={onClose}>
           <Icon name="arrowLeft" />

@@ -14,6 +14,15 @@
     var(--window);
 }
 
+/* macOS (hiddenInset): the traffic lights keep their place in window points at every page zoom,
+   inside the window's top-left corner. Their clearance, with the usual 8px gap, measured from that
+   corner in CSS pixels: --page-zoom (App) is the factor. Each layer reserves only what of this box
+   falls inside it, so the reservation applies once whatever sits beside it. */
+.app.is-macos {
+  --mac-controls-end: calc(80px / var(--page-zoom, 1));
+  --mac-controls-bottom: calc(32px / var(--page-zoom, 1));
+}
+
 /* Measures the preferred reading width at the current font size. */
 .measure-reading {
   position: absolute;
@@ -84,8 +93,11 @@
   -webkit-app-region: drag;
 }
 
-.topbar.is-macos {
-  padding-left: 80px;
+/* Beside the inline rail the traffic lights reach only past its column (--nav-width, 0 with the
+   overlay navigation); the bar stays as tall as their band at small zoom. */
+.app.is-macos .topbar {
+  min-height: max(44px, var(--mac-controls-bottom));
+  padding-left: max(8px, calc(var(--mac-controls-end) - var(--nav-width, 0px)));
   padding-right: 8px;
 }
 
