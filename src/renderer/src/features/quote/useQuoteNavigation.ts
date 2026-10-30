@@ -441,13 +441,31 @@ export function useQuoteNavigation(options: Options) {
         const shown = shownEntry(selected.entryKey)
         if (shown === null) return
         selectionSeq.current += 1
-        const source: QuoteSource = {
-          tabId: shown.tab.id,
-          entryKey: selected.entryKey,
-          postId: selected.postId,
-          focus: { selectionId: String(selectionSeq.current), quoteIndex: 0 },
-          selection: { range: selected.range, returnFocus: selected.returnFocus }
-        }
+        const reference = { selectionId: String(selectionSeq.current), quoteIndex: 0 }
+        const current = stateRef.current.card
+        const outer =
+          current !== null && current.source.entryKey === selected.entryKey && (cardRef.current?.contains(selected.range.commonAncestorContainer) ?? false) ? current : null
+        // A number selected inside a card's post: the new card replaces that card, whose text (and so
+        // the range) goes away. Like a quote followed inside a card, it keeps the original trigger —
+        // the quote, or the outer selection with its live range and return focus — for place and focus.
+        const source: QuoteSource =
+          outer !== null
+          ? {
+              tabId: outer.source.tabId,
+              entryKey: selected.entryKey,
+              postId: selected.postId,
+              focus: outer.source.focus,
+              reference,
+              ...(outer.source.selection === undefined ? {} : { selection: outer.source.selection })
+            }
+          : {
+              tabId: shown.tab.id,
+              entryKey: selected.entryKey,
+              postId: selected.postId,
+              focus: reference,
+              selection: { range: selected.range, returnFocus: selected.returnFocus }
+            }
+        if (outer !== null && cardRef.current?.contains(document.activeElement)) focusTrigger(source)
         // An explicit menu choice: pinned like a click, replacing any card.
         const card = apply({ type: 'open', source, trigger: 'activate' }).card
         if (card === null || card.source !== source) return
@@ -456,7 +474,7 @@ export function useQuoteNavigation(options: Options) {
         if (action !== 'preview') startLocate(card.id, action)
       }
     }),
-    [open, scheduleLeave, clearTimers, startLocate, apply, shownEntry, runPreview]
+    [open, scheduleLeave, clearTimers, startLocate, apply, shownEntry, runPreview, focusTrigger]
   )
 
   // A closed or replaced card drops its reads.

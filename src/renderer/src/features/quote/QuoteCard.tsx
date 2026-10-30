@@ -9,6 +9,7 @@ import { describeReadError, meaningfulName } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
 import { QuoteEntryContext } from './QuoteContext'
 import { QuoteRef } from './QuoteRef'
+import { useNumberSelectionMenu } from './NumberSelectionMenu'
 import type { QuoteCardProps } from './useQuoteNavigation'
 import './quote.css'
 import { searchErrorLines } from '../search/onlineSearchText'
@@ -67,6 +68,8 @@ export function QuoteCard({
   /** The lookup button, and whether it holds focus (removing a focused element fires no blur). */
   const lookupRef = useRef<HTMLButtonElement>(null)
   const lookupFocused = useRef(false)
+  // The card's post has no post menu: a selected whole number in it gets 预览／打开 (replacing this card).
+  const bodyNumbers = useNumberSelectionMenu(card.source.entryKey, `${card.id}:${postId}`)
 
   // Placed below the quote (above when there is no room), kept inside the window, following the
   // quote while the reader scrolls. Fixed positioning: the reading content never moves for it.
@@ -172,7 +175,7 @@ export function QuoteCard({
           </div>
           {close}
         </div>
-        <div className="quote-card-content">
+        <div className="quote-card-content number-selection-area" {...bodyNumbers.areaProps}>
           <QuoteEntryContext.Provider value={card.source.entryKey}>
             <Content
               nodes={post.content}
@@ -182,6 +185,7 @@ export function QuoteCard({
             />
           </QuoteEntryContext.Provider>
         </div>
+        {bodyNumbers.menu}
       </>
     )
   } else {

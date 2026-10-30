@@ -8,6 +8,7 @@ import { PostThumbnail } from '../image/PostThumbnail'
 import { QuoteRef } from '../quote/QuoteRef'
 import { QuoteActiveContext, QuoteControllerContext, QuoteEntryContext } from '../quote/QuoteContext'
 import { selectedPostNumber } from '../quote/selectionNumber'
+import { numberActionItems } from '../quote/NumberSelectionMenu'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { CookieId } from '../../components/CookieId'
 import { copyNumberItem, copyTextItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
@@ -68,14 +69,7 @@ export function PostView({
   const userHash = post.userHash !== null && post.userHash !== '' ? post.userHash : null
   const number = menu?.number ?? null
   const numberItems: ContextMenuItem[] =
-    number === null || quotes === null || entryKey === null
-      ? []
-      : (['preview', 'navigate', 'new-tab'] as const).map((action) => ({
-          type: 'action' as const,
-          key: `number-${action}`,
-          label: `${action === 'preview' ? '预览' : action === 'navigate' ? '打开' : '在新标签页打开'} No.${number.postId}`,
-          onSelect: () => quotes.selection({ entryKey, postId: number.postId, range: number.range, returnFocus: articleRef.current }, action)
-        }))
+    number === null || quotes === null || entryKey === null ? [] : numberActionItems(quotes, entryKey, number, articleRef.current)
   const items: ContextMenuItem[] = actions === undefined || menu === null ? [] : withSelectionCopy(menu.selection, [
     ...numberItems,
     ...(numberItems.length > 0 ? [{ type: 'separator' as const, key: 'number-separator' }] : []),
