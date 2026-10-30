@@ -1,5 +1,5 @@
 import type { LocalBlock } from '../../shared/blocks'
-import { DEFAULT_COOKIE_COLOR, isCookieColorName, type CookieColor, type CookieColorName } from '../../shared/cookieColors'
+import { IMPORTED_COOKIE_COLOR, isCookieColorName, type CookieColor, type CookieColorName } from '../../shared/cookieColors'
 import Database from 'better-sqlite3'
 import type { StorageStatus } from '../../shared/api'
 import type {
@@ -904,28 +904,36 @@ class SqliteReadingDatabase implements ReadingDatabase {
   }
 
   /**
-   * Gives an imported cookie's 饼干 ID the default color, once per ID ever: an ID that already has a
-   * color keeps it, and one whose automatic color was later changed or cleared is not colored again.
+   * Gives an imported cookie's 饼干 ID the imported color, once per ID ever: an ID already listed
+   * (in 默认 or a color) keeps its entry, and one whose automatic color was later changed, set to
+   * 默认 or removed is not colored again.
    */
   private colorOwnCookieId(cookieId: string, at: string): void {
     const db = this.writable()
     if (db.prepare('INSERT OR IGNORE INTO cookie_color_auto (cookie_id) VALUES (?)').run(cookieId).changes === 0) return
-    db.prepare('INSERT OR IGNORE INTO cookie_colors (cookie_id, color, created_at) VALUES (?, ?, ?)').run(cookieId, DEFAULT_COOKIE_COLOR, at)
+    db.prepare('INSERT OR IGNORE INTO cookie_colors (cookie_id, color, created_at) VALUES (?, ?, ?)').run(cookieId, IMPORTED_COOKIE_COLOR, at)
   }
 
   listCookieColors(): CookieColor[] {
     if (!this.db) return []
-    return this.db.prepare<[], { cookieId: string; color: string; createdAt: string }>(
+    return this.db.prepare<[], { cookieId: string; color: string | null; createdAt: string }>(
       'SELECT cookie_id AS cookieId, color, created_at AS createdAt FROM cookie_colors ORDER BY created_at, cookie_id'
-    ).all().filter((row): row is CookieColor => isCookieColorName(row.color))
+    ).all().map((row) => ({ ...row, color: isCookieColorName(row.color) ? row.color : null }))
   }
 
-  /** Colors a 饼干 ID (an existing one keeps its date and changes color) or, with `null`, clears it. */
+  /** Lists a 饼干 ID in 默认 (null color); false when already listed, which leaves it as it was. */
+  addCookieColor(cookieId: string, at: string): boolean {
+    return this.writable().prepare('INSERT OR IGNORE INTO cookie_colors (cookie_id, color, created_at) VALUES (?, NULL, ?)').run(cookieId, at).changes === 1
+  }
+
+  /** A palette color, or 默认 with `null`; a listed ID keeps its date (its place), an unlisted one is added. */
   setCookieColor(cookieId: string, color: CookieColorName | null, at: string): void {
-    const db = this.writable()
-    if (color === null) db.prepare('DELETE FROM cookie_colors WHERE cookie_id = ?').run(cookieId)
-    else db.prepare(`INSERT INTO cookie_colors (cookie_id, color, created_at) VALUES (?, ?, ?)
+    this.writable().prepare(`INSERT INTO cookie_colors (cookie_id, color, created_at) VALUES (?, ?, ?)
       ON CONFLICT (cookie_id) DO UPDATE SET color = excluded.color`).run(cookieId, color, at)
+  }
+
+  removeCookieColor(cookieId: string): void {
+    this.writable().prepare('DELETE FROM cookie_colors WHERE cookie_id = ?').run(cookieId)
   }
 
   deleteCredential(id: CredentialId): boolean {

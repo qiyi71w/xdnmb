@@ -772,8 +772,8 @@ describe('schema v20: 饼干标色', () => {
       { cookieId: 'MineA', color: 'blue', createdAt: at },
       { cookieId: 'mineb', color: 'blue', createdAt: at }
     ])
-    // Upgraded IDs count as colored once: clearing is not undone by a later ID change to the same ID.
-    db.setCookieColor('MineA', null, later)
+    // Upgraded IDs count as colored once: removing is not undone by a later ID change to the same ID.
+    db.removeCookieColor('MineA')
     expect(db.setCredentialCookieId(db.listCredentials().find((item) => item.name === '甲')!.id, 'MineA', later)).toBe(true)
     expect(db.listCookieColors().map((item) => item.cookieId)).toEqual(['mineb'])
     // The predecessor's cookie gets its color when its ID becomes known.
@@ -829,5 +829,116 @@ describe('schema v21: failed attempts may keep the forum’s error text', () => 
     expect(readFileSync(path)).toEqual(original)
     expect(Object.keys(attempts(path)[0]!)).not.toContain('forum_message')
     expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+  })
+})
+
+describe('schema v23: 饼干颜色 entries may be in 默认', () => {
+  /** A v21 database with imported (auto-colored) IDs and hand-colored ones, one auto color removed. */
+  function v21(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 19)).close()
+    const raw = new Database(path)
+    try {
+      const insert = raw.prepare(`INSERT INTO credentials (name, cookie_id, source, imported_at, ciphertext, position)
+        VALUES (?, ?, 'export', ?, ?, (SELECT MAX(position) + 1 FROM credentials))`)
+      insert.run('甲', 'MineA', at, Buffer.from('synthetic-a'))
+      insert.run('乙', 'MineB', later, Buffer.from('synthetic-b'))
+    } finally { raw.close() }
+    const v21 = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 21))
+    expect(v21.status).toEqual({ state: 'ready', schemaVersion: 21 })
+    v21.close()
+    const legacy = new Database(path)
+    try {
+      const color = legacy.prepare('INSERT INTO cookie_colors (cookie_id, color, created_at) VALUES (?, ?, ?)')
+      color.run('Hand1', 'teal', '2026-10-23T00:00:00.000Z')
+      color.run('Hand2', 'violet', later)
+      legacy.prepare("UPDATE cookie_colors SET color = 'amber' WHERE cookie_id = 'MineB'").run()
+      legacy.prepare("DELETE FROM cookie_colors WHERE cookie_id = 'MineA'").run()
+      const dismissed = { ...operation(), state: 'needs-reconciliation', report: 'unknown', dismissedAt: later }
+      legacy.prepare('UPDATE subscription_operations SET operation_json = ? WHERE id = ?')
+        .run(JSON.stringify(dismissed), dismissed.id)
+    } finally { legacy.close() }
+    return path
+  }
+  const rows = (path: string, table: string) => {
+    const raw = new Database(path, { readonly: true })
+    try { return raw.prepare(`SELECT * FROM ${table} ORDER BY 1`).all() } finally { raw.close() }
+  }
+  const expected = [
+    { cookieId: 'Hand1', color: 'teal', createdAt: '2026-10-23T00:00:00.000Z' },
+    { cookieId: 'Hand2', color: 'violet', createdAt: later },
+    { cookieId: 'MineB', color: 'amber', createdAt: later }
+  ]
+
+  it('keeps every entry, its color and its place, the automatic-color record and the cookies', () => {
+    const path = v21()
+    const credentials = rows(path, 'credentials')
+    const auto = rows(path, 'cookie_color_auto')
+    const retained = ['reminder_rules', 'reminder_state', 'subscription_operations', 'subscription_observations']
+      .map((table) => ({ table, values: rows(path, table) }))
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(db.listCookieColors()).toEqual(expected)
+    expect(rows(path, 'credentials')).toEqual(credentials)
+    expect(rows(path, 'cookie_color_auto')).toEqual(auto)
+    for (const { table, values } of retained) expect(rows(path, table)).toEqual(values)
+    expect(db.loadSubscriptionOperations()[0]).toMatchObject({ report: 'unknown', dismissedAt: later })
+    expect(db.loadSubscriptionObservation('app', context, 'complete')).toBeNull()
+    // 默认 is stored as its own state: kept in place, not removed and not colored back on restart.
+    db.setCookieColor('Hand1', null, later)
+    expect(db.addCookieColor('Hand1', later)).toBe(false)
+    // The removed automatic color stays removed when the cookie's ID is set again.
+    expect(db.setCredentialCookieId(db.listCredentials().find((item) => item.name === '甲')!.id, 'MineA', later)).toBe(true)
+    db.close()
+    expect(open(path).listCookieColors()).toEqual([{ ...expected[0]!, color: null }, ...expected.slice(1)])
+  })
+
+  it('keeps existing v22 reminder intervals and one-time reply evidence through the color rebuild and a failed attempt', () => {
+    const path = v21()
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 22)).close()
+    const raw = new Database(path)
+    try {
+      raw.prepare(`INSERT INTO reminder_count_increments
+        (id, thread_id, kind, generation, round_id, count_from, count_to, added, excluded, cleared)
+        VALUES (1, '100', 'all', 3, 'retained-round', 10, 12, 2, 1, 0)`).run()
+      raw.prepare(`INSERT INTO reminder_reply_positions VALUES ('100', 'all', 3, '101', 11, 12)`).run()
+      raw.prepare(`INSERT INTO reminder_local_replies VALUES (1, '100', '101', 'all', 3, 'excluded', 1)`).run()
+    } finally { raw.close() }
+    const tables = ['cookie_colors', 'cookie_color_auto', 'credentials', 'reminder_rules', 'reminder_state',
+      'reminder_count_increments', 'reminder_reply_positions', 'reminder_local_replies', 'subscription_operations', 'subscription_observations']
+    const retained = tables.map((table) => ({ table, values: rows(path, table) }))
+    const original = readFileSync(path)
+    const failed = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 22), {
+      version: 23, up(connection) {
+        MIGRATIONS.find((migration) => migration.version === 23)!.up(connection)
+        throw new Error('interrupted color upgrade after existing reminder evidence')
+      }
+    }])
+    expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failed.close()
+    expect(readFileSync(path)).toEqual(original)
+    const upgraded = open(path)
+    expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: 23 })
+    for (const { table, values } of retained) expect(rows(path, table)).toEqual(values)
+    upgraded.setCookieColor('Hand1', null, later)
+    upgraded.close()
+    expect(open(path).listCookieColors()).toEqual([{ ...expected[0]!, color: null }, ...expected.slice(1)])
+  })
+
+  it('rolls back an interrupted rebuild without changing the v21 file', () => {
+    const path = v21()
+    const original = readFileSync(path)
+    const failing = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 22), { version: 23, up(connection) {
+      MIGRATIONS.find((migration) => migration.version === 23)!.up(connection)
+      throw new Error('injected failure after rebuilding cookie_colors')
+    } }])
+    connections.push(failing)
+    expect(failing.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failing.close()
+    expect(readFileSync(path)).toEqual(original)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(db.listCookieColors()).toEqual(expected)
+    expect(db.listCredentials().map((item) => item.cookieId)).toEqual(expect.arrayContaining(['MineA', 'MineB']))
   })
 })

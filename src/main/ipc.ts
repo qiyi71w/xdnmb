@@ -345,15 +345,31 @@ export function registerIpc({
     return { saved: await attempt(() => store.setBlock(kind, value, blocked, new Date().toISOString())) }
   })
   handle(IpcChannel.listCookieColors, async () => store.listCookieColors())
+  /** Matched verbatim, so the ID must already be in the form stored: trimmed and within the 饼干 ID rules. */
+  const listedCookieId = (value: unknown): string => {
+    if (typeof value !== 'string') throw new InvalidRequestError()
+    const checked = validateCookieId(value)
+    if (!checked.ok || checked.cookieId !== value) throw new InvalidRequestError()
+    return value
+  }
+  handle(IpcChannel.addCookieColor, async (_event, raw) => {
+    const cookieId = listedCookieId(searchRecord(raw, ['cookieId']).cookieId)
+    try {
+      return { saved: true, added: await store.addCookieColor(cookieId, new Date().toISOString()) }
+    } catch {
+      return { saved: false }
+    }
+  })
   handle(IpcChannel.setCookieColor, async (_event, raw) => {
     const input = searchRecord(raw, ['cookieId', 'color'])
-    const { cookieId, color } = input
-    if (typeof cookieId !== 'string') throw new InvalidRequestError()
-    const checked = validateCookieId(cookieId)
-    // Matched verbatim, so the ID must already be in the form stored: trimmed and within the 饼干 ID rules.
-    if (!checked.ok || checked.cookieId !== cookieId) throw new InvalidRequestError()
+    const cookieId = listedCookieId(input.cookieId)
+    const { color } = input
     if (color !== null && !isCookieColorName(color)) throw new InvalidRequestError()
     return { saved: await attempt(() => store.setCookieColor(cookieId, color, new Date().toISOString())) }
+  })
+  handle(IpcChannel.removeCookieColor, async (_event, raw) => {
+    const cookieId = listedCookieId(searchRecord(raw, ['cookieId']).cookieId)
+    return { saved: await attempt(() => store.removeCookieColor(cookieId)) }
   })
 
   handle(IpcChannel.searchStart, async (event, raw) => {

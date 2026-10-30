@@ -103,9 +103,13 @@ export interface ReadingStore {
   loadSettings(): Promise<AppSettings>
   listBlocks(): Promise<LocalBlock[]>
   setBlock(kind: BlockKind, value: string, blocked: boolean, at: string): Promise<void>
-  /** Every 饼干 ID with a color, oldest first; rows with a color name this version does not know are left out. */
+  /** Every listed 饼干 ID, oldest first; a color name this version does not know reads as 默认 (null). */
   listCookieColors(): Promise<CookieColor[]>
+  /** Lists a 饼干 ID in 默认; resolves false when it was already listed (left unchanged). */
+  addCookieColor(cookieId: string, at: string): Promise<boolean>
+  /** A palette color or 默认 (null); a listed ID keeps its place and date, an unlisted one is added. */
   setCookieColor(cookieId: string, color: CookieColorName | null, at: string): Promise<void>
+  removeCookieColor(cookieId: string): Promise<void>
   saveSettings(settings: AppSettings): Promise<void>
 
   /** Image location of a stored post; null when the post is not stored or has no image. */
