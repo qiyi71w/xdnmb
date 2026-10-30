@@ -50,7 +50,9 @@ const api: XidaoApi = {
   },
   cookieColors: {
     list: () => ipcRenderer.invoke(IpcChannel.listCookieColors),
-    set: (input) => ipcRenderer.invoke(IpcChannel.setCookieColor, input)
+    add: (input) => ipcRenderer.invoke(IpcChannel.addCookieColor, input),
+    set: (input) => ipcRenderer.invoke(IpcChannel.setCookieColor, input),
+    remove: (input) => ipcRenderer.invoke(IpcChannel.removeCookieColor, input)
   },
   reminders: {
     getRules: (input) => ipcRenderer.invoke(IpcChannel.reminderGetRules, input),

@@ -660,9 +660,9 @@ export const MIGRATIONS: readonly Migration[] = [
     }
   },
   {
-    // 饼干标色: a color name per 饼干 ID (exact text), and the IDs that were ever given the default
+    // 饼干标色: a color name per 饼干 ID (exact text), and the IDs that were ever given the imported
     // color automatically, so that a cleared or changed color is never given back. Imported cookies
-    // whose 饼干 ID is known get the default color ('blue') once, dated by their earliest import.
+    // whose 饼干 ID is known get the imported color ('blue') once, dated by their earliest import.
     version: 20,
     up(db) {
       db.exec(`CREATE TABLE cookie_colors (
@@ -682,6 +682,23 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 21,
     up(db) {
       db.exec('ALTER TABLE publication_attempts ADD COLUMN forum_message TEXT CHECK (forum_message IS NULL OR length(forum_message) BETWEEN 1 AND 120);')
+    }
+  },
+  {
+    // 饼干颜色 entries may be in 默认: a NULL color (the theme's ordinary 饼干 ID text color),
+    // distinct from a palette color and from not being listed. SQLite cannot drop NOT NULL in
+    // place, so the table is rebuilt; every entry keeps its color, date (its place) and ID, and
+    // the automatic-color record is untouched.
+    version: 22,
+    up(db) {
+      db.exec(`CREATE TABLE cookie_colors_v22 (
+          cookie_id TEXT PRIMARY KEY,
+          color TEXT,
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO cookie_colors_v22 (cookie_id, color, created_at) SELECT cookie_id, color, created_at FROM cookie_colors;
+        DROP TABLE cookie_colors;
+        ALTER TABLE cookie_colors_v22 RENAME TO cookie_colors;`)
     }
   }
 ]

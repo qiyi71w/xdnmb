@@ -41,23 +41,46 @@ function call(channel: string, input?: unknown): Promise<unknown> {
   return Promise.resolve().then(() => handler({ sender }, input))
 }
 
-describe('饼干标色 IPC', () => {
-  it('sets, recolors in place and clears one 饼干 ID, matched case-sensitively', async () => {
-    expect(await call(IpcChannel.setCookieColor, { cookieId: 'AbC123', color: 'teal' })).toEqual({ saved: true })
+describe('饼干颜色 IPC', () => {
+  const list = () => call(IpcChannel.listCookieColors) as Promise<{ cookieId: string; color: string | null; createdAt: string }[]>
+
+  it('adds in 默认, colors and recolors in place, keeps an entry set back to 默认 and removes only on 删除', async () => {
+    expect(await call(IpcChannel.addCookieColor, { cookieId: 'AbC123' })).toEqual({ saved: true, added: true })
+    expect(await list()).toEqual([{ cookieId: 'AbC123', color: null, createdAt: expect.any(String) }])
+    // An unlisted ID given a color is added; IDs match case-sensitively.
     expect(await call(IpcChannel.setCookieColor, { cookieId: 'abc123', color: 'amber' })).toEqual({ saved: true })
-    const [first] = await call(IpcChannel.listCookieColors) as { cookieId: string; createdAt: string }[]
+    const [first, second] = await list()
     expect(await call(IpcChannel.setCookieColor, { cookieId: 'AbC123', color: 'violet' })).toEqual({ saved: true })
-    expect(await call(IpcChannel.listCookieColors)).toEqual([
-      { cookieId: 'AbC123', color: 'violet', createdAt: first!.createdAt },
-      { cookieId: 'abc123', color: 'amber', createdAt: expect.any(String) }
-    ])
+    // Adding a listed ID again changes nothing: color, date and place stay.
+    expect(await call(IpcChannel.addCookieColor, { cookieId: 'AbC123' })).toEqual({ saved: true, added: false })
+    expect(await call(IpcChannel.addCookieColor, { cookieId: 'abc123' })).toEqual({ saved: true, added: false })
+    expect(await list()).toEqual([{ ...first!, color: 'violet' }, { ...second!, color: 'amber' }])
     expect(await call(IpcChannel.setCookieColor, { cookieId: 'AbC123', color: null })).toEqual({ saved: true })
-    expect(await call(IpcChannel.listCookieColors)).toEqual([expect.objectContaining({ cookieId: 'abc123' })])
+    expect(await list()).toEqual([{ ...first!, color: null }, { ...second!, color: 'amber' }])
+    expect(await call(IpcChannel.removeCookieColor, { cookieId: 'AbC123' })).toEqual({ saved: true })
+    expect(await list()).toEqual([second])
+    expect(await call(IpcChannel.removeCookieColor, { cookieId: 'AbC123' })).toEqual({ saved: true })
+
+    // Kept across a restart.
+    db.close()
+    db = openReadingDatabase(join(folder, 'db.sqlite'))
+    expect(db.listCookieColors()).toEqual([second])
+  })
+
+  it('reports a write the storage refuses as not saved, without changing the list', async () => {
+    expect(await call(IpcChannel.setCookieColor, { cookieId: 'AbC123', color: 'teal' })).toEqual({ saved: true })
+    db.close()
+    expect(await call(IpcChannel.addCookieColor, { cookieId: 'New1' })).toEqual({ saved: false })
+    expect(await call(IpcChannel.setCookieColor, { cookieId: 'AbC123', color: null })).toEqual({ saved: false })
+    expect(await call(IpcChannel.removeCookieColor, { cookieId: 'AbC123' })).toEqual({ saved: false })
+    db = openReadingDatabase(join(folder, 'db.sqlite'))
+    expect(db.listCookieColors()).toEqual([expect.objectContaining({ cookieId: 'AbC123', color: 'teal' })])
   })
 
   it.each([
     [{ cookieId: 'AbC123', color: 'red' }],
     [{ cookieId: 'AbC123', color: 'Blue' }],
+    [{ cookieId: 'AbC123', color: 'default' }],
     [{ cookieId: 'AbC123', color: '#ff0000' }],
     [{ cookieId: 'AbC123' }],
     [{ cookieId: '', color: 'blue' }],
@@ -70,6 +93,13 @@ describe('饼干标色 IPC', () => {
     ['AbC123']
   ])('refuses an unknown color name or an invalid 饼干 ID (%#)', async (input) => {
     await expect(call(IpcChannel.setCookieColor, input)).rejects.toThrow('invalid request')
+    expect(db.listCookieColors()).toEqual([])
+  })
+
+  it.each([IpcChannel.addCookieColor, IpcChannel.removeCookieColor])('%s refuses an invalid 饼干 ID or extra fields', async (channel) => {
+    for (const input of [{ cookieId: ' AbC123' }, { cookieId: '' }, { cookieId: 7 }, { cookieId: 'AbC123', color: null }, {}, 'AbC123']) {
+      await expect(call(channel, input)).rejects.toThrow('invalid request')
+    }
     expect(db.listCookieColors()).toEqual([])
   })
 })
