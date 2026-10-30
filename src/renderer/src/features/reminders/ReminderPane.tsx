@@ -66,7 +66,7 @@ export function ReminderPane({
   /** Opens a row at an explicit target; false when this list's entry is no longer current. */
   onOpenTarget: (thread: ThreadOpen) => boolean
 }) {
-  const { overview, failure, reload, updated } = useRemindersContext()
+  const { overview, cooldownUntil, failure, reload, updated, refusedForCooldown } = useRemindersContext()
   const openList = useListOpener()
   const openInTab = useOpenThreadInTab()
   const registry = useContext(ContentRegistryContext)
@@ -113,22 +113,20 @@ export function ReminderPane({
   // ---------- 手动检查 ----------
   const [requesting, setRequesting] = useState(false)
   const [message, setMessage] = useState<{ text: string; tone: 'warn' | 'error' } | null>(null)
-  /** End of the cooldown on the monotonic clock, for display only: nothing is retried when it ends. */
-  const [cooldownUntil, setCooldownUntil] = useState<number | null>(null)
+  // The cooldown's end is anchored app-wide when an overview read arrives: opening this list again,
+  // or another 提醒 tab, counts down to the same end instead of restarting from an older read.
   const [now, setNow] = useState(() => performance.now())
-  useEffect(() => {
-    if (overview === null) return
-    const at = performance.now()
-    setNow(at)
-    setCooldownUntil(overview.checker.cooldownRemainingMs > 0 ? at + overview.checker.cooldownRemainingMs : null)
-  }, [overview])
   // Counts the shown seconds down; it never reads anything and never starts a check.
   useEffect(() => {
     if (cooldownUntil === null) return
-    const timer = window.setInterval(() => {
+    const tick = () => {
       const at = performance.now()
       setNow(at)
-      if (at >= cooldownUntil) window.clearInterval(timer)
+      return at < cooldownUntil
+    }
+    if (!tick()) return
+    const timer = window.setInterval(() => {
+      if (!tick()) window.clearInterval(timer)
     }, 1000)
     return () => window.clearInterval(timer)
   }, [cooldownUntil])
@@ -151,11 +149,7 @@ export function ReminderPane({
       if (!alive.current) return
       if (!result.accepted) {
         setMessage({ text: refusalText(result), tone: result.reason === 'storage' ? 'error' : 'warn' })
-        if (result.reason === 'cooldown' && result.retryAfterMs > 0) {
-          const at = performance.now()
-          setNow(at)
-          setCooldownUntil(at + result.retryAfterMs)
-        }
+        if (result.reason === 'cooldown' && result.retryAfterMs > 0) refusedForCooldown(result.retryAfterMs)
       }
     } catch {
       if (alive.current) setMessage({ text: '检查请求失败', tone: 'error' })

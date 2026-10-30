@@ -96,16 +96,30 @@ function useLiveReminders<T>(key: string | null, load: () => Promise<T>) {
 
 export interface RemindersState {
   overview: ReminderOverview | null
+  /**
+   * End of the manual-check cooldown on this renderer's monotonic clock (`performance.now()`),
+   * anchored once when an overview read arrives; null when none was left. For display only: main
+   * alone decides whether a check is accepted. Lists mounted later count down to the same end.
+   */
+  cooldownUntil: number | null
   failure: LoadFailure | null
   reload: () => Promise<void>
   /** A `setRule` call succeeded: show its rules in the overview's row until the next read. */
   updated: (thread: ThreadReminders) => void
+  /** A manual check was refused for its cooldown: show `retryAfterMs` from now until the next read. */
+  refusedForCooldown: (retryAfterMs: number) => void
 }
 
-async function loadOverview(): Promise<ReminderOverview> {
+interface OverviewRead {
+  overview: ReminderOverview
+  cooldownUntil: number | null
+}
+
+async function loadOverview(): Promise<OverviewRead> {
   const result = await window.xidao.reminders.overview()
   if (!result.ok) throw new ReminderStorageError()
-  return result.overview
+  const remaining = result.overview.checker.cooldownRemainingMs
+  return { overview: result.overview, cooldownUntil: remaining > 0 ? performance.now() + remaining : null }
 }
 
 /** App-wide reminder overview: the navigation badge and every reminders list share it. */
@@ -114,15 +128,24 @@ export function useReminderOverview(): RemindersState {
   const { replace } = live
   const updated = useCallback(
     (thread: ThreadReminders) =>
-      replace((overview) => ({
-        ...overview,
-        threads: overview.threads.map((row) => (row.threadId === thread.threadId ? { ...row, rules: thread.rules } : row))
+      replace((read) => ({
+        ...read,
+        overview: {
+          ...read.overview,
+          threads: read.overview.threads.map((row) => (row.threadId === thread.threadId ? { ...row, rules: thread.rules } : row))
+        }
       })),
     [replace]
   )
+  const refusedForCooldown = useCallback(
+    (retryAfterMs: number) => replace((read) => ({ ...read, cooldownUntil: performance.now() + retryAfterMs })),
+    [replace]
+  )
+  const overview = live.data?.overview ?? null
+  const cooldownUntil = live.data?.cooldownUntil ?? null
   return useMemo(
-    () => ({ overview: live.data, failure: live.failure, reload: live.reload, updated }),
-    [live.data, live.failure, live.reload, updated]
+    () => ({ overview, cooldownUntil, failure: live.failure, reload: live.reload, updated, refusedForCooldown }),
+    [overview, cooldownUntil, live.failure, live.reload, updated, refusedForCooldown]
   )
 }
 
