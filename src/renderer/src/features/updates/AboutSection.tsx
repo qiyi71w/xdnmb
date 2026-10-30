@@ -18,6 +18,7 @@ import { Choice, Section, SettingRow, Switch, type Write } from '../../app/setti
 import { Icon, Spinner } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { formatRecordTime } from '../../lib/time'
+import { useClearOnLeave } from '../../lib/useClearOnLeave'
 import { formatBytes } from '../content/contentText'
 import { ReleaseNotes } from './ReleaseNotes'
 import { useUpdates } from './updatesState'
@@ -58,7 +59,8 @@ function ExternalLink({ name, url }: { name: string; url: string }) {
   )
 }
 
-export function AboutSection({ settings, write }: { settings: AppSettings; write: Write }) {
+/** `active`: 设置 is the active tab; leaving it clears 已打开安装包, never a failure. */
+export function AboutSection({ settings, write, active }: { settings: AppSettings; write: Write; active: boolean }) {
   const { state } = useUpdates()
   return (
     <Section id="settings-about" title="关于">
@@ -86,12 +88,12 @@ export function AboutSection({ settings, write }: { settings: AppSettings; write
           </dd>
         </div>
       </dl>
-      <UpdateArea settings={settings} write={write} />
+      <UpdateArea settings={settings} write={write} active={active} />
     </Section>
   )
 }
 
-function UpdateArea({ settings, write }: { settings: AppSettings; write: Write }) {
+function UpdateArea({ settings, write, active }: { settings: AppSettings; write: Write; active: boolean }) {
   const { state, failed } = useUpdates()
   const statusId = useId()
   const [checkRequested, setCheckRequested] = useState(false)
@@ -160,7 +162,7 @@ function UpdateArea({ settings, write }: { settings: AppSettings; write: Write }
               在 GitHub 查看
             </button>
           </div>
-          <PackageActions key={release.info.version} state={state} download={release.download} />
+          <PackageActions key={release.info.version} state={state} download={release.download} active={active} />
         </div>
       )}
 
@@ -276,7 +278,7 @@ function CheckStatus({ state, failed, checking }: { state: UpdateState | null; f
  * every state (下载更新／重试 → 取消下载 → unavailable while verifying → 安装并重启／打开安装包),
  * so a keyboard user's focus stays on it as the state moves on.
  */
-function PackageActions({ state, download }: { state: UpdateState; download: UpdateDownload }) {
+function PackageActions({ state, download, active }: { state: UpdateState; download: UpdateDownload; active: boolean }) {
   const statusId = useId()
   const { platform } = state
   /**
@@ -288,14 +290,16 @@ function PackageActions({ state, download }: { state: UpdateState; download: Upd
   const pending = pressedIn === download.status
   /** What the last 安装并重启／打开安装包 press came to, when it did not hand over to the installer. */
   const [outcome, setOutcome] = useState<{ kind: 'failed'; text: string } | { kind: 'opened' } | null>(null)
+  const begin = useClearOnLeave(active, () => setOutcome((last) => (last?.kind === 'opened' ? null : last)))
 
   const run = async () => {
     setPressedIn('ready')
     setOutcome(null)
+    const current = begin()
     try {
       const result = platform === 'mac' ? await window.xidao.updates.openInstaller() : await window.xidao.updates.installAndRestart()
       if (!result.started) setOutcome({ kind: 'failed', text: actionFailedText(result.failure, platform) })
-      else if (platform === 'mac') setOutcome({ kind: 'opened' })
+      else if (platform === 'mac' && current()) setOutcome({ kind: 'opened' })
     } catch {
       setOutcome({ kind: 'failed', text: actionFailedText('install', platform) })
     } finally {

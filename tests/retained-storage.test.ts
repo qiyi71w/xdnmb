@@ -182,6 +182,83 @@ describe('retained content storage', () => {
     expect(db.loadSettings()).toEqual({ ...DEFAULT_SETTINGS, newTabSplitDefault: false })
   })
 
+  it('accounts for workspace and omitted durable personal records with exact deltas without affecting cache or protected metrics', () => {
+    const { db, path } = fixture()
+    const initial = db.getContentUsage()
+    expect(initial.cacheTextBytes).toBe(0)
+    expect(initial.protectedTextBytes).toBe(0)
+    expect(initial.cacheImageBytes).toBe(0)
+    expect(initial.protectedImageBytes).toBe(0)
+
+    // 1. Workspace: columns id (INTEGER, '1' -> 1 byte), state_json (TEXT), saved_at (TEXT)
+    const workspaceState = JSON.stringify({ activeTab: 't1', tabs: [{ id: 't1', kind: 'thread', threadId: '100' }] })
+    db.saveWorkspace(workspaceState, t0)
+    const expectedWorkspaceDelta = 1 + Buffer.byteLength(workspaceState, 'utf8') + Buffer.byteLength(t0, 'utf8')
+    const afterWorkspace = db.getContentUsage()
+    expect(afterWorkspace.personalDataBytes - initial.personalDataBytes).toBe(expectedWorkspaceDelta)
+    expect(afterWorkspace.cacheTextBytes).toBe(0)
+    expect(afterWorkspace.protectedTextBytes).toBe(0)
+
+    // 2. Account session: columns singleton (INTEGER, '1' -> 1 byte), ciphertext (BLOB), expires_at (TEXT)
+    const sessionCiphertext = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])
+    db.saveAccountSession({ ciphertext: sessionCiphertext, expiresAt: t1 })
+    const expectedSessionDelta = 1 + sessionCiphertext.byteLength + Buffer.byteLength(t1, 'utf8')
+    const afterSession = db.getContentUsage()
+    expect(afterSession.personalDataBytes - afterWorkspace.personalDataBytes).toBe(expectedSessionDelta)
+
+    // 3. Local blocks: columns kind (TEXT), value (TEXT), created_at (TEXT)
+    db.setBlock('post', '12345', true, t0)
+    const expectedBlockDelta = Buffer.byteLength('post', 'utf8') + Buffer.byteLength('12345', 'utf8') + Buffer.byteLength(t0, 'utf8')
+    const afterBlock = db.getContentUsage()
+    expect(afterBlock.personalDataBytes - afterSession.personalDataBytes).toBe(expectedBlockDelta)
+
+    // 4. Cookie colors: columns cookie_id (TEXT), color (TEXT), created_at (TEXT)
+    db.setCookieColor('cookie-abc', 'green', t0)
+    const expectedColorDelta = Buffer.byteLength('cookie-abc', 'utf8') + Buffer.byteLength('green', 'utf8') + Buffer.byteLength(t0, 'utf8')
+    const afterColor = db.getContentUsage()
+    expect(afterColor.personalDataBytes - afterBlock.personalDataBytes).toBe(expectedColorDelta)
+
+    // 5. Subscription plans & baselines
+    const rawDb = raw(path)
+    const planJson = JSON.stringify({ id: 'plan-1', state: 'completed' })
+    rawDb.prepare('INSERT INTO subscription_plans (id, plan_json) VALUES (?, ?)').run('plan-1', planJson)
+    const expectedPlanDelta = Buffer.byteLength('plan-1', 'utf8') + Buffer.byteLength(planJson, 'utf8')
+    const afterPlan = db.getContentUsage()
+    expect(afterPlan.personalDataBytes - afterColor.personalDataBytes).toBe(expectedPlanDelta)
+
+    const baselineJson = JSON.stringify({ context: { source: 'app', generation: 1 }, ids: ['100'] })
+    rawDb.prepare('INSERT INTO subscription_baselines (generation, baseline_json) VALUES (?, ?)').run(1, baselineJson)
+    const expectedBaselineDelta = 1 + Buffer.byteLength(baselineJson, 'utf8')
+    const afterBaseline = db.getContentUsage()
+    expect(afterBaseline.personalDataBytes - afterPlan.personalDataBytes).toBe(expectedBaselineDelta)
+
+    // 6. Publication attempts: columns id (1), request_id (5), editor_id (4), payload_json, credential_id (1), forum_id (1), state (7), created_at (24), updated_at (24), launch_notice (1)
+    const attemptPayload = JSON.stringify({ target: { kind: 'thread', forumId: '4' }, content: '测试发布' })
+    rawDb.prepare(`INSERT INTO publication_attempts (
+      request_id, editor_id, payload_json, credential_id, forum_id, state, created_at, updated_at, launch_notice
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run('req-1', 'ed-1', attemptPayload, 1, '4', 'sending', t0, t0, 0)
+    const expectedAttemptDelta = 1 + 5 + 4 + Buffer.byteLength(attemptPayload, 'utf8') + 1 + 1 + 7 + 24 + 24 + 1
+    const afterAttempt = db.getContentUsage()
+    expect(afterAttempt.personalDataBytes - afterBaseline.personalDataBytes).toBe(expectedAttemptDelta)
+
+    // 7. Cookie color auto tracker: columns cookie_id (TEXT)
+    rawDb.prepare('INSERT INTO cookie_color_auto (cookie_id) VALUES (?)').run('auto-cookie')
+    const expectedAutoColorDelta = Buffer.byteLength('auto-cookie', 'utf8')
+    const afterAutoColor = db.getContentUsage()
+    expect(afterAutoColor.personalDataBytes - afterAttempt.personalDataBytes).toBe(expectedAutoColorDelta)
+
+    // Total delta across all durable personal additions matches exact sum
+    const totalExpectedDelta = expectedWorkspaceDelta + expectedSessionDelta + expectedBlockDelta +
+      expectedColorDelta + expectedPlanDelta + expectedBaselineDelta + expectedAttemptDelta + expectedAutoColorDelta
+    expect(afterAutoColor.personalDataBytes - initial.personalDataBytes).toBe(totalExpectedDelta)
+
+    // Confirm cache and protected categories remain completely unaffected
+    expect(afterAutoColor.cacheTextBytes).toBe(0)
+    expect(afterAutoColor.protectedTextBytes).toBe(0)
+    expect(afterAutoColor.cacheImageBytes).toBe(0)
+    expect(afterAutoColor.protectedImageBytes).toBe(0)
+  })
+
   it('evicts the least recently loaded thread and counts shared feed/thread text only once', () => {
     const { db } = fixture()
     db.saveThreadPage(page('100'), t0)

@@ -20,6 +20,7 @@ import { SortHandle, SortStatus, useSortableList, type SortableList } from '../.
 import { formatForumTime, formatRecordTime } from '../../lib/time'
 import { moveItem } from '../../lib/reorder'
 import { singleFlight } from '../../lib/singleFlight'
+import { useClearOnLeave } from '../../lib/useClearOnLeave'
 import {
   MISSING_SELECTION_TEXT,
   ROLE_INFO,
@@ -51,6 +52,9 @@ interface Message {
   tone: Tone
   text: string
 }
+
+/** What a message line keeps once 设置 is left: errors stay, a completed result goes. */
+const withoutSuccess = (message: Message | null): Message | null => (message?.tone === 'success' ? null : message)
 
 /** Where an account's cookies are claimed, applied and exported; opened in the system browser (spec I3). */
 const OFFICIAL_COOKIE_PAGE = 'https://www.nmbxd1.com/Member/User/Index/index.html'
@@ -119,11 +123,11 @@ function CookieSettings({ overview, onChanged, active }: { overview: IdentityOve
         </div>
       )}
 
-      <CredentialList overview={overview} onChanged={onChanged} />
+      <CredentialList overview={overview} onChanged={onChanged} active={active} />
 
       <ImportArea disabled={importBlocked} onImported={onImported} active={active} />
 
-      <AccountImport onImported={onImported} />
+      <AccountImport onImported={onImported} active={active} />
 
       <div className="settings-group">
         <h4 className="settings-group-title">用途</h4>
@@ -177,10 +181,11 @@ function MessageLine({ id, message }: { id?: string; message: Message | null }) 
 /* ---------- Credential list ---------- */
 
 /** Ordered list, sorted by each row's handle (drag, or Alt+↑／Alt+↓). The first one browses. */
-function CredentialList({ overview, onChanged }: { overview: IdentityOverview; onChanged: () => Promise<void> }) {
+function CredentialList({ overview, onChanged, active }: { overview: IdentityOverview; onChanged: () => Promise<void>; active: boolean }) {
   const headingId = useId()
   const headingRef = useRef<HTMLHeadingElement>(null)
   const [message, setMessage] = useState<Message | null>(null)
+  const begin = useClearOnLeave(active, () => setMessage(withoutSuccess))
   /** The order being saved: shown at once, replaced by the stored order when the save ends. */
   const [pendingOrder, setPendingOrder] = useState<CredentialId[] | null>(null)
 
@@ -195,11 +200,12 @@ function CredentialList({ overview, onChanged }: { overview: IdentityOverview; o
     if (pendingOrder !== null) return
     setPendingOrder(ids)
     setMessage(null)
+    const current = begin()
     try {
       const result = await window.xidao.identities.reorder({ credentialIds: ids })
       if (result.ok) {
         const position = ids.indexOf(moved.id) + 1
-        setMessage({ tone: 'success', text: position === 1 ? `「${moved.name}」移到第一位，浏览时使用` : `「${moved.name}」移到第 ${position} 位` })
+        if (current()) setMessage({ tone: 'success', text: position === 1 ? `「${moved.name}」移到第一位，浏览时使用` : `「${moved.name}」移到第 ${position} 位` })
       } else setMessage({ tone: 'error', text: mutationErrorText(result, '调整顺序') })
       await onChanged()
     } catch {
@@ -245,6 +251,7 @@ function CredentialList({ overview, onChanged }: { overview: IdentityOverview; o
               sortPending={pendingOrder !== null}
               onChanged={onChanged}
               onAnnounce={setMessage}
+              begin={begin}
               listHeading={headingRef}
             />
           ))}
@@ -280,6 +287,7 @@ function CredentialItem({
   sortPending,
   onChanged,
   onAnnounce,
+  begin,
   listHeading
 }: {
   credential: CredentialSummary
@@ -292,6 +300,8 @@ function CredentialItem({
   sortPending: boolean
   onChanged: () => Promise<void>
   onAnnounce: (message: Message) => void
+  /** Marks a save's start; a success is announced only while 设置 has not been left since. */
+  begin: () => () => boolean
   listHeading: RefObject<HTMLHeadingElement | null>
 }) {
   const [mode, setMode] = useState<ItemMode>('view')
@@ -365,10 +375,11 @@ function CredentialItem({
       return
     }
     setPending(true)
+    const current = begin()
     try {
       const result = await window.xidao.identities.rename({ credentialId: credential.id, name })
       if (result.ok) {
-        onAnnounce({ tone: 'success', text: `已重命名为「${name}」` })
+        if (current()) onAnnounce({ tone: 'success', text: `已重命名为「${name}」` })
         await onChanged()
         leave(renameButton)
       } else {
@@ -395,10 +406,11 @@ function CredentialItem({
       return
     }
     setPending(true)
+    const current = begin()
     try {
       const result = await window.xidao.identities.setCookieId({ credentialId: credential.id, cookieId })
       if (result.ok) {
-        onAnnounce({ tone: 'success', text: `「${credential.name}」的饼干 ID 已${credential.cookieId === null ? '填写' : '改'}为 ${cookieId}` })
+        if (current()) onAnnounce({ tone: 'success', text: `「${credential.name}」的饼干 ID 已${credential.cookieId === null ? '填写' : '改'}为 ${cookieId}` })
         void reloadCookieColors()
         await onChanged()
         leave(cookieIdButton)
@@ -427,6 +439,7 @@ function CredentialItem({
     flight.run(async () => {
       if (pending) return
       setPending(true)
+      const current = begin()
       try {
         const result = await window.xidao.identities.remove({ credentialId: credential.id })
         if (result.ok || result.reason === 'not-found') {
@@ -434,7 +447,7 @@ function CredentialItem({
             roles.length > 0 ? `${roleList(roles)}需要重新选择` : null,
             browsing && count > 1 ? '浏览改用下一个饼干' : null
           ].filter(Boolean)
-          onAnnounce({
+          if (current()) onAnnounce({
             tone: 'success',
             text: result.ok ? `已移除「${credential.name}」${affected.length > 0 ? `；${affected.join('，')}` : ''}` : '这个饼干已不存在'
           })
@@ -676,6 +689,7 @@ function ImportForm({
   const [name, setName] = useState('')
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
+  const begin = useClearOnLeave(active, () => setMessage(withoutSuccess))
   const [invalid, setInvalid] = useState<FailureField>(null)
   const secretId = useId()
   const cookieIdId = useId()
@@ -739,6 +753,7 @@ function ImportForm({
     const named = trimmedName === '' ? {} : { name: trimmedName }
     setPending(true)
     setMessage(null)
+    const current = begin()
     try {
       const result =
         entry === 'export'
@@ -746,12 +761,13 @@ function ImportForm({
           : await window.xidao.identities.importRaw({ userhash: secret, cookieId: trimmedId, ...named })
       if (result.ok) {
         clear()
-        setMessage({ tone: 'success', text: `已导入${importedText(result.credential)}` })
+        if (current()) setMessage({ tone: 'success', text: `已导入${importedText(result.credential)}` })
         await onImported()
       } else if (result.failure.reason === 'duplicate') {
         const failure = result.failure
         clear()
-        setMessage({ tone: failure.cookieId === 'conflict' ? 'error' : 'success', text: duplicateText(failure, askCookieId ? trimmedId : null) })
+        const conflict = failure.cookieId === 'conflict'
+        if (conflict || current()) setMessage({ tone: conflict ? 'error' : 'success', text: duplicateText(failure, askCookieId ? trimmedId : null) })
         if (failure.cookieId === 'filled') await onImported()
       } else {
         const { text, field } = importFailureText(result.failure, entry)
@@ -869,7 +885,7 @@ type AccountBusy = 'login' | 'list' | 'import' | 'forget'
  * Import from the official account: login (or the stored session) lists the account's cookies by
  * their public fields; the chosen ones are stored like a pasted export. No secret reaches this view.
  */
-function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
+function AccountImport({ onImported, active }: { onImported: () => Promise<void>; active: boolean }) {
   const titleId = useId()
   const listTitleId = useId()
   const messageId = useId()
@@ -888,6 +904,10 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
   /** What the last import did to each row. */
   const [outcomes, setOutcomes] = useState<ReadonlyMap<string, Message>>(() => new Map())
   const [message, setMessage] = useState<Message | null>(null)
+  const begin = useClearOnLeave(active, () => {
+    setMessage(withoutSuccess)
+    setOutcomes((last) => new Map([...last].filter(([, outcome]) => outcome.tone !== 'success')))
+  })
 
   // Only the newest read may apply, so a slow earlier one never overwrites a newer state.
   const readOverview = useCallback(async () => {
@@ -929,10 +949,13 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
     pendingFocus.current = 'open'
   }
 
-  /** An expired session drops the list so the button offers login again. */
-  const showFailure = (reason: AccountFailure) => {
+  /**
+   * An expired session drops the list so the button offers login again. A cancellation is not a
+   * failure: like a success, it shows only on the visit it began on.
+   */
+  const showFailure = (reason: AccountFailure, current: () => boolean) => {
     if (reason === 'expired') endSession()
-    setMessage({ tone: reason === 'cancelled' ? 'success' : 'error', text: accountFailureText(reason) })
+    if (reason !== 'cancelled' || current()) setMessage({ tone: reason === 'cancelled' ? 'success' : 'error', text: accountFailureText(reason) })
   }
 
   const open = async () => {
@@ -940,6 +963,7 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
     const action = overview.loggedIn ? 'list' : 'login'
     setBusy(action)
     setMessage(null)
+    const current = begin()
     try {
       const result = action === 'list' ? await window.xidao.account.list() : await window.xidao.account.login()
       if (!alive.current) return
@@ -948,7 +972,7 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
         setSelected(new Set())
         setOutcomes(new Map())
         pendingFocus.current = 'list'
-      } else showFailure(result.reason)
+      } else showFailure(result.reason, current)
     } catch {
       if (alive.current) setMessage({ tone: 'error', text: action === 'list' ? '读取失败，请重试' : '登录失败，请重试' })
     } finally {
@@ -966,17 +990,18 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
     }
     setBusy('import')
     setMessage(null)
+    const current = begin()
     try {
       const result = await window.xidao.account.importSelected({ ids })
       if (!result.ok) {
         if (!alive.current) return
-        showFailure(result.reason)
+        showFailure(result.reason, current)
         void readOverview()
         return
       }
       void onImported()
       if (!alive.current) return
-      const next = new Map(outcomes)
+      const next: [string, Message][] = []
       const settled = new Set<string>()
       const publicIds = new Map(cookies.map((cookie) => [cookie.id, cookie.publicId]))
       const counts: AccountImportCounts = { imported: 0, filled: 0, same: 0, conflict: 0, failed: 0 }
@@ -984,23 +1009,34 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
         if (item.ok) {
           counts.imported += 1
           settled.add(id)
-          next.set(id, { tone: 'success', text: `已导入为${importedText(item.credential)}` })
+          next.push([id, { tone: 'success', text: `已导入为${importedText(item.credential)}` }])
         } else if (item.failure.reason === 'duplicate') {
           const failure = item.failure
           counts[failure.cookieId] += 1
           settled.add(id)
-          next.set(id, {
+          next.push([id, {
             tone: failure.cookieId === 'conflict' ? 'error' : 'success',
             text: duplicateText(failure, publicIds.get(id) ?? null)
-          })
+          }])
         } else {
           counts.failed += 1
-          next.set(id, { tone: 'error', text: accountImportFailureText(item.failure) })
+          next.push([id, { tone: 'error', text: accountImportFailureText(item.failure) }])
         }
       }
-      setOutcomes(next)
-      setSelected((current) => new Set([...current].filter((id) => !settled.has(id))))
-      setMessage({ tone: counts.failed > 0 || counts.conflict > 0 ? 'error' : 'success', text: accountImportSummary(counts) })
+      // An import begun before 设置 was left since shows only its failures: completed rows and a
+      // success summary would revive an old visit's result (a row's older outcome still goes).
+      const shown = current()
+      setOutcomes((last) => {
+        const updated = new Map(last)
+        for (const [id, outcome] of next) {
+          if (shown || outcome.tone !== 'success') updated.set(id, outcome)
+          else updated.delete(id)
+        }
+        return updated
+      })
+      setSelected((selection) => new Set([...selection].filter((id) => !settled.has(id))))
+      const tone = counts.failed > 0 || counts.conflict > 0 ? 'error' : 'success'
+      if (shown || tone === 'error') setMessage({ tone, text: accountImportSummary(counts) })
     } catch {
       // The request may have stored some of them before failing: re-read what is there.
       void onImported()
@@ -1014,13 +1050,14 @@ function AccountImport({ onImported }: { onImported: () => Promise<void> }) {
     if (!idle) return
     setBusy('forget')
     setMessage(null)
+    const current = begin()
     try {
       const result = await window.xidao.account.forget()
       if (!alive.current) return
       if (result.ok) {
         endSession()
-        setMessage({ tone: 'success', text: '已退出登录' })
-      } else showFailure(result.reason)
+        if (current()) setMessage({ tone: 'success', text: '已退出登录' })
+      } else showFailure(result.reason, current)
     } catch {
       if (alive.current) setMessage({ tone: 'error', text: '退出登录失败，请重试' })
     } finally {

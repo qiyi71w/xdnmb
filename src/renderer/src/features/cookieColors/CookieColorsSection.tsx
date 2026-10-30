@@ -8,13 +8,15 @@ import { cookieColorToken } from '../../../../shared/theme'
 import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
+import { useClearOnLeave } from '../../lib/useClearOnLeave'
 import { cookieIdErrorText } from '../identity/identityText'
 import { COOKIE_COLOR_LABELS } from './cookieColorNames'
 import { useCookieColors } from './cookieColorsStore'
 import '../identity/identity.css'
 import './cookieColors.css'
 
-export function CookieColorsSection() {
+/** `active`: 设置 is the active tab; leaving it clears a completed 添加 result. */
+export function CookieColorsSection({ active }: { active: boolean }) {
   const { entries, colors, loaded, failure, retry, set } = useCookieColors()
   const headingId = useId()
   const listRef = useRef<HTMLUListElement>(null)
@@ -96,7 +98,7 @@ export function CookieColorsSection() {
           </div>
         </>
       )}
-      <AddCookieColor inputRef={addInputRef} colors={colors} onSet={set} />
+      <AddCookieColor inputRef={addInputRef} colors={colors} onSet={set} active={active} />
     </section>
   )
 }
@@ -136,11 +138,13 @@ function CookieColorRow({
 function AddCookieColor({
   inputRef,
   colors,
-  onSet
+  onSet,
+  active
 }: {
   inputRef: RefObject<HTMLInputElement | null>
   colors: ReadonlyMap<string, CookieColorName>
   onSet: (cookieId: string, color: CookieColorName) => Promise<boolean>
+  active: boolean
 }) {
   const titleId = useId()
   const inputId = useId()
@@ -149,6 +153,7 @@ function AddCookieColor({
   const [color, setColor] = useState<CookieColorName>(DEFAULT_COOKIE_COLOR)
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState<{ tone: 'error' | 'success'; text: string } | null>(null)
+  const begin = useClearOnLeave(active, () => setMessage((last) => (last?.tone === 'success' ? null : last)))
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -163,11 +168,13 @@ function AddCookieColor({
     const before = colors.get(cookieId)
     setPending(true)
     setMessage(null)
+    const current = begin()
     const saved = await onSet(cookieId, color)
     setPending(false)
     // A failed save is reported (with 重试) at the top of the section; the typed ID stays.
     if (!saved) return
     setDraft('')
+    if (!current()) return
     const label = COOKIE_COLOR_LABELS[color]
     setMessage({
       tone: 'success',

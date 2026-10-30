@@ -48,8 +48,7 @@ export function createAccountService(deps: {
     try { return await deps.protector.decrypt(saved.ciphertext) }
     catch {
       listedIds.clear()
-      await deps.store.clearAccountSession()
-      throw new AccountError('expired')
+      throw new AccountError('protection-unavailable')
     }
   }
   function operation<T>(work: (signal: AbortSignal) => Promise<T>): Promise<AccountResult<T>> {

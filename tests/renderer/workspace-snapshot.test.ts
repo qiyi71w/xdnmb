@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Post } from '../../src/shared/forum'
 import { parseWorkspace, serializeWorkspace, type Workspace } from '../../src/renderer/src/features/tabs/workspaceSnapshot'
-import type { TabsState } from '../../src/renderer/src/features/tabs/tabsState'
+import { initialTabsState, tabsReducer, type TabsState } from '../../src/renderer/src/features/tabs/tabsState'
+import { MAX_WORKSPACE_LENGTH } from '../../src/shared/lifecycle'
 
 const head: Post = {
   id: '100', forumId: '4', createdAt: null, userHash: 'abc', name: null, title: '标题', isAdmin: null, isSage: false,
@@ -49,6 +50,35 @@ function withSettings(): Workspace {
 }
 
 describe('workspace snapshot', () => {
+  it('restores long navigation history and other tabs within the shared storage limit', () => {
+    let tabs = initialTabsState(true)
+    const tabId = tabs.activeId
+    for (let index = 0; index < 1000; index++) {
+      tabs = tabsReducer(tabs, { type: 'navigate', tabId, entry: { kind: 'list', feed: { kind: 'forum', id: index % 2 ? '4' : '5' } } })
+    }
+    tabs = tabsReducer(tabs, { type: 'open-tab', entry: { kind: 'list', feed: null }, split: true })
+    const value = { tabs, editors: [], lists: [] }
+    const serialized = serializeWorkspace(value)
+    expect(serialized.length).toBeLessThan(MAX_WORKSPACE_LENGTH)
+    const restored = parseWorkspace(serialized)
+    expect(restored).not.toBeNull()
+    expect(restored).toEqual(value)
+    expect(parseWorkspace(serialized.padEnd(MAX_WORKSPACE_LENGTH + 1))).toBeNull()
+  })
+
+  it('restores every open tab and saved editor without parser-only count limits', () => {
+    let tabs = initialTabsState(true)
+    for (let index = 0; index < 1000; index++) {
+      tabs = tabsReducer(tabs, { type: 'open-tab', entry: { kind: 'list', feed: null }, split: true })
+    }
+    const value = { tabs, editors: tabs.tabs.map(({ id }) => ({ tabId: id, draftId: String(id), expanded: false })), lists: [] }
+    const serialized = serializeWorkspace(value)
+    expect(serialized.length).toBeLessThan(MAX_WORKSPACE_LENGTH)
+    const restored = parseWorkspace(serialized)
+    expect(restored).not.toBeNull()
+    expect(restored).toEqual(value)
+  })
+
   it('restores an online page empty and persists search-origin reader steps as ordinary history', () => {
     const value = workspace()
     value.tabs.tabs[0]!.entries.push({ kind: 'online-search', key: 5, origin: null })

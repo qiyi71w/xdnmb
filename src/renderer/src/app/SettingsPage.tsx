@@ -508,7 +508,7 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
     case 'blocks':
       return <BlocksSection />
     case 'cookieColors':
-      return <CookieColorsSection />
+      return <CookieColorsSection active={active} />
     case 'cookies':
       return <CookieSection identities={identities} active={active} />
     case 'subscriptions':
@@ -518,9 +518,9 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
     case 'window':
       return <WindowSection settings={settings} write={write} />
     case 'cache':
-      return <CacheSection />
+      return <CacheSection active={active} />
     case 'about':
-      return <AboutSection settings={settings} write={write} />
+      return <AboutSection settings={settings} write={write} active={active} />
   }
 }
 

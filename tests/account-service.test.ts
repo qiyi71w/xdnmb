@@ -27,11 +27,12 @@ function setup() {
   const secrets = new Map<number, string>()
   let counter = 0
   let available = true
+  let decryptBlocked = false
   let time = Date.parse('2026-10-25T00:00:00.000Z')
   const protector: SecretProtector = {
     async isAvailable() { return available },
     async encrypt(secret) { const id = ++counter; secrets.set(id, secret); return Uint8Array.of(0x81, id, 0xfe) },
-    async decrypt(bytes) { const secret = secrets.get(bytes[1]!); if (!secret) throw new Error('synthetic locked'); return secret }
+    async decrypt(bytes) { const secret = secrets.get(bytes[1]!); if (decryptBlocked || !secret) throw new Error('synthetic locked'); return secret }
   }
   const identities = createIdentityService({ store, protector, storageState: () => db.status.state })
   const cookie = { id: '101', publicId: 'synthetic-public', validUntil: '2099-01-01', claimedAt: '2026-01-01' }
@@ -42,6 +43,7 @@ function setup() {
   const openLogin = vi.fn(async () => ({ secret: 'synthetic-account-session', expiresAt: '2026-11-24T00:00:00.000Z' }))
   const deps = { store, protector, identities, client, openLogin, storageState: () => db.status.state, now: () => time }
   return { service: createAccountService(deps), recreate: () => createAccountService(deps), db, path, client, openLogin, identities,
+    blockDecrypt(blocked: boolean) { decryptBlocked = blocked },
     unavailable() { available = false }, expire() { time = Date.parse('2026-12-01T00:00:00.000Z') } }
 }
 describe('encrypted local account lifecycle', () => {
@@ -91,6 +93,21 @@ describe('encrypted local account lifecycle', () => {
     expect(await env.service.login()).toEqual({ ok: false, reason: 'protection-unavailable' })
     expect(env.openLogin).not.toHaveBeenCalled()
     expect(env.db.loadAccountSession()).toBeNull()
+  })
+  it('retains an unexpired session after decryption denial and reuses it when protection recovers', async () => {
+    const env = setup()
+    await env.service.login()
+    const saved = env.db.loadAccountSession()
+    env.client.list.mockClear()
+    env.blockDecrypt(true)
+    expect(await env.service.list()).toEqual({ ok: false, reason: 'protection-unavailable' })
+    expect(await env.service.login()).toEqual({ ok: false, reason: 'protection-unavailable' })
+    expect(env.db.loadAccountSession()).toEqual(saved)
+    expect(env.client.list).not.toHaveBeenCalled()
+    env.blockDecrypt(false)
+    expect(await env.recreate().list()).toMatchObject({ ok: true, value: [{ id: '101' }] })
+    expect(env.openLogin).toHaveBeenCalledTimes(1)
+    expect(env.db.loadAccountSession()).toEqual(saved)
   })
   it('drops locally expired and server-rejected sessions', async () => {
     const env = setup()

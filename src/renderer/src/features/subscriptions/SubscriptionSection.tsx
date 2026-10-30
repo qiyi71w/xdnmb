@@ -7,6 +7,7 @@ import { Icon } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { FailureNotice } from '../../components/Notices'
 import { singleFlight } from '../../lib/singleFlight'
+import { useClearOnLeave } from '../../lib/useClearOnLeave'
 import { useListOpener } from '../reminders/openList'
 import { failureText, SOURCE_NAME, webObjectText } from './subscriptionText'
 import type { SubscriptionsState } from './useSubscriptions'
@@ -239,6 +240,7 @@ function AppUuidForm({
   const confirmId = useId()
   const blocked = overview.protection === 'unavailable' || !overview.writable || busy
   const savedRef = overview.context.appCredentialId
+  const begin = useClearOnLeave(active, () => setMessage((last) => (last?.tone === 'success' ? null : last)))
 
   // While 设置 is shown, the field shows the saved UUID, read back from main (it stays encrypted at
   // rest) each time 设置 is shown and whenever the saved one changes. Another tab shown, the field
@@ -299,6 +301,7 @@ function AppUuidForm({
       const before = overview.context.generation
       setPending(kind)
       setMessage(null)
+      const current = begin()
       let result: SubscriptionResult<SubscriptionOverview>
       try {
         result = await window.xidao.subscriptions.configureApp({ uuid })
@@ -319,7 +322,7 @@ function AppUuidForm({
       setDirty(false)
       onApplied(result.value)
       const after = result.value.context.generation
-      setMessage({
+      if (current()) setMessage({
         tone: 'success',
         text: after === before ? '与当前 UUID 相同' : kind === 'generate' ? '已生成并保存新的 UUID' : '已保存'
       })

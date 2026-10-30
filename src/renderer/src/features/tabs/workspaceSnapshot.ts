@@ -1,6 +1,7 @@
 import type { DraftId } from '../../../../shared/drafts'
 import type { ContentNode, Post } from '../../../../shared/forum'
 import type { ReadingAnchor } from '../../../../shared/reading'
+import { MAX_WORKSPACE_LENGTH } from '../../../../shared/lifecycle'
 import { entryThread, type ListRef, type SettingsTab, type Tab, type TabEntry, type TabsState, type ThreadOpen, type ThreadSnapshot } from './tabsState'
 
 /**
@@ -40,9 +41,6 @@ export interface Workspace {
 export const MAX_LIST_PAGES = 10
 
 const VERSION = 1
-const MAX_TABS = 500
-const MAX_ENTRIES = 1_000
-const MAX_EDITORS = 1_000
 const MAX_CONTENT_DEPTH = 32
 const FORUM_ID = /^\d{1,20}$/
 const DRAFT_ID = /^[1-9]\d{0,14}$/
@@ -80,7 +78,7 @@ function object(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : fail()
 }
 
-function array(value: unknown, max: number): unknown[] {
+function array(value: unknown, max = MAX_WORKSPACE_LENGTH): unknown[] {
   return Array.isArray(value) && value.length <= max ? value : fail()
 }
 
@@ -208,7 +206,7 @@ function tab(value: unknown): Tab {
   const input = object(value)
   // Only content tabs live in the list: a 设置 tab there (or a hybrid of both) is no tab.
   if (input.kind !== undefined || typeof input.split !== 'boolean') fail()
-  const entries = array(input.entries, MAX_ENTRIES).map(entry)
+  const entries = array(input.entries).map(entry)
   const index = integer(input.index, 0)
   if (entries.length === 0 || index >= entries.length) fail()
   return { id: integer(input.id, 1), split: input.split, entries, index }
@@ -247,10 +245,12 @@ function listAnchor(value: unknown): WorkspaceList['anchor'] {
  */
 export function parseWorkspace(text: string): Workspace | null {
   try {
+    // Match the save boundary: normal navigation has no separate tab/history count limit.
+    if (text.length > MAX_WORKSPACE_LENGTH) fail()
     const input = object(JSON.parse(text))
     if (input.version !== VERSION) fail()
     const state = object(input.tabs)
-    const tabs = array(state.tabs, MAX_TABS).map(tab)
+    const tabs = array(state.tabs).map(tab)
     if (tabs.length === 0) fail()
     const ids = new Set(tabs.map((item) => item.id))
     const keys = new Set(tabs.flatMap((item) => item.entries.map((step) => step.key)))
@@ -264,7 +264,7 @@ export function parseWorkspace(text: string): Workspace | null {
     if (!(ids.has(activeId) || settings?.id === activeId) || nextId <= lastId || nextKey <= Math.max(...keys)) fail()
 
     const drafts = new Set<string>()
-    const editors = array(input.editors, MAX_EDITORS).map((item): WorkspaceEditor => {
+    const editors = array(input.editors).map((item): WorkspaceEditor => {
       const editor = object(item)
       const tabId = integer(editor.tabId, 1)
       const draftId = string(editor.draftId)

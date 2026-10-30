@@ -3,6 +3,7 @@ import { DEFAULT_CACHE_LIMIT, type ContentUsage } from '../../../../shared/conte
 import { Icon } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { singleFlight } from '../../lib/singleFlight'
+import { useClearOnLeave } from '../../lib/useClearOnLeave'
 import { attempt, contentFailureText, exactBytes, formatBytes, limitToGbText, parseLimitGb, type Refused } from './contentText'
 import './content.css'
 
@@ -11,9 +12,10 @@ type UsageState = { status: 'loading' } | { status: 'failed'; refused: Refused }
 /**
  * 存储与缓存 settings: the ordinary cache limit (decimal GB), logical usage of evictable text and
  * images, protected content and personal records listed apart, and the database's physical size.
- * Clearing removes only evictable cache, after confirmation.
+ * Clearing removes only evictable cache, after confirmation. A completed result clears when 设置 is
+ * left (`active` false); a failure stays until replaced.
  */
-export function CacheSection() {
+export function CacheSection({ active }: { active: boolean }) {
   const headingId = useId()
   const inputId = useId()
   const hintId = useId()
@@ -26,6 +28,7 @@ export function CacheSection() {
   const alive = useRef(true)
   const confirmRef = useRef<HTMLButtonElement>(null)
   const clearRef = useRef<HTMLButtonElement>(null)
+  const begin = useClearOnLeave(active, () => setMessage((last) => (last?.error === false ? null : last)))
 
   const apply = useCallback((usage: ContentUsage) => {
     setState({ status: 'ready', usage })
@@ -69,12 +72,13 @@ export function CacheSection() {
       if (busy !== null) return
       setBusy('limit')
       setMessage(null)
+      const current = begin()
       const result = await attempt(() => window.xidao.content.setCacheLimit({ bytes }))
       if (!alive.current) return
       setBusy(null)
       if (result?.ok === true) {
         apply(result.value)
-        setMessage({ error: false, text: `上限已设为 ${formatBytes(result.value.limitBytes)}（${exactBytes(result.value.limitBytes)}）` })
+        if (current()) setMessage({ error: false, text: `上限已设为 ${formatBytes(result.value.limitBytes)}（${exactBytes(result.value.limitBytes)}）` })
       } else {
         setMessage({ error: true, text: `上限未保存：${contentFailureText(result?.ok === false ? result : null)}` })
       }
@@ -91,6 +95,7 @@ export function CacheSection() {
       if (busy !== null) return
       setBusy('clear')
       setMessage(null)
+      const current = begin()
       const result = await attempt(() => window.xidao.content.clearCache())
       if (!alive.current) return
       setBusy(null)
@@ -98,7 +103,7 @@ export function CacheSection() {
       if (result?.ok === true) {
         apply(result.value)
         const left = result.value.cacheTextBytes + result.value.cacheImageBytes
-        setMessage({ error: false, text: left === 0 ? '普通缓存已清理' : `普通缓存已清理，${formatBytes(left)} 暂时无法删除` })
+        if (current()) setMessage({ error: false, text: left === 0 ? '普通缓存已清理' : `普通缓存已清理，${formatBytes(left)} 暂时无法删除` })
       } else {
         setMessage({ error: true, text: `清理未完成：${contentFailureText(result?.ok === false ? result : null)}` })
       }

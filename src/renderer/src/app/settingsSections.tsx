@@ -28,6 +28,7 @@ import {
 import { Icon } from '../components/Icon'
 import { KaomojiDecor } from '../components/KaomojiDecor'
 import { previewTheme, systemPrefersDark, systemReducesMotion } from '../lib/useAppearance'
+import { useClearOnLeave } from '../lib/useClearOnLeave'
 import { describeIssues, invalidFields } from './appearanceIssues'
 import type { SettingsWriteStatus } from './useSettingsWriter'
 import './settings.css'
@@ -533,6 +534,7 @@ export function ThemeSection({
         )}
 
         <ThemeTransfer
+          shown={shown}
           adopt={(next) => {
             previewTheme(null)
             adopt(next)
@@ -551,21 +553,26 @@ const IMPORT_FAILURES = {
   'not-saved': '主题未保存'
 } as const
 
-/** Theme import / export through the system file dialogs (main shows them). Cancelling says nothing. */
-function ThemeTransfer({ adopt }: { adopt: (settings: AppSettings) => void }) {
+/**
+ * Theme import / export through the system file dialogs (main shows them). Cancelling says nothing.
+ * Leaving 设置 clears a completed result; an import finishing after that is still adopted, unannounced.
+ */
+function ThemeTransfer({ adopt, shown }: { adopt: (settings: AppSettings) => void; shown: boolean }) {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<TransferResult | null>(null)
+  const begin = useClearOnLeave(shown, () => setResult((last) => (last?.tone === 'done' ? null : last)))
 
   const run = async (action: 'import' | 'export') => {
     if (busy) return
     setBusy(true)
     setResult(null)
+    const current = begin()
     try {
       if (action === 'import') {
         const outcome = await window.xidao.theme.import()
         if (outcome.status === 'imported') {
           adopt(outcome.settings)
-          setResult({ tone: 'done', text: `已导入“${outcome.settings.customTheme?.name ?? ''}”` })
+          if (current()) setResult({ tone: 'done', text: `已导入“${outcome.settings.customTheme?.name ?? ''}”` })
         } else if (outcome.status === 'rejected') {
           setResult({ tone: 'warning', text: '主题文件不可用', issues: outcome.issues })
         } else if (outcome.status === 'failed') {
@@ -573,8 +580,9 @@ function ThemeTransfer({ adopt }: { adopt: (settings: AppSettings) => void }) {
         }
       } else {
         const outcome = await window.xidao.theme.export()
-        if (outcome.status === 'exported') setResult({ tone: 'done', text: '已导出主题' })
-        else if (outcome.status === 'failed') setResult({ tone: 'warning', text: '未能写入文件' })
+        if (outcome.status === 'exported') {
+          if (current()) setResult({ tone: 'done', text: '已导出主题' })
+        } else if (outcome.status === 'failed') setResult({ tone: 'warning', text: '未能写入文件' })
       }
     } catch {
       setResult({ tone: 'warning', text: action === 'import' ? '导入未完成' : '导出未完成' })
