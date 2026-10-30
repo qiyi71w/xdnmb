@@ -142,7 +142,7 @@
   height: 28px;
 }
 
-/* Busy (saving) but still focused: looks unavailable without dropping focus. */
+/* Busy (copying or saving) but still focused: looks unavailable without dropping focus. */
 .image-viewer-group .btn[aria-disabled='true'] {
   color: var(--ink-3);
   cursor: progress;

@@ -650,6 +650,13 @@ export function registerIpc({
     return images.saveOriginal(postId, (suggestedName, format) => chooseSavePath(event.sender, suggestedName, format))
   })
 
+  handle(IpcChannel.copyOriginalImage, async (_event, raw) => {
+    const input = searchRecord(raw, ['postId', 'url'])
+    const postId = forumId(input.postId)
+    if (typeof input.url !== 'string' || !/^xidao-image:\/\/file\/[0-9a-f]{32}\.(jpg|png|gif|webp)$/.test(input.url)) throw new InvalidRequestError()
+    return images.copyOriginal(postId, input.url)
+  })
+
   handle(IpcChannel.accountOverview, async () => account.getOverview())
   handle(IpcChannel.accountLogin, async () => account.login())
   handle(IpcChannel.accountList, async () => account.list())

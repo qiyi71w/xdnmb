@@ -17,6 +17,7 @@ import { createForumClient } from './forum/client'
 import { createForumTransport } from './forum/transport'
 import { IMAGE_MEDIA_TYPE, openManagedImageFiles, type ManagedImageFiles } from './images/files'
 import { createImageService } from './images/service'
+import { createElectronOriginalClipboard } from './images/clipboard-electron'
 import { createImageDownloader } from './images/transport'
 import { createSafeStorageProtector } from './identity/protection'
 import { createIdentityService } from './identity/service'
@@ -339,11 +340,24 @@ async function start(): Promise<void> {
   await subscriptions.recover().catch(() => console.error('[subscriptions] recovery failed'))
 
   const imageFiles = await openManagedImageFiles(join(app.getPath('userData'), 'images'))
+  const clipboardFiles = await openManagedImageFiles(join(app.getPath('userData'), 'clipboard-images'))
+  const imageClipboard = createElectronOriginalClipboard(clipboardFiles)
+  await imageClipboard.recover().catch(() => console.error('[images] clipboard recovery deferred'))
+  const clipboardCleanup = setInterval(() => {
+    void imageClipboard.recover().catch(() => undefined)
+  }, 30_000)
+  clipboardCleanup.unref()
+  app.once('will-quit', () => {
+    clearInterval(clipboardCleanup)
+    // Do not delete the current native file reference on exit; restart checks ownership again.
+    void imageClipboard.recover().catch(() => undefined)
+  })
   const images = createImageService({
     store: openedStore,
     files: imageFiles,
     download: createImageDownloader({ allowedOrigins: [IMAGE_ORIGIN] }),
-    origin: IMAGE_ORIGIN
+    origin: IMAGE_ORIGIN,
+    clipboard: imageClipboard
   })
   // Before any view can load images: drop last run's reading holders and leftover files.
   await images.recover().catch(() => console.error('[images] recovery failed'))

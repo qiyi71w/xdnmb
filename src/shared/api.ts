@@ -4,7 +4,7 @@ import type { AccountApi } from './account'
 import type { ContentApi } from './content'
 import type { BoardDirectory, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
 import type { CredentialId, IdentityMutationResult, IdentityOverview, IdentityRole, ImportResult } from './identity'
-import type { ImageLoadOutcome, ImageLoadRequest, ImageSaveOutcome, ImageViewId } from './images'
+import type { ImageCopyOutcome, ImageLoadOutcome, ImageLoadRequest, ImageSaveOutcome, ImageViewId } from './images'
 import type {
   AttachmentId, AttachResult, DraftDeleteResult, DraftId, DraftListResult, DraftSaveInput, DraftSaveResult, EditorId,
   IdentityChoice, PostTarget
@@ -312,6 +312,8 @@ export interface XidaoApi {
      * named by its detected format. Never saves a thumbnail instead.
      */
     saveOriginal(input: { postId: PostId }): Promise<ImageSaveOutcome>
+    /** Copies only the matching ready managed original; main determines the file and encoding. */
+    copyOriginal(input: { postId: PostId; url: string }): Promise<ImageCopyOutcome>
   }
   links: {
     /** Opens an absolute http(s) URL in the system browser; anything else is refused. */
@@ -436,6 +438,7 @@ export const IpcChannel = {
   cancelImage: 'images:cancel',
   releaseImageView: 'images:release-view',
   saveOriginalImage: 'images:save-original',
+  copyOriginalImage: 'images:copy-original',
   accountOverview: 'account:overview',
   accountLogin: 'account:login',
   accountList: 'account:list',

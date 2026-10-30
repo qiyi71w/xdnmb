@@ -1,10 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { PostId } from '../../../../shared/forum'
 import type { ImageViewId, LoadedImage } from '../../../../shared/images'
+import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuPoint } from '../../components/ContextMenu'
 import { Icon } from '../../components/Icon'
 import { Loading } from '../../components/Notices'
+import { useCover } from '../../lib/appCovered'
 import { openLayer } from '../../lib/layers'
-import { describeImageError, formatBytes, SAVE_TEXT, UNDECODABLE_TEXT } from './imageView'
+import { COPY_TEXT, describeCopyOutcome, describeImageError, formatBytes, SAVE_TEXT, UNDECODABLE_TEXT } from './imageView'
 import { useImageZoom, ZoomControls, type Size } from './imageZoom'
 import { useImageLoad } from './useImageLoad'
 import './image.css'
@@ -14,8 +16,10 @@ const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), [tabinde
 /**
  * Viewer of one post image over the reader or thread list that opened it (modal within that view). Fetches the
  * original on open and shows the thumbnail meanwhile; a failed original keeps the thumbnail with the
- * reason and a manual 重试. Zoom and pan by toolbar, wheel, drag and keys; saving is possible only
- * once the original is shown, and always saves the stored original. Unmounting cancels the load.
+ * reason and a manual 重试. Zoom and pan by toolbar, wheel, drag and keys. Saving and copying are
+ * possible only once the original is shown, and always use the stored original, never the
+ * thumbnail. Copying is reachable from the toolbar, Ctrl/Cmd+C and the image's context menu (right
+ * click, ContextMenu key, Shift+F10 on the image). Unmounting cancels the load.
  */
 export function ImageViewer({
   viewId,
@@ -38,12 +42,22 @@ export function ImageViewer({
   const dialogRef = useRef<HTMLDivElement>(null)
   const [natural, setNatural] = useState<Size | null>(null)
   const [saving, setSaving] = useState(false)
-  const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [copying, setCopying] = useState(false)
+  /** Set in the same tick a copy starts: the menu, the button and the keys share it, so a repeat never starts a second copy. */
+  const copyingRef = useRef(false)
+  /** Outcome of the last 保存原图 or 复制图片. */
+  const [notice, setNotice] = useState<string | null>(null)
   /** “原图尚未取得” no longer holds once the original is shown or fetched again; other outcomes stay. */
-  const clearNotLoaded = () => setSaveMessage((message) => (message === SAVE_TEXT['not-loaded'] ? null : message))
+  const clearNotLoaded = () =>
+    setNotice((message) => (message === SAVE_TEXT['not-loaded'] || message === COPY_TEXT['not-loaded'] ? null : message))
   useLayoutEffect(() => {
-    if (!displayed && saveMessage === SAVE_TEXT.saved) setSaveMessage(null)
-  }, [displayed, saveMessage])
+    if (!displayed && (notice === SAVE_TEXT.saved || notice === COPY_TEXT.image || notice === COPY_TEXT.file)) setNotice(null)
+  }, [displayed, notice])
+  /** Where the image's context menu is open; null: closed. */
+  const [menuAt, setMenuAt] = useState<ContextMenuPoint | null>(null)
+  useCover(menuAt !== null)
+  // A hidden tab or pane drops the menu without taking focus anywhere.
+  if (menuAt !== null && !displayed) setMenuAt(null)
   const mounted = useRef(true)
 
   const { load: loadOriginal } = original
@@ -90,11 +104,11 @@ export function ImageViewer({
   const save = async () => {
     if (saving) return
     if (!originalShown) {
-      setSaveMessage(SAVE_TEXT['not-loaded'])
+      setNotice(SAVE_TEXT['not-loaded'])
       return
     }
     setSaving(true)
-    setSaveMessage(null)
+    setNotice(null)
     let message: string
     try {
       message = SAVE_TEXT[(await window.xidao.images.saveOriginal({ postId })).status]
@@ -103,7 +117,29 @@ export function ImageViewer({
     }
     if (!mounted.current) return
     setSaving(false)
-    setSaveMessage(message)
+    setNotice(message)
+  }
+
+  /** Copies the shown original by its managed address; never the thumbnail, never a fresh download. */
+  const copy = async () => {
+    if (copyingRef.current) return
+    if (!originalShown || originalImage === null) {
+      setNotice(COPY_TEXT['not-loaded'])
+      return
+    }
+    copyingRef.current = true
+    setCopying(true)
+    setNotice(null)
+    let message: string
+    try {
+      message = describeCopyOutcome(await window.xidao.images.copyOriginal({ postId, url: originalImage.url }))
+    } catch {
+      message = '复制失败：应用内部请求失败'
+    }
+    copyingRef.current = false
+    if (!mounted.current) return
+    setCopying(false)
+    setNotice(message)
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -114,6 +150,11 @@ export function ImageViewer({
       event.preventDefault()
       event.stopPropagation()
     }
+    if (isContextMenuKey(event) && event.target === stageRef.current && stageRef.current !== null) {
+      handled()
+      setMenuAt(contextMenuPoint(null, stageRef.current))
+      return
+    }
     if (key === 'Escape') {
       handled()
       onClose()
@@ -122,6 +163,16 @@ export function ImageViewer({
     if (command && !event.altKey && !event.shiftKey && (key.toLowerCase() === 's' || event.code === 'KeyS')) {
       handled()
       void save()
+      return
+    }
+    if (command && !event.altKey && !event.shiftKey && (key.toLowerCase() === 'c' || event.code === 'KeyC')) {
+      // Text selected inside the viewer (its status lines) keeps the platform's own copy; a
+      // selection left in the covered view behind does not.
+      const selection = window.getSelection()
+      const viewer = dialogRef.current
+      if (selection !== null && !selection.isCollapsed && viewer !== null && (viewer.contains(selection.anchorNode) || viewer.contains(selection.focusNode))) return
+      handled()
+      void copy()
       return
     }
     if (key === 'Tab' && !command && !event.altKey) {
@@ -206,11 +257,24 @@ export function ImageViewer({
           No.{postId} 的图片
         </h2>
         <p className="visually-hidden" id={hintId}>
-          加号放大，减号缩小，0 适应窗口，1 原始大小，方向键或拖动移动图片，Ctrl 或 Command 加 S 保存原图，Esc 关闭
+          加号放大，减号缩小，0 适应窗口，1 原始大小，方向键或拖动移动图片，Ctrl 或 Command 加 C 复制图片，Ctrl 或 Command 加 S 保存原图，Esc 关闭
         </p>
         <div className="image-viewer-tools">
           <ZoomControls zoom={view} />
           <div className="image-viewer-group">
+            <button
+              type="button"
+              className="btn btn-small"
+              title="复制图片（Ctrl／⌘+C）"
+              aria-keyshortcuts="Control+C Meta+C"
+              onClick={() => void copy()}
+              disabled={!originalShown}
+              // Not `disabled` while copying: the focused button must keep focus (and the viewer its keys).
+              aria-disabled={copying || undefined}
+            >
+              <Icon name="image" size={14} />
+              {copying ? '正在复制…' : '复制图片'}
+            </button>
             <button
               type="button"
               className="btn btn-small"
@@ -238,6 +302,11 @@ export function ImageViewer({
         role="group"
         aria-label={originalShown ? '原图' : thumb !== null ? '缩略图（原图未显示）' : '图片尚未显示'}
         {...view.stageHandlers}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          setMenuAt(contextMenuPoint(event, event.currentTarget))
+        }}
       >
         {!originalShown && thumb !== null && (
           <img className="image-viewer-thumb" src={thumb.url} alt="" draggable={false} />
@@ -266,7 +335,7 @@ export function ImageViewer({
             draggable={false}
             style={view.imageStyle}
             onLoad={(event) => {
-              // Shown (and savable) only once the whole image decodes, not just its header.
+              // Shown (and savable, copyable) only once the whole image decodes, not just its header.
               const image = event.currentTarget
               const url = originalImage.url
               image.decode().then(
@@ -289,9 +358,30 @@ export function ImageViewer({
           {status}
         </div>
         <p className="image-viewer-save" role="status">
-          {saveMessage}
+          {notice}
         </p>
       </div>
+      {menuAt !== null && (
+        <ContextMenu
+          point={menuAt}
+          label={`No.${postId} 的图片操作`}
+          items={[
+            {
+              type: 'action',
+              key: 'copy-image',
+              label: '复制图片',
+              disabled: !originalShown || copying,
+              title: copying ? '正在复制…' : originalShown ? undefined : '原图显示后才能复制',
+              onSelect: () => void copy()
+            }
+          ]}
+          // Back to the image however the menu closes, so the viewer keys keep working.
+          onClose={() => {
+            setMenuAt(null)
+            stageRef.current?.focus({ preventScroll: true })
+          }}
+        />
+      )}
     </div>
   )
 }
