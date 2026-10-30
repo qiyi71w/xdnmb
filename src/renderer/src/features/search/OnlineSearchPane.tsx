@@ -143,7 +143,7 @@ function Status({ tone, children }: { tone: 'info' | 'error'; children: ReactNod
 }
 
 /**
- * The 联网 side of the 搜索 page (spec I10): a search box that requests only on submit, the
+ * The 联网 side of the 搜索 page: a search box that requests only on submit, the
  * third-party notice, plain-text results with paging over the session's chain, and result opening
  * through the existing reader navigation. Its query, pages and view live in the entry's
  * OnlineSearchSession, so leaving and coming back restores them without any request.
@@ -304,7 +304,7 @@ export function OnlineSearchPane({
   }
 
   /**
-   * 打开原串 after `thread-known`, with the quote rule (spec I6): the page the thread resumes at is
+   * 打开原串 after `thread-known`, with the quote rule: the page the thread resumes at is
    * read first; only once it arrived (and the page is still on screen) a step is committed, opening
    * the thread normally and still saying the post was not located. A failure or cancellation leaves
    * the search page and history as they were and explains it in the row.

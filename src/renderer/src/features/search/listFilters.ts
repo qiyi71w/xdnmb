@@ -1,4 +1,4 @@
-// Filters of one list view (spec I10): 版面／时间／含图 on the thread's main post, the same
+// Filters of one list view: 版面／时间／含图 on the thread's main post, the same
 // `ContentFilters` local search uses. They only choose among threads already on screen: nothing is
 // read to fill the list and the selected thread keeps being read.
 

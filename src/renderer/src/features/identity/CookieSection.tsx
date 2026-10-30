@@ -56,7 +56,7 @@ interface Message {
 /** What a message line keeps once 设置 is left: errors stay, a completed result goes. */
 const withoutSuccess = (message: Message | null): Message | null => (message?.tone === 'success' ? null : message)
 
-/** Where an account's cookies are claimed, applied and exported; opened in the system browser (spec I3). */
+/** Where an account's cookies are claimed, applied and exported; opened in the system browser. */
 const OFFICIAL_COOKIE_PAGE = 'https://www.nmbxd1.com/Member/User/Index/index.html'
 
 /**

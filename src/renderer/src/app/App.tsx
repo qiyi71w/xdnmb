@@ -376,7 +376,7 @@ export function App() {
     registry,
     platform
   })
-  // ---------- Workspace restore (spec I2) ----------
+  // ---------- Workspace restore ----------
   /** Settles once the startup restore is done: tabs exist and saved drafts were reopened. */
   const [restored] = useState(() => Promise.withResolvers<void>())
   const whenRestored = useCallback(() => restored.promise, [restored])
@@ -1164,7 +1164,7 @@ export function App() {
     openSearch(shown === null || entry === null ? { view: 'local' } : { view: 'thread', entryKey: entry.key, ...shown })
   }, [registry, openSearch])
 
-  // ---------- Keyboard (spec I11): one app-level dispatcher ----------
+  // ---------- Keyboard: one app-level dispatcher ----------
   const actions = useRef<Record<ShortcutAction, () => void> | null>(null)
   useLayoutEffect(() => {
     actions.current = {
@@ -1299,7 +1299,7 @@ export function App() {
   /**
    * The board panel lives in the navigation. Opened from the tab content in the overlay layout,
    * the overlay opens first to hold it; the panel opens once the overlay is on the layer stack, so
-   * it is the top layer and Esc closes it first (spec I11).
+   * it is the top layer and Esc closes it first.
    */
   const { open: navOverlayOpen, toggle: toggleNavOverlay } = navPopover
   /** Waiting for the overlay opened to hold the panel. */

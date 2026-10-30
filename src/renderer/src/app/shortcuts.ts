@@ -29,7 +29,7 @@ function letterOf(event: KeyInput): string | null {
 }
 
 /**
- * App shortcuts (spec I11). macOS: Cmd+T/W/R/S, Cmd+, , Control+Tab, Cmd+[ / Cmd+], Cmd+F /
+ * App shortcuts. macOS: Cmd+T/W/R/S, Cmd+, , Control+Tab, Cmd+[ / Cmd+], Cmd+F /
  * Cmd+Shift+F. Windows/Linux: Ctrl+T/W/R/S, Ctrl+, , Ctrl+Tab, Alt+Left / Alt+Right, Ctrl+F /
  * Ctrl+Shift+F. Backspace is never “back”. Zoom keys (Ctrl/Cmd + = / - / 0) are handled by the main
  * process before the page sees them.

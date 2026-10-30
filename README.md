@@ -406,6 +406,8 @@ Windows 与 Apple Silicon macOS 原生中文输入法已人工验证本机搜索
 
 需要 Node.js 24 LTS 与 npm（版本见 `.nvmrc`；`.npmrc` 启用了 `engine-strict`）。
 
+源码注释直接说明行为与约束，不依赖未公开的规格章节编号；需要交叉引用时，指向仓库内的公开文档或源码。
+
 ```bash
 npm ci            # 安装锁定依赖
 npm run dev       # 开发模式（热更新）

@@ -31,7 +31,7 @@ import { watchOfflinePresence, type CopyPresence, type OfflinePresence } from '.
 import './search.css'
 
 /**
- * 串内搜索 of one tab (spec I10 / I11): searches the thread on screen in either mode without
+ * 串内搜索 of one tab: searches the thread on screen in either mode without
  * changing how it is read, and can fetch the whole thread on request. Everything retained is
  * searched on the 搜索 page instead (its 本机 side, `SearchBody` with the `local` view). The sheet
  * is modal. Esc (or a press on the backdrop) cancels a running locate first, then closes.

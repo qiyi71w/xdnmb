@@ -78,7 +78,7 @@ interface Options {
 const NO_INTERNAL: QuoteInternalFailure = { previewSeq: null, locate: null }
 
 /**
- * App-level quote cards (spec I6 / I11): one top-level card at a time, previews and locates with
+ * App-level quote cards: one top-level card at a time, previews and locates with
  * stale-result guards, and the navigation a located quote commits (same tab, in place, a new active
  * tab or 打开原串). Every async result is checked against the latest card state before anything
  * happens; previews never touch reading state.
@@ -508,7 +508,7 @@ export function useQuoteNavigation(options: Options) {
             const threadId = known.threadId
             const cardId = card.id
             markInternal(cardId, { locate: null })
-            // Commit only once the page the thread resumes at was obtained (spec I6: 成功打开后才建可返回历史).
+            // Commit returnable history only once the page the thread resumes at was obtained.
             const run = async () => {
               const outcome = await readResumePage(threadId, locateOperation(cardId), () => isCurrentLocate(stateRef.current, cardId, seq))
               const latest = stateRef.current

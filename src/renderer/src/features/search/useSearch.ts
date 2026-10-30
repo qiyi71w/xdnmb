@@ -60,7 +60,7 @@ interface Options {
 export type SearchOpen = { view: 'local' } | { view: 'thread'; scope: ThreadScope }
 
 /**
- * App-level local / thread search (spec I10). Each tab has its own sessions, filters and results,
+ * App-level local / thread search. Each tab has its own sessions, filters and results,
  * kept while the sheet is closed and after a hit was opened, so 返回搜索结果 shows them again.
  * Every async result is checked against the current operation ID or locate `seq` before it is
  * applied; superseded and stopped sessions are cancelled in the main process. Nothing here marks

@@ -43,7 +43,7 @@ export function savedStart(state: ThreadReadingState | null, mode: ReadingMode):
 /**
  * 打开原串 (from a quote card or a search result): reads the page the thread resumes at — its saved
  * mode preference and that mode's saved position — so the navigation is committed only once that
- * page was obtained (spec I6). `current` is checked before the page read; `null` = no longer wanted.
+ * page was obtained. `current` is checked before the page read; `null` = no longer wanted.
  */
 export async function readResumePage(
   threadId: ThreadId,

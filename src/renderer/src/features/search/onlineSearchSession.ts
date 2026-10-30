@@ -50,7 +50,7 @@ const INITIAL: OnlineSearchState = { draft: '', results: null, pending: null, no
 const ignore = (): undefined => undefined
 
 /**
- * Runtime memory and request bookkeeping of one search history entry (spec I10). Lives while the
+ * Runtime memory and request bookkeeping of one search history entry. Lives while the
  * entry is in some tab's history, also while its page is not mounted (navigated away), so a
  * response arriving meanwhile is still applied and coming back needs no request. Only the latest
  * request may change the state: every new request, cancellation and disposal advances `seq`, and

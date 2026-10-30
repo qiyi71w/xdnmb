@@ -1,7 +1,7 @@
 /**
  * Open closable layers (popovers, overlays, quote cards) in opening order. Escape belongs to the
  * most recently opened one only: each layer's handler checks `isTop()` before acting, so one Esc
- * closes one layer and the next Esc the layer below it (spec I11).
+ * closes one layer and the next Esc the layer below it.
  */
 const stack: symbol[] = []
 const listeners = new Set<() => void>()
