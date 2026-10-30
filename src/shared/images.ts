@@ -45,6 +45,7 @@ export interface LoadedImage {
  * Classified image failure. None of these claims the image was deleted by the forum: a missing
  * or replaced image has not been observed, only these transport/content facts.
  * - `no-image`: the post is not stored or has no image.
+ * - `not-stored`: a local-only request found neither a usable cached image nor its original.
  * - `unsupported-source`: the stored image path is not a recognised forum image path.
  * - `network` / `timeout`: connection failed, ended early, or exceeded the time limit.
  * - `http-status`: a non-200 status (`httpStatus` carries it); `redirect`: a 3xx, never followed.
@@ -55,6 +56,7 @@ export interface LoadedImage {
  */
 export type ImageErrorReason =
   | 'no-image'
+  | 'not-stored'
   | 'unsupported-source'
   | 'network'
   | 'timeout'
@@ -98,4 +100,6 @@ export interface ImageLoadRequest {
    * it). The stored file and record stay in place until the new file is committed.
    */
   refresh?: boolean
+  /** Reuse only local files (including an original for a thumbnail); overrides refresh and never downloads. */
+  localOnly?: boolean
 }

@@ -68,7 +68,7 @@ export function OfflinePane({
   const { list, entries, load, remove, update, starting, startFailures, pollFailures } = useOfflineList()
   const { isDeleting } = useOfflineDeletions()
   const bodyRef = useRef<HTMLDivElement>(null)
-  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(bodyRef), bodyRef)
+  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(bodyRef, { localOnly: true }), bodyRef)
   const openInTab = useOpenThreadInTab()
   useRegisterContent('lists', entryKey, {
     refresh: () => {

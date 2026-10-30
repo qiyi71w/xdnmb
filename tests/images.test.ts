@@ -216,6 +216,36 @@ describe('image content judgement', () => {
   })
 })
 
+describe('local-only list thumbnails', () => {
+  it('does not fetch a missing image, even when refresh is requested; explicit original loads still fetch', async () => {
+    seed([post('60000002', { path: '2022-07-21/local', ext: '.png' })])
+    serveBytes('/thumb/2022-07-21/local.png', png(3, 2))
+    serveBytes('/image/2022-07-21/local.png', png(6, 4))
+    const images = service()
+    const input = { viewId: 'history', postId: '60000002', kind: 'thumb' as const, refresh: true, localOnly: true }
+    const outcome = await images.load('1', input, signal())
+    expect(requests.map((request) => request.url)).toEqual([])
+    expect(outcome).toEqual({ status: 'failed', error: { reason: 'not-stored' } })
+    expect(await load(images, '60000002', 'original')).toMatchObject({ status: 'ready', image: { source: 'network', kind: 'original' } })
+    expect(requests.map((request) => request.url)).toEqual(['/image/2022-07-21/local.png'])
+  })
+
+  it.each(['thumb', 'original'] as const)('reuses a stored %s and never repairs a missing file over the network', async (kind) => {
+    seed([post('60000002', { path: '2022-07-21/cached', ext: '.png' })])
+    serveBytes(`/${kind === 'thumb' ? 'thumb' : 'image'}/2022-07-21/cached.png`, png(6, 4))
+    const images = service()
+    const stored = await load(images, '60000002', kind)
+    requests.length = 0
+    const input = { viewId: 'offline', postId: '60000002', kind: 'thumb' as const, refresh: true, localOnly: true }
+    expect(await images.load('1', input, signal())).toMatchObject({
+      status: 'ready', image: { kind, source: 'stored', url: `xidao-image://file/${fileOf(stored)}` }
+    })
+    await files.remove(fileOf(stored))
+    expect(await images.load('1', input, signal())).toEqual({ status: 'failed', error: { reason: 'not-stored' } })
+    expect(requests.map((request) => request.url)).toEqual([])
+  })
+})
+
 describe('managed files', () => {
   it('keeps the previous file and record when a refresh is interrupted mid-body', async () => {
     seed([post('60000002', { path: '2022-07-21/ok', ext: '.jpg' })])

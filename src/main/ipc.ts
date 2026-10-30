@@ -625,11 +625,13 @@ export function registerIpc({
   handle(IpcChannel.loadImage, async (event, raw) => {
     const input = record(raw)
     if (input.refresh !== undefined && typeof input.refresh !== 'boolean') throw new InvalidRequestError()
+    if (input.localOnly !== undefined && typeof input.localOnly !== 'boolean') throw new InvalidRequestError()
     const load = {
       viewId: viewId(input.viewId),
       postId: forumId(input.postId),
       kind: imageKind(input.kind),
-      refresh: input.refresh === true
+      refresh: input.refresh === true,
+      localOnly: input.localOnly === true
     }
     return operations.run(event.sender, operationId(input), (signal) => images.load(String(event.sender.id), load, signal)).finally(enforceQuota)
   })

@@ -10,9 +10,10 @@ import { useImageLoad, useLoadWhenNear } from './useImageLoad'
  * thumbnails. The box is the row's 查看原图 button, beside (never inside) the row's own button: it
  * opens the list's image viewer whatever the thumbnail's state, and a failure keeps the placeholder
  * (the viewer shows the reason). `tabIndex` follows the row's, so a list keeps one tab stop per row.
+ * In a local-only list (历史, 离线) the thumbnail never downloads; a missing one keeps the placeholder.
  */
 export function RowThumbnail({ postId, images, tabIndex }: { postId: PostId; images: ImageView; tabIndex: number }) {
-  const thumb = useImageLoad(images.viewId, postId, 'thumb')
+  const thumb = useImageLoad(images.viewId, postId, 'thumb', images.localOnly)
   const { state } = thumb
   const buttonRef = useRef<HTMLButtonElement>(null)
   useLoadWhenNear(thumb, images.near, buttonRef)

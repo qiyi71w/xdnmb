@@ -29,9 +29,11 @@ export interface ImageLoad {
 /**
  * One image (thumbnail or original) of one post, loaded for a reading view. Only the latest
  * operation may change the state: a cancelled or superseded result is ignored on arrival.
- * Unmounting cancels the operation in flight. Nothing retries on its own.
+ * Unmounting cancels the operation in flight. Nothing retries on its own. `localOnly` loads use
+ * only files already on this machine (a stored original also serves a thumbnail) and never
+ * download, retry included; a missing image fails with `not-stored`.
  */
-export function useImageLoad(viewId: ImageViewId, postId: PostId, kind: ImageKind): ImageLoad {
+export function useImageLoad(viewId: ImageViewId, postId: PostId, kind: ImageKind, localOnly = false): ImageLoad {
   const [state, setState] = useState<ImageLoadState>({ status: 'idle' })
   const current = useRef<string | null>(null)
 
@@ -48,7 +50,8 @@ export function useImageLoad(viewId: ImageViewId, postId: PostId, kind: ImageKin
       const operationId = crypto.randomUUID()
       current.current = operationId
       setState({ status: 'loading' })
-      window.xidao.images.load({ operationId, viewId, postId, kind, ...(refresh ? { refresh: true } : {}) }).then(
+      const request = { operationId, viewId, postId, kind, ...(refresh ? { refresh: true } : {}), ...(localOnly ? { localOnly: true } : {}) }
+      window.xidao.images.load(request).then(
         (outcome) => {
           if (current.current !== operationId) return
           current.current = null
@@ -71,7 +74,7 @@ export function useImageLoad(viewId: ImageViewId, postId: PostId, kind: ImageKin
         }
       )
     },
-    [cancelCurrent, viewId, postId, kind]
+    [cancelCurrent, viewId, postId, kind, localOnly]
   )
 
   /** Stops a load in flight and forgets it; a later `load` starts afresh. */
@@ -128,8 +131,9 @@ export function useLoadWhenNear(image: ImageLoad, near: NearViewport, target: Re
 /**
  * Image scope of a thread list (its viewer: `useListImageViewer`): its own view ID and lazy-load
  * observer rooted at `root`. Unmounting releases the view's images from reading protection.
+ * `localOnly`: the list's thumbnails never download (see `ImageScope.localOnly`).
  */
-export function useImageScope(root: RefObject<Element | null>): ImageScope {
+export function useImageScope(root: RefObject<Element | null>, { localOnly = false }: { localOnly?: boolean } = {}): ImageScope {
   const [viewId] = useState(() => crypto.randomUUID())
   const [near] = useState(() => new NearViewport(() => root.current))
   useEffect(
@@ -139,5 +143,5 @@ export function useImageScope(root: RefObject<Element | null>): ImageScope {
     },
     [near, viewId]
   )
-  return useMemo(() => ({ viewId, near }), [viewId, near])
+  return useMemo(() => ({ viewId, near, localOnly }), [viewId, near, localOnly])
 }

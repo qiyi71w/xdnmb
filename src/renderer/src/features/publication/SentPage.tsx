@@ -149,7 +149,7 @@ export function SentPage({
   const view = kind === 'thread' ? 'threads' : 'replies'
   const text = PAGE_TEXT[kind]
   const bodyRef = useRef<HTMLDivElement>(null)
-  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(bodyRef), bodyRef)
+  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(bodyRef, { localOnly: true }), bodyRef)
   useLayoutEffect(() => onViewerOpenChange?.(viewerOpen), [onViewerOpenChange, viewerOpen])
   const attempts = useMemo(() => (list.status === 'ready' ? list.attempts.filter((attempt) => attempt.payload.target.kind === kind) : []), [list, kind])
   const records = useMemo(() => attempts.filter(isSent), [attempts])

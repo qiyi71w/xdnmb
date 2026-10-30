@@ -71,6 +71,7 @@ export function contentFailureText(result: Refused): string {
 
 const IMAGE_REASON_TEXT: Record<ImageError['reason'], string> = {
   'no-image': '本地没有这条发言或它没有图片',
+  'not-stored': '本地没有保存这张图片',
   'unsupported-source': '图片地址无法识别',
   network: '网络失败',
   timeout: '网络超时',

@@ -179,7 +179,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, ac
   useLayoutEffect(() => {
     if (!displayed && done !== null) setDone(null)
   }, [displayed, done, setDone])
-  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(bodyRef), bodyRef)
+  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(bodyRef, { localOnly: true }), bodyRef)
   useLayoutEffect(() => onViewerOpenChange?.(viewerOpen), [onViewerOpenChange, viewerOpen])
   const openInTab = useOpenThreadInTab()
   useRegisterContent('lists', entryKey, { refresh: refreshOverride ?? (() => void load()) })

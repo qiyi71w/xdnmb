@@ -51,6 +51,11 @@ export interface ViewerRequest {
 export interface ImageScope {
   viewId: ImageViewId
   near: NearViewport
+  /**
+   * List thumbnails show only images already on this machine and never download (历史, 离线).
+   * The viewer opened from them still fetches the original.
+   */
+  localOnly?: boolean
 }
 
 /** Images of one mounted reader or thread list: its scope and the viewer it owns. */
@@ -60,6 +65,7 @@ export interface ImageView extends ImageScope {
 
 const REASON_TEXT: Record<ImageError['reason'], string> = {
   'no-image': '本机没有这条发言的图片信息',
+  'not-stored': '本机没有保存这张图片',
   'unsupported-source': '图片地址无法识别',
   network: '网络失败',
   timeout: '网络超时',

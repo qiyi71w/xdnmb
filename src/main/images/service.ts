@@ -32,6 +32,8 @@ export interface ImageLoadInput {
   postId: PostId
   kind: ImageKind
   refresh: boolean
+  /** A local-only load never starts or joins a download, even when refresh is true. */
+  localOnly?: boolean
   /** Background saves must finish file/storage work before releasing retention and enforcing quota. */
   waitForCleanup?: boolean
 }
@@ -270,7 +272,7 @@ export function createImageService(options: {
       if (image === null) return { status: 'failed', error: { reason: 'no-image' } }
       const url = sourceUrl(image, input.kind)
       if (url === null) return { status: 'failed', error: { reason: 'unsupported-source' } }
-      if (!input.refresh) {
+      if (!input.refresh || input.localOnly) {
         let stored: ImageResourceRecord | null
         try {
           // Checked when the request is queued: a release queued later runs after it in the worker.
@@ -297,6 +299,7 @@ export function createImageService(options: {
           }
         }
       }
+      if (input.localOnly) return signal.aborted ? { status: 'cancelled' } : { status: 'failed', error: { reason: 'not-stored' } }
       return joinFlight(`${input.kind}|${url}`, input.kind, url, holder, signal, input.waitForCleanup === true)
     },
 
