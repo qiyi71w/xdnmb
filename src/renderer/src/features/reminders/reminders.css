@@ -66,6 +66,25 @@
   word-spacing: 0.15em;
 }
 
+/* 全串、PO等待建立基线 — not counting yet: quiet ink-2 after the counts, warning ink once a read
+   failed (its reasons are the warning icon after it). */
+.reminder-baseline {
+  color: var(--ink-2);
+}
+
+.reminder-baseline.is-warning {
+  color: var(--warn-ink);
+}
+
+/* The same state under a 提醒 menu's kinds, beside any save error. */
+.form-message.reminder-baseline-note {
+  color: var(--ink-2);
+}
+
+.form-message.reminder-baseline-note.is-warning {
+  color: var(--warn-ink);
+}
+
 /* The row whose context menu is open keeps the hover layer while the pointer is on the menu. */
 .reminder-row.is-menu-open > .thread-row:not(.is-selected) {
   background: var(--hover);

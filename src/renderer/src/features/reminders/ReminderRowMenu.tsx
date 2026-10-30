@@ -5,14 +5,15 @@ import { copyNumberItem, withSelectionCopy } from '../../components/copyMenuItem
 import { Icon } from '../../components/Icon'
 import { cookieColorItems } from '../cookieColors/CookieColorPicker'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
-import { useReminderToggle } from './ReminderMenu'
+import { ReminderBaselineNote, useReminderToggle } from './ReminderMenu'
 import { KIND_NAME } from './reminderText'
 
 /**
  * Context menu of one 提醒 row: 在新标签页打开, 复制串号, 饼干颜色… (the 串主's, when the main post is
  * held), the three kinds as checkable items (saved through `useReminderToggle` like the thread's
- * 更多 › 提醒: one rule at a time, never starting a check) and 清除提醒, unavailable while the thread
- * has no count. 复制选中文字 (taken when the menu opened) comes first.
+ * 更多 › 提醒: one rule at a time, never starting a check, with kinds still waiting for their
+ * baseline said under the items) and 清除提醒, unavailable while the thread has no count.
+ * 复制选中文字 (taken when the menu opened) comes first.
  */
 export function ReminderRowMenu({
   point,
@@ -84,6 +85,7 @@ export function ReminderRowMenu({
               <span>{saving.error}</span>
             </p>
           )}
+          <ReminderBaselineNote threadId={threadId} rules={rules} />
         </div>
       }
       onClose={onClose}

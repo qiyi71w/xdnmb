@@ -79,6 +79,48 @@ export function issuesText(row: Pick<ReminderThreadRow, 'issues' | 'lastError' |
   return parts.join('；')
 }
 
+/**
+ * Issues meaning the latest check could not finish reading the thread, its count or the quote pages
+ * the baseline needs (`incomplete`): a pending baseline stays pending until a later check.
+ */
+const UNFINISHED_ISSUES: readonly CoverageIssue[] = ['read-failed', 'not-found', 'rate-limited', 'count-invalid', 'incomplete']
+
+/** Enabled kinds still waiting for their 提醒基线, and whether the thread's latest check left it unfinished. */
+export interface BaselineState {
+  kinds: ReminderKind[]
+  failed: boolean
+}
+
+/**
+ * The baseline state of a thread's rules, or null when every enabled kind is counting. `issues`:
+ * the thread's coverage issues, null where only the rules are known (never reported as failed).
+ * Main schedules the reading; nothing here starts a check.
+ */
+export function baselineState(rules: Record<ReminderKind, ReminderRule>, issues: readonly CoverageIssue[] | null): BaselineState | null {
+  const kinds = REMINDER_KINDS.filter((kind) => rules[kind].enabled && rules[kind].baseline === 'pending')
+  if (kinds.length === 0) return null
+  return { kinds, failed: issues !== null && issues.some((issue) => UNFINISHED_ISSUES.includes(issue)) }
+}
+
+/** End of a 提醒 row's meta: `全串、PO等待建立基线`, or `全串、PO基线未建立` after an unfinished read. */
+export function baselineRowText(state: BaselineState): string {
+  const kinds = state.kinds.map((kind) => KIND_SHORT[kind]).join('、')
+  return state.failed ? `${kinds}基线未建立` : `${kinds}等待建立基线`
+}
+
+/** Added to a row's issue reasons while a baseline its latest check left unfinished is still pending. */
+export const BASELINE_RETRY_TEXT = '下次检查时重试建立基线'
+
+/**
+ * A thread's 提醒 menu: which kinds are not counting yet and, after an unfinished read, why (`reasons`,
+ * the row's `issuesText`).
+ */
+export function baselineMenuText(state: BaselineState, reasons: string | null): string {
+  const kinds = state.kinds.map((kind) => KIND_NAME[kind]).join('、')
+  if (!state.failed) return `${kinds}等待建立基线，建立后的新回复才计数`
+  return reasons === null ? `${kinds}基线未建立，下次检查时重试` : `${kinds}基线未建立（${reasons}），下次检查时重试`
+}
+
 /** Why a manual check did not start. No automatic retry follows. */
 export function refusalText(result: Extract<CheckRequestResult, { accepted: false }>): string {
   switch (result.reason) {

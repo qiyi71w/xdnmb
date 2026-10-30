@@ -9,7 +9,7 @@ import { formatReminderCount, type ReminderKind, type ReminderOverview } from '.
 import { createForumClient } from '../src/main/forum/client'
 import { createForumTransport } from '../src/main/forum/transport'
 import { createReminderNotifier } from '../src/main/reminders/notifier'
-import { createReminderService } from '../src/main/reminders/service'
+import { createReminderService, type ReminderService } from '../src/main/reminders/service'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { asStore } from './helpers/store'
@@ -18,8 +18,10 @@ const t0 = '2026-10-24T00:00:00.000Z'
 const folders: string[] = []
 const databases: ReadingDatabase[] = []
 const servers: Server[] = []
+const services: ReminderService[] = []
 
 afterEach(async () => {
+  for (const service of services.splice(0)) await service.stop('quit')
   for (const db of databases.splice(0)) db.close()
   for (const server of servers.splice(0)) {
     const closed = Promise.withResolvers<void>()
@@ -114,6 +116,7 @@ async function harness(options: { cookieIds?: string[] } = {}) {
   const service = createReminderService({ store: asStore(db), client, scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }),
     notifier: { show(message) { notifications.push(message.body); return notifier.show(message.body) } },
     now: () => new Date(wall).toISOString(), monotonicNow: () => monotonic })
+  services.push(service)
   async function overview(): Promise<ReminderOverview> {
     const result = await service.overview()
     if (!result.ok) throw new Error('overview failed')
@@ -129,7 +132,8 @@ async function harness(options: { cookieIds?: string[] } = {}) {
     async enable(threadId: string, ...kinds: ReminderKind[]) {
       for (const kind of kinds) {
         wall += 1000
-        expect((await service.setRule({ threadId, kind, enabled: true })).ok).toBe(true)
+        // Engine/checker setup, not the public enable action.
+        db.setReminderRule(threadId, kind, true, new Date(wall).toISOString())
       }
     },
     /** Starts a manual check once the cooldown has passed, without waiting for it. */
@@ -260,6 +264,37 @@ describe('credentials of reminder reads', () => {
 })
 
 describe('引用我的发言', () => {
+  it('automatically initializes quote reminders at the last page and counts only later matching replies', async () => {
+    const h = await harness({ cookieIds: ['Mine'] })
+    h.db.savePost(localPost('91', 'Mine'), t0)
+    const thread = h.thread('100', { count: 40, quotes: new Map([[40, ['91']]]) })
+    expect(await h.service.setRule({ threadId: '100', kind: 'quote', enabled: true })).toMatchObject({
+      ok: true, thread: { rules: { quote: { baseline: 'pending' } } }
+    })
+    await h.service.whenIdle()
+    expect(h.seen.map(({ page }) => page)).toEqual([1, 3])
+    expect(await h.row('100')).toMatchObject({ rules: { quote: { baseline: 'ready' } }, counts: { quote: 0 } })
+    expect(h.notifications).toEqual([])
+    thread.count = 42
+    thread.quotes.set(41, ['91'])
+    await h.check()
+    expect(await h.row('100')).toMatchObject({ counts: { quote: 1 } })
+    expect(h.notifications).toEqual(['1 个串有新提醒'])
+  })
+
+  it('projects quote initialization as pending until both its count and checked reply are stored', async () => {
+    const h = await harness()
+    await h.enable('100', 'quote')
+    const rule = h.db.reminderRuleSnapshots()[0]!
+    h.db.updateReminderState({ ...rule, baseline: 40, at: t0 })
+    expect(h.db.getReminderRules(['100'])[0]?.rules.quote.baseline).toBe('pending')
+    expect((await h.row('100')).rules.quote.baseline).toBe('pending')
+    h.db.updateReminderState({ ...rule, checkedPostId: replyId('100', 40), at: t0 })
+    expect(h.db.getReminderRules(['100'])[0]?.rules.quote.baseline).toBe('ready')
+    await h.service.setRule({ threadId: '100', kind: 'quote', enabled: false })
+    expect(h.db.getReminderRules(['100'])[0]?.rules.quote.baseline).toBeNull()
+  })
+
   it('reads only new pages and matches confirmed sends, stored and quoted 饼干 IDs, never treating unknown as a non-match', async () => {
     const h = await harness({ cookieIds: ['Mine'] })
     const thread = h.thread('100', { count: 50 })

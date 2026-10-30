@@ -17,6 +17,8 @@ export interface ReminderRule {
   kind: ReminderKind
   enabled: boolean
   closedBy: ReminderCloseReason | null
+  /** Disabled: null; enabled: pending until a successful baseline read, then ready. */
+  baseline: 'pending' | 'ready' | null
 }
 
 export interface ThreadReminders {
@@ -108,8 +110,8 @@ export interface RemindersApi {
   /** Rules of the given threads (at most 500); threads without rows report all kinds disabled. */
   getRules(input: { threadIds: ThreadId[] }): Promise<RemindersResult<{ threads: ThreadReminders[] }>>
   /**
-   * Enabling makes the next check establish a new baseline for that kind (nothing counted then);
-   * disabling deletes that kind's count and baseline. Never triggers a check.
+   * Enabling schedules baseline initialization for this kind, sharing the checker and cooldown;
+   * disabling deletes that kind's count and baseline. Initialization never counts older replies.
    */
   setRule(input: { threadId: ThreadId; kind: ReminderKind; enabled: boolean }): Promise<RemindersResult<{ thread: ThreadReminders }>>
   overview(): Promise<RemindersResult<{ overview: ReminderOverview }>>

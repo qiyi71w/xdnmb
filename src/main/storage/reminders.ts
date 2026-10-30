@@ -18,7 +18,7 @@ interface StateRow {
 }
 
 function emptyRules(): ThreadReminders['rules'] {
-  const disabled = (kind: ReminderKind): ReminderRule => ({ kind, enabled: false, closedBy: null })
+  const disabled = (kind: ReminderKind): ReminderRule => ({ kind, enabled: false, closedBy: null, baseline: null })
   return { all: disabled('all'), po: disabled('po'), quote: disabled('quote') }
 }
 
@@ -39,10 +39,19 @@ export class ReminderDatabase {
   ) {}
 
   getRules(threadIds: string[]): ThreadReminders[] {
-    const query = this.readable().prepare<[string], RuleRow>('SELECT * FROM reminder_rules WHERE thread_id = ?')
+    const db = this.readable()
+    const query = db.prepare<[string], RuleRow>('SELECT * FROM reminder_rules WHERE thread_id = ?')
+    const state = db.prepare<[string], StateRow>('SELECT * FROM reminder_state WHERE thread_id = ?')
     return threadIds.map((threadId) => {
       const rules = emptyRules()
-      for (const row of query.all(threadId)) rules[row.kind] = { kind: row.kind, enabled: row.enabled !== 0, closedBy: row.closed_by }
+      const states = new Map(state.all(threadId).map((row) => [row.kind, row]))
+      for (const row of query.all(threadId)) {
+        const value = states.get(row.kind)
+        const ready = value?.baseline !== null && value?.baseline !== undefined
+          && (row.kind !== 'quote' || value.checked_post_id !== null)
+        rules[row.kind] = { kind: row.kind, enabled: row.enabled !== 0, closedBy: row.closed_by,
+          baseline: row.enabled === 0 ? null : ready ? 'ready' : 'pending' }
+      }
       return { threadId, rules }
     })
   }

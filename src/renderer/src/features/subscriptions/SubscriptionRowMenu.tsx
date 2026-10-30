@@ -4,7 +4,7 @@ import { ContextMenu, type ContextMenuItem, type ContextMenuPoint } from '../../
 import { copyNumberItem, withSelectionCopy } from '../../components/copyMenuItems'
 import { Icon } from '../../components/Icon'
 import { cookieColorItems } from '../cookieColors/CookieColorPicker'
-import { useReminderToggle } from '../reminders/ReminderMenu'
+import { ReminderBaselineNote, useReminderToggle } from '../reminders/ReminderMenu'
 import { KIND_NAME } from '../reminders/reminderText'
 import { failureText, type LoadFailure } from '../reminders/useReminders'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
@@ -15,7 +15,8 @@ import { useOpenThreadInTab } from '../tabs/openThreadInTab'
  * thread's 更多 › 提醒: one rule at a time, never starting a check), 离线保存…, which opens the thread's
  * own 离线副本 dialog, and 取消订阅, which sends the write at once (no confirmation; the thread's
  * reminders stay as they are). While the rules are unknown the kinds cannot be toggled; a failed
- * read offers a retry. 复制选中文字 (taken when the menu opened) comes first.
+ * read offers a retry; enabled kinds still waiting for their baseline say so under the items.
+ * 复制选中文字 (taken when the menu opened) comes first.
  */
 export function SubscriptionRowMenu({
   point,
@@ -101,6 +102,7 @@ export function SubscriptionRowMenu({
               <span>{message}</span>
             </p>
           )}
+          <ReminderBaselineNote threadId={threadId} rules={rules} />
         </div>
       }
       onClose={onClose}

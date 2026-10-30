@@ -1,28 +1,51 @@
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import type { ThreadId } from '../../../../shared/forum'
 import { REMINDER_KINDS, type ReminderKind, type ReminderRule, type ThreadReminders } from '../../../../shared/reminders'
 import { ContextMenu, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { Icon } from '../../components/Icon'
-import { enabledKinds, KIND_NAME, KIND_SHORT } from './reminderText'
-import { failureText, type LoadFailure } from './useReminders'
+import { baselineMenuText, baselineState, enabledKinds, issuesText, KIND_NAME, KIND_SHORT } from './reminderText'
+import { failureText, RemindersContext, type LoadFailure } from './useReminders'
+import './reminders.css'
 
 /** What a thread's 提醒 control says: the kinds on, whether the rules are known, label and state. */
 export function reminderSummary(rules: Record<ReminderKind, ReminderRule> | undefined, failure: LoadFailure | null) {
   const on = rules === undefined ? [] : enabledKinds(rules)
   const known = rules !== undefined
   const text = !known ? (failure !== null ? '提醒状态未知' : '提醒…') : on.length === 0 ? '提醒' : `提醒：${on.map((kind) => KIND_SHORT[kind]).join('、')}`
+  const pending = rules === undefined ? null : baselineState(rules, null)
   const state = !known
     ? failure !== null
       ? `状态读取失败（${failureText(failure)}）`
       : '正在读取状态'
     : on.length === 0
       ? '未开启'
-      : `已开启：${on.map((kind) => KIND_NAME[kind]).join('、')}`
+      : `已开启：${on.map((kind) => KIND_NAME[kind]).join('、')}${pending === null ? '' : `；${pending.kinds.map((kind) => KIND_NAME[kind]).join('、')}等待建立基线`}`
   return { on, known, text, state }
+}
+
+/**
+ * The line a thread's 提醒 menus add for kinds still waiting for their baseline (提醒基线): quiet
+ * while waiting, a warning with the reasons once the thread's latest check failed to read it (from
+ * the app-wide overview's row; without one only the waiting is said). Nothing when every enabled
+ * kind is counting. Main schedules the reading; this never starts a check.
+ */
+export function ReminderBaselineNote({ threadId, rules }: { threadId: ThreadId; rules: Record<ReminderKind, ReminderRule> | undefined }) {
+  const row = useContext(RemindersContext)?.overview?.threads.find((thread) => thread.threadId === threadId) ?? null
+  if (rules === undefined) return null
+  const state = baselineState(rules, row?.issues ?? null)
+  if (state === null) return null
+  return (
+    <p className={state.failed ? 'form-message reminder-baseline-note is-warning' : 'form-message reminder-baseline-note'}>
+      <Icon name={state.failed ? 'alert' : 'info'} size={14} />
+      <span>{baselineMenuText(state, row === null ? null : issuesText(row))}</span>
+    </p>
+  )
 }
 
 /** Saving state of a thread's 提醒 rules (see `useReminderToggle`). */
 export interface ReminderToggle {
+  /** The thread whose rules it saves. */
+  threadId: ThreadId
   /** Kind whose save is running. */
   busy: ReminderKind | null
   /** Why the last save did not apply. */
@@ -65,13 +88,14 @@ export function useReminderToggle(threadId: ThreadId, onUpdated: (thread: Thread
     setError(text)
   }
 
-  return { busy, error, toggle }
+  return { threadId, busy, error, toggle }
 }
 
 /**
  * 更多 › 提醒 of a thread: the three kinds as checkable items, as in the 提醒 and 订阅 row menus.
  * Toggling only saves the rule (one at a time); it never starts a check. While a save runs, or
- * while the rules are unknown, no kind can be chosen; a failed read offers a retry.
+ * while the rules are unknown, no kind can be chosen; a failed read offers a retry. Enabled kinds
+ * still waiting for their baseline say so under the items.
  */
 export function ThreadReminderMenu({
   point,
@@ -121,6 +145,7 @@ export function ThreadReminderMenu({
               <span>{message}</span>
             </p>
           )}
+          <ReminderBaselineNote threadId={saving.threadId} rules={rules} />
         </div>
       }
       onClose={onClose}

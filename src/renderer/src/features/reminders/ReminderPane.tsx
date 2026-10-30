@@ -1,7 +1,8 @@
 // 提醒 as a list page of a tab: the thread lists' row for every thread with an enabled kind, in the
 // order the overview gives (counted threads first). The meta line ends with the thread's counts
-// (全串:3 PO:2 引用:1) and, when its latest check left something unknown, a warning icon whose
-// accessible name and tip give the reasons. Refreshed by `reminders.onChanged` only (no polling).
+// (全串:3 PO:2 引用:1), the kinds still waiting for their baseline and, when its latest check left
+// something unknown, a warning icon whose accessible name and tip give the reasons. Refreshed by
+// `reminders.onChanged` only (no polling).
 
 import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import type { ForumId, ThreadId } from '../../../../shared/forum'
@@ -24,7 +25,18 @@ import type { ThreadOpen } from '../tabs/tabsState'
 import { savedStart } from '../thread/readingStart'
 import { useListOpener } from './openList'
 import { ReminderRowMenu } from './ReminderRowMenu'
-import { countsText, hasCounts, issuesText, RATE_LIMIT_TEXT, rateLimitRetry, refusalText, secondsText } from './reminderText'
+import {
+  BASELINE_RETRY_TEXT,
+  baselineRowText,
+  baselineState,
+  countsText,
+  hasCounts,
+  issuesText,
+  RATE_LIMIT_TEXT,
+  rateLimitRetry,
+  refusalText,
+  secondsText
+} from './reminderText'
 import { failureText, useRemindersContext } from './useReminders'
 import '../feed/feed.css'
 import './reminders.css'
@@ -330,7 +342,9 @@ export function ReminderPane({
           <ul className="thread-list" aria-label={TITLE} onKeyDown={roving.onKeyDown}>
             {rows.map((row) => {
               const counts = countsText(row)
-              const issues = issuesText(row)
+              const baseline = baselineState(row.rules, row.issues)
+              const reasons = issuesText(row)
+              const issues = reasons !== null && baseline?.failed === true ? `${reasons}；${BASELINE_RETRY_TEXT}` : reasons
               const clearFailure = clearFailures.get(row.threadId)
               // 在新标签页打开, the three kinds and 清除提醒 live in the row's context menu (right-click,
               // ContextMenu, Shift+F10); middle-click or Ctrl/Cmd+click opens a new tab, as in 订阅.
@@ -370,9 +384,12 @@ export function ReminderPane({
                     onOpen={() => openRow(row)}
                     itemProps={roving.itemProps(row.threadId)}
                     metaEnd={
-                      (counts !== null || issues !== null) && (
+                      (counts !== null || baseline !== null || issues !== null) && (
                         <>
                           {counts !== null && <span className="reminder-counts">{counts}</span>}
+                          {baseline !== null && (
+                            <span className={baseline.failed ? 'reminder-baseline is-warning' : 'reminder-baseline'}>{baselineRowText(baseline)}</span>
+                          )}
                           {issues !== null && <IssueStatus text={issues} missing={row.issues.includes('not-found')} />}
                         </>
                       )

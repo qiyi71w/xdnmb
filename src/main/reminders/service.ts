@@ -93,6 +93,7 @@ export function createReminderService(deps: {
   }
   async function startScheduling(): Promise<void> {
     await loaded()
+    quitting = false
     if (scheduling) return
     scheduling = true
     schedule()
@@ -101,22 +102,50 @@ export function createReminderService(deps: {
     const previous = settings?.reminderInterval
     settings = value
     if (previous !== value.reminderInterval) schedule()
+    armInitialization()
   }
   function suspend(): void {
     if (suspendedAt !== null) return
     suspendedAt = monotonicNow()
     cancelTimer?.()
     cancelTimer = null
+    cancelInitialization?.()
+    cancelInitialization = null
   }
   function resume(): void {
     if (suspendedAt === null) return
     slept += monotonicNow() - suspendedAt
     suspendedAt = null
     arm()
+    armInitialization()
     changed()
   }
   let lastStart = -Infinity
   let active: { abort: AbortController; reason: 'quit' | 'user' | null; done: Promise<void>; resolve(): void } | null = null
+  let quitting = false
+  let intentEpoch = 0
+  let ruleQueue: Promise<unknown> = Promise.resolve()
+  // Only enable transitions queue work. Missing durable baselines survive failed attempts/restarts;
+  // consuming an intent before its pass prevents failures from creating an automatic retry loop.
+  const initializations = new Map<string, symbol>()
+  let cancelInitialization: (() => void) | null = null
+  const ruleKey = (rule: { threadId: string; kind: string }) => `${rule.threadId}:${rule.kind}`
+  function mutateRules<T>(work: () => Promise<T>): Promise<T> {
+    const task = ruleQueue.then(work)
+    ruleQueue = task.catch(() => undefined)
+    return task
+  }
+  function armInitialization(): void {
+    cancelInitialization?.()
+    cancelInitialization = null
+    if (initializations.size === 0 || active !== null || suspendedAt !== null || quitting || backoff.episodeId !== null) return
+    const remaining = cooldownRemaining()
+    if (remaining === 0) void request(true)
+    else cancelInitialization = setTimer(() => {
+      cancelInitialization = null
+      armInitialization()
+    }, remaining)
+  }
   const listeners = new Set<() => void>()
   let changePending = false
   function changed(): void {
@@ -128,22 +157,54 @@ export function createReminderService(deps: {
     })
   }
   const cooldownRemaining = () => Math.max(0, 60_000 - (awakeNow() - lastStart))
-  async function request(): Promise<CheckRequestResult> {
+  async function request(initialization = false): Promise<CheckRequestResult> {
     if (active !== null) return { accepted: false, reason: 'running', retryAfterMs: 0 }
     const remaining = cooldownRemaining()
     if (remaining > 0) return { accepted: false, reason: 'cooldown', retryAfterMs: remaining }
     const completion = Promise.withResolvers<void>()
     const current = { abort: new AbortController(), reason: null as 'quit' | 'user' | null, done: completion.promise, resolve: () => completion.resolve() }
     active = current // Reserve before the first worker await: simultaneous triggers never queue.
+    cancelInitialization?.()
+    cancelInitialization = null
+    // Tokens distinguish an enable arriving during an await (including disable/re-enable) from
+    // the intent this pass owns, so completion cannot discard a newer generation's work.
+    const intents = new Map(initializations)
+    const consumeIntents = () => {
+      for (const [key, token] of intents) if (initializations.get(key) === token) initializations.delete(key)
+    }
+    const release = () => {
+      if (active === current) active = null
+      current.resolve()
+      armInitialization()
+      changed()
+    }
     const acceptedAt = awakeNow()
     let rules
     try {
       await loaded()
+      if (initialization && backoff.episodeId !== null) {
+        release()
+        return { accepted: true }
+      }
       rules = await deps.store.reminderRuleSnapshots()
+      if (initialization) {
+        const states = new Map((await deps.store.reminderStates()).map((state) => [ruleKey(state), state]))
+        rules = rules.filter((rule) => {
+          const key = ruleKey(rule)
+          if (!intents.has(key) || initializations.get(key) !== intents.get(key)) return false
+          const state = states.get(key)
+          return state?.baseline === null || state?.baseline === undefined || (rule.kind === 'quote' && state.checkedPostId === null)
+        })
+      }
+      consumeIntents()
     } catch {
-      active = null
-      current.resolve()
+      consumeIntents()
+      release()
       return { accepted: false, reason: 'storage', retryAfterMs: 0 }
+    }
+    if (current.abort.signal.aborted || (initialization && rules.length === 0)) {
+      release()
+      return { accepted: true }
     }
     lastStart = acceptedAt
     changed()
@@ -167,7 +228,7 @@ export function createReminderService(deps: {
             const time = retry === null ? null : new Date(retry).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
             notifySystem(`论坛限流，提醒检查已暂停，${time === null ? '自动检查已关闭' : `${time} 后重试`}`)
           }
-        } else if (result.complete && !current.abort.signal.aborted && backoff.episodeId !== null) {
+        } else if (!initialization && result.complete && !current.abort.signal.aborted && backoff.episodeId !== null) {
           await saveBackoff(() => ({ minutes: 0, episodeId: null, notified: false, dismissed: false }))
           schedule()
         }
@@ -182,9 +243,7 @@ export function createReminderService(deps: {
       // One notification per check with new counts, whether it finished or was interrupted (quit
       // included). A failed or unavailable notification changes nothing in the app.
       if (increased.size > 0 && settings!.reminderSystemNotifications) notifySystem(`${increased.size} 个串有新提醒`)
-      if (active === current) active = null
-      current.resolve()
-      changed()
+      release()
     })()
     return { accepted: true }
   }
@@ -193,7 +252,12 @@ export function createReminderService(deps: {
     catch { console.error('[reminders] notification failed') }
   }
   async function stop(reason: 'quit' | 'user'): Promise<void> {
+    intentEpoch++
+    initializations.clear()
+    cancelInitialization?.()
+    cancelInitialization = null
     if (reason === 'quit') {
+      quitting = true
       scheduling = false
       schedule()
     }
@@ -216,18 +280,28 @@ export function createReminderService(deps: {
     check: request,
     cancel: () => stop('user'),
     stop,
-    whenIdle: () => active?.done ?? Promise.resolve(),
+    whenIdle: async () => { while (active !== null) await active.done },
     getRules: ({ threadIds }) => storage(async () => ({ threads: await deps.store.getReminderRules(threadIds) })),
-    setRule: ({ threadId, kind, enabled }) => storage(async () => {
-      const thread = await deps.store.setReminderRule(threadId, kind, enabled, now())
-      changed()
-      return { thread }
-    }),
-    closeForThreads: ({ threadIds, reason }) => storage(async () => {
+    setRule: ({ threadId, kind, enabled }) => {
+      const epoch = intentEpoch
+      return storage(() => mutateRules(async () => {
+        const before = (await deps.store.getReminderRules([threadId]))[0]!.rules[kind]
+        const thread = await deps.store.setReminderRule(threadId, kind, enabled, now())
+        const key = ruleKey({ threadId, kind })
+        if (!enabled) initializations.delete(key)
+        else if (!before.enabled && epoch === intentEpoch && !quitting) initializations.set(key, Symbol(key))
+        changed()
+        armInitialization()
+        return { thread }
+      }))
+    },
+    closeForThreads: ({ threadIds, reason }) => storage(() => mutateRules(async () => {
       const closed = await deps.store.closeReminderThreads(threadIds, reason, now())
+      for (const key of initializations.keys()) if (threadIds.some((id) => key.startsWith(`${id}:`))) initializations.delete(key)
       changed()
+      armInitialization()
       return { closed }
-    }),
+    })),
     clear: ({ threadId }) => storage(async () => {
       if (await deps.store.clearReminderCounts(threadId)) changed()
       return {}
