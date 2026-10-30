@@ -1022,11 +1022,44 @@ dialog.compose-image-preview:not([open]) {
 }
 
 /* Narrow or zoomed windows leave the tools less room than one row of buttons: let the tools and
-   each group shrink below their one-row width, so their buttons wrap inside the bar's reserved
-   padding instead of running under the window controls or off-screen. */
+   each group shrink below their one-row width, so their buttons wrap instead of running under the
+   window controls or off-screen. */
 .compose-image-preview .image-viewer-tools,
 .compose-image-preview .image-viewer-group {
   min-width: 0;
+}
+
+/* Too narrow for the tools beside the controls' reservation (640×800 at 200% is 320px): the
+   reservation would squeeze every wrapped row into a column. The title alone takes the top row,
+   as tall as the controls and kept clear of them; the tools wrap full width below. */
+@media (max-width: 600px) {
+  :root:has(.topbar) .compose-image-preview .image-viewer-bar {
+    padding-top: 0;
+  }
+
+  :root:has(.topbar) .compose-image-preview-title {
+    flex: 0 0 100%;
+    line-height: max(44px, env(titlebar-area-height, 0px));
+  }
+
+  .app:not(.is-macos):has(.topbar) .compose-image-preview .image-viewer-bar {
+    padding-right: var(--gutter-min);
+  }
+
+  .app:not(.is-macos):has(.topbar) .compose-image-preview-title {
+    padding-right: calc(
+      max(148px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px)) - var(--gutter-min)
+    );
+  }
+
+  .app.is-macos .compose-image-preview .image-viewer-bar {
+    padding-left: var(--gutter-min);
+  }
+
+  .app.is-macos .compose-image-preview-title {
+    line-height: max(44px, var(--mac-controls-bottom));
+    padding-left: max(0px, calc(var(--mac-controls-end) - var(--gutter-min)));
+  }
 }
 
 .compose-image-preview-title {
