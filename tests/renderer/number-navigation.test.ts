@@ -95,6 +95,22 @@ describe('按串号打开', () => {
     expect(run(state, { type: 'locate-done', seq: first, result: located('68810699') })).toBe(state)
   })
 
+  it('makes every running step stale on cancel, as leaving the page does: no late result is followed', () => {
+    const locating = run(initialNumberOpenState, { type: 'submit', raw: '68810699', newTab: true })
+    const unknown = run(locating, { type: 'locate-done', seq: locating.seq, result: { status: 'unknown-thread' } })
+    const looking = run(unknown, { type: 'lookup-start' })
+    const known = run(locating, { type: 'locate-done', seq: locating.seq, result: { status: 'thread-known', threadId: '100', head } })
+    const opening = run(known, { type: 'open-thread-start' })
+    for (const running of [locating, looking, opening]) {
+      const left = run(running, { type: 'cancel' })
+      expect(isCurrentStep(left, running.seq)).toBe(false)
+      expect(run(left, { type: 'opened', seq: running.seq })).toBe(left)
+      expect(run(left, { type: 'internal', seq: running.seq })).toBe(left)
+    }
+    expect(run(run(locating, { type: 'cancel' }), { type: 'locate-done', seq: locating.seq, result: located('68810699') }).status).toBeNull()
+    expect(run(run(opening, { type: 'cancel' }), { type: 'open-thread-failed', seq: opening.seq, error: null }).status).toMatchObject({ kind: 'thread-known' })
+  })
+
   it('offers the XDS lookup only for an unknown owner, and keeps its outcomes apart', () => {
     const unknown = run(initialNumberOpenState, { type: 'submit', raw: '68810699', newTab: false }, { type: 'locate-done', seq: 1, result: { status: 'unknown-thread' } })
     const known = run(initialNumberOpenState, { type: 'submit', raw: '68810699', newTab: false }, { type: 'locate-done', seq: 1, result: { status: 'thread-known', threadId: '100', head } })

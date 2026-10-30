@@ -94,12 +94,14 @@ export function NumberOpen({
   }
 
   // Leaving the page drops the running step and preview: their results could no longer be followed.
+  // Cancelling also makes the step stale here, not only in main: a result that was already on its
+  // way, or a read-state lookup that took no operation, must not lead to the next read or to onOpen
+  // when the same entry is shown again by a new instance.
   const cleanup = useRef(() => {})
   useLayoutEffect(() => {
     cleanup.current = () => {
-      const status = stateRef.current.status
-      if (isRunning(status)) window.xidao.reading.cancel({ operationId: operationId(status.seq) }).catch(() => undefined)
-      if (preview?.outcome === null) window.xidao.reading.cancel({ operationId: `number-preview-${entryKey}-${preview.seq}` }).catch(() => undefined)
+      cancel()
+      cancelPreview()
     }
   })
   useEffect(() => () => cleanup.current(), [])
