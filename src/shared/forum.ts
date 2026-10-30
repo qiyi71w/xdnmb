@@ -127,6 +127,8 @@ export interface ThreadPage {
   replyCount: number | null
   /** Items present but malformed. `> 0` means partial; such a page is never an end candidate. */
   skippedItems: number
+  /** Fresh protocol observation only: no malformed, duplicate, excess, or head-as-reply items. */
+  replySequenceIntact?: boolean
   /** Valid target and structure with zero real replies and nothing skipped. A candidate, not proof. */
   endCandidate: boolean
 }

@@ -573,11 +573,14 @@ describe('reminder scheduling upgrade', () => {
   function v16() {
     const path = predecessor('reminders-v9')
     const db = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 16))
-    db.setReminderRule('100', 'all', true, at)
-    const rule = db.reminderRuleSnapshots().find((rule) => rule.threadId === '100' && rule.kind === 'all')!
-    db.updateReminderState({ ...rule, at, baseline: 95, add: 3, firstPage: 5, checked: true })
-    db.finishReminderCheck(at)
     db.close()
+    const raw = new Database(path)
+    raw.prepare(`INSERT INTO reminder_rules VALUES ('100', 'all', 1, 1, ?, NULL, ?)
+      ON CONFLICT(thread_id, kind) DO UPDATE SET enabled = 1, generation = generation + 1, closed_by = NULL`).run(at, at)
+    raw.prepare(`INSERT INTO reminder_state(thread_id, kind, baseline, count, first_page, checked_at)
+      VALUES ('100', 'all', 95, 3, 5, ?) ON CONFLICT(thread_id, kind) DO UPDATE SET baseline = 95, count = 3, first_page = 5, checked_at = excluded.checked_at`).run(at)
+    raw.prepare('INSERT INTO reminder_checker(singleton, last_checked_at) VALUES (1, ?) ON CONFLICT(singleton) DO UPDATE SET last_checked_at = excluded.last_checked_at').run(at)
+    raw.close()
     return path
   }
 
