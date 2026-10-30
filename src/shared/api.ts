@@ -251,12 +251,12 @@ export interface XidaoApi {
     /** Starts a new query chain in the session (creating it), superseding any earlier chain; returns page 1. */
     run(input: { sessionId: SearchSessionId; channel: SearchChannel; query: string }): Promise<SearchOutcome>
     /**
-     * Page `page` of the current chain: an obtained page comes back from the session without a
-     * request; the next page is requested with the chain's token at most once (concurrent calls share
-     * the same request); anything else is `unavailable`.
+     * Page `page` of this channel's current chain: obtained pages are local. XDS requests the next
+     * numeric page and permits an explicit retry after failure; nmb-search spends its one-use token.
+     * Concurrent calls for the same new page share a request; other pages are `unavailable`.
      */
     page(input: { sessionId: SearchSessionId; channel: SearchChannel; page: number }): Promise<SearchOutcome>
-    /** Cancels the session's in-flight request. A cancelled next-page request spends its token. */
+    /** Cancels this channel's in-flight request; only nmb-search loses its spent next-page token. */
     cancel(input: { sessionId: SearchSessionId; channel: SearchChannel }): Promise<void>
     /** Releases the session and its pages; an in-flight request is cancelled. */
     close(input: { sessionId: SearchSessionId; channel: SearchChannel }): Promise<void>

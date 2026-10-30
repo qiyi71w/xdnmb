@@ -16,8 +16,8 @@ export const SEARCH_SITE_URLS: Readonly<Record<SearchChannel, string>> = {
 export const MAX_SEARCH_QUERY_LENGTH = 200
 
 /**
- * Caller-generated ID of one search session (one search page); same format as OperationId. A
- * session holds one query chain at a time and the pages that chain already returned.
+ * Caller-generated ID of one search page; same format as OperationId. Each channel holds its own
+ * current query chain and returned pages under this ID.
  */
 export type SearchSessionId = string
 
@@ -61,10 +61,10 @@ export interface SearchPage {
 
 /**
  * Why no further page can be requested in this chain:
- * - `end`: the last successful response carried no next-page token (not a claim the index is complete);
- * - `expired`: the token was idle for 15 minutes and is not sent;
- * - `lost`: the token was spent on a request whose result never arrived (failure, cancellation);
- *   it is never replayed. A new search starts a new chain.
+ * - `end`: no further page was announced (not a claim the index is complete);
+ * - `expired`: an nmb-search token was idle for 15 minutes and is not sent;
+ * - `lost`: an nmb-search token was spent on a request whose result never arrived (failure,
+ *   cancellation); it is never replayed. XDS numeric pages do not expire or become spent tokens.
  */
 export type SearchChainEnd = 'end' | 'expired' | 'lost'
 
@@ -72,9 +72,9 @@ export type SearchChainEnd = 'end' | 'expired' | 'lost'
 export type SearchNextState = 'available' | SearchChainEnd
 
 /**
- * Classified service failure. `serviceMessage` is the service's own `status` text from an HTTP 200
- * response (at most 200 characters, untrusted). `hint` is set only when that text itself mentions
- * rate limiting or a captcha/pass/verification; an HTTP status alone (including 429) never sets it.
+ * Classified failure. `serviceMessage` is bounded, untrusted HTTP-200 status/degraded-query text;
+ * `hint` comes only from that text. HTTP rate/verification statuses have separate cases.
+ * A `retryAt` deadline is epoch milliseconds from Retry-After, or null when the service gave none.
  */
 export type SearchError =
   | { kind: 'network'; detail: 'timeout' | 'connection' }

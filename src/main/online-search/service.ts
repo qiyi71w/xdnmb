@@ -22,9 +22,9 @@ const MIN_DATE_SECONDS = 946_684_800
 const MAX_DATE_SECONDS = 4_102_444_800
 
 /**
- * Online search sessions. `owner` scopes sessions to one renderer page; a session holds one query
- * chain: the pages it returned and, at most, one unspent next-page token. A token is sent at most
- * once and never after it went idle; whatever happens to the request that carried it, it is gone.
+ * Session operations implemented by the two explicit adapters. `owner` scopes work to one
+ * renderer, `sessionId` to one search entry. Each adapter owns its distinct cursor and retry rules;
+ * obtained pages stay local and neither adapter requests a page until explicitly asked.
  */
 export interface SearchAdapter {
   run(owner: string, sessionId: string, query: string): Promise<SearchOutcome>
