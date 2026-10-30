@@ -9,6 +9,7 @@ import { clearThreadReminders } from '../reminders/useReminders'
 import { currentEntry, entryThread, newTabEntry, type Tab, type TabEntry, type TabsAction, type TabsState, type ThreadOpen, type ThreadSnapshot } from '../tabs/tabsState'
 import { readResumePage } from '../thread/readingStart'
 import { findQuoteElement, quoteHostId, quoteKey, type QuoteController, type QuoteRefInfo } from './QuoteContext'
+import { lookUpThread } from './threadLookup'
 import {
   initialQuoteState,
   isCurrentLocate,
@@ -36,8 +37,15 @@ function cancelOperation(operationId: string): void {
   window.xidao.reading.cancel({ operationId }).catch(() => undefined)
 }
 
+/** Element focus goes back to: the quote reference, or for a selected number the post or row it sits in. */
 function triggerOf(source: QuoteSource): HTMLElement | null {
+  if (source.selection !== undefined) return source.selection.returnFocus?.isConnected ? source.selection.returnFocus : null
   return findQuoteElement(source.entryKey, quoteHostId(source.focus), source.focus.quoteIndex)
+}
+
+/** What the card sits under: the quote reference, or the selected number's text. */
+function anchorOf(source: QuoteSource): Element | Range | null {
+  return source.selection?.range ?? triggerOf(source)
 }
 
 function tabbables(root: ParentNode): HTMLElement[] {
@@ -50,19 +58,24 @@ export interface QuoteInternalFailure {
   previewSeq: number | null
   /** Intent of the last locate / 打开原串 call that rejected (it was dropped), else null. */
   locate: LocateIntent | null
+  /** The last 向 XDS 查询所属串 call rejected. */
+  lookup?: boolean
 }
 
 export interface QuoteCardProps {
   card: QuoteCard
   internal: QuoteInternalFailure
   cardRef: RefObject<HTMLDivElement | null>
-  anchor: () => HTMLElement | null
+  /** The quote reference, or a selected number's range: only its rectangle is used. */
+  anchor: () => Element | Range | null
   onPointerEnter: () => void
   onPointerLeave: () => void
   onBlur: () => void
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
   onRetry: () => void
   onOpenThread: () => void
+  /** 向 XDS 查询所属串 (explicit, disclosed on the card). */
+  onLookUp: () => void
   onClose: () => void
 }
 
@@ -226,13 +239,54 @@ export function useQuoteNavigation(options: Options) {
       if (locate === null || locate.result !== null) return
       const { id: cardId } = card
       const seq = locate.seq
-      markInternal(cardId, { locate: null })
-      window.xidao.quotes.locate({ operationId: locateOperation(cardId), postId: card.source.postId }).then(
+      markInternal(cardId, { locate: null, lookup: false })
+      const hint = card.source.hint
+      window.xidao.quotes.locate({ operationId: locateOperation(cardId), postId: card.source.postId, ...(hint === undefined ? {} : { hint }) }).then(
         (result) => onLocated(cardId, seq, result),
         () => {
           if (!isCurrentLocate(stateRef.current, cardId, seq)) return
           apply({ type: 'cancel-locate', cardId })
           markInternal(cardId, { locate: locate.intent })
+        }
+      )
+    },
+    [apply, markInternal, onLocated]
+  )
+
+  /**
+   * 向 XDS 查询所属串, only on the card's explicit (disclosed) action: XDS names a thread, then the
+   * reader verifies it. A located post follows the intent of the locate before it, through the same
+   * commit as any quote; anything else stays on the card.
+   */
+  const runLookUp = useCallback(
+    (card: QuoteCard) => {
+      const locate = card.locate
+      if (locate === null || locate.result !== null || locate.viaLookup !== true) return
+      const { id: cardId } = card
+      const seq = locate.seq
+      markInternal(cardId, { locate: null, lookup: false })
+      lookUpThread(locateOperation(cardId), card.source.postId, () => isCurrentLocate(stateRef.current, cardId, seq)).then(
+        (result) => {
+          switch (result.status) {
+            case 'cancelled':
+              return
+            case 'located':
+              onLocated(cardId, seq, result.location)
+              return
+            case 'thread-known':
+              onLocated(cardId, seq, { status: 'thread-known', threadId: result.threadId, head: result.head })
+              return
+            case 'read-failed':
+              onLocated(cardId, seq, { status: 'failed', threadId: result.threadId, error: result.error })
+              return
+            default:
+              apply({ type: 'lookup-done', cardId, seq, note: result })
+          }
+        },
+        () => {
+          if (!isCurrentLocate(stateRef.current, cardId, seq)) return
+          apply({ type: 'cancel-locate', cardId })
+          markInternal(cardId, { lookup: true })
         }
       )
     },
@@ -252,7 +306,10 @@ export function useQuoteNavigation(options: Options) {
         entryKey: info.entryKey,
         postId: info.postId,
         focus: info.origin ?? { ...info.host, quoteIndex: info.quoteIndex },
-        reference: info.origin === undefined ? undefined : { ...info.host, quoteIndex: info.quoteIndex }
+        reference: info.origin === undefined ? undefined : { ...info.host, quoteIndex: info.quoteIndex },
+        ...(info.hint === undefined ? {} : { hint: info.hint }),
+        // A reference inside a selected number's card keeps that card's place and focus return.
+        ...(info.origin !== undefined && 'selectionId' in info.origin && before?.source.selection !== undefined ? { selection: before.source.selection } : {})
       }
       if (info.origin !== undefined && trigger !== 'hover' && cardRef.current?.contains(document.activeElement)) focusTrigger(source)
       // Following a reference in the card is a deliberate preview choice, even if its parent was pinned.
@@ -305,14 +362,21 @@ export function useQuoteNavigation(options: Options) {
     [apply, focusTrigger]
   )
 
-  /** Moves focus to the element that follows the card's quote in tab order. */
+  /** Moves focus to the element that follows the card's quote in tab order (a selected number: back to its post). */
   const focusAfterTrigger = useCallback((source: QuoteSource) => {
     const trigger = triggerOf(source)
     if (trigger === null) return
+    if (source.selection !== undefined) {
+      trigger.focus({ preventScroll: true })
+      return
+    }
     const list = tabbables(document).filter((element) => !cardRef.current?.contains(element))
     const next = list[list.indexOf(trigger) + 1]
     ;(next ?? trigger).focus()
   }, [])
+
+  /** Distinct `selectionId` per selection action, so each one gets its own card. */
+  const selectionSeq = useRef(0)
 
   const controller = useMemo<QuoteController>(
     () => ({
@@ -371,9 +435,46 @@ export function useQuoteNavigation(options: Options) {
         const first = cardRef.current === null ? undefined : tabbables(cardRef.current)[0]
         first?.focus()
         return first !== undefined
+      },
+      selection(selected, action) {
+        clearTimers()
+        const shown = shownEntry(selected.entryKey)
+        if (shown === null) return
+        selectionSeq.current += 1
+        const reference = { selectionId: String(selectionSeq.current), quoteIndex: 0 }
+        const current = stateRef.current.card
+        const outer =
+          current !== null && current.source.entryKey === selected.entryKey && (cardRef.current?.contains(selected.range.commonAncestorContainer) ?? false) ? current : null
+        // A number selected inside a card's post: the new card replaces that card, whose text (and so
+        // the range) goes away. Like a quote followed inside a card, it keeps the original trigger —
+        // the quote, or the outer selection with its live range and return focus — for place and focus.
+        const source: QuoteSource =
+          outer !== null
+          ? {
+              tabId: outer.source.tabId,
+              entryKey: selected.entryKey,
+              postId: selected.postId,
+              focus: outer.source.focus,
+              reference,
+              ...(outer.source.selection === undefined ? {} : { selection: outer.source.selection })
+            }
+          : {
+              tabId: shown.tab.id,
+              entryKey: selected.entryKey,
+              postId: selected.postId,
+              focus: reference,
+              selection: { range: selected.range, returnFocus: selected.returnFocus }
+            }
+        if (outer !== null && cardRef.current?.contains(document.activeElement)) focusTrigger(source)
+        // An explicit menu choice: pinned like a click, replacing any card.
+        const card = apply({ type: 'open', source, trigger: 'activate' }).card
+        if (card === null || card.source !== source) return
+        threadOf.current.set(card.id, entryThread(shown.entry)?.threadId ?? null)
+        runPreview(card)
+        if (action !== 'preview') startLocate(card.id, action)
       }
     }),
-    [open, scheduleLeave, clearTimers, startLocate, apply]
+    [open, scheduleLeave, clearTimers, startLocate, apply, shownEntry, runPreview, focusTrigger]
   )
 
   // A closed or replaced card drops its reads.
@@ -395,8 +496,8 @@ export function useQuoteNavigation(options: Options) {
   useEffect(() => {
     const card = stateRef.current.card
     if (card === null || tabs === null) return
-    const trigger = triggerOf(card.source)
-    if (tabs.activeId !== card.source.tabId || sourceCurrent(card) === null || trigger === null || trigger.getClientRects().length === 0) {
+    const anchor = anchorOf(card.source)
+    if (tabs.activeId !== card.source.tabId || sourceCurrent(card) === null || anchor === null || anchor.getClientRects().length === 0) {
       apply({ type: 'close', cardId: card.id })
     }
   }, [tabs, sourceCurrent, apply])
@@ -445,10 +546,10 @@ export function useQuoteNavigation(options: Options) {
 
   useEffect(() => clearTimers, [clearTimers])
 
-  /** The open card's quote element; stable so the card does not re-subscribe on every render. */
+  /** What the open card sits under; stable so the card does not re-subscribe on every render. */
   const anchor = useCallback(() => {
     const current = stateRef.current.card
-    return current === null ? null : triggerOf(current.source)
+    return current === null ? null : anchorOf(current.source)
   }, [])
 
   const card = state.card
@@ -530,6 +631,16 @@ export function useQuoteNavigation(options: Options) {
               apply({ type: 'cancel-locate', cardId })
               markInternal(cardId, { locate: 'open-thread' })
             })
+          },
+          onLookUp: () => {
+            const before = stateRef.current.card
+            if (before === null || before.id !== card.id) return
+            if (sourceCurrent(before) === null) {
+              apply({ type: 'close', cardId: card.id })
+              return
+            }
+            const next = apply({ type: 'lookup-start', cardId: card.id }).card
+            if (next !== null && next.locate !== null && next.locate.seq !== before.locate?.seq) runLookUp(next)
           },
           onClose: () => closeCard(true)
         }

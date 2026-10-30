@@ -62,10 +62,16 @@ export interface SearchPageHandle {
   show(side: SearchPageSide): void
 }
 
-/** 搜索 page while mounted or in navigation history: the side shown, where 本机 was scrolled. */
+/**
+ * 搜索 page while mounted or in navigation history: the side shown, where 本机 was scrolled, and
+ * 按串号打开's text. `numberFocus`: the page was left by opening from 按串号打开, so coming back
+ * focuses its box again. The online channel shown lives in the entry's OnlineSearchEntry.
+ */
 export interface SearchPageMemory {
   side: SearchPageSide
   localScrollTop: number
+  numberDraft: string
+  numberFocus: boolean
 }
 
 /**

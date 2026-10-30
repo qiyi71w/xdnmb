@@ -19,6 +19,7 @@ import { useImageScope } from '../image/useImageLoad'
 import { useListImageViewer } from '../image/useListImageViewer'
 import { QuoteEntryContext } from '../quote/QuoteContext'
 import { QuoteRef } from '../quote/QuoteRef'
+import { useNumberSelectionMenu } from '../quote/NumberSelectionMenu'
 import type { FeedPageRecord } from './feedState'
 import { ThreadRow } from './ThreadRow'
 import { isPinnedThread } from './pinned'
@@ -88,6 +89,8 @@ export function FeedPane({
   const filtering = contentFilterCount(filters) > 0
   const filter = useListFilter(filters, setFilters)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // 版规／时间线说明 have no menu of their own: a selected whole number there gets 预览／打开.
+  const descriptionNumbers = useNumberSelectionMenu(entryKey)
   const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(scrollRef), scrollRef)
   const sentinelRef = useRef<HTMLDivElement>(null)
   // While filtering, more pages are read only on request: a filter never scans the feed by itself.
@@ -295,13 +298,16 @@ export function FeedPane({
               <span className="feed-description-preview">{contentText(info.description).trim()}</span>
             </summary>
             <QuoteEntryContext.Provider value={entryKey}>
-              <Content
-                nodes={info.description}
-                className="feed-description-body"
-                renderQuote={(node, quoteIndex) => (
-                  <QuoteRef host={{ descriptionId: `${info.ref.kind}:${info.ref.id}` }} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} />
-                )}
-              />
+              <div {...descriptionNumbers.areaProps} className="number-selection-area">
+                <Content
+                  nodes={info.description}
+                  className="feed-description-body"
+                  renderQuote={(node, quoteIndex) => (
+                    <QuoteRef host={{ descriptionId: `${info.ref.kind}:${info.ref.id}` }} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} hint={node.hint} />
+                  )}
+                />
+              </div>
+              {descriptionNumbers.menu}
             </QuoteEntryContext.Provider>
           </details>
         )}

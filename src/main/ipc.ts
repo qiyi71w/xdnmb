@@ -33,9 +33,14 @@ import { applyZoom, currentZoom } from './zoom'
 import type { SearchService } from './search/service'
 import type { SearchFilters, SearchScope } from '../shared/search'
 import { serverCalendarDate } from '../shared/search-filters'
-import { MAX_SEARCH_QUERY_LENGTH, SEARCH_SITE_URL } from '../shared/online-search'
+import { MAX_SEARCH_QUERY_LENGTH, SEARCH_CHANNELS, SEARCH_SITE_URLS, type SearchChannel } from '../shared/online-search'
 import type { OnlineSearchService } from './online-search/service'
 import type { AccountService } from './account/service'
+
+function searchChannel(value: unknown): SearchChannel {
+  if (typeof value !== 'string' || !(SEARCH_CHANNELS as readonly string[]).includes(value)) throw new InvalidRequestError()
+  return value as SearchChannel
+}
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
@@ -522,24 +527,33 @@ export function registerIpc({
   })
 
   handle(IpcChannel.runOnlineSearch, async (event, raw) => {
-    const input = record(raw)
-    return onlineSearch.run(owner(event.sender), sessionId(input), searchQuery(input.query))
+    const input = searchRecord(raw, ['sessionId', 'channel', 'query'])
+    return onlineSearch.run(owner(event.sender), sessionId(input), searchChannel(input.channel), searchQuery(input.query))
   })
   handle(IpcChannel.onlineSearchPage, async (event, raw) => {
-    const input = record(raw)
+    const input = searchRecord(raw, ['sessionId', 'channel', 'page'])
     const pageNumber = input.page
     if (typeof pageNumber !== 'number' || !Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > MAX_SEARCH_PAGE) throw new InvalidRequestError()
-    return onlineSearch.page(owner(event.sender), sessionId(input), pageNumber)
+    return onlineSearch.page(owner(event.sender), sessionId(input), searchChannel(input.channel), pageNumber)
   })
   handle(IpcChannel.cancelOnlineSearch, async (event, raw) => {
-    onlineSearch.cancel(owner(event.sender), sessionId(record(raw)))
+    const input = searchRecord(raw, ['sessionId', 'channel'])
+    onlineSearch.cancel(owner(event.sender), sessionId(input), searchChannel(input.channel))
   })
   handle(IpcChannel.closeOnlineSearch, async (event, raw) => {
-    onlineSearch.close(owner(event.sender), sessionId(record(raw)))
+    const input = searchRecord(raw, ['sessionId', 'channel'])
+    onlineSearch.close(owner(event.sender), sessionId(input), searchChannel(input.channel))
   })
-  handle(IpcChannel.openOnlineSearchSite, async () => {
-    await shell.openExternal(SEARCH_SITE_URL)
+  handle(IpcChannel.openOnlineSearchSite, async (_event, raw) => {
+    const input = searchRecord(raw, ['channel'])
+    await shell.openExternal(SEARCH_SITE_URLS[searchChannel(input.channel)])
     return { opened: true }
+  })
+  handle(IpcChannel.searchThreadOf, async (event, raw) => {
+    const input = searchRecord(raw, ['operationId', 'postId'])
+    if (typeof input.postId !== 'string' || !/^[1-9]\d{0,19}$/.test(input.postId)) throw new InvalidRequestError()
+    const postId = input.postId
+    return operations.run(event.sender, operationId(input), (signal) => onlineSearch.threadOf(postId, signal))
   })
 
   handle(IpcChannel.cancel, async (event, raw) => {

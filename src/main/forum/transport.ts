@@ -91,7 +91,7 @@ export function createForumTransport(options: {
               : httpStatus === 429 ? 'rate-limited'
                 : httpStatus === 401 || httpStatus === 403 ? 'permission'
                   : httpStatus === 404 ? 'not-found' : 'network'
-            classified({ kind, detail, httpStatus })
+            classified({ kind, detail, httpStatus, ...(incoming.headers['retry-after'] !== undefined ? { retryAfter: incoming.headers['retry-after'] } : {}) })
             return
           }
 
@@ -145,7 +145,7 @@ export function createForumTransport(options: {
               }).decode(Buffer.concat(chunks, decodedBytes))
               settled = true
               cleanup()
-              resolve({ mediaType, text })
+              resolve({ mediaType, text, ...(incoming.headers['retry-after'] !== undefined ? { retryAfter: incoming.headers['retry-after'] } : {}) })
             } catch {
               classified({ kind: 'unknown-structure', detail: 'decode' })
             }

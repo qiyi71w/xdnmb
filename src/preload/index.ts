@@ -142,7 +142,8 @@ const api: XidaoApi = {
     page: (input) => ipcRenderer.invoke(IpcChannel.onlineSearchPage, input),
     cancel: (input) => ipcRenderer.invoke(IpcChannel.cancelOnlineSearch, input),
     close: (input) => ipcRenderer.invoke(IpcChannel.closeOnlineSearch, input),
-    openSite: () => ipcRenderer.invoke(IpcChannel.openOnlineSearchSite)
+    openSite: (input) => ipcRenderer.invoke(IpcChannel.openOnlineSearchSite, input),
+    threadOf: (input) => ipcRenderer.invoke(IpcChannel.searchThreadOf, input)
   },
   readingState: {
     get: (input) => ipcRenderer.invoke(IpcChannel.getReadingState, input),

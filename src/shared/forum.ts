@@ -20,8 +20,8 @@ export function comparePostIds(a: PostId, b: PostId): number {
 export type ContentNode =
   | { type: 'text'; text: string }
   | { type: 'lineBreak' }
-  /** Explicit reference to another post, e.g. `>>No.50000001`. Interaction belongs to quote navigation. */
-  | { type: 'quoteRef'; postId: PostId; raw: string }
+  /** Reading reference. `readingOnly` candidates do not count as explicit reminder quotes. */
+  | { type: 'quoteRef'; postId: PostId; raw: string; readingOnly?: true; hint?: { threadId: ThreadId; page: number | null } }
   | { type: 'emphasis'; style: EmphasisStyle; children: ContentNode[] }
   /** Forum quote styling (`<font color="#789922">`, inline green), rendered as a semantic quote span. */
   | { type: 'greentext'; children: ContentNode[] }

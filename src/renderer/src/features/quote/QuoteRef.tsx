@@ -1,4 +1,5 @@
 import { useContext, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
+import type { LocateHint } from '../../../../shared/api'
 import type { PostId } from '../../../../shared/forum'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { copyNumberItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
@@ -11,8 +12,24 @@ import { QuoteActiveContext, QuoteControllerContext, QuoteEntryContext, quoteHos
  * switches to it. Right click, the ContextMenu key or Shift+F10 opens the quote's own menu
  * (在新标签页打开, 复制串号; 复制选中文字 on top while text there is selected), never the menu of
  * the post around it. Outside a navigable entry (no controller or entry) it stays static text.
+ * `hint` is a verified forum link's thread (and page): locating tries it when local records do not
+ * place the post; `No.` reading candidates behave like any reference here.
  */
-export function QuoteRef({ host, origin, quoteIndex, postId, raw }: { host: QuoteHost; origin?: QuoteAnchor; quoteIndex: number; postId: PostId; raw: string }) {
+export function QuoteRef({
+  host,
+  origin,
+  quoteIndex,
+  postId,
+  raw,
+  hint
+}: {
+  host: QuoteHost
+  origin?: QuoteAnchor
+  quoteIndex: number
+  postId: PostId
+  raw: string
+  hint?: LocateHint
+}) {
   const controller = useContext(QuoteControllerContext)
   const entryKey = useContext(QuoteEntryContext)
   const active = useContext(QuoteActiveContext)
@@ -24,7 +41,7 @@ export function QuoteRef({ host, origin, quoteIndex, postId, raw }: { host: Quot
   if (controller === null || entryKey === null) return <span className="quote-ref">{raw}</span>
 
   const hostId = quoteHostId(host)
-  const info: QuoteRefInfo = { entryKey, host, origin, quoteIndex, postId }
+  const info: QuoteRefInfo = { entryKey, host, origin, quoteIndex, postId, ...(hint === undefined ? {} : { hint }) }
   const expanded = active === quoteKey(entryKey, hostId, quoteIndex)
 
   const openMenu = (event: MouseEvent<HTMLButtonElement> | KeyboardEvent<HTMLButtonElement>) => {
