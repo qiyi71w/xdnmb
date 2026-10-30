@@ -299,7 +299,7 @@ export function FeedPane({
                 nodes={info.description}
                 className="feed-description-body"
                 renderQuote={(node, quoteIndex) => (
-                  <QuoteRef host={{ descriptionId: `${info.ref.kind}:${info.ref.id}` }} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} />
+                  <QuoteRef host={{ descriptionId: `${info.ref.kind}:${info.ref.id}` }} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} hint={node.hint} />
                 )}
               />
             </QuoteEntryContext.Provider>

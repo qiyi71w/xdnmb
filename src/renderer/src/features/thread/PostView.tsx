@@ -1,11 +1,13 @@
-import { useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
-import type { Post } from '../../../../shared/forum'
+import { useContext, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
+import type { Post, PostId } from '../../../../shared/forum'
 import { Content } from '../../components/Content'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
 import type { ImageView } from '../image/imageView'
 import { PostThumbnail } from '../image/PostThumbnail'
 import { QuoteRef } from '../quote/QuoteRef'
+import { QuoteActiveContext, QuoteControllerContext, QuoteEntryContext } from '../quote/QuoteContext'
+import { selectedPostNumber } from '../quote/selectionNumber'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { CookieId } from '../../components/CookieId'
 import { copyNumberItem, copyTextItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
@@ -25,7 +27,9 @@ export interface PostActions {
  * their own lines, the image and the body. The head's title is the reader's one h1; an untitled
  * thread keeps a hidden one. The context menu (right click, ContextMenu key, Shift+F10) offers
  * 回复／举报／屏蔽串号／屏蔽饼干 (no 屏蔽 on the user's own posts), then 复制内容／复制串号／复制饼干
- * and 饼干颜色… (not for an admin), under 复制选中文字 when text in the post is selected.
+ * and 饼干颜色… (not for an admin), under 复制选中文字 when text in the post is selected. A selection
+ * that is exactly one whole post number in the body adds 预览／打开／在新标签页打开 for that number
+ * (through the quote card: nothing opens before it is located); other digits never do.
  */
 export function PostView({
   post,
@@ -45,7 +49,15 @@ export function PostView({
   actions?: PostActions
 }) {
   const articleRef = useRef<HTMLElement>(null)
-  const [menu, setMenu] = useState<{ point: ContextMenuPoint; owner: HTMLElement; selection: ContextMenuItem | null } | null>(null)
+  const quotes = useContext(QuoteControllerContext)
+  const entryKey = useContext(QuoteEntryContext)
+  const activeQuote = useContext(QuoteActiveContext)
+  const [menu, setMenu] = useState<{
+    point: ContextMenuPoint
+    owner: HTMLElement
+    selection: ContextMenuItem | null
+    number: { postId: PostId; range: Range } | null
+  } | null>(null)
   useCover(menu !== null)
   const block = (kind: 'post' | 'cookie', value: string) => {
     const reader = articleRef.current?.closest('.reader')
@@ -54,7 +66,19 @@ export function PostView({
     }))
   }
   const userHash = post.userHash !== null && post.userHash !== '' ? post.userHash : null
+  const number = menu?.number ?? null
+  const numberItems: ContextMenuItem[] =
+    number === null || quotes === null || entryKey === null
+      ? []
+      : (['preview', 'navigate', 'new-tab'] as const).map((action) => ({
+          type: 'action' as const,
+          key: `number-${action}`,
+          label: `${action === 'preview' ? '预览' : action === 'navigate' ? '打开' : '在新标签页打开'} No.${number.postId}`,
+          onSelect: () => quotes.selection({ entryKey, postId: number.postId, range: number.range, returnFocus: articleRef.current }, action)
+        }))
   const items: ContextMenuItem[] = actions === undefined || menu === null ? [] : withSelectionCopy(menu.selection, [
+    ...numberItems,
+    ...(numberItems.length > 0 ? [{ type: 'separator' as const, key: 'number-separator' }] : []),
     { type: 'action', key: 'reply', label: '回复', onSelect: () => actions.reply(articleRef.current) },
     { type: 'action', key: 'report', label: '举报', onSelect: () => actions.report(articleRef.current) },
     ...(!actions.own ? [
@@ -74,13 +98,26 @@ export function PostView({
   const openMenu = actions === undefined ? undefined : (event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
     event.preventDefault()
     event.stopPropagation()
-    setMenu({ point: contextMenuPoint(event, event.currentTarget), owner: event.currentTarget, selection: selectionCopyItem(undefined, event.currentTarget) })
+    setMenu({
+      point: contextMenuPoint(event, event.currentTarget),
+      owner: event.currentTarget,
+      selection: selectionCopyItem(undefined, event.currentTarget),
+      number: selectedPostNumber(event.currentTarget)
+    })
   }
 
   return (
     <article ref={articleRef} className={classes} data-post-id={post.id} tabIndex={0} aria-label={`${isHead ? '主帖' : '回复'} No.${post.id}`}
       onContextMenu={openMenu}
-      onKeyDown={openMenu === undefined ? undefined : (event) => { if (isContextMenuKey(event)) openMenu(event) }}>
+      onKeyDown={openMenu === undefined ? undefined : (event) => {
+        if (isContextMenuKey(event)) {
+          openMenu(event)
+          return
+        }
+        // Tab from the post whose selected number's card is open moves into that card, as from a quote.
+        if (event.key === 'Tab' && !event.shiftKey && event.target === event.currentTarget && quotes !== null && entryKey !== null &&
+          activeQuote?.startsWith(`${entryKey}:selection:`) === true && quotes.focusCard()) event.preventDefault()
+      }}>
       <header className="post-head">
         <div className="post-meta">
           {post.userHash !== null && <CookieId cookieId={post.userHash} admin={post.isAdmin === true} />}
@@ -100,7 +137,7 @@ export function PostView({
       <Content
         nodes={post.content}
         className="post-body"
-        renderQuote={(node, quoteIndex) => <QuoteRef host={{ postId: post.id }} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} />}
+        renderQuote={(node, quoteIndex) => <QuoteRef host={{ postId: post.id }} quoteIndex={quoteIndex} postId={node.postId} raw={node.raw} hint={node.hint} />}
       />
       {menu !== null && <ContextMenu point={menu.point} label={`No.${post.id} 操作`} items={items} onClose={(restore) => { setMenu(null); if (restore) articleRef.current?.focus({ preventScroll: true }) }} />}
     </article>

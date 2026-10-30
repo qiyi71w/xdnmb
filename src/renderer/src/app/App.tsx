@@ -601,13 +601,15 @@ export function App() {
   )
 
   /**
-   * An online search result opens as a new `online-search` step of the tab still showing that page
-   * (back reads 返回搜索结果 and the page comes back from its session without a new request).
+   * A target from the 搜索 page (an online result, or 按串号打开) opens as a new `online-search` step
+   * of the tab still showing that page (back reads 返回搜索结果 and the page comes back from its
+   * memory without a new request), or with `newTab` in a new active tab, leaving the page as it is.
    */
-  const openFromOnlineSearch = useCallback((entryKey: number, init: EntryInit): boolean => {
+  const openFromOnlineSearch = useCallback((entryKey: number, init: EntryInit, newTab = false): boolean => {
     const tab = stateRef.current.tabs?.tabs.find((item) => currentEntry(item).key === entryKey)
     if (tab === undefined) return false
-    dispatch({ type: 'navigate', tabId: tab.id, entry: init, origin: 'online-search' })
+    if (newTab) dispatch({ type: 'open-tab', entry: init, split: stateRef.current.settings.newTabSplitDefault })
+    else dispatch({ type: 'navigate', tabId: tab.id, entry: init, origin: 'online-search' })
     return true
   }, [])
 

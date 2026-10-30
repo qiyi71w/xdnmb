@@ -21,7 +21,7 @@ function pageOf(reply: number): number {
 /** IDs this content explicitly quotes (`>>No.x`), in order of first appearance. */
 function quotedPostIds(nodes: ContentNode[], result: Set<PostId> = new Set()): Set<PostId> {
   for (const node of nodes) {
-    if (node.type === 'quoteRef') result.add(node.postId)
+    if (node.type === 'quoteRef' && !node.readingOnly) result.add(node.postId)
     else if ('children' in node) quotedPostIds(node.children, result)
   }
   return result

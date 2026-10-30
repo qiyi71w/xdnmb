@@ -24,7 +24,7 @@
 - **订阅**：管理 App UUID 订阅和网页订阅，并在两端之间同步。
 - **提醒**：每个串可单独开启“全串更新”“PO 追更”“引用我的发言”，后台检查并发系统通知。
 - **离线保存**：把整串文字和原图存到本机，断网也能看。
-- **搜索**：本机搜索已读过的内容，或通过 [nmb-search](https://nmb-search.166666666.xyz/) 联网搜索。
+- **搜索**：本机搜索已读过的内容，或选择 [XDS](https://xds.wol.moe/)／[nmb-search](https://nmb-search.166666666.xyz/) 联网搜索；也可独立按串号打开。
 - **屏蔽与饼干颜色**：在本机屏蔽串号或饼干，给饼干 ID 标颜色。
 - **外观**：浅色、深色、跟随系统或自定义主题；正文字体、字号、阅读宽度、密度和界面缩放可调。
 
@@ -35,6 +35,15 @@
 - **串内订阅状态**：App 和网页分别判断。既没有完整列表、已读到的部分也没有这个串时，按钮显示“读取状态”，点按会读取该端的订阅列表，不会把未知当成未订阅。
 - **结果未确认**：加入或取消后若无法确认结果，可点“核对订阅”。核对只读取原来那个 App UUID 或网页饼干的订阅列表，不会重发；提示会写明本次回读的结果：看到了这个串、读取失败、没读完，或读完了也没有。
 - **关闭提示**：不想再核对时，点提示旁的 × 关闭；在串内则从订阅按钮旁的下拉菜单关闭。关闭只记录在本机，不修改远端订阅，也不代表已订阅或未订阅，之后可以重新加入或取消。写入或核对进行中不能关闭；关闭没能保存时，提示会保留。
+
+## 搜索与串号
+
+- 搜索页默认“本机”；联网侧首次使用 XDS，手动选择会保存在本机。每个搜索页分别保留两渠道的查询、结果与分页；切换渠道不会发送请求。本机筛选不作用于联网查询。
+- 联网只在提交查询、翻页或主动重试时请求，不预取、不自动重试，也不在失败时换到另一服务。已取得的页面可来回查看；XDS 使用页码，nmb-search 的下一页令牌过期或丢失后需要重新搜索。服务失败保留已有结果；有重试时间的限流不会因切换渠道而解除。
+- “按串号打开”独立于关键词搜索，接受 1–20 位正整数、`No.1234567`、`>>No.1234567` 与论坛串链接，保留链接里的页码和回复线索。关键词框里的数字仍是搜索词。
+- 不知道所属串时，可主动把串号交给 XDS 反查；不会在悬停时自动反查，也不会改变搜索渠道。反查只提供所属串线索：没有核实回复位置时可明确打开原串，不会扫描整串猜页码。失败不新增空标签或后退记录。
+- 正文里的 `No.` 与明确引用一样支持预览、跳转和返回。裸数字不自动链接；选中完整有效串号后，可从右键菜单（键盘可用菜单键或 Shift+F10）预览或打开。普通 `No.` 和裸数字不计入“引用我的发言”提醒。
+
 
 ## 安装
 
@@ -81,7 +90,7 @@ macOS 上用 Cmd 代替 Ctrl。
 - Windows：`%APPDATA%\汐岛`
 - macOS：`~/Library/Application Support/汐岛`
 
-饼干和 App UUID 用系统凭据保护加密（Windows DPAPI，macOS 钥匙串）。联网搜索的搜索词会发送给 nmb-search。浏览缓存默认上限 2 GB，可在“设置 › 存储与缓存”调整或清理。
+饼干和 App UUID 用系统凭据保护加密（Windows DPAPI，macOS 钥匙串）。联网查询会交给所选的 XDS 或 nmb-search 及其上游，主动所属串反查会把串号交给 XDS；请求不携带论坛饼干凭据、官网会话或 App UUID。第三方收录可能不完整或过时。“打开搜索网站”只会外开当前渠道，不是自动备用服务。浏览缓存默认上限 2 GB，可在“设置 › 存储与缓存”调整或清理。
 
 ## 从源码构建
 
@@ -99,5 +108,5 @@ npm test
 
 - 协议参考：[TransparentLC/xdcmd 的 API 整理](https://github.com/TransparentLC/xdcmd/wiki/自己整理的-X-岛匿名版-API-文档)、[X 岛原始 API 文档](https://www.zybuluo.com/ovear/note/151481)、[orzogc/xdnmb](https://github.com/orzogc/xdnmb) 与 [orzogc/xdnmb_api](https://github.com/orzogc/xdnmb_api)（AGPL-3.0）。
 - 预设颜文字取自 [xdnmb_api](https://github.com/orzogc/xdnmb_api/blob/28fdba53031a15e0de88954679afe91b9308f71a/lib/src/xdnmb.dart#L1780-L1889) 中的 X 岛官方颜文字列表。
-- 联网搜索使用 [nmb-search](https://nmb-search.166666666.xyz/)（[API 与使用条款](https://nmb-search.166666666.xyz/api.txt)），该服务基于 [4get](https://git.lolcat.ca/lolcat/4get)。
+- 联网搜索使用 [XDS](https://xds.wol.moe/)（[公开 API](https://xds.wol.moe/api/docs)）与 [nmb-search](https://nmb-search.166666666.xyz/)（[API 与使用条款](https://nmb-search.166666666.xyz/api.txt)）；后者基于 [4get](https://git.lolcat.ca/lolcat/4get)。
 - 第三方依赖的许可说明见 [docs/development.md](docs/development.md#第三方许可)。

@@ -37,13 +37,26 @@ describe('safe forum content', () => {
     ])
   })
 
+  it('recognizes No. reading candidates without linking bare numbers or changing their punctuation', () => {
+    const source = '（No.1234567），No.12345678! No.123456789；No.99999999999999999999，2026-10-30 123.45 12345678 No.0 No.012 No.123456789012345678901 abcNo.12'
+    const parsed = parseContent(source)
+    expect(parsed.plainText).toBe(source)
+    expect(parsed.nodes.filter((node) => node.type === 'quoteRef')).toEqual([
+      { type: 'quoteRef', postId: '1234567', raw: 'No.1234567', readingOnly: true },
+      { type: 'quoteRef', postId: '12345678', raw: 'No.12345678', readingOnly: true },
+      { type: 'quoteRef', postId: '123456789', raw: 'No.123456789', readingOnly: true },
+      { type: 'quoteRef', postId: '99999999999999999999', raw: 'No.99999999999999999999', readingOnly: true }
+    ])
+  })
+
   it.each(['www.nmbxd.com', 'www.nmbxd1.com', 'nmbxd.com', 'nmbxd1.com'])(
     'recognizes thread links on %s in bare text and anchors without rewriting their visible text',
     (host) => {
       for (const protocol of ['http', 'https']) {
-        for (const suffix of ['', '?page=2', '?r=68810622', '?r=0.584561', '?page=2&r=68810622', '?r=68810622&page=2']) {
+        for (const suffix of ['', '?page=2', '?r=68810622', '?page=2&r=68810622', '?r=68810622&page=2']) {
           const url = `${protocol}://${host}/t/68810621${suffix}`
-          const expected = { type: 'quoteRef', postId: '68810621', raw: url }
+          const expected = { type: 'quoteRef', postId: suffix.includes('r=') ? '68810622' : '68810621', raw: url,
+            ...(suffix === '' ? {} : { hint: { threadId: '68810621', page: suffix.includes('page=2') ? 2 : null } }) }
           expect(parseContent(url)).toEqual({ nodes: [expected], plainText: url })
           expect(parseContent(`<a href="${url.replaceAll('&', '&amp;')}">${url.replaceAll('&', '&amp;')}</a>`))
             .toEqual({ nodes: [expected], plainText: url })
@@ -69,17 +82,18 @@ describe('safe forum content', () => {
     const url = 'https://www.nmbxd.com/t/68810621?page=2'
     expect(parseContent(`串号（${url}），和 (${url}).`).nodes).toEqual([
       { type: 'text', text: '串号（' },
-      { type: 'quoteRef', postId: '68810621', raw: url },
+      { type: 'quoteRef', postId: '68810621', raw: url, hint: { threadId: '68810621', page: 2 } },
       { type: 'text', text: '），和 (' },
-      { type: 'quoteRef', postId: '68810621', raw: url },
+      { type: 'quoteRef', postId: '68810621', raw: url, hint: { threadId: '68810621', page: 2 } },
       { type: 'text', text: ').' }
     ])
   })
 
   it.each([
     'https://www.nmbxd.com/f/4', 'https://www.nmbxd.com/t/68810621/extra',
-    'https://www.nmbxd.com/t/68810621/', 'https://www.nmbxd.com/t/not-a-number',
     'https://www.nmbxd.com/t/123456789012345678901',
+    'https://www.nmbxd.com/t/not-a-number', 'https://www.nmbxd.com/t/68810621?r=0.584561',
+    'https://www.nmbxd.com/t/68810621?page=-1',
     'https://www.nmbxd.com/t/68810621?foo=2', 'https://www.nmbxd.com/t/68810621#other',
     'https://www.nmbxd.com.evil.example/t/68810621', 'https://example.com/t/68810621',
     'https://user@www.nmbxd.com/t/68810621', 'https://www.nmbxd.com:8080/t/68810621'

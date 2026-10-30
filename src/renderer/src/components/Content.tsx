@@ -1,5 +1,6 @@
 import { Fragment, useMemo, type ReactNode } from 'react'
 import type { ContentNode, EmphasisStyle } from '../../../shared/forum'
+import { withReadingReferences } from './readingReferences'
 import { Spoiler, SpoilerPlaceholder } from './Spoiler'
 import { plainNodes } from './plainNodes'
 import { withSpoilers, type DisplayNode } from './spoilers'
@@ -115,7 +116,8 @@ export function Content({
 }) {
   const base = mode === 'body' ? 'content-body' : 'content-excerpt'
   const classes = className === undefined ? base : `${base} ${className}`
-  const display = useMemo(() => withSpoilers(nodes), [nodes])
+  // Stored body text from before `No.` recognition gets its reading references here (display only).
+  const display = useMemo(() => withSpoilers(mode === 'body' ? withReadingReferences(nodes) : nodes), [nodes, mode])
   const ctx: RenderContext = { mode, renderQuote: mode === 'body' ? renderQuote : undefined, quoteCount: 0 }
   // Excerpts sit inside buttons, which only allow phrasing content (`<br>` included).
   if (mode === 'excerpt') return <span className={classes}>{renderNodes(display, ctx, 'n')}</span>

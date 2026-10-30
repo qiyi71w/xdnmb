@@ -122,8 +122,18 @@ function contentNodes(value: unknown, depth: number): ContentNode[] {
         return { type: 'text', text: string(node.text) }
       case 'lineBreak':
         return { type: 'lineBreak' }
-      case 'quoteRef':
-        return { type: 'quoteRef', postId: forumId(node.postId), raw: string(node.raw) }
+      case 'quoteRef': {
+        const quote: Extract<ContentNode, { type: 'quoteRef' }> = { type: 'quoteRef', postId: forumId(node.postId), raw: string(node.raw) }
+        if (node.readingOnly !== undefined) {
+          if (node.readingOnly !== true) fail()
+          quote.readingOnly = true
+        }
+        if (node.hint !== undefined) {
+          const hint = object(node.hint)
+          quote.hint = { threadId: forumId(hint.threadId), page: hint.page === null ? null : integer(hint.page, 1) }
+        }
+        return quote
+      }
       case 'emphasis':
         if (!EMPHASIS.has(node.style as string)) fail()
         return { type: 'emphasis', style: node.style as never, children: contentNodes(node.children, depth + 1) }

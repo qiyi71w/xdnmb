@@ -1,7 +1,8 @@
-import { parseForumLink, type SearchChainEnd, type SearchError, type SearchHit, type SearchNextState, type SearchOutcome, type SearchPage } from '../../shared/online-search'
+import { type SearchChannel, type SearchChainEnd, type SearchError, type SearchHit, type SearchNextState, type SearchOutcome, type SearchPage, type ThreadOfOutcome, parseForumLink } from '../../shared/online-search'
 import { ForumReadError, ReadCancelledError, type ForumTransport } from '../forum/contract'
+import { createXdsSearchAdapter, retryDeadline, XDS_API_ORIGIN } from './xds'
 
-/** The only search service: its public JSON web-search endpoint. Nothing else is ever requested. */
+/** The nmb-search public JSON web-search endpoint. */
 export const SEARCH_API_ORIGIN = 'https://nmb-search.166666666.xyz'
 const SEARCH_API_PATH = '/api/v1/web'
 
@@ -25,12 +26,21 @@ const MAX_DATE_SECONDS = 4_102_444_800
  * chain: the pages it returned and, at most, one unspent next-page token. A token is sent at most
  * once and never after it went idle; whatever happens to the request that carried it, it is gone.
  */
-export interface OnlineSearchService {
+export interface SearchAdapter {
   run(owner: string, sessionId: string, query: string): Promise<SearchOutcome>
   page(owner: string, sessionId: string, page: number): Promise<SearchOutcome>
   cancel(owner: string, sessionId: string): void
   close(owner: string, sessionId: string): void
   closeAll(owner: string): void
+}
+
+export interface OnlineSearchService {
+  run(owner: string, sessionId: string, channel: SearchChannel, query: string): Promise<SearchOutcome>
+  page(owner: string, sessionId: string, channel: SearchChannel, page: number): Promise<SearchOutcome>
+  cancel(owner: string, sessionId: string, channel: SearchChannel): void
+  close(owner: string, sessionId: string, channel: SearchChannel): void
+  closeAll(owner: string): void
+  threadOf(postId: string, signal: AbortSignal): Promise<ThreadOfOutcome>
 }
 
 interface InFlight {
@@ -124,10 +134,12 @@ function parse(mediaType: string | null, text: string): Fetched {
   return { ok: true, hits, token: typeof npt === 'string' && npt.length > 0 ? npt : null }
 }
 
-function transportFailure(error: unknown): Fetched {
+function transportFailure(error: unknown, now: number): Fetched {
   if (error instanceof ReadCancelledError) return { ok: false, outcome: { status: 'cancelled' } }
   if (!(error instanceof ForumReadError)) return failed({ kind: 'network', detail: 'connection' })
   const { detail, httpStatus } = error.error
+  if (httpStatus === 429) return failed({ kind: 'rate-limited', retryAt: retryDeadline(error.error.retryAfter, now) })
+  if (httpStatus === 401 || httpStatus === 403) return failed({ kind: 'verification', httpStatus })
   switch (detail) {
     case 'timeout':
       return failed({ kind: 'network', detail: 'timeout' })
@@ -142,7 +154,7 @@ function transportFailure(error: unknown): Fetched {
   }
 }
 
-export function createOnlineSearchService({
+function createNmbSearchAdapter({
   transport,
   origin = SEARCH_API_ORIGIN,
   now = () => Date.now()
@@ -151,11 +163,13 @@ export function createOnlineSearchService({
   transport: ForumTransport
   origin?: string
   now?: () => number
-}): OnlineSearchService {
+}): SearchAdapter {
   const sessions = new Map<string, Session>()
   const keyOf = (owner: string, sessionId: string): string => `${owner}\u0000${sessionId}`
+  let limitedUntil = 0
 
   async function request(params: { s: string } | { npt: string }, signal: AbortSignal): Promise<Fetched> {
+    if (limitedUntil > now()) return failed({ kind: 'rate-limited', retryAt: limitedUntil })
     const url = new URL(SEARCH_API_PATH, origin)
     if ('s' in params) url.searchParams.set('s', params.s)
     else url.searchParams.set('npt', params.npt)
@@ -163,7 +177,11 @@ export function createOnlineSearchService({
       const response = await transport.get(url, signal)
       return parse(response.mediaType, response.text)
     } catch (error) {
-      return transportFailure(error)
+      const fetched = transportFailure(error, now())
+      if (!fetched.ok && fetched.outcome.status === 'failed' && fetched.outcome.error.kind === 'rate-limited' && fetched.outcome.error.retryAt !== null) {
+        limitedUntil = Math.max(limitedUntil, fetched.outcome.error.retryAt)
+      }
+      return fetched
     }
   }
 
@@ -245,6 +263,7 @@ export function createOnlineSearchService({
       if (next !== 'available' || chain.token === null || pageNumber !== chain.pages.length + 1) {
         return { status: 'unavailable', next: next === 'available' ? 'end' : next }
       }
+      if (limitedUntil > now()) return { status: 'failed', error: { kind: 'rate-limited', retryAt: limitedUntil }, next }
       // Spent now: if this request's result never arrives, the token is not sent again.
       const token = chain.token.value
       chain.token = null
@@ -262,6 +281,50 @@ export function createOnlineSearchService({
 
     closeAll(owner) {
       for (const key of ownedKeys(owner)) release(key)
+    }
+  }
+}
+
+/** Two explicit adapters share only ownership and channel-level Retry-After gates. */
+export function createOnlineSearchService(options: {
+  transport: ForumTransport
+  origin?: string
+  xdsTransport: ForumTransport
+  xdsOrigin?: string
+  now?: () => number
+}): OnlineSearchService {
+  const now = options.now ?? Date.now
+  const nmb = createNmbSearchAdapter(options)
+  const xds = createXdsSearchAdapter({ transport: options.xdsTransport, origin: options.xdsOrigin ?? XDS_API_ORIGIN, now })
+  const adapters = { xds, 'nmb-search': nmb }
+  const limits = new Map<SearchChannel, number>()
+  const gate = (channel: SearchChannel): SearchError | null => {
+    const until = limits.get(channel)
+    return until !== undefined && until > now() ? { kind: 'rate-limited', retryAt: until } : null
+  }
+  const remember = <T extends SearchOutcome | ThreadOfOutcome>(channel: SearchChannel, outcome: T): T => {
+    if (outcome.status === 'failed' && outcome.error.kind === 'rate-limited' && outcome.error.retryAt !== null) {
+      limits.set(channel, Math.max(limits.get(channel) ?? 0, outcome.error.retryAt))
+    }
+    return outcome
+  }
+  return {
+    async run(owner, sessionId, channel, query) {
+      const error = gate(channel)
+      if (error !== null) return { status: 'failed', error, next: 'end' }
+      return remember(channel, await adapters[channel].run(owner, sessionId, query))
+    },
+    async page(owner, sessionId, channel, page) {
+      // Obtained pages are still readable during a service cooldown; the adapter gates new reads.
+      return remember(channel, await adapters[channel].page(owner, sessionId, page))
+    },
+    cancel(owner, sessionId, channel) { adapters[channel].cancel(owner, sessionId) },
+    close(owner, sessionId, channel) { adapters[channel].close(owner, sessionId) },
+    closeAll(owner) { nmb.closeAll(owner); xds.closeAll(owner) },
+    async threadOf(postId, signal) {
+      const error = gate('xds')
+      if (error !== null) return { status: 'failed', error }
+      return remember('xds', await xds.threadOf(postId, signal))
     }
   }
 }

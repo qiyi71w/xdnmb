@@ -1,5 +1,6 @@
 import { Parser } from 'htmlparser2'
 import type { ContentNode, EmphasisStyle } from '../../shared/forum'
+import { readingLinkTarget, readingReferenceNodes } from '../../shared/reading-references'
 
 const droppedTags: Readonly<Record<string, true>> = {
   script: true, style: true, iframe: true, frame: true, object: true, embed: true,
@@ -66,24 +67,6 @@ function safeLink(href: string | undefined): string | null {
   }
 }
 
-const threadHosts: Readonly<Record<string, true>> = {
-  'www.nmbxd.com': true, 'www.nmbxd1.com': true, 'nmbxd.com': true, 'nmbxd1.com': true
-}
-
-function threadLinkId(href: string): string | null {
-  try {
-    const url = new URL(href)
-    if (!['http:', 'https:'].includes(url.protocol) || !Object.hasOwn(threadHosts, url.hostname) || url.username || url.password || url.port || url.hash) return null
-    const match = /^\/t\/(\d{1,20})$/.exec(url.pathname)
-    if (match === null) return null
-    for (const key of url.searchParams.keys()) {
-      if (key !== 'page' && key !== 'r') return null
-    }
-    return match[1]!
-  } catch {
-    return null
-  }
-}
 
 function visibleText(nodes: readonly ContentNode[]): string {
   return nodes.map((node) => {
@@ -181,9 +164,9 @@ export function parseContent(html: string): { nodes: ContentNode[]; plainText: s
     const converted: ContentNode[] = []
     for (const node of list) {
       if (node.type === 'link') {
-        const postId = threadLinkId(node.href)
-        if (postId !== null) {
-          converted.push({ type: 'quoteRef', postId, raw: visibleText(node.children) || node.href })
+        const target = readingLinkTarget(node.href)
+        if (target !== null) {
+          converted.push({ type: 'quoteRef', ...target, raw: visibleText(node.children) || node.href })
           continue
         }
       }
@@ -192,18 +175,10 @@ export function parseContent(html: string): { nodes: ContentNode[]; plainText: s
         if ('children' in node) pending.push(node.children)
         continue
       }
-      const references = /(?:[>＞]{2}(?:No\.)?|[>＞]No\.)(\d{1,20})(?!\d)|https?:\/\/[^\s<>"'，。！？；、（）【】]+/g
-      let offset = 0
-      for (const match of node.text.matchAll(references)) {
-        // Prose punctuation is not part of a bare URL; anchors retain their visible label verbatim.
-        const raw = match[1] === undefined ? match[0].replace(/[.,!;:)\]}]+$/, '') : match[0]
-        const postId = match[1] ?? threadLinkId(raw)
-        if (postId === null) continue
-        appendText(converted, node.text.slice(offset, match.index))
-        converted.push({ type: 'quoteRef', postId, raw })
-        offset = match.index + raw.length
+      for (const reference of readingReferenceNodes(node.text)) {
+        if (reference.type === 'text') appendText(converted, reference.text)
+        else converted.push(reference)
       }
-      appendText(converted, node.text.slice(offset))
     }
     list.length = 0
     for (const node of converted) list.push(node)
