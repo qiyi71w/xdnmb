@@ -239,7 +239,7 @@ export interface SubscriptionStore {
   loadSubscriptionAppCiphertext(id: string): Promise<Uint8Array | null>
   listSubscriptionAppCredentials(): Promise<string[]>
   setSubscriptionSource(source: SubscriptionSource): Promise<void>
-  loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly?: boolean): Promise<SubscriptionObservation | null>
+  loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly?: boolean | 'complete'): Promise<SubscriptionObservation | null>
   loadSubscriptionObservationById(id: string): Promise<SubscriptionObservation | null>
   saveSubscriptionObservation(observation: SubscriptionObservation): Promise<void>
   saveSubscriptionOperation(operation: SubscriptionOperation): Promise<void>

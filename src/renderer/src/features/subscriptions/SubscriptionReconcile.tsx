@@ -219,7 +219,7 @@ export function ReconcileView({
           {sides !== null && <p className="sub-recon-meta">{sides}</p>}
         </header>
         <div className="sub-recon">
-          <WriteStatus displayed={displayed} />
+          <WriteStatus displayed={displayed} focusAfter={() => scrollRef.current} />
           {body}
         </div>
         <ActionBar task={task} plan={plan} overview={overview} onExecute={() => void execute()} onStop={stopTask} onBack={onBack} />

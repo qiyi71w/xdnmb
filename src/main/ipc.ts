@@ -744,6 +744,9 @@ export function registerIpc({
   handle(IpcChannel.subscriptionObservation, async (_event, raw) =>
     subscriptions.getObservation({ source: subscriptionSource(record(raw).source) }))
 
+  handle(IpcChannel.subscriptionSnapshot, async (_event, raw) =>
+    subscriptions.getSnapshot({ source: subscriptionSource(record(raw).source) }))
+
   handle(IpcChannel.subscriptionRead, async (event, raw) => {
     const input = record(raw)
     const request = {
@@ -782,6 +785,9 @@ export function registerIpc({
     enforceQuota()
     return result
   })
+
+  handle(IpcChannel.subscriptionDismiss, async (_event, raw) =>
+    subscriptions.dismiss({ id: viewId(record(raw).id) }))
 
   handle(IpcChannel.subscriptionMergeSources, async () => subscriptions.getMergeSources())
   handle(IpcChannel.subscriptionPlans, async () => subscriptions.getPlans())

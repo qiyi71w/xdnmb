@@ -5,7 +5,6 @@ import {
   useId,
   useLayoutEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
   type FormEvent,
@@ -17,19 +16,18 @@ import type { ContentFilters } from '../../../../shared/search'
 import type {
   SubscriptionAction,
   SubscriptionMergeSource,
-  SubscriptionObservation,
   SubscriptionOperation,
   SubscriptionOverview,
-  SubscriptionResult,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { selectionCopyItem } from '../../components/copyMenuItems'
-import { Icon } from '../../components/Icon'
+import { Icon, Spinner } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { FailureNotice } from '../../components/Notices'
 import { describeReadError, meaningfulTitle } from '../../lib/format'
+import { formatRecordTime } from '../../lib/time'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
@@ -40,32 +38,20 @@ import { contentFilterCount, filterList, headMeta } from '../search/listFilters'
 import { NO_CONTENT_FILTERS } from '../search/searchState'
 import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
-import { UnsettledLine, unsettledEntryOf, unsettledText, WriteStatus } from './SubscriptionActivity'
+import { UnsettledLine, unsettledEntryOf, unsettledText, WriteStatus, type FocusAfterDismiss } from './SubscriptionActivity'
 import { previewBlocker, plansNeedingAttention, ReconcileHistoryDialog, ReconcileResult, ReconcileView } from './SubscriptionReconcile'
 import { taskMode, type ReconcileMode } from './reconcileState'
 import { SubscriptionRowMenu } from './SubscriptionRowMenu'
 import { useSubscriptionOffline } from './SubscriptionOffline'
-import {
-  decideChange,
-  displayedObservation,
-  initialSubscriptionListState,
-  isReconcilable,
-  selectionKey,
-  sourceObjectRef,
-  subscriptionListReducer,
-  type SubscriptionListState
-} from './subscriptionListState'
+import { collectionDisplay, decideChange, isReconcilable, listedThreads, sourceObjectRef } from './subscriptionListState'
 import { SOURCE_NAME, SOURCE_SHORT, failureText, sourceBlocker, threadLabel } from './subscriptionText'
-import { useSubscriptionsContext, type WriteNotice } from './useSubscriptions'
+import { useCollection, useSubscriptionsContext, type WriteNotice } from './useSubscriptions'
 import { useThreadRules } from '../reminders/useReminders'
 import '../feed/feed.css'
 import '../identity/identity.css'
 import './subscriptions.css'
 
 const THREAD_ID = /^\d{1,20}$/
-
-/** Fired after any page of a subscription list was read, so other views can re-read the stored observation. */
-export const SUBSCRIPTION_OBSERVED_EVENT = 'xidao:subscription-observed'
 
 /** An unsettled write shown under 加入: the thread, and the collection when it is not the one shown. */
 function elsewhereText(operation: SubscriptionOperation, overview: SubscriptionOverview, objectRef: string | null): string {
@@ -82,10 +68,11 @@ function elsewhereText(operation: SubscriptionOperation, overview: SubscriptionO
 
 /**
  * Remote subscription list of the currently selected source (App / 网页), in the tab's list slot.
- * Reads when the user navigates here or switches source here: page after page up to the end
- * candidate, silently, stopping at the first error or refusal and never retrying by itself. Old
- * observations stay on screen when a read fails, is cancelled or is partial; results arriving for a
- * previous source or identity combination are dropped.
+ * Showing this page (navigated to, restored, remembered or brought back) or a change of the
+ * collection it shows starts one read round of the collection (joined when one runs): page after page up to the end candidate, silently, stopping at the first error or
+ * refusal and never retrying by itself. The round belongs to the collection, so leaving this view
+ * does not cancel it. The last complete list stays on screen until a newer round reads to the end;
+ * without one, the pages read so far show as not read to the end.
  */
 export function SubscriptionPane({
   entryKey,
@@ -101,8 +88,25 @@ export function SubscriptionPane({
   onOpenThread: (thread: ThreadSummary) => void
 }) {
   const subscriptions = useSubscriptionsContext()
-  const { overview, overviewFailed, refreshOverview, applyOverview, operations, active, change, busy, task, plans, startPreview, dismissTask, revealSeq, claimReveal } =
-    subscriptions
+  const {
+    overview,
+    overviewFailed,
+    refreshOverview,
+    applyOverview,
+    operations,
+    active,
+    change,
+    busy,
+    task,
+    plans,
+    startPreview,
+    dismissTask,
+    revealSeq,
+    claimReveal,
+    loadCollection,
+    refreshCollection,
+    stopCollection
+  } = subscriptions
   const openSettings = useSettingsOpener()
   const openInTab = useOpenThreadInTab()
   const registry = useContext(ContentRegistryContext)
@@ -177,130 +181,56 @@ export function SubscriptionPane({
   const [history, setHistory] = useState<{ planId: string | null } | null>(null)
   const [moreAt, setMoreAt] = useState<ContextMenuPoint | null>(null)
   const moreRef = useRef<HTMLButtonElement>(null)
-  const [state, dispatch] = useReducer(
-    subscriptionListReducer,
-    remembered?.state ?? initialSubscriptionListState,
-    (start: SubscriptionListState): SubscriptionListState => ({ ...start, activity: 'idle', stopRequested: false })
-  )
   /** This view's filters; kept across source switches, never resetting the thread being read. */
   const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtersRef = useRef(filters)
   const filter = useListFilter(filters, setFilters)
 
-  const selection = overview === null ? null : selectionKey(overview)
-  const overviewRef = useRef(overview)
-  const selectionRef = useRef(selection)
-  const stateRef = useRef(state)
-  useLayoutEffect(() => {
-    overviewRef.current = overview
-    selectionRef.current = selection
-    stateRef.current = state
-  })
-
   // ---------- Reads ----------
-  /** The read this view is waiting for; any other result is stale. */
-  const reading = useRef<{ operationId: string; selection: string } | null>(null)
-  /** Explicit navigation (no remembered list) or a source switch made here reads page 1. */
-  const autoRead = useRef(remembered === null && saved === undefined)
-
-  /** One page; resolves to the observation it produced, or null when refused, failed or stale. */
-  const read = useCallback(async (observationId: string | null): Promise<SubscriptionObservation | null> => {
-    const current = overviewRef.current
-    if (current === null || reading.current !== null) return null
-    const token = { operationId: crypto.randomUUID(), selection: selectionKey(current) }
-    reading.current = token
-    dispatch({ type: 'start', activity: observationId === null ? 'first' : 'next' })
-    let result: SubscriptionResult<SubscriptionObservation>
-    try {
-      result = await window.xidao.subscriptions.read({ source: current.source, observationId, operationId: token.operationId })
-    } catch {
-      if (reading.current !== token) return null
-      reading.current = null
-      dispatch({ type: 'internal', where: 'read' })
-      return null
-    }
-    if (reading.current !== token) return null
-    reading.current = null
-    if (selectionRef.current !== token.selection) return null
-    if (!result.ok) {
-      dispatch({ type: 'refused', reason: result.reason })
-      return null
-    }
-    dispatch({ type: 'observed', observation: result.value })
-    window.dispatchEvent(new Event(SUBSCRIPTION_OBSERVED_EVENT))
-    return result.value
-  }, [])
-
+  const { key: collection, state: collected } = useCollection(overview?.source ?? 'app')
   /**
-   * Reads from `observationId` (null: a new observation from page 1), page after page until the
-   * end candidate; stops at the first error (rate limit and verification included), refusal,
-   * cancellation or source change. Nothing is retried automatically.
+   * The collection a round was started for since this page was last shown. Showing the page (on
+   * mount, when restored or remembered, or brought back) and every change of the collection it
+   * shows (source switch, UUID or binding change) start one round, joining one that runs; a
+   * re-render starts nothing.
    */
-  const readOn = useCallback(
-    async (observationId: string | null) => {
-      let next = observationId
-      for (;;) {
-        const observation = await read(next)
-        if (observation === null) return
-        if (observation.error !== null || observation.cancelled || observation.nextPage === null) return
-        next = observation.id
-      }
-    },
-    [read]
-  )
-
-  /** Abandons the running read: it is cancelled and its late result discarded. */
-  const abandonRead = useCallback(() => {
-    const token = reading.current
-    if (token === null) return
-    reading.current = null
-    window.xidao.subscriptions.cancel({ operationId: token.operationId }).catch(() => undefined)
-  }, [])
-
-  useEffect(() => abandonRead, [abandonRead])
-
-  // A new selection (first known, source switch, UUID or binding change) starts over with whatever
-  // is stored for it; only explicit navigation or a switch made here reads page 1 by itself.
+  const readFor = useRef<string | null>(null)
+  const blocked = overview === null || sourceBlocker(overview, overview.source) !== null
   useEffect(() => {
-    const current = overviewRef.current
-    if (selection === null || current === null) return
-    // Consumed only when the read starts, so an effect replay (StrictMode) cannot lose it.
-    const shouldRead = autoRead.current
-    if (stateRef.current.selection === selection && !shouldRead) return
-    abandonRead()
-    dispatch({ type: 'reset', selection })
-    dispatch({ type: 'start', activity: 'stored' })
-    let alive = true
-    const source = current.source
-    window.xidao.subscriptions
-      .getObservation({ source })
-      .then(
-        (observation) => {
-          if (alive && selectionRef.current === selection) dispatch({ type: 'stored', observation })
-        },
-        () => {
-          if (alive && selectionRef.current === selection) dispatch({ type: 'internal', where: 'stored' })
-        }
-      )
-      .finally(() => {
-        if (!alive || selectionRef.current !== selection) return
-        const latest = overviewRef.current
-        if (!shouldRead || latest === null || sourceBlocker(latest, latest.source) !== null) return
-        autoRead.current = false
-        void readOn(null)
-      })
-    return () => {
-      alive = false
+    if (!pageDisplayed) {
+      readFor.current = null
+      return
     }
-  }, [selection, abandonRead, readOn])
+    // Kept for later while the source cannot be read (e.g. its identity is not set yet).
+    if (collection === null || overview === null || blocked || readFor.current === collection) return
+    readFor.current = collection
+    refreshCollection(overview.source, overview.context)
+  }, [pageDisplayed, collection, blocked, refreshCollection])
 
   const refresh = useCallback(() => {
-    abandonRead()
-    void readOn(null)
-  }, [abandonRead, readOn])
+    const current = overview
+    if (current !== null) refreshCollection(current.source, current.context)
+  }, [overview, refreshCollection])
+  const resume = () => {
+    if (overview !== null) refreshCollection(overview.source, overview.context, true)
+  }
+  const refreshButtonRef = useRef<HTMLButtonElement>(null)
+  /** 停止读取 had the focus when pressed: once the round ends and the button goes, focus moves to 刷新订阅. */
+  const stopFocus = useRef(false)
+  const stopRead = (event: { currentTarget: HTMLElement }) => {
+    if (overview === null || collected?.stopRequested === true) return
+    stopFocus.current = document.activeElement === event.currentTarget
+    stopCollection(overview.source, overview.context)
+  }
+  const reading = collected?.reading === true
+  useLayoutEffect(() => {
+    if (reading || !stopFocus.current) return
+    stopFocus.current = false
+    const focused = document.activeElement
+    if (focused === null || focused === document.body) refreshButtonRef.current?.focus()
+  }, [reading])
   refreshRef.current = () => {
-    const latest = overviewRef.current
-    if (latest !== null && sourceBlocker(latest, latest.source) === null) refresh()
+    if (overview !== null && sourceBlocker(overview, overview.source) === null) refresh()
   }
   // Ctrl/Cmd+R in 同步与合并 reads a fresh preview (never while a preview is read or a plan runs).
   useRegisterContent('lists', entryKey, {
@@ -315,10 +245,8 @@ export function SubscriptionPane({
     setSwitchError(null)
     try {
       const result = await window.xidao.subscriptions.selectSource({ source })
-      if (result.ok) {
-        autoRead.current = true
-        applyOverview(result.value)
-      } else setSwitchError(`未切换：${failureText(result.reason)}`)
+      if (result.ok) applyOverview(result.value)
+      else setSwitchError(`未切换：${failureText(result.reason)}`)
     } catch {
       setSwitchError('切换失败，未切换')
     } finally {
@@ -332,8 +260,8 @@ export function SubscriptionPane({
   const scrollTop = useRef(remembered?.scrollTop ?? saved?.scrollTop ?? 0)
   useLayoutEffect(() => {
     filtersRef.current = filters
-    registry?.listMemory.set(entryKey, { kind: 'subscriptions', state, scrollTop: scrollTop.current, view, filters })
-    if (state.activity === 'idle' && state.selection !== null) registry?.savedLists.delete(entryKey)
+    registry?.listMemory.set(entryKey, { kind: 'subscriptions', scrollTop: scrollTop.current, view, filters })
+    if (collected !== null && (collected.local === 'loaded' || collected.local === 'failed') && !collected.reading) registry?.savedLists.delete(entryKey)
   })
   // The scroller exists only once the overview is known (the loading view has none).
   const overviewKnown = overview !== null
@@ -355,7 +283,6 @@ export function SubscriptionPane({
     scrollTop.current = scroller.scrollTop
     registry?.listMemory.set(entryKey, {
       kind: 'subscriptions',
-      state: stateRef.current,
       scrollTop: scrollTop.current,
       view,
       filters: filtersRef.current
@@ -363,12 +290,12 @@ export function SubscriptionPane({
   }
 
   // ---------- Displayed list ----------
-  const displayed = displayedObservation(state)
-  const threads = useMemo(() => {
-    const seen = new Map<string, ThreadSummary>()
-    for (const page of displayed?.pages ?? []) for (const thread of page.threads) if (!seen.has(thread.head.id)) seen.set(thread.head.id, thread)
-    return [...seen.values()]
-  }, [displayed])
+  const display = collected === null ? null : collectionDisplay(collected)
+  const displayed = display?.observation ?? null
+  const threads = useMemo(
+    () => (collection === null ? [] : listedThreads(displayed, operations ?? [], collection)),
+    [displayed, operations, collection]
+  )
   const filtered = useMemo(() => filterList(threads, (thread) => headMeta(thread.head), filters), [threads, filters])
   const filtering = contentFilterCount(filters) > 0
   const uncertainById = useMemo(() => new Map(filtered.shown.map(({ item, uncertain }) => [item.head.id, uncertain])), [filtered])
@@ -441,7 +368,7 @@ export function SubscriptionPane({
   const fromInline = (event: { target: EventTarget }) => event.target instanceof Element && event.target.closest('.sub-inline') !== null
   const menuThread = rowMenu === null ? undefined : threads.find((thread) => thread.head.id === rowMenu.threadId)
   const offline = useSubscriptionOffline(pageDisplayed && view === 'list')
-  const readInFlight = state.activity === 'first' || state.activity === 'next'
+  const readInFlight = collected?.reading === true
   // Before the early return below: hooks run in the same order on every render.
   const refreshTurn = useRefreshTurn(readInFlight)
 
@@ -470,9 +397,19 @@ export function SubscriptionPane({
     return null
   }
 
-  const shown = state.shown
-  const endPage = displayed?.pages.find((page) => page.endCandidate)?.page ?? null
-  const nextPage = shown !== null && shown.error === null && !readInFlight && blocker === null ? shown.nextPage : null
+  const latest = collected?.latest ?? null
+  const localLoading = collected === null || collected.local === 'idle' || collected.local === 'loading'
+  /** Where an unfinished latest read can go on from, offered when nothing reads and it did not fail. */
+  const nextPage = latest !== null && latest.error === null && !readInFlight && blocker === null ? latest.nextPage : null
+  /** The complete list shown is older than the latest read, which is running, failed or stopped early. */
+  const snapshotAt = display?.complete === true && displayed !== null && latest !== null && latest.id !== displayed.id ? displayed.startedAt : null
+  /** Rows after a dismissed reminder of a row or of the list under 加入 take its focus. */
+  const focusRowAfter: FocusAfterDismiss = (from) => from.closest('li')?.querySelector<HTMLElement>('[data-roving-item]') ?? scrollRef.current
+  const focusLineAfter: FocusAfterDismiss = (from) => {
+    const item = from.closest('li')
+    const other = item?.nextElementSibling ?? item?.previousElementSibling ?? null
+    return other?.querySelector<HTMLElement>('button') ?? scrollRef.current
+  }
 
   return (
     <section ref={paneRef} className="list-pane sub-pane" aria-label={`订阅：${SOURCE_NAME[source]}`}>
@@ -525,6 +462,7 @@ export function SubscriptionPane({
               {threads.length > 0 && <ListFilterToggle filter={filter} />}
               <button
                 type="button"
+                ref={refreshButtonRef}
                 className="icon-btn"
                 onClick={() => {
                   if (!refreshTurn.turning) refresh()
@@ -588,7 +526,7 @@ export function SubscriptionPane({
           )}
 
           <ReconcileResult displayed={pageDisplayed && view === 'list'} onView={(planId) => setHistory({ planId })} />
-          <WriteStatus displayed={pageDisplayed && view === 'list'} placed={placed} />
+          <WriteStatus displayed={pageDisplayed && view === 'list'} placed={placed} focusAfter={() => scrollRef.current} />
 
           <AddForm
             disabled={writeBlocked}
@@ -601,57 +539,91 @@ export function SubscriptionPane({
             <ul className="sub-unsettled" aria-label="待核对的订阅操作">
               {unsettled.elsewhere.map((operation) => (
                 <li key={operation.id}>
-                  <UnsettledLine operation={operation} text={elsewhereText(operation, overview, objectRef)} />
+                  <UnsettledLine operation={operation} text={elsewhereText(operation, overview, objectRef)} focusAfter={focusLineAfter} />
                 </li>
               ))}
             </ul>
           )}
         </div>
 
-        {/* Reading is silent (no progress, no coverage); only a failure shows, as one line. */}
-        <div className="list-status" aria-busy={readInFlight || state.activity === 'stored' ? true : undefined}>
+        {/* Reading shows one line with 停止读取; a failure, a stop, an older list or an unfinished one shows as one line. */}
+        <div className="list-status" aria-busy={readInFlight || localLoading ? true : undefined}>
           {offline.notice}
-          {state.internalError !== null && (
+          {readInFlight && (
+            <p className="sub-stopped">
+              <Spinner />
+              <span>{collected?.stopRequested === true ? '正在停止读取…' : '正在读取订阅'}</span>
+              {/* Stays focusable once asked (focus stays here); a second press does nothing. */}
+              <button
+                type="button"
+                className="btn btn-small btn-page"
+                aria-disabled={collected?.stopRequested === true || undefined}
+                onClick={stopRead}
+              >
+                停止读取
+              </button>
+            </p>
+          )}
+          {!readInFlight && collected?.stopped === true && (
+            <p className="sub-stopped" role="status">
+              <Icon name="info" size={14} />
+              <span>已停止读取，已读到的内容保留</span>
+            </p>
+          )}
+          {collected?.local === 'failed' && (
             <FailureNotice
-              title={state.internalError === 'stored' ? '本机保存的列表读取失败' : '订阅读取失败'}
+              title="本机保存的列表读取失败"
               failure={{ type: 'internal' }}
-              onRetry={
-                state.internalError === 'read' && blocker === null
-                  ? () => void readOn(shown !== null && shown.nextPage !== null ? shown.id : null)
-                  : undefined
-              }
+              onRetry={() => loadCollection(source, overview.context)}
               compact
             />
           )}
-          {state.refusal !== null && (
+          {collected?.internalError === true && (
+            <FailureNotice title="订阅读取失败" failure={{ type: 'internal' }} onRetry={blocker === null ? resume : undefined} compact />
+          )}
+          {collected?.refusal != null && (
             <div className="notice notice-error is-compact" role="alert">
               <Icon name="alert" className="notice-icon" />
               <p className="notice-text">
-                读取未执行：{failureText(state.refusal)}
+                读取未执行：{failureText(collected.refusal)}
                 <KaomojiDecor state="failure" />
               </p>
             </div>
           )}
-          {shown !== null && shown.error !== null && (
+          {latest !== null && latest.error !== null && !readInFlight && (
             <p className="sub-stopped" role="alert">
               <Icon name="alert" size={14} />
               <span>
-                第 {shown.error.page} 页读取失败：{describeReadError(shown.error.detail)}
+                第 {latest.error.page} 页读取失败：{describeReadError(latest.error.detail)}
               </span>
-              {blocker === null && !readInFlight && (
-                <button type="button" className="btn btn-small btn-page" onClick={() => void readOn(shown.id)}>
+              {blocker === null && (
+                <button type="button" className="btn btn-small btn-page" onClick={resume}>
                   重试
                 </button>
               )}
             </p>
           )}
+          {snapshotAt !== null && (
+            <p className="sub-stopped">
+              <Icon name="info" size={14} />
+              <span>显示 {formatRecordTime(snapshotAt)} 读完的列表{readInFlight ? '，正在更新' : ''}</span>
+            </p>
+          )}
+          {display?.complete === false && displayed !== null && (
+            <p className="sub-stopped">
+              <Icon name="info" size={14} />
+              <span>
+                {readInFlight ? '正在读取' : '尚未读完'}：已显示 {displayed.pages.length} 页，列表可能不全，未列出不代表未订阅
+              </span>
+            </p>
+          )}
         </div>
 
-        {displayed === null && state.activity === 'idle' && blocker === null && (
+        {displayed === null && !readInFlight && !localLoading && blocker === null && (
           <div className="list-empty">
             <p className="list-empty-title">
               <KaomojiDecor state="subscriptionUnread" above />
-              {shown !== null || state.refusal !== null || state.internalError !== null ? '还没有取得列表' : '还没有读取这份订阅'}
+              {latest !== null || collected?.refusal != null || collected?.internalError === true ? '还没有取得列表' : '还没有读取这份订阅'}
             </p>
             <button type="button" className="btn btn-page sub-empty-action" onClick={refresh}>
               读取
@@ -659,7 +631,7 @@ export function SubscriptionPane({
           </div>
         )}
 
-        {displayed !== null && threads.length === 0 && endPage === 1 && (
+        {display?.complete === true && threads.length === 0 && (
           <div className="list-empty" role="status">
             <p className="list-empty-title">
               <KaomojiDecor state="subscriptionsEmpty" above />
@@ -711,7 +683,7 @@ export function SubscriptionPane({
                     onOpen={() => onOpenThread(thread)}
                     itemProps={itemProps}
                   />
-                  {entry !== undefined && <UnsettledLine operation={entry} tabIndex={itemProps.tabIndex} />}
+                  {entry !== undefined && <UnsettledLine operation={entry} tabIndex={itemProps.tabIndex} focusAfter={focusRowAfter} />}
                 </li>
               )
             })}
@@ -725,8 +697,8 @@ export function SubscriptionPane({
         )}
 
         <div className="list-footer">
-          {shown !== null && nextPage !== null && (
-            <button type="button" className="btn btn-quiet" onClick={() => void readOn(shown.id)}>
+          {nextPage !== null && (
+            <button type="button" className="btn btn-quiet" onClick={resume}>
               继续读取（第 {nextPage} 页起）
             </button>
           )}

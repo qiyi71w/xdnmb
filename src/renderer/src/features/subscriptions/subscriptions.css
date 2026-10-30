@@ -157,6 +157,25 @@
   overflow-wrap: anywhere;
 }
 
+/* × of an unresolved entry: closes its reminder locally, never a text button. */
+.sub-inline > .sub-dismiss {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: inherit;
+}
+
+/* Why × was not saved: on its own line under the sentence. */
+.sub-inline-error {
+  flex-basis: 100%;
+  color: var(--danger-ink);
+  overflow-wrap: anywhere;
+}
+
+.sub-write-text > .sub-inline-error {
+  font-size: var(--text-xs);
+}
+
 .sub-unsettled {
   display: grid;
   gap: 4px;

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { ReadError } from '../../shared/api'
 import type { SubscriptionCandidate, SubscriptionChoice, SubscriptionContext, SubscriptionDifference, SubscriptionFailure, SubscriptionObservation, SubscriptionOperation, SubscriptionOverview, SubscriptionPlan, SubscriptionPreview, SubscriptionProvenance, SubscriptionResult, SubscriptionSource, SubscriptionsApi } from '../../shared/subscriptions'
+import { completeSubscriptionObservation } from '../../shared/subscriptions'
 import type { SecretProtector } from '../identity/protection'
 import type { RequestScheduler } from '../reading/scheduler'
 import type { AppStore, SubscriptionBaseline } from '../storage/contract'
@@ -23,11 +24,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 function sameContext(left: SubscriptionContext, right: SubscriptionContext): boolean {
   return left.generation === right.generation && left.appCredentialId === right.appCredentialId && left.webCredentialId === right.webCredentialId
 }
-function sufficient(observation: SubscriptionObservation | null): boolean {
-  return observation !== null && !observation.error && !observation.cancelled && observation.nextPage === null &&
-    observation.pages.length > 0 && observation.pages.every((page, index) => page.page === index + 1 &&
-      page.endCandidate === (index === observation.pages.length - 1))
-}
+const sufficient = completeSubscriptionObservation
 function safeError(error: unknown): ReadError {
   if (error instanceof ForumReadError) {
     const { kind, detail, httpStatus } = error.error
@@ -54,7 +51,7 @@ export function createSubscriptionService(deps: {
   const webOrigin = new URL(deps.webOrigin).origin
   let changing = false
   let configuring = false
-  const reading = new Set<string>()
+  const reading = new Map<string, Promise<SubscriptionResult<SubscriptionObservation>>>()
   const previews = new Map<string, SubscriptionPreview>()
 
   async function overview(): Promise<SubscriptionOverview> {
@@ -160,7 +157,7 @@ export function createSubscriptionService(deps: {
       const outstanding = await store.loadSubscriptionOperations()
       const secret = await identity(input.source, context)
       for (const entry of outstanding) {
-        if (entry.state === 'settled' || entry.source !== input.source || entry.threadId !== input.threadId) continue
+        if (entry.dismissedAt !== undefined || entry.state === 'settled' || entry.source !== input.source || entry.threadId !== input.threadId) continue
         if (input.source === 'web') {
           if (entry.context.webCredentialId === context.webCredentialId) return { ok: false, reason: 'busy' }
         } else if (entry.context.appCredentialId === context.appCredentialId ||
@@ -415,24 +412,33 @@ export function createSubscriptionService(deps: {
       const configuration = await store.loadSubscriptionConfiguration()
       return store.loadSubscriptionObservation(source, configuration.context)
     },
+    async getSnapshot({ source }) {
+      const configuration = await store.loadSubscriptionConfiguration()
+      return store.loadSubscriptionObservation(source, configuration.context, 'complete')
+    },
     async read(input, signal): Promise<SubscriptionResult<SubscriptionObservation>> {
-      const key = input.observationId ?? input.source
-      if (reading.has(key)) return { ok: false, reason: 'busy' }
-      reading.add(key)
       try {
         if (store.status.state !== 'ready') return { ok: false, reason: 'storage' }
         const configuration = await store.loadSubscriptionConfiguration()
-        const value = input.observationId === null ? observation(input.source, configuration.context) : await store.loadSubscriptionObservationById(input.observationId)
-        if (!value || value.source !== input.source) return { ok: false, reason: 'not-found' }
-        if (!sameContext(value.context, configuration.context)) return { ok: false, reason: 'stale' }
-        if (value.nextPage === null) return { ok: true, value }
-        const secret = await identity(input.source, value.context)
-        const bounded = AbortSignal.any([signal, AbortSignal.timeout(20_000)])
-        await fetchPage(value, secret, bounded)
-        await store.saveSubscriptionObservation(value)
-        return { ok: true, value }
-      } catch (error) { return { ok: false, reason: error instanceof UnavailableIdentity ? error.reason : 'storage' } }
-      finally { reading.delete(key) }
+        const key = JSON.stringify([input.source, configuration.context, input.observationId])
+        const running = reading.get(key)
+        if (running !== undefined) return await running
+        const task = (async (): Promise<SubscriptionResult<SubscriptionObservation>> => {
+          try {
+            const value = input.observationId === null ? observation(input.source, configuration.context) : await store.loadSubscriptionObservationById(input.observationId)
+            if (!value || value.source !== input.source) return { ok: false, reason: 'not-found' }
+            if (!sameContext(value.context, configuration.context)) return { ok: false, reason: 'stale' }
+            if (value.nextPage === null) return { ok: true, value }
+            const secret = await identity(input.source, value.context)
+            const bounded = AbortSignal.any([signal, AbortSignal.timeout(20_000)])
+            await fetchPage(value, secret, bounded)
+            await store.saveSubscriptionObservation(value)
+            return { ok: true, value }
+          } catch (error) { return { ok: false, reason: error instanceof UnavailableIdentity ? error.reason : 'storage' } }
+        })()
+        reading.set(key, task)
+        try { return await task } finally { if (reading.get(key) === task) reading.delete(key) }
+      } catch { return { ok: false, reason: 'storage' } }
     },
     getOperations: () => store.loadSubscriptionOperations(),
     getPlans: () => store.loadSubscriptionPlans(),
@@ -467,8 +473,24 @@ export function createSubscriptionService(deps: {
         if (store.status.state !== 'ready') return { ok: false, reason: 'storage' }
         const operation = (await store.loadSubscriptionOperations()).find((entry) => entry.id === id)
         if (!operation) return { ok: false, reason: 'not-found' }
+        if (operation.dismissedAt !== undefined) return { ok: false, reason: 'invalid-selection' }
         if (operation.report === 'pending') operation.report = 'unknown'
         return { ok: true, value: await finish(operation, signal, true) }
+      } catch { return { ok: false, reason: 'storage' } }
+      finally { changing = false }
+    },
+    async dismiss({ id }): Promise<SubscriptionResult<SubscriptionOperation>> {
+      if (changing) return { ok: false, reason: 'busy' }
+      changing = true
+      try {
+        if (store.status.state !== 'ready') return { ok: false, reason: 'storage' }
+        const operation = (await store.loadSubscriptionOperations()).find((entry) => entry.id === id)
+        if (!operation) return { ok: false, reason: 'not-found' }
+        if (operation.dismissedAt === undefined) {
+          operation.dismissedAt = now().toISOString()
+          await store.saveSubscriptionOperation(operation)
+        }
+        return { ok: true, value: operation }
       } catch { return { ok: false, reason: 'storage' } }
       finally { changing = false }
     },

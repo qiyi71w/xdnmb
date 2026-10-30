@@ -23,6 +23,7 @@ import { IDENTITY_ROLES } from '../../shared/identity'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
 import type { AttachmentId, DraftId, DraftSaveInput, PostTarget } from '../../shared/drafts'
 import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionPlan, SubscriptionSource } from '../../shared/subscriptions'
+import { completeSubscriptionObservation } from '../../shared/subscriptions'
 import type { SubscriptionBaseline, SubscriptionConfiguration } from './contract'
 import type { PublicationAttempt } from '../../shared/publication'
 import type { PublicationStore } from '../publication/contract'
@@ -1316,16 +1317,20 @@ class SqliteReadingDatabase implements ReadingDatabase {
     this.writable().prepare('UPDATE subscription_configuration SET source = ? WHERE singleton = 1').run(source)
   }
 
-  loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly = false): SubscriptionObservation | null {
+  loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly: boolean | 'complete' = false): SubscriptionObservation | null {
     if (!this.db) return null
     const column = validOnly ? 'valid_observation_json' : 'observation_json'
-    const row = this.db.prepare<[string, number, string | null, string | null, number], { observation_json: string }>(`
+    const rows = this.db.prepare<[string, number, string | null, string | null, number], { observation_json: string }>(`
       SELECT ${column} AS observation_json FROM subscription_observations
       WHERE source = ? AND generation = ? AND app_credential_id IS ? AND web_credential_id IS ?
       AND (? = 0 OR valid_observation_json IS NOT NULL)
-      ORDER BY rowid DESC LIMIT 1
-    `).get(source, context.generation, context.appCredentialId, context.webCredentialId, Number(validOnly))
-    return row ? JSON.parse(row.observation_json) as SubscriptionObservation : null
+      ORDER BY rowid DESC ${validOnly === 'complete' ? '' : 'LIMIT 1'}
+    `).all(source, context.generation, context.appCredentialId, context.webCredentialId, Number(Boolean(validOnly)))
+    for (const row of rows) {
+      const value = JSON.parse(row.observation_json) as SubscriptionObservation
+      if (validOnly !== 'complete' || completeSubscriptionObservation(value)) return value
+    }
+    return null
   }
 
   loadSubscriptionObservationById(id: string): SubscriptionObservation | null {
@@ -1403,7 +1408,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     const db = this.writable()
     db.transaction(() => {
       for (const operation of this.loadSubscriptionOperations()) {
-        if (operation.state !== 'pending') continue
+        if (operation.state !== 'pending' || operation.dismissedAt !== undefined) continue
         operation.state = 'needs-reconciliation'
         if (operation.report === 'pending') operation.report = 'unknown'
         this.saveSubscriptionOperation(operation)

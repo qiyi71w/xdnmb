@@ -4,7 +4,6 @@ import type { ContentFilters } from '../../../../shared/search'
 import { createReadingResets, type ReadingResets } from '../content/readingResets'
 import type { FeedState } from '../feed/feedState'
 import { OnlineSearchSessions } from '../search/onlineSearchSession'
-import type { SubscriptionListState } from '../subscriptions/subscriptionListState'
 import type { TabsState, ThreadSnapshot, ThreadTarget } from './tabsState'
 import { MAX_LIST_PAGES, type WorkspaceList } from './workspaceSnapshot'
 
@@ -75,9 +74,9 @@ export interface SearchPageMemory {
  */
 export type ListMemory =
   | { kind: 'feed'; state: FeedState; scrollTop: number; anchor: WorkspaceList['anchor']; filters: ContentFilters }
+  /** The subscription list itself lives with its collection while the app runs; the view keeps only its own state. */
   | {
       kind: 'subscriptions'
-      state: SubscriptionListState
       scrollTop: number
       view: 'list' | 'reconcile'
       filters: ContentFilters
