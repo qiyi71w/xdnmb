@@ -375,8 +375,12 @@ async function start(): Promise<void> {
       baseUrl: FORUM_API_ORIGIN, browseIdentity: async () => userhash
     }),
     adapter: createPublicationAdapter(),
-    onRecorded: (attempt) => { void failures.recorded(attempt).catch(() => console.error('[publication] failure notice unavailable')) },
-    onChecked: () => {
+    onRecorded: (attempt) => {
+      if (attempt.state === 'confirmed') reminders.publicationConfirmed()
+      void failures.recorded(attempt).catch(() => console.error('[publication] failure notice unavailable'))
+    },
+    onChecked: (attempt) => {
+      if (attempt.state === 'confirmed') reminders.publicationConfirmed()
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.webContents.isDestroyed()) window.webContents.send(PUBLICATION_CHANGED_CHANNEL)
       }

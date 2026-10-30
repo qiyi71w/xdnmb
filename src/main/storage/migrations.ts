@@ -683,6 +683,52 @@ export const MIGRATIONS: readonly Migration[] = [
     up(db) {
       db.exec('ALTER TABLE publication_attempts ADD COLUMN forum_message TEXT CHECK (forum_message IS NULL OR length(forum_message) BETWEEN 1 AND 120);')
     }
+  },
+  {
+    // Counter intervals and local reply evidence are personal records, not evictable page caches.
+    version: 22,
+    up(db) {
+      db.exec(`ALTER TABLE reminder_state ADD COLUMN own_positions_trusted INTEGER NOT NULL DEFAULT 1 CHECK (own_positions_trusted IN (0, 1));
+        CREATE TABLE reminder_count_increments (
+          id INTEGER PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('all', 'po', 'quote')),
+          generation INTEGER NOT NULL,
+          round_id TEXT NOT NULL,
+          count_from INTEGER,
+          count_to INTEGER,
+          added INTEGER NOT NULL CHECK (added > 0),
+          excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded >= 0 AND excluded <= added),
+          cleared INTEGER NOT NULL DEFAULT 0 CHECK (cleared IN (0, 1))
+        );
+        CREATE INDEX reminder_increment_round ON reminder_count_increments(round_id);
+        CREATE INDEX reminder_increment_range ON reminder_count_increments(thread_id, kind, generation, count_from, count_to);
+        CREATE TABLE reminder_reply_positions (
+          thread_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('all', 'po')),
+          generation INTEGER NOT NULL,
+          post_id TEXT NOT NULL,
+          ordinal INTEGER CHECK (ordinal BETWEEN 1 AND 19),
+          observed_count INTEGER NOT NULL,
+          PRIMARY KEY (thread_id, kind, generation, post_id)
+        );
+        CREATE TABLE reminder_local_replies (
+          publication_id INTEGER NOT NULL,
+          thread_id TEXT NOT NULL,
+          post_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('all', 'po')),
+          generation INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'excluded', 'cleared', 'baseline', 'closed')),
+          increment_id INTEGER,
+          PRIMARY KEY (publication_id, kind, generation)
+        );
+        CREATE INDEX reminder_local_reply_position ON reminder_local_replies(thread_id, kind, generation, post_id, status);
+        INSERT INTO reminder_local_replies (publication_id, thread_id, post_id, kind, generation)
+          SELECT p.id, p.thread_id, p.post_id, r.kind, r.generation
+          FROM publication_attempts p JOIN reminder_rules r ON r.thread_id = p.thread_id
+          WHERE p.state = 'confirmed' AND json_extract(p.payload_json, '$.target.kind') = 'reply'
+            AND r.enabled = 1 AND r.kind IN ('all', 'po');`)
+    }
   }
 ]
 

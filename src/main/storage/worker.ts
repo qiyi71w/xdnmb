@@ -137,6 +137,7 @@ port.on('message', (request: StorageRequest) => {
       case 'reminderCookieIds': value = db.reminderCookieIds(...request.args); break
       case 'reminderQuoteSources': value = db.reminderQuoteSources(...request.args); break
       case 'updateReminderState': value = db.updateReminderState(...request.args); break
+      case 'reminderIncreasedThreads': value = db.reminderIncreasedThreads(...request.args); break
       case 'clearReminderCounts': value = db.clearReminderCounts(...request.args); break
       case 'finishReminderCheck': value = db.finishReminderCheck(...request.args); break
       case 'loadReminderBackoff': value = db.loadReminderBackoff(...request.args); break

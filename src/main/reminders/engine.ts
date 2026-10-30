@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { ReadError } from '../../shared/api'
 import { comparePostIds, type ContentNode, type Post, type PostId, type ReadingMode, type ThreadPage } from '../../shared/forum'
 import { REMINDER_KINDS, type CoverageIssue, type ReminderKind } from '../../shared/reminders'
@@ -84,8 +85,10 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   rules: RuleSnapshot[]
   signal: AbortSignal
   increased: Set<string>
+  roundId?: string
 }): Promise<{ rateLimited: boolean; complete: boolean }> {
   const { store, now } = deps
+  const roundId = input.roundId ?? randomUUID()
   const states = new Map((await store.reminderStates()).map((state) => [`${state.threadId}:${state.kind}`, state]))
   const cookieIds = new Set(await store.reminderCookieIds())
   const hasCookie = (await store.listCredentials()).length > 0
@@ -105,7 +108,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   }
 
   async function write(run: ThreadRun, kind: ReminderKind, update: Omit<ReminderUpdate, 'threadId' | 'kind' | 'generation' | 'at'>): Promise<void> {
-    const applied = await store.updateReminderState({ ...update, threadId: run.threadId, kind, generation: run.kinds[kind]!.rule.generation, at: now() })
+    const applied = await store.updateReminderState({ ...update, roundId, threadId: run.threadId, kind, generation: run.kinds[kind]!.rule.generation, at: now() })
     if (applied && (update.add ?? 0) > 0) input.increased.add(run.threadId)
   }
   /** Saves the kind's issues of this check and marks it checked. */
@@ -173,12 +176,16 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     const value = run.kinds[kind]
     if (value) {
       const baseline = value.state?.baseline ?? null
+      const firstPageReplyIds = page.replySequenceIntact === true && replyCount !== null && Number.isSafeInteger(replyCount)
+        && page.replies.length === Math.min(PAGE_SIZE, replyCount)
+        && page.replies.every((reply, index) => index === 0 || comparePostIds(page.replies[index - 1]!.id, reply.id) < 0)
+        ? page.replies.map((reply) => reply.id) : undefined
       if (replyCount === null) value.issues.add('count-invalid')
       else if (baseline !== null && replyCount > baseline) {
-        await write(run, kind, { baseline: replyCount, add: replyCount - baseline, firstPage: pageOf(baseline + 1) })
+        await write(run, kind, { baseline: replyCount, add: replyCount - baseline, firstPage: pageOf(baseline + 1), firstPageReplyIds })
       } else {
         if (baseline !== null && replyCount < baseline) value.issues.add('count-decreased')
-        await write(run, kind, { baseline: replyCount })
+        await write(run, kind, { baseline: replyCount, firstPageReplyIds })
       }
       await finish(run, kind)
     }
@@ -334,6 +341,9 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       if (rateLimit !== null) await interrupt(run, kind, rateLimit)
       else if (run.steps.length > 0 && run.kinds[kind] && !run.kinds[kind]!.done) await interrupt(run, kind, null)
     }
+    const increased = await store.reminderIncreasedThreads(roundId)
+    input.increased.clear()
+    for (const threadId of increased) input.increased.add(threadId)
     deps.changed()
   }
   return { rateLimited: rateLimit !== null, complete: complete && !input.signal.aborted && runs.every((run) => run.steps.length === 0) }

@@ -17,6 +17,8 @@ export interface ReminderService extends Omit<RemindersApi, 'onOpenList'> {
   stop(reason: 'quit' | 'user'): Promise<void>
   /** Deterministic completion seam; does not trigger or enqueue a check. */
   whenIdle(): Promise<void>
+  /** A publication transaction may have corrected existing counts; emits change without checking. */
+  publicationConfirmed(): void
 }
 
 export function createReminderService(deps: {
@@ -210,8 +212,9 @@ export function createReminderService(deps: {
     changed()
     void (async () => {
       const increased = new Set<string>()
+      const roundId = randomUUID()
       try {
-        const result = await runReminderRound({ ...deps, now, changed }, { rules, signal: current.abort.signal, increased })
+        const result = await runReminderRound({ ...deps, now, changed }, { rules, signal: current.abort.signal, increased, roundId })
         if (result.rateLimited) {
           let notify = false
           try {
@@ -239,6 +242,15 @@ export function createReminderService(deps: {
         await deps.store.finishReminderCheck(now())
       } catch {
         // The previous 上次检查 time stays.
+      }
+      try {
+        // Confirmation and clearing can commit after the engine finishes. This read is the
+        // notification decision; a later confirmation cannot retract an already chosen notice.
+        const current = await deps.store.reminderIncreasedThreads(roundId)
+        increased.clear()
+        for (const threadId of current) increased.add(threadId)
+      } catch {
+        // Keep the engine's last successfully observed decision when storage becomes unavailable.
       }
       // One notification per check with new counts, whether it finished or was interrupted (quit
       // included). A failed or unavailable notification changes nothing in the app.
@@ -281,6 +293,7 @@ export function createReminderService(deps: {
     cancel: () => stop('user'),
     stop,
     whenIdle: async () => { while (active !== null) await active.done },
+    publicationConfirmed: changed,
     getRules: ({ threadIds }) => storage(async () => ({ threads: await deps.store.getReminderRules(threadIds) })),
     setRule: ({ threadId, kind, enabled }) => {
       const epoch = intentEpoch

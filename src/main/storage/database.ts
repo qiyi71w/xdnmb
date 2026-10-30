@@ -315,6 +315,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
   reminderCookieIds: ReadingDatabase['reminderCookieIds'] = () => this.reminders.cookieIds()
   reminderQuoteSources: ReadingDatabase['reminderQuoteSources'] = (ids) => this.reminders.quoteSources(ids)
   updateReminderState: ReadingDatabase['updateReminderState'] = (value) => this.reminders.update(value)
+  reminderIncreasedThreads: ReadingDatabase['reminderIncreasedThreads'] = (roundId) => this.reminders.increasedThreads(roundId)
   clearReminderCounts: ReadingDatabase['clearReminderCounts'] = (id) => this.reminders.clearCounts(id)
   finishReminderCheck: ReadingDatabase['finishReminderCheck'] = (at) => this.reminders.finishCheck(at)
   loadReminderBackoff: ReadingDatabase['loadReminderBackoff'] = () => this.reminders.loadBackoff()
@@ -1149,6 +1150,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
         db.prepare('UPDATE publication_attempts SET attachment_id = NULL, saved_draft_id = ? WHERE id = ?')
           .run(savedDraftId, input.id)
       }
+      if (input.state === 'confirmed' && attempt.payload.target.kind === 'reply') this.reminders.confirmedPublication(input.threadId!)
       const finished = this.getPublication(input.id)
       if (!finished) throw new Error('publication result returned no row')
       return finished

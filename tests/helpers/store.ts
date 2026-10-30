@@ -111,6 +111,7 @@ export function asStore(db: ReadingDatabase): AppStore {
     reminderCookieIds: async () => db.reminderCookieIds(),
     reminderQuoteSources: async (...args) => db.reminderQuoteSources(...args),
     updateReminderState: async (...args) => db.updateReminderState(...args),
+    reminderIncreasedThreads: async (roundId) => db.reminderIncreasedThreads(roundId),
     clearReminderCounts: async (...args) => db.clearReminderCounts(...args),
     finishReminderCheck: async (...args) => db.finishReminderCheck(...args),
     loadReminderBackoff: async () => db.loadReminderBackoff(),
