@@ -40,7 +40,8 @@ function ignore(): undefined {
  * Main-process lifecycle requests. `close` offers 后台驻留 / 退出汐岛; `quit` runs the real quit:
  * close competing dialogs, cancel open PO questions, wait for sends that settle by themselves (an
  * uncertain one is checked once; still uncertain stops the quit), save every editor's draft now
- * (asking only when that fails), save the workspace, then let the main process close the window.
+ * (asking only when that fails), save the workspace (skipped when storage refuses every write this
+ * run), then let the main process close the window.
  * Nothing is ever sent, a locked editor is never saved, and the window is shown only when there is
  * something to answer. From start to completion or cancellation the rest of the window is inert (a
  * question, or the working dialog), so nothing can change after the drafts were saved.
@@ -192,17 +193,22 @@ export function LifecycleHost({
       await flush()
 
       setWork('saving')
+      let workspaceSaved = false
       for (;;) {
         const workspace = buildWorkspace()
-        let saved = false
+        let writable = true
         if (workspace !== null) {
           try {
-            saved = (await window.xidao.lifecycle.saveWorkspace({ workspace: serializeWorkspace(workspace) })).ok
+            const result = await window.xidao.lifecycle.saveWorkspace({ workspace: serializeWorkspace(workspace) })
+            workspaceSaved = result.ok
+            writable = result.writable
           } catch {
-            saved = false
+            workspaceSaved = false
           }
         }
-        if (saved) break
+        // Read-only or unavailable storage saves nothing this run (the banner says so) and no retry
+        // can change that: quit, leaving the workspace saved before as it is.
+        if (workspaceSaved || !writable) break
         if ((await ask({ kind: 'save-failed', saving: false })) === 'cancel') {
           cancel()
           return
@@ -210,8 +216,8 @@ export function LifecycleHost({
         setQuestion({ kind: 'save-failed', saving: true })
       }
       setQuestion(null)
-      // Quitting although drafts were not saved never installs an update at this exit.
-      completed = await window.xidao.lifecycle.completeQuit({ draftsSaved: failures.size === 0 }).then(
+      // Quitting although drafts or the workspace were not saved never installs an update at this exit.
+      completed = await window.xidao.lifecycle.completeQuit({ saved: failures.size === 0 && workspaceSaved }).then(
         () => true,
         () => false
       )

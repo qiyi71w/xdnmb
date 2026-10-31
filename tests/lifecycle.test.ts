@@ -336,7 +336,7 @@ describe('window lifecycle', () => {
     lossy.lifecycle.requestQuit('install')
     lossy.lifecycle.completeQuit(false)
     await flush()
-    expect(lossy.exitReasons).toEqual(['drafts-lost'])
+    expect(lossy.exitReasons).toEqual(['unsaved'])
   })
 
   it('never exits for installing once the session is ending, and asks a running window to save at once', async () => {

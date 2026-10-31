@@ -886,9 +886,9 @@ export function registerIpc({
   handle(IpcChannel.lifecyclePresentQuit, async () => lifecycle.presentQuit())
   handle(IpcChannel.lifecycleCancelQuit, async () => lifecycle.cancelQuit())
   handle(IpcChannel.lifecycleCompleteQuit, async (_event, raw) => {
-    const draftsSaved = record(raw).draftsSaved
-    if (typeof draftsSaved !== 'boolean') throw new InvalidRequestError()
-    lifecycle.completeQuit(draftsSaved)
+    const saved = record(raw).saved
+    if (typeof saved !== 'boolean') throw new InvalidRequestError()
+    lifecycle.completeQuit(saved)
   })
   handle(IpcChannel.loadWorkspace, async () => {
     try {
@@ -900,7 +900,8 @@ export function registerIpc({
   handle(IpcChannel.saveWorkspace, async (_event, raw) => {
     const workspace = record(raw).workspace
     if (typeof workspace !== 'string' || workspace.length > MAX_WORKSPACE_LENGTH) throw new InvalidRequestError()
-    return { ok: await attempt(() => store.saveWorkspace(workspace, new Date().toISOString())) }
+    const ok = await attempt(() => store.saveWorkspace(workspace, new Date().toISOString()))
+    return { ok, writable: ok || store.status.state === 'ready' }
   })
   handle(IpcChannel.listLaunchNotices, async () => {
     try {
