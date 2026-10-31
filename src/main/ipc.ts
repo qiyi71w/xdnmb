@@ -1,3 +1,4 @@
+import type { AnalyticsService } from './analytics/service'
 import { isAnnouncementIdentity } from '../shared/announcements'
 import type { AnnouncementService } from './announcements/service'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
@@ -68,6 +69,7 @@ class InvalidRequestError extends Error {
 }
 
 interface IpcDeps {
+  analytics: AnalyticsService
   announcements: AnnouncementService
   content: ContentService
   search: SearchService
@@ -315,7 +317,7 @@ export interface IpcRegistration {
 
 export function registerIpc({
   reading, images, identities, account, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
-  announcements, updates, getStatus, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
+  analytics, announcements, updates, getStatus, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): IpcRegistration {
   const owner = (sender: WebContents): string => String(sender.id)
   const operations = new OperationRegistry()
@@ -342,6 +344,13 @@ export function registerIpc({
       return handler(event, input)
     })
   }
+
+  handle(IpcChannel.analyticsGetState, async () => analytics.getState())
+  handle(IpcChannel.analyticsSetChoice, async (_event, raw) => {
+    if (raw !== 'on' && raw !== 'off') throw new InvalidRequestError()
+    return analytics.setChoice(raw)
+  })
+  handle(IpcChannel.analyticsDeleteData, async () => analytics.deleteData())
 
   handle(IpcChannel.announcementGetState, async () => announcements.getState())
   handle(IpcChannel.announcementRefresh, async () => announcements.refresh())

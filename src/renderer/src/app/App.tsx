@@ -21,6 +21,7 @@ import {
 } from '../features/directory/navStore'
 import { useDirectory } from '../features/directory/useDirectory'
 import { HistoryPageContext, type HistoryPageHost } from '../features/content/RetainedPane'
+import { AnalyticsChoiceDialog, useAnalyticsChoicePrompt } from '../features/analytics/AnalyticsChoiceDialog'
 import { AnnouncementNavigationContext } from '../features/announcements/AnnouncementBody'
 import { AnnouncementDialog, useAutomaticAnnouncement, useFocusConditions } from '../features/announcements/AnnouncementDialog'
 import { isTextEntry, promptEligible } from '../features/announcements/startupPrompt'
@@ -370,7 +371,7 @@ export function App() {
   })
   const pendingTabFocus = useRef(false)
 
-  // ---------- Startup prompts (the automatic announcement) ----------
+  // ---------- Startup prompts (the statistics question, then the automatic announcement) ----------
   /**
    * The startup restore finished (tabs, reopened drafts) and the lifecycle check after it settled,
    * so a dialog that check raises is already up. Set once by `LifecycleHost`.
@@ -407,7 +408,11 @@ export function App() {
       !isTextEntry(document.activeElement),
     []
   )
-  const automaticAnnouncement = useAutomaticAnnouncement(promptAllowed, promptStillAllowed)
+  // The first-run statistics question comes first; the announcement waits until it is settled
+  // (never asked, answered, or unreadable) and then for its own eligible moment.
+  const analyticsChoice = useAnalyticsChoicePrompt(promptAllowed, promptStillAllowed)
+  const { close: closeAnalyticsChoice, drop: dropAnalyticsChoice } = analyticsChoice
+  const automaticAnnouncement = useAutomaticAnnouncement(promptAllowed && analyticsChoice.settled, promptStillAllowed)
   const { close: closeAnnouncement } = automaticAnnouncement
 
   // ---------- Quote cards (preview, locate, quote navigation) ----------
@@ -1071,7 +1076,9 @@ export function App() {
     quote.cardProps?.onClose()
     // Closed for this run only, as 确认 would: nothing is stored.
     closeAnnouncement()
-  }, [closeNav, searchCommands, quote.cardProps, closeAnnouncement])
+    // Unanswered: asked again if the quit is cancelled, and at the next start.
+    dropAnalyticsChoice()
+  }, [closeNav, searchCommands, quote.cardProps, closeAnnouncement, dropAnalyticsChoice])
 
   /** Opens a sent record's place from 历史 in a new active tab (global split default). */
   const openEntryInTab = useCallback((entry: EntryInit) => {
@@ -1607,6 +1614,9 @@ export function App() {
               resolving={promptEditor.publication.resolving}
               onAnswer={(answer) => void resolvePrompt(promptEditor.id, answer)}
             />
+          )}
+          {analyticsChoice.shown && (
+            <AnalyticsChoiceDialog receiver={analyticsChoice.receiver} onClose={closeAnalyticsChoice} fallbackFocus={activeTabFocus} />
           )}
           {automaticAnnouncement.announcement !== null && (
             <AnnouncementDialog announcement={automaticAnnouncement.announcement} onClose={closeAnnouncement} fallbackFocus={activeTabFocus} />

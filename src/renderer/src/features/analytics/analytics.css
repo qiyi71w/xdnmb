@@ -1,0 +1,146 @@
+/* Usage statistics (features/analytics): the first-run question and 设置 › 使用统计. The text sits
+   on paper, wraps everywhere, and the dialog's 关闭／开启 stay outside its scrolling body, so both
+   remain reachable in narrow windows and at 200% zoom. */
+
+.analytics-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.analytics-dialog-body {
+  gap: 10px;
+}
+
+.analytics-lead {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.analytics-disclosure {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-s);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.analytics-disclosure dt {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.analytics-disclosure dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.analytics-disclosure p {
+  margin: 0;
+}
+
+.analytics-disclosure ul {
+  margin: 4px 0;
+  padding-left: 1.25em;
+  list-style: disc;
+}
+
+/* Narrow windows and large zoom: each term above its text. */
+@media (max-width: 480px) {
+  .analytics-disclosure {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analytics-disclosure dd + dt {
+    margin-top: 4px;
+  }
+}
+
+.analytics-actions {
+  align-items: center;
+}
+
+.analytics-failure {
+  flex: 1 1 100%;
+  margin: 0;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+
+.analytics-failure .icon,
+.analytics-warning .icon {
+  flex: none;
+  margin-top: 3px;
+}
+
+.analytics-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  margin: 0;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.analytics-status-line .spinner {
+  flex: none;
+}
+
+.analytics-warning {
+  margin: 0;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+
+.analytics-outcome:empty {
+  display: none;
+}
+
+.analytics-delete {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.analytics-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: var(--radius-s);
+  font-size: var(--text-sm);
+  color: var(--accent-ink);
+  list-style: none;
+  cursor: pointer;
+}
+
+.analytics-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.analytics-details > summary:hover {
+  background: var(--hover);
+}
+
+.analytics-details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.analytics-details-icon {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.analytics-details[open] > summary .analytics-details-icon {
+  transform: rotate(90deg);
+}
+
+.analytics-details > .analytics-disclosure {
+  margin-top: 8px;
+}

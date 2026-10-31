@@ -44,6 +44,11 @@ const onOpenDraft = bufferedChannel<[notice: SendFailureNotice]>(PUBLICATION_OPE
 
 // Named operations only: no generic invoke/send, no Electron objects, URLs, SQL or file access.
 const api: XidaoApi = {
+  analytics: {
+    getState: () => ipcRenderer.invoke(IpcChannel.analyticsGetState),
+    setChoice: (choice) => ipcRenderer.invoke(IpcChannel.analyticsSetChoice, choice),
+    deleteData: () => ipcRenderer.invoke(IpcChannel.analyticsDeleteData)
+  },
   announcements: {
     getState: () => ipcRenderer.invoke(IpcChannel.announcementGetState),
     refresh: () => ipcRenderer.invoke(IpcChannel.announcementRefresh),
