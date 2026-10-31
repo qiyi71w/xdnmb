@@ -1,13 +1,18 @@
 import { createContext } from 'react'
+import type { LocateHint } from '../../../../shared/api'
 import type { PostId } from '../../../../shared/forum'
 
-/** A real content host, not necessarily a post. Preview hosts stay distinct from the reader. */
-export type QuoteHost = { postId: PostId } | { descriptionId: string } | { previewId: string }
+/**
+ * A real content host, not necessarily a post. Preview hosts stay distinct from the reader.
+ * `selectionId` is a selected whole post number inside some content: it has no element of its own.
+ */
+export type QuoteHost = { postId: PostId } | { descriptionId: string } | { previewId: string } | { selectionId: string }
 export type QuoteAnchor = QuoteHost & { quoteIndex: number }
 
 export function quoteHostId(host: QuoteHost): string {
   if ('postId' in host) return host.postId
   if ('descriptionId' in host) return `description:${host.descriptionId}`
+  if ('selectionId' in host) return `selection:${host.selectionId}`
   return `preview:${host.previewId}`
 }
 
@@ -23,6 +28,22 @@ export interface QuoteRefInfo {
   quoteIndex: number
   /** The quoted post. */
   postId: PostId
+  /** Verified forum link clue (thread and page), used only when local records do not locate the post. */
+  hint?: LocateHint
+}
+
+/**
+ * A whole post number the user selected in body content (see `selectedPostNumber`). It is no
+ * reference: nothing was linked or requested before the user chose an action on it.
+ */
+export interface SelectedNumber {
+  /** History entry whose content holds the selection. */
+  entryKey: number
+  postId: PostId
+  /** The selected text, for placing the card under it while the content stays. */
+  range: Range
+  /** Where focus goes back when the card closes (the post or row whose menu offered the action). */
+  returnFocus: HTMLElement | null
 }
 
 /** What a quote reference can ask of the app-level quote controller. */
@@ -49,6 +70,12 @@ export interface QuoteController {
   contextMenu(info: QuoteRefInfo): void
   /** Tab from the quote reference whose card is open: moves focus into the card. */
   focusCard(): boolean
+  /**
+   * An action on a selected number, from its content's context menu (right click, ContextMenu key or
+   * Shift+F10): `preview` opens the pinned card; `navigate` / `new-tab` locate it like a click / Ctrl·Cmd
+   * click on a quote, with the same card for anything but a located post.
+   */
+  selection(selected: SelectedNumber, action: 'preview' | 'navigate' | 'new-tab'): void
 }
 
 export const QuoteControllerContext = createContext<QuoteController | null>(null)

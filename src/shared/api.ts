@@ -4,7 +4,7 @@ import type { AccountApi } from './account'
 import type { ContentApi } from './content'
 import type { BoardDirectory, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
 import type { CredentialId, IdentityMutationResult, IdentityOverview, IdentityRole, ImportResult } from './identity'
-import type { ImageLoadOutcome, ImageLoadRequest, ImageSaveOutcome, ImageViewId } from './images'
+import type { ImageCopyOutcome, ImageLoadOutcome, ImageLoadRequest, ImageSaveOutcome, ImageViewId } from './images'
 import type {
   AttachmentId, AttachResult, DraftDeleteResult, DraftId, DraftListResult, DraftSaveInput, DraftSaveResult, EditorId,
   IdentityChoice, PostTarget
@@ -17,7 +17,7 @@ import type { RemindersApi } from './reminders'
 import type { AppSettings, ZoomAction, ZoomState } from './settings'
 import type { AppearanceIssue } from './theme'
 import type { SearchApi } from './search'
-import type { SearchOutcome, SearchSessionId } from './online-search'
+import type { SearchChannel, SearchOutcome, SearchSessionId, ThreadOfOutcome } from './online-search'
 import type { UpdatesApi } from './updates'
 
 /** Edit commands the main process runs on the requesting window, as its Edit menu would. */
@@ -68,6 +68,8 @@ export interface ReadError {
   kind: ReadErrorKind
   detail: ReadErrorDetail
   httpStatus?: number
+  /** Raw HTTP Retry-After; only service-specific callers interpret its deadline. */
+  retryAfter?: string
   /** Lower page identified by a repeated response; present for page-cap failures. */
   highestReadablePage?: number
   /** `page-cap`: verified lower page already read during validation; reuse without another request. */
@@ -242,25 +244,26 @@ export interface XidaoApi {
     locate(input: { operationId: OperationId; postId: PostId; hint?: LocateHint }): Promise<QuoteLocation>
   }
   /**
-   * Online search (nmb-search). Requests happen only for `run`, a not-yet-obtained `page` and nothing
-   * else; there is no retry, prefetch or background request. Sessions are scoped to the calling page
-   * and released by `close` or when the page goes away. No forum identity is ever involved.
+   * Online search with explicit channel selection. Only user run/page/retry actions request data;
+   * channels keep independent chains, and no forum identity is ever involved.
    */
   onlineSearch: {
     /** Starts a new query chain in the session (creating it), superseding any earlier chain; returns page 1. */
-    run(input: { sessionId: SearchSessionId; query: string }): Promise<SearchOutcome>
+    run(input: { sessionId: SearchSessionId; channel: SearchChannel; query: string }): Promise<SearchOutcome>
     /**
-     * Page `page` of the current chain: an obtained page comes back from the session without a
-     * request; the next page is requested with the chain's token at most once (concurrent calls share
-     * the same request); anything else is `unavailable`.
+     * Page `page` of this channel's current chain: obtained pages are local. XDS requests the next
+     * numeric page and permits an explicit retry after failure; nmb-search spends its one-use token.
+     * Concurrent calls for the same new page share a request; other pages are `unavailable`.
      */
-    page(input: { sessionId: SearchSessionId; page: number }): Promise<SearchOutcome>
-    /** Cancels the session's in-flight request. A cancelled next-page request spends its token. */
-    cancel(input: { sessionId: SearchSessionId }): Promise<void>
+    page(input: { sessionId: SearchSessionId; channel: SearchChannel; page: number }): Promise<SearchOutcome>
+    /** Cancels this channel's in-flight request; only nmb-search loses its spent next-page token. */
+    cancel(input: { sessionId: SearchSessionId; channel: SearchChannel }): Promise<void>
     /** Releases the session and its pages; an in-flight request is cancelled. */
-    close(input: { sessionId: SearchSessionId }): Promise<void>
+    close(input: { sessionId: SearchSessionId; channel: SearchChannel }): Promise<void>
     /** Opens the search website (fixed URL) in the system browser. */
-    openSite(): Promise<{ opened: boolean }>
+    openSite(input: { channel: SearchChannel }): Promise<{ opened: boolean }>
+    /** Explicit disclosed XDS ownership lookup only; cancel through reading.cancel. */
+    threadOf(input: { operationId: OperationId; postId: PostId }): Promise<ThreadOfOutcome>
   }
   /** Local reading context. Never touches the network; downloads and previews never call it. */
   readingState: {
@@ -312,6 +315,8 @@ export interface XidaoApi {
      * named by its detected format. Never saves a thumbnail instead.
      */
     saveOriginal(input: { postId: PostId }): Promise<ImageSaveOutcome>
+    /** Copies only the matching ready managed original; main determines the file and encoding. */
+    copyOriginal(input: { postId: PostId; url: string }): Promise<ImageCopyOutcome>
   }
   links: {
     /** Opens an absolute http(s) URL in the system browser; anything else is refused. */
@@ -387,7 +392,9 @@ export const IpcChannel = {
   listBlocks: 'blocks:list',
   setBlock: 'blocks:set',
   listCookieColors: 'cookie-colors:list',
+  addCookieColor: 'cookie-colors:add',
   setCookieColor: 'cookie-colors:set',
+  removeCookieColor: 'cookie-colors:remove',
   searchStart: 'search:start',
   searchNext: 'search:next',
   searchCancel: 'search:cancel',
@@ -400,6 +407,7 @@ export const IpcChannel = {
   cancelOnlineSearch: 'online-search:cancel',
   closeOnlineSearch: 'online-search:close',
   openOnlineSearchSite: 'online-search:open-site',
+  searchThreadOf: 'online-search:thread-of',
   listHistory: 'content:list-history',
   listOffline: 'content:list-offline',
   clearHistory: 'content:clear-history',
@@ -436,6 +444,7 @@ export const IpcChannel = {
   cancelImage: 'images:cancel',
   releaseImageView: 'images:release-view',
   saveOriginalImage: 'images:save-original',
+  copyOriginalImage: 'images:copy-original',
   accountOverview: 'account:overview',
   accountLogin: 'account:login',
   accountList: 'account:list',
@@ -462,10 +471,12 @@ export const IpcChannel = {
   subscriptionRevealApp: 'subscriptions:reveal-app',
   subscriptionSelectSource: 'subscriptions:select-source',
   subscriptionObservation: 'subscriptions:observation',
+  subscriptionSnapshot: 'subscriptions:snapshot',
   subscriptionRead: 'subscriptions:read',
   subscriptionChange: 'subscriptions:change',
   subscriptionOperations: 'subscriptions:operations',
   subscriptionReconcile: 'subscriptions:reconcile',
+  subscriptionDismiss: 'subscriptions:dismiss',
   subscriptionMergeSources: 'subscriptions:merge-sources',
   subscriptionPreviewSync: 'subscriptions:preview-sync',
   subscriptionPreviewMerge: 'subscriptions:preview-merge',

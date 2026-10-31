@@ -9,7 +9,9 @@ import type {
   SubscriptionPlanItem,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
+import { completeSubscriptionObservation } from '../../../../shared/subscriptions'
 import { describeReadError, meaningfulTitle } from '../../lib/format'
+import { formatClockTime } from '../../lib/time'
 
 // Fixed copy only. Nothing here ever includes a UUID, a userhash or any other secret: the
 // renderer only knows local references, names and generations.
@@ -98,6 +100,27 @@ export function needsReconcile(operation: SubscriptionOperation): boolean {
     operation.verification === 'mismatch' ||
     operation.verification === 'absent-unproven'
   )
+}
+
+/**
+ * What the latest readback or 核对 of a write saw, with when it started; null before any. A read
+ * that stopped early without the thread says so: it is not evidence of absence.
+ */
+export function readbackText(operation: SubscriptionOperation): string | null {
+  const after = operation.after
+  if (after === null) return null
+  const at = `（${formatClockTime(after.startedAt)}）`
+  if (after.ids.includes(operation.threadId)) return `回读看到这个串在订阅中${at}`
+  if (after.error !== null) return `回读第 ${after.error.page} 页失败：${describeReadError(after.error.detail)}${at}`
+  if (after.cancelled) return `回读已停止，已读的页中没有这个串${at}`
+  if (!completeSubscriptionObservation(after)) return `回读未读完，已读的页中没有这个串${at}`
+  return `回读读完整份订阅，没有这个串${at}`
+}
+
+/** Why closing (×) an unresolved entry was not saved; it and its protection stay. */
+export function dismissFailureText(reason: SubscriptionFailure | 'internal'): string {
+  if (reason === 'busy') return '关闭未保存：另一项订阅操作正在进行，提示保留'
+  return `关闭未保存：${reason === 'internal' ? '应用内部请求失败' : failureText(reason)}，提示保留`
 }
 
 function reportText(operation: SubscriptionOperation): string {

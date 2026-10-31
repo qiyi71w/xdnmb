@@ -20,8 +20,8 @@ export function comparePostIds(a: PostId, b: PostId): number {
 export type ContentNode =
   | { type: 'text'; text: string }
   | { type: 'lineBreak' }
-  /** Explicit reference to another post, e.g. `>>No.50000001`. Interaction belongs to quote navigation. */
-  | { type: 'quoteRef'; postId: PostId; raw: string }
+  /** Reading reference. `readingOnly` candidates do not count as explicit reminder quotes. */
+  | { type: 'quoteRef'; postId: PostId; raw: string; readingOnly?: true; hint?: { threadId: ThreadId; page: number | null } }
   | { type: 'emphasis'; style: EmphasisStyle; children: ContentNode[] }
   /** Forum quote styling (`<font color="#789922">`, inline green), rendered as a semantic quote span. */
   | { type: 'greentext'; children: ContentNode[] }
@@ -127,6 +127,8 @@ export interface ThreadPage {
   replyCount: number | null
   /** Items present but malformed. `> 0` means partial; such a page is never an end candidate. */
   skippedItems: number
+  /** Fresh protocol observation only: no malformed, duplicate, excess, or head-as-reply items. */
+  replySequenceIntact?: boolean
   /** Valid target and structure with zero real replies and nothing skipped. A candidate, not proof. */
   endCandidate: boolean
 }

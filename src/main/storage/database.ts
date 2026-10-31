@@ -1,5 +1,5 @@
 import type { LocalBlock } from '../../shared/blocks'
-import { DEFAULT_COOKIE_COLOR, isCookieColorName, type CookieColor, type CookieColorName } from '../../shared/cookieColors'
+import { IMPORTED_COOKIE_COLOR, isCookieColorName, type CookieColor, type CookieColorName } from '../../shared/cookieColors'
 import Database from 'better-sqlite3'
 import type { StorageStatus } from '../../shared/api'
 import type {
@@ -23,6 +23,7 @@ import { IDENTITY_ROLES } from '../../shared/identity'
 import type { CredentialId, CredentialSource, CredentialSummary, IdentityRole, RoleSelection } from '../../shared/identity'
 import type { AttachmentId, DraftId, DraftSaveInput, PostTarget } from '../../shared/drafts'
 import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionPlan, SubscriptionSource } from '../../shared/subscriptions'
+import { completeSubscriptionObservation } from '../../shared/subscriptions'
 import type { SubscriptionBaseline, SubscriptionConfiguration } from './contract'
 import type { PublicationAttempt } from '../../shared/publication'
 import type { PublicationStore } from '../publication/contract'
@@ -315,6 +316,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
   reminderCookieIds: ReadingDatabase['reminderCookieIds'] = () => this.reminders.cookieIds()
   reminderQuoteSources: ReadingDatabase['reminderQuoteSources'] = (ids) => this.reminders.quoteSources(ids)
   updateReminderState: ReadingDatabase['updateReminderState'] = (value) => this.reminders.update(value)
+  reminderIncreasedThreads: ReadingDatabase['reminderIncreasedThreads'] = (roundId) => this.reminders.increasedThreads(roundId)
   clearReminderCounts: ReadingDatabase['clearReminderCounts'] = (id) => this.reminders.clearCounts(id)
   finishReminderCheck: ReadingDatabase['finishReminderCheck'] = (at) => this.reminders.finishCheck(at)
   loadReminderBackoff: ReadingDatabase['loadReminderBackoff'] = () => this.reminders.loadBackoff()
@@ -902,28 +904,36 @@ class SqliteReadingDatabase implements ReadingDatabase {
   }
 
   /**
-   * Gives an imported cookie's 饼干 ID the default color, once per ID ever: an ID that already has a
-   * color keeps it, and one whose automatic color was later changed or cleared is not colored again.
+   * Gives an imported cookie's 饼干 ID the imported color, once per ID ever: an ID already listed
+   * (in 默认 or a color) keeps its entry, and one whose automatic color was later changed, set to
+   * 默认 or removed is not colored again.
    */
   private colorOwnCookieId(cookieId: string, at: string): void {
     const db = this.writable()
     if (db.prepare('INSERT OR IGNORE INTO cookie_color_auto (cookie_id) VALUES (?)').run(cookieId).changes === 0) return
-    db.prepare('INSERT OR IGNORE INTO cookie_colors (cookie_id, color, created_at) VALUES (?, ?, ?)').run(cookieId, DEFAULT_COOKIE_COLOR, at)
+    db.prepare('INSERT OR IGNORE INTO cookie_colors (cookie_id, color, created_at) VALUES (?, ?, ?)').run(cookieId, IMPORTED_COOKIE_COLOR, at)
   }
 
   listCookieColors(): CookieColor[] {
     if (!this.db) return []
-    return this.db.prepare<[], { cookieId: string; color: string; createdAt: string }>(
+    return this.db.prepare<[], { cookieId: string; color: string | null; createdAt: string }>(
       'SELECT cookie_id AS cookieId, color, created_at AS createdAt FROM cookie_colors ORDER BY created_at, cookie_id'
-    ).all().filter((row): row is CookieColor => isCookieColorName(row.color))
+    ).all().map((row) => ({ ...row, color: isCookieColorName(row.color) ? row.color : null }))
   }
 
-  /** Colors a 饼干 ID (an existing one keeps its date and changes color) or, with `null`, clears it. */
+  /** Lists a 饼干 ID in 默认 (null color); false when already listed, which leaves it as it was. */
+  addCookieColor(cookieId: string, at: string): boolean {
+    return this.writable().prepare('INSERT OR IGNORE INTO cookie_colors (cookie_id, color, created_at) VALUES (?, NULL, ?)').run(cookieId, at).changes === 1
+  }
+
+  /** A palette color, or 默认 with `null`; a listed ID keeps its date (its place), an unlisted one is added. */
   setCookieColor(cookieId: string, color: CookieColorName | null, at: string): void {
-    const db = this.writable()
-    if (color === null) db.prepare('DELETE FROM cookie_colors WHERE cookie_id = ?').run(cookieId)
-    else db.prepare(`INSERT INTO cookie_colors (cookie_id, color, created_at) VALUES (?, ?, ?)
+    this.writable().prepare(`INSERT INTO cookie_colors (cookie_id, color, created_at) VALUES (?, ?, ?)
       ON CONFLICT (cookie_id) DO UPDATE SET color = excluded.color`).run(cookieId, color, at)
+  }
+
+  removeCookieColor(cookieId: string): void {
+    this.writable().prepare('DELETE FROM cookie_colors WHERE cookie_id = ?').run(cookieId)
   }
 
   deleteCredential(id: CredentialId): boolean {
@@ -1149,6 +1159,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
         db.prepare('UPDATE publication_attempts SET attachment_id = NULL, saved_draft_id = ? WHERE id = ?')
           .run(savedDraftId, input.id)
       }
+      if (input.state === 'confirmed' && attempt.payload.target.kind === 'reply') this.reminders.confirmedPublication(input.threadId!)
       const finished = this.getPublication(input.id)
       if (!finished) throw new Error('publication result returned no row')
       return finished
@@ -1316,16 +1327,20 @@ class SqliteReadingDatabase implements ReadingDatabase {
     this.writable().prepare('UPDATE subscription_configuration SET source = ? WHERE singleton = 1').run(source)
   }
 
-  loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly = false): SubscriptionObservation | null {
+  loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly: boolean | 'complete' = false): SubscriptionObservation | null {
     if (!this.db) return null
     const column = validOnly ? 'valid_observation_json' : 'observation_json'
-    const row = this.db.prepare<[string, number, string | null, string | null, number], { observation_json: string }>(`
+    const rows = this.db.prepare<[string, number, string | null, string | null, number], { observation_json: string }>(`
       SELECT ${column} AS observation_json FROM subscription_observations
       WHERE source = ? AND generation = ? AND app_credential_id IS ? AND web_credential_id IS ?
       AND (? = 0 OR valid_observation_json IS NOT NULL)
-      ORDER BY rowid DESC LIMIT 1
-    `).get(source, context.generation, context.appCredentialId, context.webCredentialId, Number(validOnly))
-    return row ? JSON.parse(row.observation_json) as SubscriptionObservation : null
+      ORDER BY rowid DESC ${validOnly === 'complete' ? '' : 'LIMIT 1'}
+    `).all(source, context.generation, context.appCredentialId, context.webCredentialId, Number(Boolean(validOnly)))
+    for (const row of rows) {
+      const value = JSON.parse(row.observation_json) as SubscriptionObservation
+      if (validOnly !== 'complete' || completeSubscriptionObservation(value)) return value
+    }
+    return null
   }
 
   loadSubscriptionObservationById(id: string): SubscriptionObservation | null {
@@ -1403,7 +1418,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     const db = this.writable()
     db.transaction(() => {
       for (const operation of this.loadSubscriptionOperations()) {
-        if (operation.state !== 'pending') continue
+        if (operation.state !== 'pending' || operation.dismissedAt !== undefined) continue
         operation.state = 'needs-reconciliation'
         if (operation.report === 'pending') operation.report = 'unknown'
         this.saveSubscriptionOperation(operation)

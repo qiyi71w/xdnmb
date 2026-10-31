@@ -50,7 +50,9 @@ const api: XidaoApi = {
   },
   cookieColors: {
     list: () => ipcRenderer.invoke(IpcChannel.listCookieColors),
-    set: (input) => ipcRenderer.invoke(IpcChannel.setCookieColor, input)
+    add: (input) => ipcRenderer.invoke(IpcChannel.addCookieColor, input),
+    set: (input) => ipcRenderer.invoke(IpcChannel.setCookieColor, input),
+    remove: (input) => ipcRenderer.invoke(IpcChannel.removeCookieColor, input)
   },
   reminders: {
     getRules: (input) => ipcRenderer.invoke(IpcChannel.reminderGetRules, input),
@@ -111,10 +113,12 @@ const api: XidaoApi = {
     revealAppUuid: () => ipcRenderer.invoke(IpcChannel.subscriptionRevealApp),
     selectSource: (input) => ipcRenderer.invoke(IpcChannel.subscriptionSelectSource, input),
     getObservation: (input) => ipcRenderer.invoke(IpcChannel.subscriptionObservation, input),
+    getSnapshot: (input) => ipcRenderer.invoke(IpcChannel.subscriptionSnapshot, input),
     read: (input) => ipcRenderer.invoke(IpcChannel.subscriptionRead, input),
     change: (input) => ipcRenderer.invoke(IpcChannel.subscriptionChange, input),
     getOperations: () => ipcRenderer.invoke(IpcChannel.subscriptionOperations),
     reconcile: (input) => ipcRenderer.invoke(IpcChannel.subscriptionReconcile, input),
+    dismiss: (input) => ipcRenderer.invoke(IpcChannel.subscriptionDismiss, input),
     getMergeSources: () => ipcRenderer.invoke(IpcChannel.subscriptionMergeSources),
     previewSync: (input) => ipcRenderer.invoke(IpcChannel.subscriptionPreviewSync, input),
     previewMerge: (input) => ipcRenderer.invoke(IpcChannel.subscriptionPreviewMerge, input),
@@ -138,7 +142,8 @@ const api: XidaoApi = {
     page: (input) => ipcRenderer.invoke(IpcChannel.onlineSearchPage, input),
     cancel: (input) => ipcRenderer.invoke(IpcChannel.cancelOnlineSearch, input),
     close: (input) => ipcRenderer.invoke(IpcChannel.closeOnlineSearch, input),
-    openSite: () => ipcRenderer.invoke(IpcChannel.openOnlineSearchSite)
+    openSite: (input) => ipcRenderer.invoke(IpcChannel.openOnlineSearchSite, input),
+    threadOf: (input) => ipcRenderer.invoke(IpcChannel.searchThreadOf, input)
   },
   readingState: {
     get: (input) => ipcRenderer.invoke(IpcChannel.getReadingState, input),
@@ -169,7 +174,8 @@ const api: XidaoApi = {
     load: (input) => ipcRenderer.invoke(IpcChannel.loadImage, input),
     cancel: (input) => ipcRenderer.invoke(IpcChannel.cancelImage, input),
     releaseView: (input) => ipcRenderer.invoke(IpcChannel.releaseImageView, input),
-    saveOriginal: (input) => ipcRenderer.invoke(IpcChannel.saveOriginalImage, input)
+    saveOriginal: (input) => ipcRenderer.invoke(IpcChannel.saveOriginalImage, input),
+    copyOriginal: (input) => ipcRenderer.invoke(IpcChannel.copyOriginalImage, input)
   },
   account: {
     getOverview: () => ipcRenderer.invoke(IpcChannel.accountOverview),

@@ -78,7 +78,8 @@ async function fixture() {
   const app = new Map<string, Set<string>>([[UUID_A, new Set(['1001', '1002'])], [UUID_B, new Set(['2001'])]])
   const web = new Map<string, Set<string>>([[COOKIE_A, new Set(['3001'])], [COOKIE_B, new Set(['4001'])]])
   const requests: RequestRecord[] = []
-  const behavior = { dropNextWrite: false, failPage: 0, ignoreWrites: false, writeFailure: null as 'rate-limit' | 'captcha' | null, onWrite: null as null | (() => Promise<void>) }
+  const behavior = { dropNextWrite: false, failPage: 0, failSource: null as SubscriptionSource | null, ignoreWrites: false, writeFailure: null as 'rate-limit' | 'captcha' | null,
+    onWrite: null as null | (() => Promise<void>), onRead: null as null | ((source: SubscriptionSource, page: number) => Promise<void>) }
   const server = createServer(async (request, response) => {
     const url = new URL(request.url!, 'http://localhost')
     const isWeb = url.pathname.startsWith('/Forum/') || url.pathname.startsWith('/Home/')
@@ -103,7 +104,8 @@ async function fixture() {
       response.end(isWeb ? `<p class="success">${message}</p>` : JSON.stringify(message))
       return
     }
-    if (page === behavior.failPage) { response.statusCode = 503; response.end('temporary'); return }
+    if (behavior.onRead) await behavior.onRead(isWeb ? 'web' : 'app', page)
+    if (page === behavior.failPage && (behavior.failSource === null || behavior.failSource === (isWeb ? 'web' : 'app'))) { response.statusCode = 503; response.end('temporary'); return }
     // Deliberately tiny non-final pages prove that short pages cannot end the read.
     const ids = [...collection].slice(page - 1, page)
     response.end(isWeb ? `<html><head><title>网页订阅</title></head><body><div class="h-threads-list">${ids.map((id) => `<div class="h-threads-item-main" data-threads-id="${id}"><a class="h-threads-info-id" href="/t/${id}">No.${id}</a><div class="h-threads-content">正文 验证码 饼干 请登录</div></div>`).join('')}</div></body></html>`
@@ -242,6 +244,82 @@ describe('protected subscription configuration and observations', () => {
     expect(db.loadSubscriptionObservation('app', context, true)?.error).toBeNull()
   })
 
+  it('keeps the last complete display snapshot through partial reads, errors and external changes without writing', async () => {
+    const { service, remote } = await setup()
+    await service.configureApp({ uuid: UUID_A })
+    const complete = await scan(service, 'app')
+    expect((await service.getSnapshot({ source: 'app' }))?.ids).toEqual(['1001', '1002'])
+    remote.app.set(UUID_A, new Set(['1001', '1003']))
+    let next = unwrap(await service.read({ source: 'app', observationId: null, operationId: 'new' }, signal()))
+    expect(next.ids).toEqual(['1001'])
+    expect((await service.getSnapshot({ source: 'app' }))?.id).toBe(complete.id)
+    remote.behavior.failPage = 2
+    next = unwrap(await service.read({ source: 'app', observationId: next.id, operationId: 'error' }, signal()))
+    expect(next.error?.page).toBe(2)
+    expect((await service.getSnapshot({ source: 'app' }))?.ids).toEqual(['1001', '1002'])
+    remote.behavior.failPage = 0
+    await scan(service, 'app')
+    expect((await service.getSnapshot({ source: 'app' }))?.ids).toEqual(['1001', '1003'])
+    expect(writes(remote.requests)).toEqual([])
+  })
+
+  it('does not promote historical valid partial observations to complete snapshots', async () => {
+    const { service, db, file, remote } = await setup()
+    await service.configureApp({ uuid: UUID_A })
+    const partial = unwrap(await service.read({ source: 'app', observationId: null, operationId: 'partial' }, signal()))
+    db.close(); databases.delete(db)
+    const reopened = open(file)
+    expect(reopened.loadSubscriptionObservation('app', partial.context, true)?.ids).toEqual(['1001'])
+    expect(reopened.loadSubscriptionObservation('app', partial.context, 'complete')).toBeNull()
+    expect(reopened.loadSubscriptionAppCiphertext(partial.context.appCredentialId!)).not.toBeNull()
+    expect(writes(remote.requests)).toEqual([])
+  })
+
+  it.each(['app', 'web'] as const)('isolates %s cancellation and errors from the other source and refreshes with new evidence', async (source) => {
+    const { service, remote } = await setup()
+    await service.configureApp({ uuid: UUID_A })
+    const other = source === 'app' ? 'web' : 'app'
+    const untouched = await scan(service, other)
+    const stopped = new AbortController()
+    stopped.abort()
+    const cancelled = unwrap(await service.read({ source, observationId: null, operationId: 'cancel' }, stopped.signal))
+    expect(cancelled).toMatchObject({ cancelled: true, pages: [], error: null })
+    expect((await service.getObservation({ source: other }))?.id).toBe(untouched.id)
+    remote.behavior.failPage = 1
+    remote.behavior.failSource = source
+    const failed = unwrap(await service.read({ source, observationId: null, operationId: 'failure' }, signal()))
+    expect(failed.cancelled).toBe(false)
+    expect(failed.error?.page).toBe(1)
+    expect((await service.getObservation({ source: other }))?.id).toBe(untouched.id)
+    remote.behavior.failPage = 0
+    const recovered = await scan(service, source)
+    expect(recovered.id).not.toBe(failed.id)
+    expect(recovered.error).toBeNull()
+    expect(recovered.nextPage).toBeNull()
+    expect(writes(remote.requests)).toEqual([])
+  })
+
+  it('shares an in-flight page and confines late results to their original identity', async () => {
+    const { service, remote } = await setup()
+    await service.configureApp({ uuid: UUID_A })
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    remote.behavior.onRead = async (source, page) => {
+      if (source === 'app' && page === 1) { entered.resolve(); await release.promise }
+    }
+    const first = service.read({ source: 'app', observationId: null, operationId: 'one' }, signal())
+    await entered.promise
+    const second = service.read({ source: 'app', observationId: null, operationId: 'two' }, signal())
+    await service.configureApp({ uuid: UUID_B })
+    release.resolve()
+    const [left, right] = await Promise.all([first, second])
+    expect(unwrap(left).id).toBe(unwrap(right).id)
+    expect(remote.requests.filter((request) => request.path === '/Api/feed')).toHaveLength(1)
+    expect(await service.getObservation({ source: 'app' })).toBeNull()
+    remote.behavior.onRead = null
+    expect((await scan(service, 'app')).ids).toEqual(['2001'])
+  })
+
   it('uses the shared background lane while foreground work proceeds and queued cancellation sends nothing', async () => {
     const { store, protector, remote } = await setup()
     const scheduler = createRequestScheduler({ backgroundSpacingMs: 0 })
@@ -366,6 +444,122 @@ describe('subscription intent, reports, readback and read-only recovery', () => 
     await service.configureApp({ uuid: UUID_A })
     expect(await change(service, 'app', '1009', 'add')).toEqual({ ok: false, reason: 'busy' })
     expect(writes(remote.requests)).toHaveLength(1)
+  })
+
+  it('closes only the local unknown report durably, preserves evidence and requires a later explicit write', async () => {
+    const { service, remote, db, file, create } = await setup()
+    await service.configureApp({ uuid: UUID_A })
+    const snapshot = await scan(service, 'app')
+    remote.behavior.dropNextWrite = true
+    remote.behavior.failPage = 1
+    const unknown = unwrap(await change(service, 'app', '1009', 'add'))
+    expect(unknown).toMatchObject({ report: 'unknown', verification: 'unknown', state: 'needs-reconciliation' })
+    expect((await service.getSnapshot({ source: 'app' }))?.id).toBe(snapshot.id)
+    remote.behavior.failPage = 0
+    await scan(service, 'app')
+    expect((await service.getObservation({ source: 'app' }))?.ids).toContain('1009')
+    expect(await change(service, 'app', '1009', 'add')).toEqual({ ok: false, reason: 'busy' })
+    const before = remote.requests.length
+    const closed = unwrap(await service.dismiss({ id: unknown.id }))
+    expect(closed.dismissedAt).toBeDefined()
+    expect(closed).toMatchObject({ report: 'unknown', verification: 'unknown', state: 'needs-reconciliation', after: unknown.after })
+    expect(remote.requests).toHaveLength(before)
+    expect(await service.reconcile({ id: unknown.id, operationId: 'late' }, signal())).toEqual({ ok: false, reason: 'invalid-selection' })
+    db.close(); databases.delete(db)
+    const reopened = open(file)
+    const recovered = create(asStore(reopened))
+    await recovered.recover()
+    expect((await recovered.getOperations())[0]?.dismissedAt).toBe(closed.dismissedAt)
+    expect(remote.requests).toHaveLength(before)
+    expect(unwrap(await change(recovered, 'app', '1009', 'remove')).state).toBe('settled')
+    expect(writes(remote.requests)).toHaveLength(2)
+  })
+
+  it('rejects closing a running write or reconciliation and does not resurrect a closed report', async () => {
+    const { service, remote, db } = await setup()
+    await service.configureApp({ uuid: UUID_A })
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    remote.behavior.onWrite = async () => { entered.resolve(); await release.promise }
+    remote.behavior.dropNextWrite = true
+    const pending = change(service, 'app', '1009', 'add')
+    await entered.promise
+    const id = db.loadSubscriptionOperations()[0]!.id
+    expect(await service.dismiss({ id })).toEqual({ ok: false, reason: 'busy' })
+    release.resolve()
+    const unknown = unwrap(await pending)
+    remote.behavior.onWrite = null
+    const reading = Promise.withResolvers<void>()
+    const finish = Promise.withResolvers<void>()
+    remote.behavior.onRead = async () => { reading.resolve(); await finish.promise }
+    const checking = service.reconcile({ id: unknown.id, operationId: 'check' }, signal())
+    await reading.promise
+    expect(await service.dismiss({ id })).toEqual({ ok: false, reason: 'busy' })
+    finish.resolve()
+    expect(unwrap(await checking).verification).toBe('present')
+    const closed = unwrap(await service.dismiss({ id }))
+    expect(closed.report).toBe('unknown')
+    expect(closed.after?.ids).toContain('1009')
+    expect((await service.getOperations())[0]?.dismissedAt).toBeDefined()
+  })
+
+  it('rolls back a failed local closure and retains unknown evidence and write protection after reopen', async () => {
+    const { service, remote, db, file, create } = await setup()
+    await service.configureApp({ uuid: UUID_A })
+    remote.behavior.ignoreWrites = true
+    const unknown = unwrap(await change(service, 'app', '1009', 'add'))
+    const fault = new Database(file)
+    fault.exec(`CREATE TRIGGER reject_subscription_closure BEFORE UPDATE ON subscription_operations
+      WHEN json_extract(NEW.operation_json, '$.dismissedAt') IS NOT NULL
+      BEGIN SELECT RAISE(ABORT, 'synthetic storage failure'); END`)
+    fault.close()
+    const before = remote.requests.length
+    expect(await service.dismiss({ id: unknown.id })).toEqual({ ok: false, reason: 'storage' })
+    expect(remote.requests).toHaveLength(before)
+    db.close(); databases.delete(db)
+    const reopened = open(file)
+    const recovered = create(asStore(reopened))
+    expect((await recovered.getOperations())[0]).toEqual(unknown)
+    expect(await change(recovered, 'app', '1009', 'add')).toEqual({ ok: false, reason: 'busy' })
+    expect(remote.requests).toHaveLength(before)
+  })
+
+  it('closes an orphan fixed-object intent even if its original web credential has been removed', async () => {
+    const { service, db, remote, a, b } = await setup()
+    remote.behavior.ignoreWrites = true
+    const unknown = unwrap(await change(service, 'web', '3009', 'add'))
+    db.setRoleSelection('web-sync', b.id)
+    db.deleteCredential(a.id)
+    const before = remote.requests.length
+    const checked = unwrap(await service.reconcile({ id: unknown.id, operationId: 'check' }, signal()))
+    expect(checked.after?.error?.detail).toMatchObject({ kind: 'identity', detail: 'identity-missing' })
+    const closed = unwrap(await service.dismiss({ id: unknown.id }))
+    expect(closed.context.webCredentialId).toBe(a.id)
+    expect(closed.after).toEqual(checked.after)
+    expect(remote.requests).toHaveLength(before)
+  })
+
+  it('closes a restart-orphaned intent locally and keeps its historical report across recovery', async () => {
+    const { service, store, create, db, file, remote } = await setup()
+    await service.configureApp({ uuid: UUID_A })
+    let saves = 0
+    const interrupted: AppStore = { ...store, async saveSubscriptionOperation(operation) {
+      if (++saves === 2) throw new Error('lost report persistence')
+      await store.saveSubscriptionOperation(operation)
+    } }
+    expect(await change(create(interrupted), 'app', '1010', 'add')).toEqual({ ok: false, reason: 'result-storage' })
+    const orphan = db.loadSubscriptionOperations()[0]!
+    expect(orphan).toMatchObject({ state: 'pending', report: 'pending' })
+    const before = remote.requests.length
+    const closed = unwrap(await service.dismiss({ id: orphan.id }))
+    db.close(); databases.delete(db)
+    const reopened = open(file)
+    const recovered = create(asStore(reopened))
+    await recovered.recover()
+    expect((await recovered.getOperations())[0]).toEqual(closed)
+    expect(remote.requests).toHaveLength(before)
+    expect(unwrap(await change(recovered, 'app', '1010', 'add')).state).toBe('settled')
+    expect(writes(remote.requests)).toHaveLength(2)
   })
 
   it('fixes in-flight web identity/generation even when binding, source and UI cancellation change', async () => {

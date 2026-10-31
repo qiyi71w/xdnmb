@@ -29,6 +29,10 @@ export interface ReminderUpdate {
   kind: ReminderKind
   generation: number
   at: string
+  /** The check that owns this write; used for the final, post-correction notification decision. */
+  roundId?: string
+  /** Page 1's reply IDs only when every original slot on that page is present and ordered. */
+  firstPageReplyIds?: PostId[]
   baseline?: number
   checkedPostId?: PostId
   /** New replies counted by this write. */
@@ -72,6 +76,8 @@ export interface ReminderStore {
   reminderQuoteSources(postIds: PostId[]): Promise<QuoteSource[]>
   /** `false` when the rule was disabled or re-enabled since the snapshot: nothing was written. */
   updateReminderState(update: ReminderUpdate): Promise<boolean>
+  /** Threads with an uncleared, unexcluded increment from this check, in current generations. */
+  reminderIncreasedThreads(roundId: string): Promise<ThreadId[]>
   /** Every count of the thread becomes 0; `false` when there was nothing to clear. */
   clearReminderCounts(threadId: ThreadId): Promise<boolean>
   finishReminderCheck(at: string): Promise<void>

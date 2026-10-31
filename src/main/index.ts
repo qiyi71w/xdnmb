@@ -17,6 +17,7 @@ import { createForumClient } from './forum/client'
 import { createForumTransport } from './forum/transport'
 import { IMAGE_MEDIA_TYPE, openManagedImageFiles, type ManagedImageFiles } from './images/files'
 import { createImageService } from './images/service'
+import { createElectronOriginalClipboard } from './images/clipboard-electron'
 import { createImageDownloader } from './images/transport'
 import { createSafeStorageProtector } from './identity/protection'
 import { createIdentityService } from './identity/service'
@@ -45,6 +46,7 @@ import { createReminderNotifier } from './reminders/notifier'
 import { applyZoom, zoomActionOf } from './zoom'
 import { createSearchService, type SearchService } from './search/service'
 import { createOnlineSearchService, SEARCH_API_ORIGIN } from './online-search/service'
+import { XDS_API_ORIGIN } from './online-search/xds'
 import { createAccountService } from './account/service'
 import { createAccountClient, requestAccountPage } from './account/client'
 import { isAccountLoginNavigation, openAccountLogin } from './account/login'
@@ -339,11 +341,24 @@ async function start(): Promise<void> {
   await subscriptions.recover().catch(() => console.error('[subscriptions] recovery failed'))
 
   const imageFiles = await openManagedImageFiles(join(app.getPath('userData'), 'images'))
+  const clipboardFiles = await openManagedImageFiles(join(app.getPath('userData'), 'clipboard-images'))
+  const imageClipboard = createElectronOriginalClipboard(clipboardFiles)
+  await imageClipboard.recover().catch(() => console.error('[images] clipboard recovery deferred'))
+  const clipboardCleanup = setInterval(() => {
+    void imageClipboard.recover().catch(() => undefined)
+  }, 30_000)
+  clipboardCleanup.unref()
+  app.once('will-quit', () => {
+    clearInterval(clipboardCleanup)
+    // Do not delete the current native file reference on exit; restart checks ownership again.
+    void imageClipboard.recover().catch(() => undefined)
+  })
   const images = createImageService({
     store: openedStore,
     files: imageFiles,
     download: createImageDownloader({ allowedOrigins: [IMAGE_ORIGIN] }),
-    origin: IMAGE_ORIGIN
+    origin: IMAGE_ORIGIN,
+    clipboard: imageClipboard
   })
   // Before any view can load images: drop last run's reading holders and leftover files.
   await images.recover().catch(() => console.error('[images] recovery failed'))
@@ -375,8 +390,12 @@ async function start(): Promise<void> {
       baseUrl: FORUM_API_ORIGIN, browseIdentity: async () => userhash
     }),
     adapter: createPublicationAdapter(),
-    onRecorded: (attempt) => { void failures.recorded(attempt).catch(() => console.error('[publication] failure notice unavailable')) },
-    onChecked: () => {
+    onRecorded: (attempt) => {
+      if (attempt.state === 'confirmed') reminders.publicationConfirmed()
+      void failures.recorded(attempt).catch(() => console.error('[publication] failure notice unavailable'))
+    },
+    onChecked: (attempt) => {
+      if (attempt.state === 'confirmed') reminders.publicationConfirmed()
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.webContents.isDestroyed()) window.webContents.send(PUBLICATION_CHANGED_CHANNEL)
       }
@@ -403,7 +422,14 @@ async function start(): Promise<void> {
     transport: createForumTransport({
       allowedOrigins: [SEARCH_API_ORIGIN],
       maxCompressedBytes: 2 * 1024 * 1024,
-      maxDecodedBytes: 4 * 1024 * 1024
+      maxDecodedBytes: 4 * 1024 * 1024,
+      userAgent: `Xidao/${app.getVersion()}`
+    }),
+    xdsTransport: createForumTransport({
+      allowedOrigins: [XDS_API_ORIGIN],
+      maxCompressedBytes: 2 * 1024 * 1024,
+      maxDecodedBytes: 4 * 1024 * 1024,
+      userAgent: `Xidao/${app.getVersion()}`
     })
   })
 

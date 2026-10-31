@@ -1,19 +1,20 @@
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
 import type { QuoteLocation, ReadError } from '../../../../shared/api'
 import type { BoardDirectory, ForumId, Post, PostId, ThreadId, TimelineId } from '../../../../shared/forum'
-import { MAX_SEARCH_QUERY_LENGTH, type ForumLinkTarget, type SearchError, type SearchHit } from '../../../../shared/online-search'
+import { MAX_SEARCH_QUERY_LENGTH, type ForumLinkTarget, type SearchHit } from '../../../../shared/online-search'
 import { Icon } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { Loading } from '../../components/Notices'
 import { describeReadError } from '../../lib/format'
 import { formatRecordTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
-import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
+import { useRegisterContent } from '../tabs/contentRegistry'
 import { useAppCovered } from '../../lib/appCovered'
 import { readResumePage } from '../thread/readingStart'
 import type { EntryInit } from '../tabs/tabsState'
 import { useThreadTabMenu, type ThreadTabMenu } from '../tabs/ThreadTabMenu'
 import type { OnlineSearchNotice, OnlineSearchResults, OnlineSearchSession } from './onlineSearchSession'
+import { CHANNEL_TEXT, channelHost, searchErrorLines } from './onlineSearchText'
 import './online-search.css'
 
 const MAX_SOURCE_LENGTH = 80
@@ -109,24 +110,6 @@ function findForum(directory: BoardDirectory, boardName: string): ForumId | null
   return null
 }
 
-/** Reason lines of a search failure; the service's own message is shown verbatim as text. */
-function errorLines(error: SearchError): { reason: string; details: string[] } {
-  switch (error.kind) {
-    case 'network':
-      return { reason: error.detail === 'timeout' ? '搜索服务 20 秒内未响应' : '无法连接搜索服务', details: [] }
-    case 'http-status':
-      return { reason: `搜索服务返回 HTTP ${error.httpStatus}`, details: [] }
-    case 'service': {
-      const details = [`服务消息：${error.serviceMessage}`]
-      if (error.hint === 'rate-limited') details.push('请求过于频繁')
-      if (error.hint === 'verification') details.push('服务要求人工验证')
-      return { reason: '搜索服务返回错误', details }
-    }
-    case 'unknown-structure':
-      return { reason: error.detail === 'redirect' ? '搜索服务要求跳转到其他地址，已拒绝' : '搜索服务返回了无法识别的内容', details: [] }
-  }
-}
-
 const CHAIN_END_TEXT = {
   end: '没有更多结果',
   expired: '下一页已过期',
@@ -143,31 +126,34 @@ function Status({ tone, children }: { tone: 'info' | 'error'; children: ReactNod
 }
 
 /**
- * The 联网 side of the 搜索 page: a search box that requests only on submit, the
- * third-party notice, plain-text results with paging over the session's chain, and result opening
- * through the existing reader navigation. Its query, pages and view live in the entry's
- * OnlineSearchSession, so leaving and coming back restores them without any request.
+ * One channel of the 联网 side of the 搜索 page: a search box that requests only on submit, the
+ * third-party notice for that channel, plain-text results with paging over the session's chain,
+ * and result opening through the existing reader navigation. Its query, pages and view live in the
+ * channel's OnlineSearchSession, so leaving, switching channel and coming back restore them without
+ * any request. The page mounts one pane per shown channel: switching drops a running locate of the
+ * channel left behind, so nothing opens from out of sight.
  */
 export function OnlineSearchPane({
   entryKey,
+  session,
   displayed,
+  takeFocus,
   directory,
   onOpen
 }: {
   entryKey: number
+  session: OnlineSearchSession
   /** The page is on screen (its tab is active, and in a 搜索 page the 联网 side is shown). */
   displayed: boolean
+  /** Mounting moves focus into the pane (not after a channel switch: focus stays on the switch). */
+  takeFocus: boolean
   directory: BoardDirectory | null
   /** Opens a result in this entry's tab as a new `online-search` step; false when the entry is no longer current. */
   onOpen: (entryKey: number, init: EntryInit) => boolean
 }) {
-  const registry = useContext(ContentRegistryContext)
-  const [session] = useState<OnlineSearchSession>(() => {
-    if (registry === null) throw new Error('OnlineSearchPane needs the content registry')
-    return registry.onlineSearches.session(entryKey)
-  })
   const state = useSyncExternalStore(session.subscribe, session.getState)
   const { results, pending, notice } = state
+  const service = CHANNEL_TEXT[session.channel]
 
   const inputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -193,7 +179,7 @@ export function OnlineSearchPane({
   useLayoutEffect(() => {
     const scroller = scrollRef.current
     if (scroller !== null) scroller.scrollTop = session.view.scrollTop
-    if (!displayedRef.current) return
+    if (!displayedRef.current || !takeFocus) return
     const focus = session.view.focus
     const shown = session.getState().results
     const target = focus !== null && shown !== null && focus.page === shown.current ? hitButton(focus.page, focus.index) : null
@@ -435,11 +421,14 @@ export function OnlineSearchPane({
 
   const openSite = () => {
     setSiteFailed(false)
-    window.xidao.onlineSearch.openSite().then(
+    window.xidao.onlineSearch.openSite({ channel: session.channel }).then(
       (result) => setSiteFailed(!result.opened),
       () => setSiteFailed(true)
     )
   }
+
+  const runQuery = notice !== null && notice.kind !== 'closed' && notice.request.kind === 'run' ? notice.request.query : null
+  const noticePage = notice !== null && notice.kind !== 'closed' && notice.request.kind === 'page' ? notice.request.page : null
 
   const hits = shownPage?.hits ?? []
   const ids = useMemo(() => (shownPage === null ? [] : shownPage.hits.map((_, index) => `${shownPage.pageNumber}-${index}`)), [shownPage])
@@ -448,7 +437,7 @@ export function OnlineSearchPane({
   const inTab = useThreadTabMenu()
 
   return (
-    <section className="online-search-page" aria-label="联网搜索">
+    <section className="online-search-page" aria-label={`联网搜索：${service}`}>
       <div className="online-search-scroll" ref={scrollRef} onScroll={onScroll}>
         <header className="online-search-header">
           <form className="online-search-form" role="search" onSubmit={submit}>
@@ -485,16 +474,18 @@ export function OnlineSearchPane({
 
         <div className="online-search-about" id={`online-search-about-${entryKey}`}>
           <p className="online-search-about-site">
-            <span>搜索词会发给第三方服务 nmb-search，收录可能不全或过时</span>
+            <span>
+              搜索词会发给第三方服务 {service}（{channelHost(session.channel)}），收录可能不全或过时
+            </span>
             <button type="button" className="btn btn-small btn-quiet" onClick={openSite}>
               <Icon name="external" size={14} />
-              打开搜索网站
+              打开 {service} 网站
             </button>
           </p>
           {siteFailed && (
             <p className="notice-inline is-warning" role="status">
               <Icon name="alert" size={14} />
-              无法在系统浏览器中打开搜索网站
+              无法在系统浏览器中打开 {service} 网站
               <KaomojiDecor state="failure" />
             </p>
           )}
@@ -516,7 +507,9 @@ export function OnlineSearchPane({
               </button>
             </div>
           )}
-          {notice !== null && notice.kind !== 'closed' && notice.request.kind === 'run' && <RequestNotice notice={notice} onRetry={rerun} />}
+          {notice !== null && notice.kind !== 'closed' && runQuery !== null && (
+            <RequestNotice notice={notice} service={service} onRetry={() => rerun(runQuery)} />
+          )}
           {results !== null && !results.live && pending?.kind !== 'run' && (
             <div className="online-search-chain-end">
               <p className="notice-inline">
@@ -536,7 +529,7 @@ export function OnlineSearchPane({
             <h3 className="online-search-results-head" ref={headingRef} tabIndex={-1}>
               <span className="online-search-results-query">「{results.query}」</span>
               <span className="online-search-results-meta">
-                第 {shownPage.pageNumber} 页 · {hits.length} 条 · {formatRecordTime(shownPage.fetchedAt)} 取得
+                {service} · 第 {shownPage.pageNumber} 页 · {hits.length} 条 · {formatRecordTime(shownPage.fetchedAt)} 取得
               </span>
             </h3>
 
@@ -589,7 +582,15 @@ export function OnlineSearchPane({
             {inTab.menu}
 
             <Pager results={results} session={session} pendingPage={pending?.kind === 'page' ? pending.page : null} />
-            {notice !== null && notice.kind !== 'closed' && notice.request.kind === 'page' && <RequestNotice notice={notice} onRetry={null} />}
+            {notice !== null && notice.kind !== 'closed' && noticePage !== null && (
+              // XDS pages are numbered, so a failed or cancelled one can be asked for again; an
+              // nmb-search page's one-time token is gone.
+              <RequestNotice
+                notice={notice}
+                service={service}
+                onRetry={session.channel === 'xds' && session.canShow(noticePage) ? () => session.goToPage(noticePage) : null}
+              />
+            )}
             {results.live && results.current === results.pages.length && results.next !== 'available' && pending === null && (
               <div className="online-search-chain-end">
                 <p className="list-end">{CHAIN_END_TEXT[results.next]}</p>
@@ -609,21 +610,37 @@ export function OnlineSearchPane({
 }
 
 /**
- * Failure or cancellation of a search (`onRetry` = run the same query again) or of a page request
- * (no retry: the token that page needed is gone).
+ * Failure or cancellation of a search (`onRetry` runs the same query again) or of a page request
+ * (`onRetry` asks for that XDS page again; null for nmb-search, whose token that page needed is gone).
  */
-function RequestNotice({ notice, onRetry }: { notice: Exclude<OnlineSearchNotice, { kind: 'closed' }>; onRetry: ((query: string) => void) | null }) {
+function RequestNotice({
+  notice,
+  service,
+  onRetry
+}: {
+  notice: Exclude<OnlineSearchNotice, { kind: 'closed' }>
+  service: string
+  onRetry: (() => void) | null
+}) {
   const request = notice.request
   const subject = request.kind === 'run' ? `搜索「${request.query}」` : `读取第 ${request.page} 页`
   if (notice.kind === 'cancelled') {
     return (
-      <p className="notice-inline online-search-request-notice" role="status">
-        <Icon name="info" size={14} />
-        已取消{subject}
-      </p>
+      <div className="online-search-chain-end online-search-request-notice">
+        <p className="notice-inline" role="status">
+          <Icon name="info" size={14} />
+          已取消{subject}
+        </p>
+        {request.kind === 'page' && onRetry !== null && (
+          <button type="button" className="btn btn-small btn-page" onClick={onRetry}>
+            <Icon name="refresh" size={14} />
+            重新读取第 {request.page} 页
+          </button>
+        )}
+      </div>
     )
   }
-  const { reason, details } = notice.kind === 'failed' ? errorLines(notice.error) : { reason: '应用内部请求失败', details: [] }
+  const { reason, details } = notice.kind === 'failed' ? searchErrorLines(notice.error, service) : { reason: '应用内部请求失败', details: [] }
   return (
     <div className="notice notice-error online-search-request-notice" role="alert">
       <Icon name="alert" className="notice-icon" />
@@ -638,8 +655,8 @@ function RequestNotice({ notice, onRetry }: { notice: Exclude<OnlineSearchNotice
           </p>
         ))}
       </div>
-      {request.kind === 'run' && onRetry !== null && (
-        <button type="button" className="btn btn-small btn-page" onClick={() => onRetry(request.query)}>
+      {onRetry !== null && (
+        <button type="button" className="btn btn-small btn-page" onClick={onRetry}>
           重试
         </button>
       )}

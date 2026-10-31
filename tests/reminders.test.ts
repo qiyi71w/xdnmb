@@ -264,6 +264,26 @@ describe('credentials of reminder reads', () => {
 })
 
 describe('引用我的发言', () => {
+  it('keeps No. and numeric reading candidates out of explicit quote checks while existing quotes still count', async () => {
+    const h = await harness({ cookieIds: ['Mine'] })
+    const thread = h.thread('100', { count: 0 })
+    await h.enable('100', 'quote')
+    await h.check()
+    thread.count = 2
+    h.remote.override = (entry) => entry.path === '/api/thread' ? { body: JSON.stringify({
+      ...forumPost('100', '主帖', 'PoHash'), ReplyCount: 2,
+      Replies: [forumPost(replyId('100', 1), 'No.91 92 2026-10-30 123.45', 'Other'),
+        forumPost(replyId('100', 2), 'No.91 >>No.92', 'Other')]
+    }) } : undefined
+    h.refs.set('92', forumPost('92', '明确引用', 'Mine'))
+    const requests = await h.check()
+    expect(requests).toContain('ref:92+cookie')
+    expect(requests.some((request) => request.startsWith('ref:91'))).toBe(false)
+    expect(await h.row('100')).toMatchObject({ counts: { quote: 1 }, unverifiedQuotes: 0 })
+    const nodes = h.db.loadPost(replyId('100', 1))?.value.content ?? []
+    expect(nodes).toContainEqual({ type: 'quoteRef', postId: '91', raw: 'No.91', readingOnly: true })
+  })
+
   it('automatically initializes quote reminders at the last page and counts only later matching replies', async () => {
     const h = await harness({ cookieIds: ['Mine'] })
     h.db.savePost(localPost('91', 'Mine'), t0)

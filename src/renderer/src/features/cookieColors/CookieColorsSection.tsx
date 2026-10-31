@@ -1,23 +1,22 @@
-// 设置 › 浏览 › 饼干颜色: every colored 饼干 ID in 添加时间 order, each with its color and 删除;
-// a filter; and adding an ID by hand (an ID that already has a color changes color instead).
+// 设置 › 浏览 › 饼干颜色: every listed 饼干 ID in 添加时间 order, each with 默认 or a color and
+// 删除; a filter; and adding an ID by hand, in 默认 (an ID already listed stays as it is).
 
 import { useId, useRef, useState, type CSSProperties, type FormEvent, type RefObject } from 'react'
-import { COOKIE_COLORS, DEFAULT_COOKIE_COLOR, type CookieColor, type CookieColorName } from '../../../../shared/cookieColors'
+import type { CookieColor, CookieColorName } from '../../../../shared/cookieColors'
 import { COOKIE_ID_MAX_LENGTH, validateCookieId } from '../../../../shared/identity'
-import { cookieColorToken } from '../../../../shared/theme'
 import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { useClearOnLeave } from '../../lib/useClearOnLeave'
 import { cookieIdErrorText } from '../identity/identityText'
-import { COOKIE_COLOR_LABELS } from './cookieColorNames'
+import { COOKIE_COLOR_CHOICES, cookieColorLabel, cookieSwatchFill } from './cookieColorNames'
 import { useCookieColors } from './cookieColorsStore'
 import '../identity/identity.css'
 import './cookieColors.css'
 
 /** `active`: 设置 is the active tab; leaving it clears a completed 添加 result. */
 export function CookieColorsSection({ active }: { active: boolean }) {
-  const { entries, colors, loaded, failure, retry, set } = useCookieColors()
+  const { entries, loaded, failure, retry, add, set, remove: removeId } = useCookieColors()
   const headingId = useId()
   const listRef = useRef<HTMLUListElement>(null)
   const filterRef = useRef<HTMLInputElement>(null)
@@ -29,7 +28,7 @@ export function CookieColorsSection({ active }: { active: boolean }) {
   // The deleted row's place goes to the next row's 删除 (else the previous one, else the add field).
   const remove = async (cookieId: string) => {
     const at = shown.findIndex((entry) => entry.cookieId === cookieId)
-    if (!(await set(cookieId, null))) return
+    if (!(await removeId(cookieId))) return
     requestAnimationFrame(() => {
       const buttons = listRef.current?.querySelectorAll<HTMLElement>('[data-remove]') ?? []
       const next = buttons[Math.min(at, buttons.length - 1)]
@@ -56,7 +55,7 @@ export function CookieColorsSection({ active }: { active: boolean }) {
       )}
       {loaded && entries.length === 0 && (
         <p className="settings-empty">
-          还没有饼干颜色
+          还没有饼干 ID
           <KaomojiDecor state="cookieColorsEmpty" />
         </p>
       )}
@@ -98,7 +97,7 @@ export function CookieColorsSection({ active }: { active: boolean }) {
           </div>
         </>
       )}
-      <AddCookieColor inputRef={addInputRef} colors={colors} onSet={set} active={active} />
+      <AddCookieColor inputRef={addInputRef} onAdd={add} active={active} />
     </section>
   )
 }
@@ -113,9 +112,9 @@ function CookieColorRow({
   onRemove: () => void
 }) {
   // The chosen color shows at once; a failed save puts the stored one back (the section says why).
-  const [choosing, setChoosing] = useState<CookieColorName | null>(null)
-  const choose = async (color: CookieColorName) => {
-    setChoosing(color)
+  const [choosing, setChoosing] = useState<{ color: CookieColorName | null } | null>(null)
+  const choose = async (color: CookieColorName | null) => {
+    setChoosing({ color })
     await onSet(entry.cookieId, color)
     setChoosing(null)
   }
@@ -125,8 +124,8 @@ function CookieColorRow({
         <CookieId cookieId={entry.cookieId} />
       </span>
       <span className="shell-manage-actions">
-        <ColorChoice label={`${entry.cookieId} 的颜色`} value={choosing ?? entry.color} onChange={(color) => void choose(color)} />
-        <button type="button" className="btn btn-small btn-page" data-remove="" aria-label={`删除 ${entry.cookieId} 的颜色`} onClick={onRemove}>
+        <ColorChoice label={`${entry.cookieId} 的颜色`} value={choosing === null ? entry.color : choosing.color} onChange={(color) => void choose(color)} />
+        <button type="button" className="btn btn-small btn-page" data-remove="" aria-label={`删除 ${entry.cookieId}`} onClick={onRemove}>
           删除
         </button>
       </span>
@@ -134,23 +133,20 @@ function CookieColorRow({
   )
 }
 
-/** Adds a 饼干 ID by hand, checked by the same rules as filling a cookie's 饼干 ID. */
+/** Adds a 饼干 ID by hand in 默认, checked by the same rules as filling a cookie's 饼干 ID. */
 function AddCookieColor({
   inputRef,
-  colors,
-  onSet,
+  onAdd,
   active
 }: {
   inputRef: RefObject<HTMLInputElement | null>
-  colors: ReadonlyMap<string, CookieColorName>
-  onSet: (cookieId: string, color: CookieColorName) => Promise<boolean>
+  onAdd: (cookieId: string) => Promise<{ saved: boolean; added: boolean }>
   active: boolean
 }) {
   const titleId = useId()
   const inputId = useId()
   const messageId = useId()
   const [draft, setDraft] = useState('')
-  const [color, setColor] = useState<CookieColorName>(DEFAULT_COOKIE_COLOR)
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState<{ tone: 'error' | 'success'; text: string } | null>(null)
   const begin = useClearOnLeave(active, () => setMessage((last) => (last?.tone === 'success' ? null : last)))
@@ -165,21 +161,16 @@ function AddCookieColor({
       return
     }
     const { cookieId } = checked
-    const before = colors.get(cookieId)
     setPending(true)
     setMessage(null)
     const current = begin()
-    const saved = await onSet(cookieId, color)
+    const { saved, added } = await onAdd(cookieId)
     setPending(false)
     // A failed save is reported (with 重试) at the top of the section; the typed ID stays.
     if (!saved) return
     setDraft('')
     if (!current()) return
-    const label = COOKIE_COLOR_LABELS[color]
-    setMessage({
-      tone: 'success',
-      text: before === undefined ? `已添加 ${cookieId}` : before === color ? `${cookieId} 已是${label}` : `${cookieId} 已有颜色，已改为${label}`
-    })
+    setMessage({ tone: 'success', text: added ? `已添加 ${cookieId}` : `${cookieId} 已在列表中，颜色未改` })
   }
 
   const invalid = message?.tone === 'error'
@@ -209,7 +200,6 @@ function AddCookieColor({
           aria-describedby={messageId}
           aria-invalid={invalid ? true : undefined}
         />
-        <ColorChoice label="颜色" value={color} onChange={setColor} />
         <button type="submit" className="btn btn-small btn-page" aria-disabled={pending ? true : undefined}>
           添加
         </button>
@@ -227,24 +217,25 @@ function AddCookieColor({
 }
 
 /**
- * The eight 饼干颜色 as a radio group: Tab reaches the chosen one, arrow keys move and choose. Each
- * swatch is named for screen readers and in its tip; the chosen one carries a check mark.
+ * 默认 and the eight 饼干颜色 as a radio group: Tab reaches the chosen one, arrow keys move and
+ * choose. Each swatch is named for screen readers and in its tip; the chosen one carries a check mark.
  */
-function ColorChoice({ label, value, onChange }: { label: string; value: CookieColorName; onChange: (color: CookieColorName) => void }) {
+function ColorChoice({ label, value, onChange }: { label: string; value: CookieColorName | null; onChange: (color: CookieColorName | null) => void }) {
   const name = useId()
   return (
     <span className="cookie-swatches" role="radiogroup" aria-label={label}>
-      {COOKIE_COLORS.map((color) => {
-        const style = { '--swatch': `var(--${cookieColorToken(color)})` } as CSSProperties
+      {COOKIE_COLOR_CHOICES.map((color) => {
+        const style = { '--swatch': cookieSwatchFill(color) } as CSSProperties
+        const choice = cookieColorLabel(color)
         return (
-          <label key={color} className="cookie-swatch" style={style} title={COOKIE_COLOR_LABELS[color]}>
+          <label key={color ?? 'default'} className={color === null ? 'cookie-swatch is-default' : 'cookie-swatch'} style={style} title={choice}>
             <input
               type="radio"
               className="cookie-swatch-input"
               name={name}
-              value={color}
+              value={color ?? 'default'}
               checked={value === color}
-              aria-label={COOKIE_COLOR_LABELS[color]}
+              aria-label={choice}
               onChange={() => onChange(color)}
             />
             <span className="cookie-swatch-dot" aria-hidden="true">

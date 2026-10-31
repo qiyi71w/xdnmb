@@ -1,18 +1,23 @@
-// Online search through the single third-party nmb-search service (a 4get / Google CSE proxy).
-// The main process owns requests, pagination tokens and normalization; the renderer only sees the
-// normalized pages below and never a service URL, query URL or pagination token.
+// The main process owns third-party requests, pagination and normalization. The renderer only sees
+// normalized pages, never pagination tokens or arbitrary service endpoints.
 
 import type { PostId, ThreadId, TimelineId } from './forum'
 
-/** The search website itself, opened only in the system browser by an explicit user action. */
-export const SEARCH_SITE_URL = 'https://nmb-search.166666666.xyz/'
+export const SEARCH_CHANNELS = ['xds', 'nmb-search'] as const
+export type SearchChannel = (typeof SEARCH_CHANNELS)[number]
+
+/** Fixed websites opened only by an explicit user action. */
+export const SEARCH_SITE_URLS: Readonly<Record<SearchChannel, string>> = {
+  xds: 'https://xds.wol.moe/',
+  'nmb-search': 'https://nmb-search.166666666.xyz/'
+}
 
 /** Longest accepted query, in UTF-16 code units after trimming. */
 export const MAX_SEARCH_QUERY_LENGTH = 200
 
 /**
- * Caller-generated ID of one search session (one search page); same format as OperationId. A
- * session holds one query chain at a time and the pages that chain already returned.
+ * Caller-generated ID of one search page; same format as OperationId. Each channel holds its own
+ * current query chain and returned pages under this ID.
  */
 export type SearchSessionId = string
 
@@ -56,10 +61,10 @@ export interface SearchPage {
 
 /**
  * Why no further page can be requested in this chain:
- * - `end`: the last successful response carried no next-page token (not a claim the index is complete);
- * - `expired`: the token was idle for 15 minutes and is not sent;
- * - `lost`: the token was spent on a request whose result never arrived (failure, cancellation);
- *   it is never replayed. A new search starts a new chain.
+ * - `end`: no further page was announced (not a claim the index is complete);
+ * - `expired`: an nmb-search token was idle for 15 minutes and is not sent;
+ * - `lost`: an nmb-search token was spent on a request whose result never arrived (failure,
+ *   cancellation); it is never replayed. XDS numeric pages do not expire or become spent tokens.
  */
 export type SearchChainEnd = 'end' | 'expired' | 'lost'
 
@@ -67,12 +72,14 @@ export type SearchChainEnd = 'end' | 'expired' | 'lost'
 export type SearchNextState = 'available' | SearchChainEnd
 
 /**
- * Classified service failure. `serviceMessage` is the service's own `status` text from an HTTP 200
- * response (at most 200 characters, untrusted). `hint` is set only when that text itself mentions
- * rate limiting or a captcha/pass/verification; an HTTP status alone (including 429) never sets it.
+ * Classified failure. `serviceMessage` is bounded, untrusted HTTP-200 status/degraded-query text;
+ * `hint` comes only from that text. HTTP rate/verification statuses have separate cases.
+ * A `retryAt` deadline is epoch milliseconds from Retry-After, or null when the service gave none.
  */
 export type SearchError =
   | { kind: 'network'; detail: 'timeout' | 'connection' }
+  | { kind: 'rate-limited'; retryAt: number | null }
+  | { kind: 'verification'; httpStatus: number }
   | { kind: 'http-status'; httpStatus: number }
   | { kind: 'service'; serviceMessage: string; hint: 'rate-limited' | 'verification' | null }
   | { kind: 'unknown-structure'; detail: 'redirect' | 'too-large' | 'decode' | 'html' | 'json' | 'shape' }
@@ -91,6 +98,13 @@ export type SearchOutcome =
   | { status: 'unavailable'; next: SearchChainEnd }
   | { status: 'cancelled' }
   | { status: 'closed' }
+
+/** Third-party ownership is only a clue; the reader must verify any target before navigating. */
+export type ThreadOfOutcome =
+  | { status: 'found'; postId: PostId; threadId: ThreadId; kind: 'thread' | 'reply' }
+  | { status: 'not-indexed' }
+  | { status: 'failed'; error: SearchError }
+  | { status: 'cancelled' }
 
 const FORUM_HOSTS: Readonly<Record<string, true>> = { 'nmbxd1.com': true, 'www.nmbxd1.com': true, 'nmbxd.com': true, 'www.nmbxd.com': true }
 const DECIMAL_ID = /^[1-9]\d{0,19}$/
@@ -149,4 +163,23 @@ export function parseForumLink(raw: string): ForumLinkTarget | null {
     return boardName === null ? null : { kind: 'board', boardName }
   }
   return null
+}
+
+/** A whole explicit number input. IDs stay strings, including values beyond JS integer precision. */
+export function parseNumberTarget(raw: string): { postId: PostId; hint: { threadId: ThreadId; page: number | null } | null } | null {
+  const text = raw.trim()
+  if (text.length > 2048) return null
+  const number = /^(?:>>)?(?:No\.)?([1-9]\d{0,19})$/.exec(text)
+  if (number !== null) return { postId: number[1]!, hint: null }
+  const link = parseForumLink(text)
+  if (link?.kind === 'thread') {
+    const url = new URL(text)
+    if (url.hash || [...url.searchParams.keys()].some((key) => key !== 'r' && key !== 'page') ||
+        url.searchParams.getAll('r').length > 1 || url.searchParams.getAll('page').length > 1 ||
+        (url.searchParams.has('r') && link.replyId === null) ||
+        (url.searchParams.has('page') && link.page === null)) return null
+  }
+  return link?.kind === 'thread'
+    ? { postId: link.replyId ?? link.threadId, hint: { threadId: link.threadId, page: link.page } }
+    : null
 }

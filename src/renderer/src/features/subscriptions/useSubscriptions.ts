@@ -4,11 +4,14 @@ import type { ThreadId } from '../../../../shared/forum'
 import type {
   SubscriptionAction,
   SubscriptionChoice,
+  SubscriptionContext,
   SubscriptionFailure,
   SubscriptionMergeSource,
+  SubscriptionObservation,
   SubscriptionOperation,
   SubscriptionOverview,
   SubscriptionPlan,
+  SubscriptionResult,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
 import {
@@ -23,7 +26,16 @@ import {
   type ReconcileMode,
   type ReconcileTask
 } from './reconcileState'
-import { clearSuccessfulWriteOnLeave } from './subscriptionListState'
+import {
+  clearSuccessfulWriteOnLeave,
+  collectionKey,
+  collectionReducer,
+  noticeAfterDismiss,
+  observationKey,
+  unloadedCollection,
+  type CollectionEvent,
+  type CollectionState
+} from './subscriptionListState'
 
 /** Local history is re-read this often while a plan runs in this window; never any remote call. */
 const PLAN_POLL_MS = 1000
@@ -65,6 +77,12 @@ export interface ChangeRequest {
   label: string
 }
 
+/** Why the last 关闭 (×) of a journal entry did not happen; the entry and its protection stay. */
+export interface DismissFailure {
+  id: string
+  reason: SubscriptionFailure | 'internal'
+}
+
 export interface SubscriptionsState {
   /** Last overview received; kept while a refresh runs or fails. */
   overview: SubscriptionOverview | null
@@ -85,10 +103,34 @@ export interface SubscriptionsState {
   reconcile: (operation: SubscriptionOperation) => Promise<void>
   /** Cancels the readback / 核对 reads of the active write; the write request itself is not withdrawn. */
   stopReadback: () => void
+  /**
+   * Durably closes an unresolved journal entry (×): local only, nothing is sent and nothing is
+   * retried; its report and evidence stay. Resolves true once saved. Refused while anything runs.
+   */
+  dismiss: (operation: SubscriptionOperation) => Promise<boolean>
+  /** The entry whose 关闭 is being saved. */
+  dismissing: string | null
+  dismissFailure: DismissFailure | null
+
+  /** Remote collections by `collectionKey`: snapshot, latest evidence and read round, shared by all views. */
+  collections: ReadonlyMap<string, CollectionState>
+  /** Reads a collection's stored snapshot and latest observation once (again after a failure); local only. */
+  loadCollection: (source: SubscriptionSource, context: SubscriptionContext) => void
+  /**
+   * Starts one read round of a collection, page after page to the end candidate, unless one is
+   * running (then it is joined). `resume` continues the latest unfinished observation instead of
+   * starting at page 1. Never retried automatically; leaving a view does not cancel it.
+   */
+  refreshCollection: (source: SubscriptionSource, context: SubscriptionContext, resume?: boolean) => void
+  /**
+   * 停止读取: cancels the page the collection's round is reading and starts no further page; only
+   * this collection's round, whichever view asked. What was read stays. No-op once requested.
+   */
+  stopCollection: (source: SubscriptionSource, context: SubscriptionContext) => void
 
   /** The one sync / merge preview or plan of this window; process-only, never resumed. */
   task: ReconcileTask | null
-  /** A write, 核对, preview read or plan is running: nothing else may start. */
+  /** A write, 核对, 关闭, preview read or plan is running: nothing else may start. */
   busy: boolean
   /** Starts a fresh preview (bounded background reads, no writes). Merge needs an explicit old App reference. */
   startPreview: (mode: ReconcileMode, mergeSource: SubscriptionMergeSource | null) => Promise<void>
@@ -148,6 +190,16 @@ export function useSubscriptions(): SubscriptionsState {
   const [mergeSourcesFailed, setMergeSourcesFailed] = useState(false)
   const latestPlans = useRef(0)
   const latestMergeSources = useRef(0)
+  const [dismissing, setDismissing] = useState<string | null>(null)
+  const [dismissFailure, setDismissFailure] = useState<DismissFailure | null>(null)
+  // Synchronous guard, as for writes: a second × in the same frame does nothing.
+  const dismissingRef = useRef<string | null>(null)
+  const [collections, setCollections] = useState<ReadonlyMap<string, CollectionState>>(() => new Map())
+  const collectionsRef = useRef<Map<string, CollectionState>>(new Map())
+  /** The read round of each collection in flight, with the operation of the page it is reading. */
+  const rounds = useRef(new Map<string, { operationId: string; stopRequested: boolean }>())
+  /** Collections whose stored observations are being read. */
+  const loads = useRef(new Set<string>())
   const overviewRef = useRef<SubscriptionOverview | null>(null)
   useEffect(() => {
     overviewRef.current = overview
@@ -225,8 +277,119 @@ export function useSubscriptions(): SubscriptionsState {
     void refreshPlans()
     return () => {
       alive.current = false
+      for (const round of rounds.current.values()) window.xidao.subscriptions.cancel({ operationId: round.operationId }).catch(() => undefined)
     }
   }, [refreshOverview, refreshOperations, refreshPlans])
+
+  const updateCollection = useCallback((key: string, event: CollectionEvent) => {
+    const next = new Map(collectionsRef.current)
+    next.set(key, collectionReducer(next.get(key) ?? unloadedCollection, event))
+    collectionsRef.current = next
+    if (alive.current) setCollections(next)
+  }, [])
+
+  // Every readback / 核对 read in the journal (dismissed entries included: closing erases no evidence)
+  // is evidence of its own collection, taken only where it is newer than what that collection has.
+  useEffect(() => {
+    const current = collectionsRef.current
+    let next: Map<string, CollectionState> | null = null
+    for (const operation of operations ?? []) {
+      const after = operation.after
+      if (after === null) continue
+      const key = observationKey(after)
+      const before = (next ?? current).get(key) ?? unloadedCollection
+      const merged = collectionReducer(before, { type: 'evidence', observation: after })
+      if (merged === before) continue
+      next ??= new Map(current)
+      next.set(key, merged)
+    }
+    if (next === null) return
+    collectionsRef.current = next
+    if (alive.current) setCollections(next)
+  }, [operations])
+
+  const loadCollection = useCallback(
+    (source: SubscriptionSource, context: SubscriptionContext) => {
+      const key = collectionKey(source, context)
+      const local = collectionsRef.current.get(key)?.local ?? 'idle'
+      // An entry made from journal evidence alone (`idle`) still reads what storage holds.
+      if (loads.current.has(key) || local === 'loading' || local === 'loaded') return
+      loads.current.add(key)
+      updateCollection(key, { type: 'load' })
+      // Stored for the identity the main process has now; anything of another collection is no evidence here.
+      const own = (observation: SubscriptionObservation | null) => (observation !== null && observationKey(observation) === key ? observation : null)
+      Promise.all([window.xidao.subscriptions.getSnapshot({ source }), window.xidao.subscriptions.getObservation({ source })])
+        .then(
+          ([snapshot, latest]) => updateCollection(key, { type: 'local', snapshot: own(snapshot), latest: own(latest) }),
+          () => updateCollection(key, { type: 'local-failed' })
+        )
+        .finally(() => loads.current.delete(key))
+    },
+    [updateCollection]
+  )
+
+  /** One round: page after page until the end candidate, the first error, refusal, cancellation or identity change. */
+  const runRound = useCallback(
+    async (key: string, source: SubscriptionSource, from: string | null) => {
+      const round = { operationId: '', stopRequested: false }
+      rounds.current.set(key, round)
+      updateCollection(key, { type: 'start' })
+      let observationId = from
+      try {
+        for (;;) {
+          // Requested between two pages: the next one never starts.
+          if (round.stopRequested) return
+          round.operationId = crypto.randomUUID()
+          let result: SubscriptionResult<SubscriptionObservation>
+          try {
+            result = await window.xidao.subscriptions.read({ source, observationId, operationId: round.operationId })
+          } catch {
+            updateCollection(key, { type: 'internal' })
+            return
+          }
+          if (!result.ok) {
+            updateCollection(key, { type: 'refused', reason: result.reason })
+            return
+          }
+          const observation = result.value
+          // The main process reads for its current identity: a result of another collection stays out of this one.
+          if (observationKey(observation) !== key) return
+          updateCollection(key, { type: 'observed', observation })
+          if (observation.error !== null || observation.cancelled || observation.nextPage === null) return
+          observationId = observation.id
+        }
+      } finally {
+        rounds.current.delete(key)
+        updateCollection(key, { type: 'end' })
+      }
+    },
+    [updateCollection]
+  )
+
+  const refreshCollection = useCallback(
+    (source: SubscriptionSource, context: SubscriptionContext, resume = false) => {
+      const key = collectionKey(source, context)
+      loadCollection(source, context)
+      if (rounds.current.has(key)) return
+      const latest = collectionsRef.current.get(key)?.latest ?? null
+      const from = resume && latest !== null && latest.nextPage !== null ? latest.id : null
+      void runRound(key, source, from)
+    },
+    [loadCollection, runRound]
+  )
+
+  const stopCollection = useCallback(
+    (source: SubscriptionSource, context: SubscriptionContext) => {
+      const key = collectionKey(source, context)
+      const round = rounds.current.get(key)
+      // Synchronous guard: a second press, or a press after the round ended, does nothing.
+      if (round === undefined || round.stopRequested) return
+      round.stopRequested = true
+      updateCollection(key, { type: 'stop-requested' })
+      window.xidao.subscriptions.cancel({ operationId: round.operationId }).catch(() => undefined)
+    },
+    [updateCollection]
+  )
 
   // A new App UUID turns the previous one into a merge source.
   const appRef = overview?.context.appCredentialId
@@ -270,7 +433,7 @@ export function useSubscriptions(): SubscriptionsState {
 
   const change = useCallback(
     async (request: ChangeRequest) => {
-      if (activeRef.current !== null || busyTask(taskRef.current)) return
+      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current)) return
       const operationId = crypto.randomUUID()
       const write: ActiveWrite = {
         kind: 'change',
@@ -297,7 +460,7 @@ export function useSubscriptions(): SubscriptionsState {
 
   const reconcile = useCallback(
     async (operation: SubscriptionOperation) => {
-      if (activeRef.current !== null || busyTask(taskRef.current)) return
+      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current)) return
       const operationId = crypto.randomUUID()
       const write: ActiveWrite = {
         kind: 'reconcile',
@@ -326,6 +489,36 @@ export function useSubscriptions(): SubscriptionsState {
 
   const dismissLastWrite = useCallback(() => setLastWrite(null), [])
 
+  const dismiss = useCallback(
+    async (operation: SubscriptionOperation): Promise<boolean> => {
+      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current)) return false
+      dismissingRef.current = operation.id
+      setDismissing(operation.id)
+      setDismissFailure(null)
+      let saved = false
+      try {
+        const result = await window.xidao.subscriptions.dismiss({ id: operation.id })
+        if (!alive.current) return result.ok
+        if (result.ok) {
+          saved = true
+          const closed = result.value
+          setOperations((current) => current?.map((item) => (item.id === closed.id ? closed : item)) ?? current)
+          // The finished write's line is the same reminder: it goes with it, and nothing else does.
+          setLastWrite((current) => noticeAfterDismiss(current, closed))
+        } else setDismissFailure({ id: operation.id, reason: result.reason })
+      } catch {
+        if (alive.current) setDismissFailure({ id: operation.id, reason: 'internal' })
+      } finally {
+        dismissingRef.current = null
+        if (alive.current) setDismissing(null)
+      }
+      // The journal is the durable record: whatever happened, show what it holds.
+      void refreshOperations()
+      return saved
+    },
+    [refreshOperations]
+  )
+
   /** Reads a fresh preview; callers have checked that nothing else runs. */
   const runPreview = useCallback(
     async (mode: ReconcileMode, mergeSource: SubscriptionMergeSource | null, notice: PreviewNotice) => {
@@ -353,7 +546,7 @@ export function useSubscriptions(): SubscriptionsState {
 
   const startPreview = useCallback(
     async (mode: ReconcileMode, mergeSource: SubscriptionMergeSource | null) => {
-      if (activeRef.current !== null || busyTask(taskRef.current)) return
+      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current)) return
       if (mode === 'merge' && mergeSource === null) return
       await runPreview(mode, mergeSource, null)
     },
@@ -443,8 +636,15 @@ export function useSubscriptions(): SubscriptionsState {
     change,
     reconcile,
     stopReadback,
+    dismiss,
+    dismissing,
+    dismissFailure,
+    collections,
+    loadCollection,
+    refreshCollection,
+    stopCollection,
     task,
-    busy: active !== null || busyTask(task),
+    busy: active !== null || dismissing !== null || busyTask(task),
     startPreview,
     setChoice,
     execute,
@@ -469,4 +669,19 @@ export function useSubscriptionsContext(): SubscriptionsState {
   const value = useContext(SubscriptionsContext)
   if (value === null) throw new Error('SubscriptionsContext is not provided')
   return value
+}
+
+/**
+ * The remote collection `source` writes to under the identity shown, with its stored snapshot read
+ * once when first needed. Rendering never reads from the forum; only `refreshCollection` does.
+ */
+export function useCollection(source: SubscriptionSource): { key: string | null; state: CollectionState | null } {
+  const { overview, collections, loadCollection } = useSubscriptionsContext()
+  const context = overview?.context ?? null
+  const key = context === null ? null : collectionKey(source, context)
+  useEffect(() => {
+    if (context !== null) loadCollection(source, context)
+    // The key names the source and every part of the context.
+  }, [key, loadCollection])
+  return { key, state: key === null ? null : (collections.get(key) ?? unloadedCollection) }
 }
