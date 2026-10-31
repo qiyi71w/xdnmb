@@ -94,21 +94,40 @@ node server/analytics/main.ts restore <文件>   # 用备份新建数据库并�
 | `XIDAO_ANALYTICS_HOST`／`XIDAO_ANALYTICS_PORT` | 监听地址与端口，默认 `127.0.0.1:8787` |
 | `XIDAO_ANALYTICS_MAX_INSTANCES` | 已登记实例上限，默认 100000 |
 
-同一数据库只运行一个 `serve` 进程。配置建议放在仅服务账户可读（`0600`）的环境文件中，例如 systemd 单元：
+同一数据库只运行一个 `serve` 进程。配置放在仅 root 可读（`0600`）的环境文件中。正式部署用官方 `node:24` 镜像运行（主机不需要安装 Node）：应用文件只读挂载，数据目录归一个不对应任何主机账户的专用 uid，只在本机回环地址发布端口：
 
-```ini
-[Service]
-EnvironmentFile=/etc/xidao-analytics.env
-ExecStart=/usr/bin/node /opt/xidao/server/analytics/main.ts serve
-User=xidao-analytics
-StateDirectory=xidao-analytics
-ProtectSystem=strict
-ProtectHome=true
-NoNewPrivileges=true
-Restart=on-failure
+```bash
+docker run -d --name xidao-analytics --restart unless-stopped \
+  --user 64787:64787 --read-only --tmpfs /tmp:size=8m --cap-drop ALL \
+  --security-opt no-new-privileges --memory 256m --pids-limit 64 \
+  --log-driver json-file --log-opt max-size=1m --log-opt max-file=3 \
+  --env-file /opt/xidao-analytics/analytics.env \
+  -v /opt/xidao-analytics/app:/app:ro -v /opt/xidao-analytics/data:/data \
+  -p 127.0.0.1:18787:8787 -w /app node:24-bookworm-slim \
+  node --disable-warning=ExperimentalWarning server/analytics/main.ts serve
 ```
 
-对外服务由现有反向代理终止 HTTPS，并只转发 `/v1/` 与 `/admin/` 到本机监听地址。服务不读取 `X-Forwarded-For` 等来源头，也不按 IP 做任何判断。
+其中 `app/` 是仓库中的 `server/analytics/` 与 `src/shared/analytics-protocol.ts`（保持相对路径），环境文件设置 `XIDAO_ANALYTICS_DB=/data/analytics.sqlite`、`XIDAO_ANALYTICS_HOST=0.0.0.0`（容器内）与密码哈希。数据目录权限 `0700`。`cleanup`／`backup`／`restore` 用同一镜像、同一挂载以 `docker run --rm` 执行；不要和 `serve` 同时指向同一个库做 `restore`。镜像建议按 digest 固定，升级 Node 时再更新。
+
+对外由现有反向代理终止 HTTPS，只转发 `/v1/` 与 `/admin` 到本机监听地址，其余路径返回 404。服务不读取 `X-Forwarded-For` 等来源头，也不按 IP 做任何判断，所以代理不必添加这些头。统计请求在请求体里带有标识与凭证，代理常用的访问日志格式会记录来源 IP，因此要在这个站点关闭访问日志与错误日志（nginx 中站点级 `access_log` 会覆盖上层继承的所有 `access_log`，包括写到标准输出的那一条）：
+
+```nginx
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name stats.example.com;
+    access_log off;
+    error_log /dev/null;
+    # ssl_certificate / ssl_certificate_key / ssl_protocols TLSv1.3 TLSv1.2 ...
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    client_max_body_size 4k;
+    location /v1/  { proxy_pass http://127.0.0.1:18787; proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_redirect off; }
+    location /admin { proxy_pass http://127.0.0.1:18787; proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_redirect off; }
+    location / { return 404; }
+}
+```
+
+80 端口的同名站点只提供 ACME 验证路径，其余请求 301 到 HTTPS，同样关闭两种日志。桌面客户端只使用 HTTPS 来源且不跟随重定向，所以这个 301 不会让请求体改走明文。
 
 ## 私人看板与认证
 
@@ -134,8 +153,23 @@ Restart=on-failure
 
 这只约束应用自身。反向代理的访问日志、云平台的流日志与主机日志需要在部署时单独核对并关闭或去除标识与来源 IP；网络层在连接时仍能看到来源 IP。
 
+## 正式部署
+
+汐岛正式版本的统计来源是 `https://xidao-stats.qiyi71w.com`（写在仓库的 `.env.production` 中）。以下是部署时核对过的事实：
+
+- 服务器：作者的甲骨文云实例，加拿大多伦多区域（`ca-toronto-1`），ARM64 Ubuntu。服务按上文以 Docker 容器运行，随 Docker 开机自启；现有的 OpenResty 反向代理在同一台主机上终止 HTTPS。
+- 网络链路：DNS 记录不经 CDN 代理，客户端直接与这台主机建立 TLS，中间没有其他会解密请求的代理。证书由 Let's Encrypt 签发，certbot 用 webroot 方式自动续期，续期钩子安装证书并重载代理；已用 `certbot renew --dry-run` 验证续期流程。只接受 TLS 1.2 与 1.3。
+- 日志：统计站点的访问日志与错误日志都已关闭，成功的统计、删除与看板请求在代理的访问日志、错误日志和容器标准输出中都没有记录。例外：TLS 握手在选定站点之前就失败的连接（例如客户端只支持旧版 TLS）由代理的默认站点记录一行，含来源 IP 与握手字节，但没有主机名、路径或请求内容。这份共享日志不由本服务管理。服务容器本身只写运维事件，日志按 1 MiB × 3 份轮转。
+- 数据与备份：数据库只在容器挂载的数据目录里。主机没有面板备份任务，云平台未启用引导卷备份策略，也没有其他文件备份覆盖这个目录。
+- 保留：清理在服务进程内完成，启动时先清理再监听，运行中每分钟检查一次统计日变化，所以不需要另配定时任务；服务停止期间不清理，重新启动时立即补做。
+- 云平台：主机上的 OCI 日志代理没有配置任何采集源，不向云端发送主机日志；主机自己的系统日志只有账户登录和其他服务的记录，不含统计内容。VCN 流日志（会保留连接的来源 IP 与端口元数据）是否启用只能在云控制台查看，部署时**尚未核对**。
+
+部署后的统计数据从清空的数据库开始：验收用的隔离身份在验收结束后与数据库文件一起删除。
+
 ## 验证范围
 
 `tests/analytics-service.test.ts` 用真实本地 HTTP、临时 SQLite 文件和受控时钟覆盖：同日重复与并发上报、北京时间零点、第 30／31 日窗口、最后上报归属、登记不计数、他人凭证拒绝、重复删除、删除与上报并发、事务中断回滚与重启后重试、31 日与 12 个月清理、清理失败后重试、备份只含日汇总、字段白名单与大小限制、限流与容量、看板全路径认证，以及日志中不出现合成敏感标记、标识、凭证与地址。
 
 另在 Linux 上以 Node 24 实际运行服务进程，验证了：两个隔离实例上报到浏览器看板；删除、重启和停止服务后的看板状态；`SIGKILL` 中断并发上报和删除后重启的数据一致性；`backup`／`restore`／`cleanup` 命令；以及真实日志采样。这些都是本机受控演练，不代表正式域名、TLS、反向代理、云平台日志或主机备份已经通过核对。
+
+正式部署（上文“正式部署”）另在实际主机上验证了：TLS 证书、协议版本与 HSTS；未认证访问 `/admin`、`/admin/`、`/admin/api/summary`、不存在的 `/admin` 子路径及 `../` 构造的路径都返回 `401`，大小写变体、编码与双斜杠变体返回 `404`，没有绕过认证的路径；上报凭证（作为 Bearer 或 Basic 提交）不能读取看板；两个隔离身份经公网 HTTPS 登记、上报、同日去重、跨实例凭证 `403`、多余字段 `400`、删除与重复删除、删除后上报 `403`，看板计数随之变化；容器重启后已删除身份仍被拒绝、有效身份保留；真实的 Windows 客户端经公网走完开启、上报、浏览器看板、关闭与删除的完整链路（见[开发说明](development.md#使用统计客户端)）；删除后数据库、WAL 与共享内存文件中没有已删除实例的标识，也没有凭证明文；代理与容器日志采样中没有统计请求、标识或凭证。保留规则在同一主机上用相同镜像和应用文件、隔离数据库与偏移时钟演练：40 天前上报的实例在按真实时间启动时被清理并冻结为日汇总，已自删的实例不计入也不复活，10 天前的实例保留；重启后结论不变；`backup`／`restore` 恢复出的库没有任何实例。
