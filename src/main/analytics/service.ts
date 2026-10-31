@@ -287,11 +287,12 @@ export function createAnalyticsService(options: {
     }
     const identity = record.identity
     if (identity === null || current !== generation) return
-    // A registration can outlast the moment that started it: report only foreground use, and only
-    // within today's budget (a registration may have spent its last request).
-    if (!options.isForeground() || budget.used >= ANALYTICS_PACING.requestsPerDay) return
     token ??= await options.protector.decrypt(Buffer.from(identity.protectedToken, 'base64'))
     if (current !== generation) return
+    // A registration or the decryption can outlast the moment that started it: report only
+    // foreground use as it is now, and only within today's budget (a registration may have spent
+    // its last request).
+    if (!options.isForeground() || budget.used >= ANALYTICS_PACING.requestsPerDay) return
     const response = await send(ANALYTICS_PATHS.activity, {
       protocol: ANALYTICS_PROTOCOL_VERSION,
       instanceId: identity.instanceId,

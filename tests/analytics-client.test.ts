@@ -413,6 +413,47 @@ describe('desktop usage statistics', () => {
     expect(service.requests.map((request) => request.path)).toEqual(['/v1/instances', '/v1/activity'])
   })
 
+  it('a stored credential decrypted after the window left the foreground reports only at the next foreground moment', async () => {
+    const path = databasePath()
+    let db = open(path)
+    const wall = { wall: 0 }
+    const service = await receiver(wall)
+    const { clock, lock, create, advance, settle } = harness(service.origin, '2026-10-31T23:50:00+08:00')
+    Object.defineProperty(wall, 'wall', { get: () => clock.wall })
+    const first = create(db)
+    await first.setChoice('on')
+    await settle()
+    expect(service.requests.map((request) => request.path)).toEqual(['/v1/instances', '/v1/activity'])
+    await first.stop()
+
+    // A new run with the stored identity: its credential is decrypted once, asynchronously.
+    db = reopen(db, path)
+    const decrypt = lock.decrypt.bind(lock)
+    const held: Array<() => void> = []
+    lock.decrypt = (ciphertext) => {
+      const { promise, resolve, reject } = Promise.withResolvers<string>()
+      held.push(() => { decrypt(ciphertext).then(resolve, reject) })
+      return promise
+    }
+    advance(24 * 60 * 60_000)
+    const current = create(db)
+    await current.start()
+    current.poke()
+    await until(() => held.length === 1)
+    // Minimized (or locked) across the next Beijing midnight before the decryption finishes.
+    clock.foreground = false
+    advance(15 * 60_000)
+    held[0]!()
+    await settle()
+    expect(service.requests.map((request) => request.path)).toEqual(['/v1/instances', '/v1/activity'])
+    clock.foreground = true
+    advance(ANALYTICS_PACING.minSpacingMs)
+    current.poke()
+    await settle()
+    expect(service.requests.map((request) => request.path)).toEqual(['/v1/instances', '/v1/activity', '/v1/activity'])
+    expect(service.requests[2]!.body.instanceId).toBe(service.requests[1]!.body.instanceId)
+  })
+
   it('a registration that succeeds with the last request of the day keeps its identity without exceeding the daily budget', async () => {
     const path = databasePath()
     const db = open(path)
