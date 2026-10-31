@@ -1,6 +1,7 @@
-/* Usage statistics (features/analytics): the first-run question and 设置 › 使用统计. The text sits
-   on paper, wraps everywhere, and the dialog's 关闭／开启 stay outside its scrolling body, so both
-   remain reachable in narrow windows and at 200% zoom. */
+/* Usage statistics (features/analytics): the first-run question and 设置 › 使用统计. The question
+   shows the purpose and the data sent; receiver, retention and privacy limits are one click away.
+   The text sits on paper, wraps everywhere, and the dialog's 关闭／开启 stay outside its
+   scrolling body, so both remain reachable in narrow windows and at 200% zoom. */
 
 .analytics-dialog {
   width: min(560px, calc(100vw - 32px));
@@ -12,14 +13,11 @@
 
 .analytics-lead {
   margin: 0;
-  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
+.analytics-sent,
 .analytics-disclosure {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 6px 12px;
   margin: 0;
   padding: 12px 14px;
   border: 1px solid var(--line-soft);
@@ -28,6 +26,12 @@
   color: var(--ink);
   font-size: var(--text-sm);
   overflow-wrap: anywhere;
+}
+
+.analytics-disclosure {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
 }
 
 .analytics-disclosure dt {
@@ -40,10 +44,12 @@
   min-width: 0;
 }
 
+.analytics-sent p,
 .analytics-disclosure p {
   margin: 0;
 }
 
+.analytics-sent ul,
 .analytics-disclosure ul {
   margin: 4px 0;
   padding-left: 1.25em;

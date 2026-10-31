@@ -8,7 +8,7 @@ import type { AnalyticsChoiceResult, AnalyticsState } from '../../../../shared/a
 import { Icon, Spinner } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { Modal, ModalHeader } from '../../components/Modal'
-import { AnalyticsDisclosure } from './AnalyticsDisclosure'
+import { ANALYTICS_PURPOSE, AnalyticsSentData, AnalyticsTerms } from './AnalyticsDisclosure'
 import { choicePromptReducer, choiceSettled, INITIAL_CHOICE_PROMPT } from './choicePrompt'
 import { choiceFailureText } from './analyticsText'
 import './analytics.css'
@@ -116,8 +116,19 @@ export function AnalyticsChoiceDialog({
     <Modal className="analytics-dialog" labelledBy={titleId} onClose={dismiss} fallbackFocus={fallbackFocus}>
       <ModalHeader title="使用统计" titleId={titleId} closeLabel="关闭，不开启统计" onClose={dismiss} closeDisabled={busy} />
       <div className="modal-body analytics-dialog-body">
-        <p className="analytics-lead">是否开启使用统计？不开启就不会发送任何统计。</p>
-        <AnalyticsDisclosure receiver={receiver} />
+        <p className="analytics-lead">要开启使用统计吗？它{ANALYTICS_PURPOSE}</p>
+        <div className="analytics-sent">
+          <AnalyticsSentData />
+        </div>
+        <details className="analytics-details">
+          <summary>
+            <Icon name="chevron" size={14} className="analytics-details-icon" />
+            接收方、保留期与隐私边界
+          </summary>
+          <dl className="analytics-disclosure">
+            <AnalyticsTerms receiver={receiver} />
+          </dl>
+        </details>
       </div>
       <div className="modal-actions analytics-actions">
         {failure !== null && (
