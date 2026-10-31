@@ -1,7 +1,7 @@
-import type { SearchChannel, SearchError, SearchNextState, SearchOutcome, SearchPage } from '../../../../shared/online-search'
+import { DEFAULT_XDS_SEARCH_FILTERS, isXdsSearchFilters, sameXdsSearchFilters, type SearchChannel, type SearchError, type SearchNextState, type SearchOutcome, type SearchPage, type XdsSearchFilters } from '../../../../shared/online-search'
 
 /** A request of the search page: a new query chain (`run`) or a page of the current chain. */
-export type OnlineSearchRequest = { kind: 'run'; query: string } | { kind: 'page'; page: number }
+export type OnlineSearchRequest = { kind: 'run'; query: string; filters: XdsSearchFilters | null } | { kind: 'page'; page: number }
 
 /** What the last request left to say; `null` after a success. */
 export type OnlineSearchNotice =
@@ -15,6 +15,7 @@ export type OnlineSearchNotice =
 /** Pages obtained by one query chain, as shown on the search page. */
 export interface OnlineSearchResults {
   query: string
+  filters: XdsSearchFilters | null
   /** Index = page number − 1; always contiguous from page 1. */
   pages: readonly SearchPage[]
   /** Page number shown. */
@@ -32,6 +33,8 @@ export interface OnlineSearchResults {
 export interface OnlineSearchState {
   /** Text in the search box. */
   draft: string
+  filters: XdsSearchFilters
+  filtersOpen: boolean
   results: OnlineSearchResults | null
   /** Request whose result is still awaited. */
   pending: OnlineSearchRequest | null
@@ -45,7 +48,7 @@ export interface OnlineSearchViewMemory {
   focus: { page: number; index: number } | null
 }
 
-const INITIAL: OnlineSearchState = { draft: '', results: null, pending: null, notice: null }
+const INITIAL: OnlineSearchState = { draft: '', filters: DEFAULT_XDS_SEARCH_FILTERS, filtersOpen: false, results: null, pending: null, notice: null }
 
 const ignore = (): undefined => undefined
 
@@ -64,7 +67,7 @@ export class OnlineSearchSession {
   readonly sessionId: string
   readonly channel: SearchChannel
   readonly view: OnlineSearchViewMemory = { scrollTop: 0, focus: null }
-  private state: OnlineSearchState = INITIAL
+  private state: OnlineSearchState = { ...INITIAL, filters: { ...DEFAULT_XDS_SEARCH_FILTERS } }
   private seq = 0
   private disposed = false
   private readonly listeners = new Set<() => void>()
@@ -90,17 +93,37 @@ export class OnlineSearchSession {
     if (!this.disposed && draft !== this.state.draft) this.set({ ...this.state, draft })
   }
 
+  setFilters(filters: XdsSearchFilters): void {
+    if (!this.disposed && !sameXdsSearchFilters(filters, this.state.filters)) this.set({ ...this.state, filters: { ...filters } })
+  }
+
+  setFiltersOpen(filtersOpen: boolean): void {
+    if (!this.disposed && filtersOpen !== this.state.filtersOpen) this.set({ ...this.state, filtersOpen })
+  }
+
+  private matchesPending(query: string, filters: XdsSearchFilters | null): boolean {
+    const { pending } = this.state
+    return pending?.kind === 'run' && pending.query === query &&
+      (pending.filters === null ? filters === null : filters !== null && sameXdsSearchFilters(pending.filters, filters))
+  }
+
+  hasPending(query: string): boolean {
+    return this.matchesPending(query, this.channel === 'xds' ? this.state.filters : null)
+  }
+
   /**
    * Starts a new query chain (explicit submit, retry or 重新搜索). `query` is already trimmed. The
-   * same query while its own run is still awaited does nothing (no second request, nothing changes):
+   * same query and filters while their own run is still awaited do nothing (no second request):
    * `pending` is set synchronously, so repeated Enter or clicks before a re-render are dropped too.
-   * A different query replaces the awaited one, as before.
+   * A different query or filter snapshot replaces the awaited one.
    */
-  run(query: string): void {
-    const { pending } = this.state
-    if (this.disposed || query === '' || (pending?.kind === 'run' && pending.query === query)) return
+  run(query: string, filters: XdsSearchFilters = this.state.filters): void {
+    if (this.disposed || query === '' || (this.channel === 'xds' && !isXdsSearchFilters(filters))) return
+    const effectiveFilters = this.channel === 'xds' ? filters : null
+    if (this.matchesPending(query, effectiveFilters)) return
     const seq = ++this.seq
-    const request: OnlineSearchRequest = { kind: 'run', query }
+    const snapshot = effectiveFilters === null ? null : Object.freeze({ ...effectiveFilters })
+    const request: OnlineSearchRequest = { kind: 'run', query, filters: snapshot }
     const { results } = this.state
     // The new chain replaces the old one in the main process: old pages stay shown, not turnable.
     this.set({
@@ -109,7 +132,7 @@ export class OnlineSearchSession {
       notice: null,
       results: results === null || !results.live ? results : { ...results, live: false }
     })
-    window.xidao.onlineSearch.run({ sessionId: this.sessionId, channel: this.channel, query }).then(
+    window.xidao.onlineSearch.run({ sessionId: this.sessionId, channel: this.channel, query, filters: snapshot }).then(
       (outcome) => this.settle(seq, request, outcome),
       () => this.reject(seq, request)
     )
@@ -202,7 +225,7 @@ export class OnlineSearchSession {
         this.view.scrollTop = 0
         this.view.focus = null
         if (request.kind === 'run') {
-          this.set({ ...base, notice: null, results: { query: request.query, pages: [outcome.page], current: 1, next: outcome.next, live: true } })
+          this.set({ ...base, notice: null, results: { query: request.query, filters: request.filters, pages: [outcome.page], current: 1, next: outcome.next, live: true } })
           return
         }
         if (results === null) {

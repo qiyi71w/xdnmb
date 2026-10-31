@@ -168,7 +168,7 @@ export function SearchPage({
               ))}
             </div>
             {side === 'online' && (
-              <div className="segmented" role="group" aria-label="联网搜索服务">
+              <div className="segmented search-page-channel" role="group" aria-label="联网搜索服务">
                 {SEARCH_CHANNELS.map((item) => (
                   <button key={item} type="button" className="segmented-item" aria-pressed={channel === item} onClick={() => chooseChannel(item)}>
                     {CHANNEL_TEXT[item]}

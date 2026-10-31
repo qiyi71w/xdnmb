@@ -2,7 +2,7 @@ import { createServer, type ServerResponse, type Server } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createForumTransport } from '../src/main/forum/transport'
 import { createOnlineSearchService } from '../src/main/online-search/service'
-import { parseNumberTarget } from '../src/shared/online-search'
+import { DEFAULT_XDS_SEARCH_FILTERS, parseNumberTarget, type XdsSearchFilters } from '../src/shared/online-search'
 
 const servers: Server[] = []
 afterEach(async () => {
@@ -47,16 +47,34 @@ describe('explicit XDS adapter', () => {
       if (entry.path === '/api/v1/web') return answer(response, { status: 'ok', web: [], npt: entry.params.npt ? null : 'once' })
       answer(response, page(Number(entry.params.page), [hit(entry.params.page === '1' ? '90071992547409931234' : '70000002', '70000000')]))
     })
-    await search.run('w', 'same', 'nmb-search', 'nmb query')
-    expect(await search.run('w', 'same', 'xds', 'xds & query')).toMatchObject({ status: 'ok', next: 'available', page: { hits: [{ target: { threadId: '70000000', replyId: '90071992547409931234', page: null } }] } })
+    await search.run('w', 'same', 'nmb-search', 'nmb query', null)
+    expect(await search.run('w', 'same', 'xds', 'xds & query', DEFAULT_XDS_SEARCH_FILTERS)).toMatchObject({ status: 'ok', next: 'available', page: { hits: [{ target: { threadId: '70000000', replyId: '90071992547409931234', page: null } }] } })
     expect(seen[1]).toMatchObject({ path: '/api/v1/search', params: { q: 'xds & query', scope: 'all', page: '1', size: '20' }, headers: { 'user-agent': 'Xidao/1.0.0' } })
     for (const field of ['cookie', 'authorization', 'x-userhash', 'uuid']) expect(seen[1]?.headers[field]).toBeUndefined()
     await search.page('w', 'same', 'xds', 2)
     await search.page('w', 'same', 'nmb-search', 2)
-    expect(seen[2]?.params).toEqual({ q: 'xds & query', scope: 'all', page: '2', size: '20' })
+    expect(seen[2]?.params).toEqual({ q: 'xds & query', scope: 'all', sort: 'rank', mode: 'terms', match: 'thread', op: 'and', page: '2', size: '20' })
     expect(seen[3]?.params).toEqual({ npt: 'once' })
     expect(await search.page('w', 'same', 'xds', 1)).toMatchObject({ status: 'ok', cached: true })
     expect(seen).toHaveLength(4)
+  })
+
+  it('snapshots every XDS filter and serializes the submitted values on every numbered page', async () => {
+    const { search, seen } = await fixture((entry, response) => answer(response, page(Number(entry.params.page))))
+    const filters: XdsSearchFilters = {
+      fid: '99999999999999999999', since: '2024-02-29', until: '2026-10-30', scope: 'replies',
+      sort: 'time_asc', mode: 'exact', match: 'aggregate', op: 'or'
+    }
+    const submitted = { ...filters }
+    await search.run('w', 's', 'xds', 'same query', filters)
+    Object.assign(filters, DEFAULT_XDS_SEARCH_FILTERS)
+    await search.page('w', 's', 'xds', 2)
+    expect(seen.map((entry) => entry.params)).toEqual([
+      { q: 'same query', ...submitted, page: '1', size: '20' },
+      { q: 'same query', ...submitted, page: '2', size: '20' }
+    ])
+    await search.run('w', 's', 'xds', 'same query', filters)
+    expect(seen[2]?.params).toEqual({ q: 'same query', scope: 'all', sort: 'rank', mode: 'terms', match: 'thread', op: 'and', page: '1', size: '20' })
   })
 
   it('retries a numeric page only on explicit action after failure and preserves obtained pages', async () => {
@@ -65,7 +83,7 @@ describe('explicit XDS adapter', () => {
       if (entry.params.page === '2' && fails) return answer(response, {}, 503)
       answer(response, page(Number(entry.params.page)))
     })
-    await search.run('w', 's', 'xds', 'q')
+    await search.run('w', 's', 'xds', 'q', DEFAULT_XDS_SEARCH_FILTERS)
     expect(await search.page('w', 's', 'xds', 2)).toMatchObject({ status: 'failed', error: { kind: 'http-status', httpStatus: 503 }, next: 'available' })
     expect(seen).toHaveLength(2)
     expect(await search.page('w', 's', 'xds', 1)).toMatchObject({ status: 'ok', cached: true })
@@ -80,16 +98,16 @@ describe('explicit XDS adapter', () => {
       if (entry.params.page === '2') return response.writeHead(429, { 'Retry-After': '30' }).end()
       answer(response, page(1))
     })
-    await search.run('w', 's', 'xds', 'q')
+    await search.run('w', 's', 'xds', 'q', DEFAULT_XDS_SEARCH_FILTERS)
     expect(await search.page('w', 's', 'xds', 2)).toMatchObject({ status: 'failed', error: { kind: 'rate-limited', retryAt: 1_800_000_030_000 } })
-    expect(await search.run('w', 'other', 'xds', 'q')).toMatchObject({ status: 'failed', error: { kind: 'rate-limited' } })
+    expect(await search.run('w', 'other', 'xds', 'q', DEFAULT_XDS_SEARCH_FILTERS)).toMatchObject({ status: 'failed', error: { kind: 'rate-limited' } })
     expect(await search.threadOf('70000002', new AbortController().signal)).toMatchObject({ status: 'failed', error: { kind: 'rate-limited' } })
     expect(await search.page('w', 's', 'xds', 1)).toMatchObject({ status: 'ok', cached: true })
     expect(seen).toHaveLength(2)
-    await search.run('w', 's', 'nmb-search', 'q')
+    await search.run('w', 's', 'nmb-search', 'q', null)
     expect(seen).toHaveLength(3)
     advance(30_000)
-    expect(await search.run('w', 'other', 'xds', 'q')).toMatchObject({ status: 'ok' })
+    expect(await search.run('w', 'other', 'xds', 'q', DEFAULT_XDS_SEARCH_FILTERS)).toMatchObject({ status: 'ok' })
   })
 
   it('ignores superseded numeric responses', async () => {
@@ -98,9 +116,9 @@ describe('explicit XDS adapter', () => {
       if (entry.params.q === 'old') held.push(response)
       else answer(response, page(1, [hit('70000009')], 1))
     })
-    const old = search.run('w', 's', 'xds', 'old')
+    const old = search.run('w', 's', 'xds', 'old', DEFAULT_XDS_SEARCH_FILTERS)
     await expect.poll(() => held.length).toBe(1)
-    const fresh = await search.run('w', 's', 'xds', 'new')
+    const fresh = await search.run('w', 's', 'xds', 'new', DEFAULT_XDS_SEARCH_FILTERS)
     held[0]?.end(JSON.stringify(page(1)))
     expect(await old).toEqual({ status: 'cancelled' })
     expect(fresh).toMatchObject({ status: 'ok', page: { hits: [{ target: { threadId: '70000009' } }] } })
@@ -113,15 +131,15 @@ describe('explicit XDS adapter', () => {
     ['unsafe ID', page(1, [hit('javascript:alert(1)')]), 200, { kind: 'unknown-structure', detail: 'shape' }]
   ])('does not mistake %s for no results', async (_name, body, status, error) => {
     const { search } = await fixture((_entry, response) => answer(response, body, status))
-    expect(await search.run('w', 's', 'xds', 'q')).toMatchObject({ status: 'failed', error })
+    expect(await search.run('w', 's', 'xds', 'q', DEFAULT_XDS_SEARCH_FILTERS)).toMatchObject({ status: 'failed', error })
   })
 
   it('distinguishes normal no-results and inert hostile text with synthesized verified links', async () => {
     const empty = await fixture((_entry, response) => answer(response, page(1, [], 0)))
-    expect(await empty.search.run('w', 's', 'xds', 'q')).toMatchObject({ status: 'ok', next: 'end', page: { hits: [] } })
+    expect(await empty.search.run('w', 's', 'xds', 'q', DEFAULT_XDS_SEARCH_FILTERS)).toMatchObject({ status: 'ok', next: 'end', page: { hits: [] } })
     const hostile = { ...hit('70000001'), content: '<script>alert(1)</script>\u202E', url: 'javascript:alert(1)', user_hash: 'not-rendered' }
     const { search } = await fixture((_entry, response) => answer(response, page(1, [hostile], 1)))
-    const outcome = await search.run('w', 's', 'xds', 'q')
+    const outcome = await search.run('w', 's', 'xds', 'q', DEFAULT_XDS_SEARCH_FILTERS)
     expect(outcome).toMatchObject({ status: 'ok', page: { hits: [{ description: '<script>alert(1)</script>', url: 'https://www.nmbxd1.com/t/70000001' }] } })
     expect(JSON.stringify(outcome)).not.toContain('not-rendered')
   })
@@ -146,7 +164,7 @@ describe('explicit XDS adapter', () => {
 
   it('cancels an explicit lookup and rejects redirects and timeouts with no replay', async () => {
     const held = await fixture(() => undefined, 50)
-    expect(await held.search.run('w', 's', 'xds', 'q')).toMatchObject({ status: 'failed', error: { kind: 'network', detail: 'timeout' } })
+    expect(await held.search.run('w', 's', 'xds', 'q', DEFAULT_XDS_SEARCH_FILTERS)).toMatchObject({ status: 'failed', error: { kind: 'network', detail: 'timeout' } })
     const controller = new AbortController()
     const request = held.search.threadOf('7', controller.signal)
     controller.abort()

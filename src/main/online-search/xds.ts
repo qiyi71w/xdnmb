@@ -1,4 +1,4 @@
-import type { SearchError, SearchHit, SearchOutcome, ThreadOfOutcome } from '../../shared/online-search'
+import type { SearchError, SearchHit, SearchOutcome, ThreadOfOutcome, XdsSearchFilters } from '../../shared/online-search'
 import { parseForumLink } from '../../shared/online-search'
 import { ForumReadError, ReadCancelledError, type ForumTransport, type TransportResponse } from '../forum/contract'
 import type { SearchAdapter } from './service'
@@ -65,6 +65,7 @@ function hit(value: unknown): SearchHit | null {
 
 interface Chain {
   query: string
+  filters: XdsSearchFilters
   pages: Map<number, Extract<SearchOutcome, { status: 'ok' }>['page']>
   next: 'available' | 'end'
   inFlight: { controller: AbortController; page: number; promise: Promise<SearchOutcome> } | null
@@ -95,7 +96,15 @@ export function createXdsSearchAdapter({ transport, origin = XDS_API_ORIGIN, now
       try {
         const url = new URL('/api/v1/search', origin)
         url.searchParams.set('q', chain.query)
-        url.searchParams.set('scope', 'all')
+        const { filters } = chain
+        url.searchParams.set('scope', filters.scope)
+        url.searchParams.set('sort', filters.sort)
+        url.searchParams.set('mode', filters.mode)
+        url.searchParams.set('match', filters.match)
+        url.searchParams.set('op', filters.op)
+        if (filters.fid !== '') url.searchParams.set('fid', filters.fid)
+        if (filters.since !== '') url.searchParams.set('since', filters.since)
+        if (filters.until !== '') url.searchParams.set('until', filters.until)
         url.searchParams.set('page', String(pageNumber))
         url.searchParams.set('size', String(PAGE_SIZE))
         const body = json(await transport.get(url, controller.signal))
@@ -123,14 +132,15 @@ export function createXdsSearchAdapter({ transport, origin = XDS_API_ORIGIN, now
   }
 
   return {
-    run(owner, sessionId, query) {
+    run(owner, sessionId, query, filters) {
+      if (filters === null) throw new Error('invalid request')
       const key = keyOf(owner, sessionId)
       const blocked = limited()
       if (blocked !== null) return Promise.resolve({ status: 'failed', error: blocked, next: 'end' })
       release(key)
       const owned = [...sessions.keys()].filter((item) => item.startsWith(keyOf(owner, '')))
       for (const oldest of owned.slice(0, Math.max(0, owned.length - MAX_SESSIONS + 1))) release(oldest)
-      const chain: Chain = { query, pages: new Map(), next: 'end', inFlight: null }
+      const chain: Chain = { query, filters: { ...filters }, pages: new Map(), next: 'end', inFlight: null }
       sessions.set(key, chain)
       return start(key, chain, 1)
     },

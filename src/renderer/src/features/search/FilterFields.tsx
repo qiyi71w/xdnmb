@@ -26,7 +26,7 @@ function dateValue(value: string): string | null {
 }
 
 /** One exclusive filter choice as pressed buttons (`.segmented`) under a visible label. */
-function ChoiceField<T extends string>({
+export function ChoiceField<T extends string>({
   label,
   choices,
   value,

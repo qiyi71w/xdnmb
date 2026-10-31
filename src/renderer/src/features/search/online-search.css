@@ -17,42 +17,21 @@
   padding-bottom: 28px;
 }
 
+/* Sticky frosted bar: position, padding and compact padding come from search.css's one 搜索 page
+   bar rule, shared with 本机; here only the stacking of the form and the length count. */
 .online-search-header {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   display: grid;
   gap: 8px;
-  padding: 12px 12px 10px 16px;
-  background: color-mix(in oklch, var(--pane) 78%, transparent);
-  backdrop-filter: blur(18px) saturate(1.5);
-  border-bottom: 1px solid var(--line-soft);
 }
 
-.online-search-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+/* XDS's filters sit under the bar as the 本机 ones do (12px below, lined up with its padding). */
+.online-search-filters {
+  margin: 12px 12px 0 16px;
 }
 
-.online-search-input {
-  flex: 1 1 12em;
-  min-width: 0;
-  min-height: 32px;
-  padding: 4px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-m);
-  background: var(--paper);
-  font-size: var(--text-md);
-}
-
-.online-search-input:focus-visible {
-  outline-offset: 0;
-  border-color: transparent;
-}
-
-.online-search-submit {
-  min-height: 32px;
+/* 恢复默认 ends the fields' last line, at its right edge. */
+.online-search-filters-reset {
+  margin-left: auto;
 }
 
 .online-search-count {
@@ -347,11 +326,7 @@
   text-align: center;
 }
 
-/* Compact density: header, result rows and pager padding only; text sizes stay. */
-:root[data-density='compact'] .online-search-header {
-  padding: 8px 10px 6px 12px;
-}
-
+/* Compact density: result rows and pager padding only (the search bar: search.css); text sizes stay. */
 :root[data-density='compact'] .online-search-hits {
   padding: 4px 6px 0;
 }

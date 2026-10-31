@@ -236,7 +236,7 @@ export function SearchBody({
             maxLength={MAX_QUERY_LENGTH}
             autoComplete="off"
             spellCheck={false}
-            placeholder={view === 'local' ? '标题或正文中的文字' : '这个串里的文字'}
+            placeholder={view === 'local' ? '搜索词' : '这个串里的文字'}
             onChange={(event) => setDraft({ view, text: event.target.value })}
           />
         </div>
@@ -260,7 +260,8 @@ export function SearchBody({
         >
           <Icon name="filter" size={14} />
           筛选
-          {filterCount > 0 && <span className="btn-count">{filterCount}</span>}
+          {/* A hidden 0 keeps 筛选's width on the 搜索 page (search.css); the name above says the count. */}
+          <span className={filterCount > 0 ? 'btn-count' : 'btn-count is-empty'}>{filterCount}</span>
         </button>
       </form>
 

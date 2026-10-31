@@ -27,6 +27,7 @@
   align-content: start;
 }
 
+/* One search bar for 串内搜索, 本机 and 联网 (OnlineSearchPane): box with icon, 搜索, 筛选. */
 .search-form {
   display: flex;
   flex-wrap: wrap;
@@ -59,6 +60,14 @@
   color: var(--ink);
   font-size: var(--text-body);
   caret-color: var(--accent);
+  /* type=search (本机, 串内) and type=text (联网) draw alike; each keeps its own keys. */
+  appearance: none;
+}
+
+.search-input::placeholder {
+  color: var(--ink-3);
+  opacity: 1;
+  font: inherit;
 }
 
 .search-input:focus-visible {
@@ -91,6 +100,11 @@
 
 .filter-toggle.is-active .icon {
   color: var(--accent-ink);
+}
+
+/* A hidden 0 that only holds 筛选's width (the 搜索 page); elsewhere it takes no room. */
+.filter-toggle .btn-count.is-empty {
+  display: none;
 }
 
 /* A list head's 筛选: an icon button beside 刷新. While open it keeps the hover overlay; filters in use
@@ -434,8 +448,9 @@
 }
 
 /* ---------- 搜索 page ----------
-   One centred column as wide as the online search page: the 本机｜联网 switch on top, then the
-   chosen side with its own scroller and frosted sticky search bar (the 联网 side's header). */
+   One centred column as wide as the online search page. A quiet top row (本机｜联网, and for 联网
+   a lighter XDS｜nmb-search right after it, at the start; a short 按串号打开 at the end), then the
+   chosen side with its own scroller and frosted sticky search bar, the page's main row. */
 
 .search-page {
   height: 100%;
@@ -445,46 +460,93 @@
 }
 
 .search-page-column {
+  container-type: inline-size;
+  container-name: search-page;
   width: min(100%, calc(var(--reading-width) + 2 * var(--gutter-min)));
   height: 100%;
   display: flex;
   flex-direction: column;
+  /* Short windows (or 200% zoom) with a long 按串号打开 status: the side keeps a usable height and
+     the whole column scrolls instead, so the search bar stays reachable and nothing is hidden. */
+  overflow: hidden auto;
+  overscroll-behavior: contain;
 }
 
+/* The top row's two entries share one line; 按串号打开's status and preview span the row under it. */
 .search-page-bar {
   flex: none;
   display: grid;
-  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 16px;
   padding: 12px 12px 0 16px;
 }
 
-/* 本机｜联网, then (联网 only) XDS｜nmb-search; wraps under each other when narrow or zoomed. */
+/* 本机｜联网, then (联网 only) XDS｜nmb-search; the second goes under the first only when it must. */
 .search-page-switches {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 12px;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
 }
 
-/* 按串号打开: one line (label, box, 打开) that wraps at 200% instead of clipping. */
+/* XDS｜nmb-search: lighter than 本机｜联网 (no track, smaller type), still a 24px target. */
+.search-page-channel {
+  gap: 2px;
+  padding: 0;
+  background: none;
+}
+
+.search-page-channel .segmented-item {
+  min-height: 24px;
+  padding: 1px 8px;
+  font-size: var(--text-xs);
+}
+
+.search-page-channel .segmented-item:not([aria-pressed='true']):hover {
+  background: var(--hover);
+}
+
+:root[data-density='compact'] .search-page-channel {
+  padding: 0;
+}
+
+/* 按串号打开 lays its form and status straight into the top row's grid. */
 .number-open {
-  display: grid;
-  gap: 6px;
+  display: contents;
 }
 
+/* Label, box, 打开: kept short beside the switch; wraps at 200% instead of clipping. */
 .number-open-form {
+  justify-self: end;
+  width: min(100%, 24rem);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 8px;
 }
 
+/* Too narrow for both on one line: 按串号打开 goes under the switches, at the start. */
+@container search-page (max-width: 38rem) {
+  .search-page-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .number-open-form {
+    justify-self: start;
+    margin-top: 8px;
+  }
+}
+
 .number-open-label {
   font-size: var(--text-sm);
   color: var(--ink-2);
+  white-space: nowrap;
 }
 
 .number-open-input {
-  flex: 1 1 12em;
+  flex: 1 1 10em;
   min-width: 0;
   min-height: 30px;
   padding: 3px 10px;
@@ -501,10 +563,15 @@
 }
 
 .number-open-status {
+  grid-column: 1 / -1;
   display: grid;
   gap: 6px;
   max-height: 40vh;
   overflow: auto;
+}
+
+.number-open-status:not(:empty) {
+  margin-top: 8px;
 }
 
 .number-open-result {
@@ -531,7 +598,7 @@
 
 .search-page-side {
   flex: 1;
-  min-height: 0;
+  min-height: 12rem;
 }
 
 .search-page-scroll {
@@ -548,15 +615,38 @@
   padding: 0 12px 28px 16px;
 }
 
-.search-page-body > .search-form {
+/* The 搜索 page's frosted sticky search bar, one rule for both sides: the 本机 form itself (pulled
+   out to the column edges) and the 联网 pane's header around the same form. Same padding and the
+   same compact padding, so box, 搜索 and 筛选 sit at the same place on either side. */
+.search-page-body > .search-form,
+.online-search-header {
   position: sticky;
   top: 0;
   z-index: 2;
-  margin: 0 -12px 0 -16px;
   padding: 12px 12px 10px 16px;
   background: color-mix(in oklch, var(--pane) 78%, transparent);
   backdrop-filter: blur(18px) saturate(1.5);
   border-bottom: 1px solid var(--line-soft);
+}
+
+:root[data-density='compact'] :is(.search-page-body > .search-form, .online-search-header) {
+  padding: 8px 10px 6px 12px;
+}
+
+.search-page-body > .search-form {
+  margin: 0 -12px 0 -16px;
+}
+
+/* 筛选 keeps one width with or without its count (a hidden 0 holds the place), and nmb-search,
+   which has no filters, keeps an invisible 筛选 of that width: the box and 搜索 never move
+   between 本机, XDS and nmb-search or when a filter is turned on. Not in 串内搜索's sheet. */
+:is(.search-page-body, .online-search-header) .filter-toggle .btn-count.is-empty {
+  display: inline;
+  visibility: hidden;
+}
+
+.search-form-slot {
+  visibility: hidden;
 }
 
 /* The 联网 side fills the column instead of centring its own. */
@@ -567,6 +657,13 @@
 .search-page .online-search-scroll {
   width: 100%;
   border-inline: 0;
+}
+
+/* Both sides' scrollers keep room for their scrollbar whether or not they scroll yet, so the
+   search bar has the same width on 本机, XDS and nmb-search (short windows, 200% zoom). */
+.search-page-scroll,
+.search-page .online-search-scroll {
+  scrollbar-gutter: stable;
 }
 
 /* ---------- List filters ---------- */
