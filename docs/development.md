@@ -13,10 +13,11 @@ npm ci            # 安装锁定依赖
 npm run dev       # 开发模式（热更新）
 npm run build     # 构建到 out/
 npm start         # 运行构建产物
-npm run typecheck # 主进程、preload、共享代码与界面的类型检查
+npm run typecheck # 主进程、preload、共享代码、界面与统计服务的类型检查
 npm test          # Vitest，运行在 Electron 自带的 Node 中，与应用使用同一 SQLite 驱动
 npm run dist:win  # 在 Windows 上构建 x64 NSIS 安装程序与 latest.yml 到 dist/
 npm run dist:mac  # 在 macOS 上构建 x64／arm64 DMG 与 latest-mac.yml 到 dist/（DMG 由 hdiutil 生成，只能在 macOS 上构建）
+npm run analytics -- serve  # 本机运行使用统计服务（配置见 docs/analytics-service.md）
 ```
 
 ## 打包与发布
@@ -48,6 +49,7 @@ npm run dist:mac  # 在 macOS 上构建 x64／arm64 DMG 与 latest-mac.yml 到 d
 | `src/main/announcements/`、`src/renderer/src/features/announcements/` | 冷启动公告读取、独立持久记录、一次性自动展示资格与设置主动查看 |
 | `src/main/ipc.ts`、`src/preload/` | 具名 IPC 与调用方校验 |
 | `src/renderer/` | React 界面 |
+| `server/analytics/` | 独立部署的自愿使用统计服务与私人看板（Node 24 内置 HTTP／SQLite，不随桌面应用打包）；协议常量在 `src/shared/analytics-protocol.ts`，协议、口径与运维见 [使用统计服务](analytics-service.md) |
 
 ## 数据与安全实现
 
