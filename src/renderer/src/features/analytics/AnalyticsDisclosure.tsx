@@ -4,7 +4,7 @@
 
 import './analytics.css'
 
-export const ANALYTICS_PURPOSE = '帮作者了解大约有多少安装在使用汐岛，以及各版本和系统的占比。'
+export const ANALYTICS_PURPOSE = '帮作者了解汐岛的大致使用人数，以及各版本和系统的占比。'
 
 /** The data sent, and the most likely worries about what is not. */
 export function AnalyticsSentData() {
