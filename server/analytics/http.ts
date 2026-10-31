@@ -12,7 +12,6 @@ import {
 import type {
   AnalyticsActivityResponse,
   AnalyticsCredentials,
-  AnalyticsDeletionResponse,
   AnalyticsErrorCode,
   AnalyticsPlatform,
   AnalyticsRegisterResponse
@@ -151,16 +150,6 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
         const result = store.recordActivity(statDay, credentials, version, platform as AnalyticsPlatform)
         if (result.kind === 'invalid_credentials') return sendError(response, 403, 'invalid_credentials')
         sendJson(response, 200, { statDay, duplicate: result.duplicate } satisfies AnalyticsActivityResponse)
-      }
-    }],
-    [ANALYTICS_PATHS.deletion, {
-      bucket: buckets.selfOperations,
-      handle(body, response) {
-        const problem = checkFields(body, ['protocol', 'instanceId', 'token'])
-        const credentials = readCredentials(body)
-        if (problem || !credentials) return sendError(response, 400, problem ?? 'invalid_request')
-        if (store.deleteInstance(credentials) === 'invalid_credentials') return sendError(response, 403, 'invalid_credentials')
-        sendJson(response, 200, { deleted: true } satisfies AnalyticsDeletionResponse)
       }
     }]
   ])

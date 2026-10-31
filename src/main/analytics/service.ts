@@ -1,6 +1,6 @@
 import {
   EMPTY_ANALYTICS_RECORD, type AnalyticsApi, type AnalyticsAvailability, type AnalyticsChoice, type AnalyticsChoiceResult,
-  type AnalyticsDeletionFailure, type AnalyticsDeletionResult, type AnalyticsRecord, type AnalyticsState
+  type AnalyticsRecord, type AnalyticsState
 } from '../../shared/analytics'
 import {
   ANALYTICS_INSTANCE_ID_PATTERN, ANALYTICS_PATHS, ANALYTICS_PROTOCOL_VERSION, ANALYTICS_STAT_DAY_PATTERN, ANALYTICS_TOKEN_PATTERN,
@@ -36,8 +36,8 @@ export interface AnalyticsService extends AnalyticsApi {
   /** A fact behind the foreground decision changed (focus, show, restore, unlock, resume). */
   poke(): void
   /**
-   * Quitting: abandons the running attempt or deletion (never waits for the network) and schedules
-   * nothing until `resume`. Settles once their local writes are done, before storage closes.
+   * Quitting: abandons the running attempt (never waits for the network) and schedules nothing
+   * until `resume`. Settles once its local writes are done, before storage closes.
    */
   stop(): Promise<void>
   resume(): void
@@ -69,8 +69,8 @@ function errorCode(response: AnalyticsResponse): string | null {
  * Voluntary usage statistics of this installation. Nothing is sent, and no identity exists, until
  * the user turned statistics on and that choice was stored. While on, one activity report per
  * Beijing statistics day is sent when the window is in the foreground (decided by `isForeground`).
- * Turning off stops at once and cancels the running request; deleting first turns off, then asks
- * the service to remove what is linked to this device, keeping the credentials until it confirmed.
+ * Turning off stops at once and cancels the running request; it does not ask the service to remove
+ * anything (what is linked to this device expires there after 31 idle statistics days).
  */
 export function createAnalyticsService(options: {
   store: Store
@@ -79,8 +79,6 @@ export function createAnalyticsService(options: {
   protector: SecretProtector
   /** `null`: this build has no receiving service. */
   transport: AnalyticsTransport | null
-  /** Host name of the receiving service, shown in the disclosure. */
-  receiver: string | null
   /** `null`: this platform is not part of the statistics. */
   platform: AnalyticsPlatform | null
   version: string
@@ -114,15 +112,9 @@ export function createAnalyticsService(options: {
   let generation = 0
   let attempt: Promise<void> | null = null
   let attemptController: AbortController | null = null
-  let deletionController: AbortController | null = null
   let cancelTimer: (() => void) | null = null
   /** Decrypted token of `record.identity`, kept in the main process for this run only. */
   let token: string | null = null
-  /**
-   * A deletion was requested but even its intent could not be stored: it stays unresolved for this
-   * run (statistics off, turning on refused) although the stored record does not say so.
-   */
-  let unresolvedDeletion = false
 
   let notBefore = -Infinity
   let lastAttemptAt = -Infinity
@@ -133,7 +125,6 @@ export function createAnalyticsService(options: {
 
   let writes: Promise<unknown> = Promise.resolve()
   let operations: Promise<unknown> = Promise.resolve()
-  let deleting: Promise<AnalyticsDeletionResult> | null = null
 
   function queue<T>(tail: 'writes' | 'operations', work: () => Promise<T>): Promise<T> {
     const previous = tail === 'writes' ? writes : operations
@@ -165,10 +156,7 @@ export function createAnalyticsService(options: {
     return {
       availability,
       choice,
-      saved: record.choice,
-      hasIdentity: record.identity !== null,
-      deletionPending: record.deletionPending || unresolvedDeletion,
-      receiver: options.receiver
+      saved: record.choice
     }
   }
 
@@ -193,7 +181,7 @@ export function createAnalyticsService(options: {
   }
 
   function running(): boolean {
-    return started && !paused && availability === 'available' && choice === 'on' && !record.deletionPending && !unresolvedDeletion && !halted
+    return started && !paused && availability === 'available' && choice === 'on' && !halted
   }
 
   /** Looks whether a report is due now; otherwise when to look again. Never more than one in flight. */
@@ -285,9 +273,9 @@ export function createAnalyticsService(options: {
       const instanceId = body.instanceId
       const received = body.token
       const ciphertext = Buffer.from(await options.protector.encrypt(received)).toString('base64')
-      // Stored before the first report, so deletion stays possible for whatever gets counted.
+      // Stored before the first report, so a later run reports under the same identity.
       const stored = await update((latest) =>
-        current !== generation || latest.choice !== 'on' || latest.deletionPending || latest.identity !== null
+        current !== generation || latest.choice !== 'on' || latest.identity !== null
           ? null
           : { ...latest, identity: { instanceId, protectedToken: ciphertext }, reportedDay: null })
       if (!stored) {
@@ -325,11 +313,11 @@ export function createAnalyticsService(options: {
       return
     }
     if (response.status === 403 && errorCode(response) === 'invalid_credentials') {
-      // The service no longer knows this identity (deleted elsewhere or expired after 31 idle
-      // days). Only while still on and with no deletion pending may a new one be registered.
+      // The service no longer knows this identity (expired after 31 idle days). Only while still
+      // on may a new one be registered.
       token = null
       const dropped = await update((latest) =>
-        current !== generation || latest.choice !== 'on' || latest.deletionPending || latest.identity?.instanceId !== identity.instanceId
+        current !== generation || latest.choice !== 'on' || latest.identity?.instanceId !== identity.instanceId
           ? null
           : { ...latest, identity: null, reportedDay: null })
       if (!dropped) backOff()
@@ -369,9 +357,8 @@ export function createAnalyticsService(options: {
         const saved = await update((latest) => ({ ...latest, choice: 'off' }))
         return { result: saved ? 'saved' : 'not-saved', state: state() }
       }
-      if (record.deletionPending || unresolvedDeletion) return { result: 'refused', reason: 'deletion-pending', state: state() }
       if (!(await options.protector.isAvailable())) return { result: 'refused', reason: 'protection-unavailable', state: state() }
-      const saved = await update((latest) => (latest.deletionPending ? null : { ...latest, choice: 'on' }))
+      const saved = await update((latest) => ({ ...latest, choice: 'on' }))
       if (!saved) return { result: 'not-saved', state: state() }
       stopRun()
       choice = 'on'
@@ -383,59 +370,6 @@ export function createAnalyticsService(options: {
     })
   }
 
-  async function runDeletion(): Promise<AnalyticsDeletionResult> {
-    stopRun()
-    choice = 'off'
-    // The aborted attempt settles first, so a registration it stored is deleted too.
-    await attempt
-    const failed = (reason: AnalyticsDeletionFailure): AnalyticsDeletionResult => ({ result: 'failed', reason, state: state() })
-    if (record.identity === null) {
-      // Nothing on this device links to the service: nothing to ask for.
-      const stored = await update((latest) => (latest.identity !== null ? null : { ...latest, choice: 'off', deletionPending: false, reportedDay: null }))
-      unresolvedDeletion = false
-      return stored || record.choice === 'off' ? { result: 'deleted', state: state() } : failed('storage')
-    }
-    if (transport === null) return failed('service')
-    const recorded = await update((latest) => ({ ...latest, choice: 'off', deletionPending: latest.identity !== null }))
-    if (!recorded) {
-      unresolvedDeletion = true
-      return failed('storage')
-    }
-    const identity = record.identity
-    if (identity === null) return { result: 'deleted', state: state() }
-    let secret: string
-    try {
-      secret = token ?? await options.protector.decrypt(Buffer.from(identity.protectedToken, 'base64'))
-    } catch {
-      return failed('protection-unavailable')
-    }
-    // Quitting meanwhile: the deletion stays pending for the next run.
-    if (paused) return failed('network')
-    const controller = new AbortController()
-    deletionController = controller
-    let response: AnalyticsResponse
-    try {
-      response = await transport.post(ANALYTICS_PATHS.deletion, {
-        protocol: ANALYTICS_PROTOCOL_VERSION, instanceId: identity.instanceId, token: secret
-      }, controller.signal)
-    } catch {
-      // No answer (offline, timeout, quitting): nothing is known to be deleted.
-      return failed('network')
-    } finally {
-      if (deletionController === controller) deletionController = null
-    }
-    if (response.status === 200) {
-      // Confirmed: only now are the identity and its credentials removed from this device.
-      const cleared = await update((latest) => (latest.identity?.instanceId !== identity.instanceId ? latest
-        : { ...latest, choice: 'off', identity: null, deletionPending: false, reportedDay: null }))
-      if (!cleared) return failed('storage')
-      unresolvedDeletion = false
-      token = null
-      return { result: 'deleted', state: state() }
-    }
-    return failed(response.status === 403 ? 'rejected' : 'service')
-  }
-
   return {
     start,
     async getState() {
@@ -443,21 +377,13 @@ export function createAnalyticsService(options: {
       return state()
     },
     setChoice,
-    async deleteData() {
-      await start()
-      // Repeated presses join the running deletion.
-      deleting ??= queue('operations', runDeletion).finally(() => { deleting = null })
-      return deleting
-    },
     poke() {
       evaluate()
     },
     async stop() {
       paused = true
       stopRun()
-      deletionController?.abort()
       await attempt
-      await deleting?.catch(() => undefined)
       await writes
     },
     resume() {

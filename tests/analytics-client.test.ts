@@ -86,7 +86,8 @@ type Reply = (request: Received, response: ServerResponse) => void | Promise<voi
 async function receiver(clock: { wall: number }) {
   const requests: Received[] = []
   const tokens = new Map<string, string>()
-  const deleted = new Set<string>()
+  /** Identities the service no longer knows (expired). */
+  const forgotten = new Set<string>()
   let serial = 0
   const json = (response: ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}) => {
     response.writeHead(status, { 'Content-Type': 'application/json', ...headers })
@@ -101,14 +102,13 @@ async function receiver(clock: { wall: number }) {
       tokens.set(id, secret)
       json(response, 201, { instanceId: id, token: secret })
     } else if (request.path === '/v1/activity') {
-      if (typeof instanceId !== 'string' || tokens.get(instanceId) !== token || deleted.has(instanceId)) json(response, 403, { error: 'invalid_credentials' })
+      if (typeof instanceId !== 'string' || tokens.get(instanceId) !== token || forgotten.has(instanceId)) json(response, 403, { error: 'invalid_credentials' })
       else json(response, 200, { statDay: beijingDay(clock.wall), duplicate: false })
     } else {
-      if (typeof instanceId === 'string' && tokens.get(instanceId) === token) deleted.add(instanceId)
-      json(response, 200, { deleted: true })
+      json(response, 404, { error: 'not_found' })
     }
   }
-  const state = { reply: protocol, requests, tokens, deleted, json, protocol }
+  const state = { reply: protocol, requests, tokens, forgotten, json, protocol }
   const server = createServer((incoming, response) => {
     const chunks: Buffer[] = []
     incoming.on('data', (chunk: Buffer) => chunks.push(chunk))
@@ -149,7 +149,6 @@ function harness(origin: string, start = '2026-10-31T12:00:00+08:00') {
     storageReady: () => true,
     protector: lock,
     transport,
-    receiver: '127.0.0.1',
     platform: 'windows',
     version: '1.2.3',
     isForeground: () => clock.foreground,
@@ -205,14 +204,14 @@ describe('desktop usage statistics', () => {
     const service = await receiver({ wall: Date.now() })
     const { create, settle } = harness(service.origin)
     const first = create(db)
-    expect(await first.getState()).toMatchObject({ availability: 'available', choice: 'unset', saved: 'unset', hasIdentity: false })
+    expect(await first.getState()).toEqual({ availability: 'available', choice: 'unset', saved: 'unset' })
     for (let i = 0; i < 10; i++) first.poke()
     await settle()
     expect(service.requests).toHaveLength(0)
     expect(await first.setChoice('off')).toMatchObject({ result: 'saved', state: { choice: 'off', saved: 'off' } })
     db = reopen(db, path)
     const second = create(db)
-    expect(await second.getState()).toMatchObject({ choice: 'off', saved: 'off', hasIdentity: false })
+    expect(await second.getState()).toEqual({ availability: 'available', choice: 'off', saved: 'off' })
     second.poke()
     await settle()
     expect(service.requests).toHaveLength(0)
@@ -238,7 +237,7 @@ describe('desktop usage statistics', () => {
     expect(activity!.headers.cookie).toBeUndefined()
     const token = activity!.body.token as string
     expect(storedJson(path)).not.toContain(token)
-    expect(db.loadAnalytics()).toMatchObject({ choice: 'on', reportedDay: '2026-10-31', deletionPending: false })
+    expect(db.loadAnalytics()).toMatchObject({ choice: 'on', reportedDay: '2026-10-31' })
 
     // A focus storm and a restart on the same statistics day send nothing more.
     for (let i = 0; i < 20; i++) first.poke()
@@ -378,7 +377,7 @@ describe('desktop usage statistics', () => {
     // Next day the service forgot the identity: the client registers a new one, still on.
     service.set(service.protocol)
     const before = db.loadAnalytics().identity
-    service.deleted.add(before!.instanceId)
+    service.forgotten.add(before!.instanceId)
     advance(24 * 60 * 60_000)
     current.poke()
     await settle()
@@ -447,68 +446,7 @@ describe('desktop usage statistics', () => {
     expect(service.requests.slice(ANALYTICS_PACING.requestsPerDay).map((request) => request.path)).toEqual(['/v1/activity'])
   })
 
-  it('a deletion whose intent could not be stored stays unresolved for this run: turning on is refused until a deletion succeeds', async () => {
-    const path = databasePath()
-    const db = open(path)
-    const service = await receiver({ wall: Date.parse('2026-10-31T12:00:00+08:00') })
-    const { create, settle } = harness(service.origin)
-    const current = create(db)
-    await current.setChoice('on')
-    await settle()
-    denyAnalyticsWrites(path, true)
-    expect(await current.deleteData()).toMatchObject({ result: 'failed', reason: 'storage', state: { choice: 'off', deletionPending: true, hasIdentity: true } })
-    expect(service.requests.filter((request) => request.path === '/v1/deletion')).toHaveLength(0)
-    denyAnalyticsWrites(path, false)
-    expect(await current.setChoice('on')).toMatchObject({ result: 'refused', reason: 'deletion-pending' })
-    current.poke()
-    await settle()
-    expect(service.requests).toHaveLength(2)
-    expect(await current.deleteData()).toMatchObject({ result: 'deleted', state: { deletionPending: false, hasIdentity: false } })
-    expect(await current.setChoice('on')).toMatchObject({ result: 'saved' })
-  })
-
-  it('deletion stops first, keeps the credentials while the service cannot confirm, blocks a new identity, and clears them once confirmed', async () => {
-    const path = databasePath()
-    let db = open(path)
-    const service = await receiver({ wall: Date.parse('2026-10-31T12:00:00+08:00') })
-    const { create, advance, settle } = harness(service.origin)
-    let current = create(db)
-    await current.setChoice('on')
-    await settle()
-    const identity = db.loadAnalytics().identity!
-    service.set((request, response) => {
-      if (request.path === '/v1/deletion') service.json(response, 503, { error: 'server_error' })
-      else service.protocol(request, response)
-    })
-    expect(await current.deleteData()).toMatchObject({ result: 'failed', reason: 'service', state: { choice: 'off', deletionPending: true, hasIdentity: true } })
-    expect(await current.setChoice('on')).toMatchObject({ result: 'refused', reason: 'deletion-pending' })
-    advance(24 * 60 * 60_000)
-    current.poke()
-    await settle()
-    expect(service.requests.filter((request) => request.path !== '/v1/deletion')).toHaveLength(2)
-
-    // Across a restart: still pending, still off, credentials kept.
-    db = reopen(db, path)
-    current = create(db)
-    expect(await current.getState()).toMatchObject({ choice: 'off', saved: 'off', deletionPending: true, hasIdentity: true })
-    service.set(service.protocol)
-    // Two presses join one deletion.
-    const [one, two] = await Promise.all([current.deleteData(), current.deleteData()])
-    expect(one).toMatchObject({ result: 'deleted', state: { deletionPending: false, hasIdentity: false, choice: 'off' } })
-    expect(two).toBe(one)
-    expect(service.deleted.has(identity.instanceId)).toBe(true)
-    expect(service.requests.filter((request) => request.path === '/v1/deletion')).toHaveLength(2)
-    expect(db.loadAnalytics()).toEqual({ choice: 'off', identity: null, deletionPending: false, reportedDay: null })
-
-    // Repeating it asks nothing (no identity left); turning on again starts a new identity.
-    expect(await current.deleteData()).toMatchObject({ result: 'deleted' })
-    expect(service.requests.filter((request) => request.path === '/v1/deletion')).toHaveLength(2)
-    await current.setChoice('on')
-    await settle()
-    expect(db.loadAnalytics().identity!.instanceId).not.toBe(identity.instanceId)
-  })
-
-  it('reports through the real statistics service and deletes there: dashboard counts follow, old credentials are refused', async () => {
+  it('reports through the real statistics service; turning off stops reporting and leaves the counted day in place', async () => {
     const folder = mkdtempSync(join(tmpdir(), 'xidao-analytics-e2e-'))
     folders.push(folder)
     const password = 'isolated-acceptance-password'
@@ -560,14 +498,12 @@ describe('desktop usage statistics', () => {
     expect(counted.distributions.today.platforms).toEqual([{ value: 'windows', count: 1 }])
 
     const identity = db.loadAnalytics().identity!
-    const lock = protector()
-    const token = await lock.decrypt(Buffer.from(identity.protectedToken, 'base64'))
-    expect(await current.deleteData()).toMatchObject({ result: 'deleted', state: { hasIdentity: false } })
-    expect((await summary()).todayActive).toBe(0)
-    const late = await fetch(`${origin}/v1/activity`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ protocol: 1, instanceId: identity.instanceId, token, version: '1.2.3', platform: 'windows' })
-    })
-    expect(late.status).toBe(403)
+    expect(await current.setChoice('off')).toMatchObject({ result: 'saved', state: { choice: 'off' } })
+    for (let i = 0; i < 10; i++) current.poke()
+    await settle()
+    // Off only stops future reports; the identity stays on this device and the day stays counted.
+    expect(db.loadAnalytics()).toMatchObject({ choice: 'off', identity, reportedDay: '2026-10-31' })
+    expect((await summary()).todayActive).toBe(1)
+    expect(await fetch(`${origin}/v1/deletion`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then((r) => r.status)).toBe(404)
   })
 })

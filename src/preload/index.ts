@@ -46,8 +46,7 @@ const onOpenDraft = bufferedChannel<[notice: SendFailureNotice]>(PUBLICATION_OPE
 const api: XidaoApi = {
   analytics: {
     getState: () => ipcRenderer.invoke(IpcChannel.analyticsGetState),
-    setChoice: (choice) => ipcRenderer.invoke(IpcChannel.analyticsSetChoice, choice),
-    deleteData: () => ipcRenderer.invoke(IpcChannel.analyticsDeleteData)
+    setChoice: (choice) => ipcRenderer.invoke(IpcChannel.analyticsSetChoice, choice)
   },
   announcements: {
     getState: () => ipcRenderer.invoke(IpcChannel.announcementGetState),

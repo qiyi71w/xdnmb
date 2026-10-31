@@ -395,7 +395,6 @@ export interface XidaoApi {
 export const IpcChannel = {
   analyticsGetState: 'analytics:get-state',
   analyticsSetChoice: 'analytics:set-choice',
-  analyticsDeleteData: 'analytics:delete-data',
   announcementGetState: 'announcements:get-state',
   announcementRefresh: 'announcements:refresh',
   announcementTakeAutomatic: 'announcements:take-automatic',

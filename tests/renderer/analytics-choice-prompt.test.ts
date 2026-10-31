@@ -9,7 +9,7 @@ import {
 } from '../../src/renderer/src/features/analytics/choicePrompt'
 
 function state(patch: Partial<AnalyticsState>): AnalyticsState {
-  return { availability: 'available', choice: 'unset', saved: 'unset', hasIdentity: false, deletionPending: false, receiver: 'stats.example', ...patch }
+  return { availability: 'available', choice: 'unset', saved: 'unset', ...patch }
 }
 
 function run(actions: ChoicePromptAction[], from: ChoicePromptState = INITIAL_CHOICE_PROMPT): ChoicePromptState {

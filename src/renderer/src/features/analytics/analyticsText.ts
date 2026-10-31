@@ -1,11 +1,9 @@
-import type { AnalyticsChoiceResult, AnalyticsDeletionFailure, AnalyticsState } from '../../../../shared/analytics'
+import type { AnalyticsChoiceResult, AnalyticsState } from '../../../../shared/analytics'
 
 /** Why a statistics choice did not stick, and what this run does now. `null`: the request itself failed. */
 export function choiceFailureText(choice: 'on' | 'off', result: AnalyticsChoiceResult | null): string {
   if (result?.result === 'refused') {
     switch (result.reason) {
-      case 'deletion-pending':
-        return '还有未完成的统计记录删除，先完成删除才能开启'
       case 'protection-unavailable':
         return '系统凭据保护不可用，无法安全保存统计凭证，统计保持关闭'
       case 'unavailable':
@@ -16,22 +14,6 @@ export function choiceFailureText(choice: 'on' | 'off', result: AnalyticsChoiceR
   // A failed off still stopped this run; the next start reads what is on disk.
   if (result?.state.saved === 'on') return '本次运行已停止统计，但没能保存关闭，下次启动仍会开启'
   return '本次运行不会统计，但没能保存选择，下次启动会再次询问'
-}
-
-export function deletionFailureText(reason: AnalyticsDeletionFailure): string {
-  switch (reason) {
-    // No answer: the service may or may not have deleted; only a retry can confirm it.
-    case 'network':
-      return '没有收到统计服务的确认，删除还没有完成'
-    case 'service':
-      return '统计服务暂时无法处理，记录还没有删除'
-    case 'rejected':
-      return '统计服务没有接受本机的删除凭证，记录还没有删除'
-    case 'protection-unavailable':
-      return '系统凭据保护不可用，读不出删除凭证，记录还没有删除'
-    case 'storage':
-      return '没能在本机保存删除状态，记录还没有确认删除'
-  }
 }
 
 /** Why statistics cannot be changed here; `null` while available. */

@@ -9,8 +9,8 @@ import { isJsonObject } from './json.ts'
 
 // Storage model
 // - `instances`: one row per participating instance while it still has a reason to exist.
-//   Only a SHA-256 of the self-operation token is kept. `last_seen_day` is overwritten by
-//   every activity (registration day until then), so no first-registration date survives.
+//   Only a SHA-256 of the report token is kept. `last_seen_day` is overwritten by every
+//   activity (registration day until then), so no first-registration date survives.
 // - `daily_activity`: one row per instance and statistics day, holding the last report of
 //   that day. Today's row is the only one that can change.
 // - `service_days`: one anonymous row per day on which the service ran. It separates a
@@ -18,8 +18,8 @@ import { isJsonObject } from './json.ts'
 //   is frozen here and its version and platform counts move to `day_buckets`; neither
 //   table contains any instance identifier.
 //
-// Every write runs in one IMMEDIATE transaction, so deletion, late activity and cleanup
-// are serialized and either fully apply or leave the previous state.
+// Every write runs in one IMMEDIATE transaction, so activity and cleanup are serialized and
+// either fully apply or leave the previous state.
 
 const SCHEMA_VERSION = 1
 
@@ -62,8 +62,6 @@ export type RegisterResult =
 export type ActivityResult =
   | { kind: 'recorded'; duplicate: boolean }
   | { kind: 'invalid_credentials' }
-
-export type DeletionResult = 'deleted' | 'invalid_credentials'
 
 export interface CleanupResult {
   frozenDays: number
@@ -126,7 +124,6 @@ export interface SummaryBackup {
 export interface AnalyticsStore {
   register(day: string, maxInstances: number): RegisterResult
   recordActivity(day: string, credentials: AnalyticsCredentials, version: string, platform: AnalyticsPlatform): ActivityResult
-  deleteInstance(credentials: AnalyticsCredentials): DeletionResult
   markServiceDay(day: string): void
   cleanup(today: string): CleanupResult
   summary(today: string): AnalyticsSummary
@@ -151,8 +148,8 @@ export function openAnalyticsStore(options: OpenAnalyticsStoreOptions): Analytic
   try {
     db.exec('PRAGMA busy_timeout = 5000')
     db.exec('PRAGMA journal_mode = WAL')
-    // An acknowledged deletion must survive power loss, and deleted content is
-    // overwritten instead of lingering in free pages.
+    // Applied cleanup must survive power loss, and expired content is overwritten instead
+    // of lingering in free pages.
     db.exec('PRAGMA synchronous = FULL')
     db.exec('PRAGMA secure_delete = ON')
     db.exec('PRAGMA foreign_keys = ON')
@@ -184,8 +181,6 @@ function createStore(db: DatabaseSync): AnalyticsStore {
   const insertActivity = db.prepare('INSERT INTO daily_activity (day, instance_id, version, platform) VALUES (?, ?, ?, ?)')
   const updateActivity = db.prepare('UPDATE daily_activity SET version = ?, platform = ? WHERE day = ? AND instance_id = ?')
   const touchInstance = db.prepare('UPDATE instances SET last_seen_day = ? WHERE id = ? AND last_seen_day < ?')
-  const deleteActivityOf = db.prepare('DELETE FROM daily_activity WHERE instance_id = ?')
-  const deleteInstanceRow = db.prepare('DELETE FROM instances WHERE id = ?')
   const markDay = db.prepare('INSERT OR IGNORE INTO service_days (day) VALUES (?)')
   // Frozen buckets are written before `frozen_active`, which marks the day as frozen.
   const freezeBuckets = db.prepare(`
@@ -248,7 +243,7 @@ function createStore(db: DatabaseSync): AnalyticsStore {
   }
 
   function checkpoint(): void {
-    // Moves committed deletions out of the WAL file; a busy checkpoint is retried next time.
+    // Moves committed cleanup out of the WAL file; a busy checkpoint is retried next time.
     db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
   }
 
@@ -280,20 +275,6 @@ function createStore(db: DatabaseSync): AnalyticsStore {
         markDay.run(day)
         return { kind: 'recorded', duplicate } as const
       })
-    },
-
-    deleteInstance(credentials) {
-      const result = immediate(db, (): DeletionResult => {
-        const authorization = authorize(credentials).kind
-        if (authorization === 'mismatch') return 'invalid_credentials'
-        // Unknown credentials have nothing linked left: deleted earlier or already expired.
-        if (authorization === 'unknown') return 'deleted'
-        deleteActivityOf.run(credentials.instanceId)
-        deleteInstanceRow.run(credentials.instanceId)
-        return 'deleted'
-      })
-      if (result === 'deleted') checkpoint()
-      return result
     },
 
     markServiceDay(day) {

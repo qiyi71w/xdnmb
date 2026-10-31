@@ -350,7 +350,6 @@ export function registerIpc({
     if (raw !== 'on' && raw !== 'off') throw new InvalidRequestError()
     return analytics.setChoice(raw)
   })
-  handle(IpcChannel.analyticsDeleteData, async () => analytics.deleteData())
 
   handle(IpcChannel.announcementGetState, async () => announcements.getState())
   handle(IpcChannel.announcementRefresh, async () => announcements.refresh())

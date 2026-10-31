@@ -1,5 +1,5 @@
 /* Usage statistics (features/analytics): the first-run question and 设置 › 使用统计. The question
-   shows the purpose and the data sent; receiver, retention and privacy limits are one click away.
+   shows the purpose and the data sent; 设置 shows the same in a collapsed list.
    The text sits on paper, wraps everywhere, and the dialog's 关闭／开启 stay outside its
    scrolling body, so both remain reachable in narrow windows and at 200% zoom. */
 
@@ -106,11 +106,6 @@
 
 .analytics-outcome:empty {
   display: none;
-}
-
-.analytics-delete {
-  display: flex;
-  flex-wrap: wrap;
 }
 
 .analytics-details > summary {

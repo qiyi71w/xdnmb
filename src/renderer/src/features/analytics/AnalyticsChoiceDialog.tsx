@@ -4,11 +4,11 @@
 // once more then keeps the answer for this run only.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from 'react'
-import type { AnalyticsChoiceResult, AnalyticsState } from '../../../../shared/analytics'
+import type { AnalyticsChoiceResult } from '../../../../shared/analytics'
 import { Icon, Spinner } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { Modal, ModalHeader } from '../../components/Modal'
-import { ANALYTICS_PURPOSE, AnalyticsSentData, AnalyticsTerms } from './AnalyticsDisclosure'
+import { ANALYTICS_PURPOSE, AnalyticsSentData } from './AnalyticsDisclosure'
 import { choicePromptReducer, choiceSettled, INITIAL_CHOICE_PROMPT } from './choicePrompt'
 import { choiceFailureText } from './analyticsText'
 import './analytics.css'
@@ -20,15 +20,12 @@ import './analytics.css'
  */
 export function useAnalyticsChoicePrompt(eligible: boolean, stillEligible: () => boolean) {
   const [prompt, dispatch] = useReducer(choicePromptReducer, INITIAL_CHOICE_PROMPT)
-  const [state, setState] = useState<AnalyticsState | null>(null)
 
   useEffect(() => {
     let alive = true
     window.xidao.analytics.getState().then(
       (value) => {
-        if (!alive) return
-        setState(value)
-        dispatch({ type: 'read', state: value })
+        if (alive) dispatch({ type: 'read', state: value })
       },
       () => {
         if (alive) dispatch({ type: 'read', state: null })
@@ -51,7 +48,6 @@ export function useAnalyticsChoicePrompt(eligible: boolean, stillEligible: () =>
   const close = useCallback(() => dispatch({ type: 'close' }), [])
   const drop = useCallback(() => dispatch({ type: 'drop' }), [])
   return {
-    receiver: prompt.phase === 'shown' && state !== null ? state.receiver : null,
     shown: prompt.phase === 'shown',
     settled: choiceSettled(prompt),
     close,
@@ -60,11 +56,9 @@ export function useAnalyticsChoicePrompt(eligible: boolean, stillEligible: () =>
 }
 
 export function AnalyticsChoiceDialog({
-  receiver,
   onClose,
   fallbackFocus
 }: {
-  receiver: string | null
   onClose: () => void
   fallbackFocus: () => HTMLElement | null
 }) {
@@ -120,15 +114,6 @@ export function AnalyticsChoiceDialog({
         <div className="analytics-sent">
           <AnalyticsSentData />
         </div>
-        <details className="analytics-details">
-          <summary>
-            <Icon name="chevron" size={14} className="analytics-details-icon" />
-            接收方、保留期与隐私边界
-          </summary>
-          <dl className="analytics-disclosure">
-            <AnalyticsTerms receiver={receiver} />
-          </dl>
-        </details>
       </div>
       <div className="modal-actions analytics-actions">
         {failure !== null && (

@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -98,10 +98,6 @@ function report(harness: Harness, credentials: AnalyticsCredentials, version = '
   return post(harness, ANALYTICS_PATHS.activity, { protocol: 1, ...credentials, version, platform })
 }
 
-function remove(harness: Harness, credentials: AnalyticsCredentials) {
-  return post(harness, ANALYTICS_PATHS.deletion, { protocol: 1, ...credentials })
-}
-
 function basic(user: string, password: string): string {
   return `Basic ${Buffer.from(`${user}:${password}`).toString('base64')}`
 }
@@ -179,83 +175,6 @@ describe('analytics service counting', () => {
     expect(day31.window).toMatchObject({ from: '2026-10-02', active: 1 })
     expect(day31.distributions.window.platforms).toEqual([{ value: 'windows', count: 1 }])
     expect(trendDay(day31, '2026-10-01')).toEqual({ day: '2026-10-01', active: 2, source: 'detail' })
-  })
-})
-
-describe('analytics service deletion', () => {
-  it('rejects foreign credentials, deletes idempotently and keeps older anonymous summaries', async () => {
-    setBeijing('2026-09-01')
-    const harness = await start(tempDatabase())
-    const a = await register(harness)
-    const b = await register(harness)
-    await report(harness, a)
-    await report(harness, b)
-    setBeijing('2026-09-02')
-    await report(harness, a)
-    await report(harness, b)
-    setBeijing('2026-10-02') // 09-01 left the 31-day detail window and is frozen
-    await report(harness, a)
-    await report(harness, b)
-
-    const foreign = await remove(harness, { instanceId: a.instanceId, token: b.token })
-    expect(foreign).toMatchObject({ status: 403, body: { error: 'invalid_credentials' } })
-    expect((await summary(harness)).todayActive).toBe(2)
-
-    expect(await remove(harness, a)).toMatchObject({ status: 200, body: { deleted: true } })
-    expect(await remove(harness, a)).toMatchObject({ status: 200, body: { deleted: true } })
-    expect(await report(harness, a)).toMatchObject({ status: 403, body: { error: 'invalid_credentials' } })
-
-    const after = await summary(harness)
-    expect(after.todayActive).toBe(1)
-    expect(trendDay(after, '2026-09-02')).toEqual({ day: '2026-09-02', active: 1, source: 'detail' })
-    expect(trendDay(after, '2026-09-01')).toEqual({ day: '2026-09-01', active: 2, source: 'summary' })
-    expect(rows(harness.path, 'SELECT * FROM daily_activity WHERE instance_id = ?', a.instanceId)).toEqual([])
-    expect(rows(harness.path, 'SELECT * FROM instances WHERE id = ?', a.instanceId)).toEqual([])
-  })
-
-  it('never revives an instance when late reports race its deletion, also after reopening', async () => {
-    setBeijing('2026-10-31')
-    const path = tempDatabase()
-    const harness = await start(path)
-    const a = await register(harness)
-    const b = await register(harness)
-    await report(harness, b)
-
-    const raced = await Promise.all([
-      report(harness, a), report(harness, a), remove(harness, a), report(harness, a), report(harness, a), remove(harness, a), report(harness, a)
-    ])
-    expect(raced.filter((response) => response.status === 200 && 'deleted' in (response.body ?? {}))).toHaveLength(2)
-    expect((await summary(harness)).todayActive).toBe(1)
-
-    await stop(harness)
-    const reopened = await start(path)
-    expect(await report(reopened, a)).toMatchObject({ status: 403 })
-    expect((await summary(reopened)).todayActive).toBe(1)
-    await stop(reopened)
-    // Deleted identifiers do not linger in the database or its WAL.
-    const files = readdirSync(join(path, '..')).map((name) => readFileSync(join(path, '..', name)))
-    expect(files.some((bytes) => bytes.includes(a.instanceId))).toBe(false)
-  })
-
-  it('rolls back an interrupted deletion and completes it on retry after a restart', async () => {
-    setBeijing('2026-10-31')
-    const path = tempDatabase()
-    const harness = await start(path)
-    const a = await register(harness)
-    await report(harness, a)
-
-    const control = new DatabaseSync(path)
-    control.exec("CREATE TRIGGER interrupt BEFORE DELETE ON instances BEGIN SELECT RAISE(ABORT, 'interrupted'); END")
-    expect(await remove(harness, a)).toMatchObject({ status: 500, body: { error: 'server_error' } })
-    expect((await summary(harness)).todayActive).toBe(1)
-    expect((await report(harness, a)).body).toEqual({ statDay: '2026-10-31', duplicate: true })
-    control.exec('DROP TRIGGER interrupt')
-    control.close()
-
-    await stop(harness)
-    const reopened = await start(path)
-    expect(await remove(reopened, a)).toMatchObject({ status: 200 })
-    expect((await summary(reopened)).todayActive).toBe(0)
   })
 })
 
@@ -342,14 +261,14 @@ describe('analytics service retention', () => {
     await report(harness, b)
     setBeijing('2026-10-02')
     await report(harness, a)
-    await remove(harness, b)
     setBeijing('2026-10-03')
     await summary(harness)
 
     const backup = parseSummaryBackup(JSON.parse(JSON.stringify(harness.store.exportSummaries('2026-10-03'))))
+    const both = { versions: [{ value: '1.0.0', count: 2 }], platforms: [{ value: 'windows', count: 2 }] }
     const onlyA = { versions: [{ value: '1.0.0', count: 1 }], platforms: [{ value: 'windows', count: 1 }] }
-    expect(backup.days).toEqual([{ day: '2026-10-01', active: 1, ...onlyA }, { day: '2026-10-02', active: 1, ...onlyA }])
-    expect(() => parseSummaryBackup({ ...backup, days: [{ ...backup.days[0], active: 2 }] })).toThrow(/bucket/)
+    expect(backup.days).toEqual([{ day: '2026-10-01', active: 2, ...both }, { day: '2026-10-02', active: 1, ...onlyA }])
+    expect(() => parseSummaryBackup({ ...backup, days: [{ ...backup.days[0], active: 3 }] })).toThrow(/bucket/)
     const serialized = JSON.stringify(backup)
     expect(serialized.includes(a.instanceId) || serialized.includes(b.instanceId)).toBe(false)
     expect(() => openAnalyticsStore({ path, createOnly: true })).toThrow(/refusing to overwrite/)
@@ -363,7 +282,7 @@ describe('analytics service retention', () => {
     expect(await report(restored, b)).toMatchObject({ status: 403 })
     expect(await report(restored, a)).toMatchObject({ status: 403 })
     const result = await summary(restored)
-    expect(trendDay(result, '2026-10-01')).toEqual({ day: '2026-10-01', active: 1, source: 'summary' })
+    expect(trendDay(result, '2026-10-01')).toEqual({ day: '2026-10-01', active: 2, source: 'summary' })
     expect(result.window.summaryOnlyDays).toBe(2)
     expect(rows(restoredPath, "SELECT * FROM service_days WHERE day = '2025-09-30'")).toEqual([])
     expect(restored.store.exportSummaries('2026-10-03').days).toEqual(backup.days)
@@ -392,7 +311,8 @@ describe('analytics service boundaries', () => {
 
     const stranger = { instanceId: 'A'.repeat(22), token: 'B'.repeat(43) }
     expect(await report(harness, stranger)).toMatchObject({ status: 403, body: { error: 'invalid_credentials' } })
-    expect(await remove(harness, stranger)).toMatchObject({ status: 200 })
+    // Records linked to an instance only end by expiry: there is no deletion endpoint.
+    expect(await post(harness, '/v1/deletion', { protocol: 1, ...a })).toMatchObject({ status: 404, body: { error: 'not_found' } })
     expect(rows(path, 'SELECT count(*) AS n FROM instances')[0]?.n).toBe(1)
     expect((await summary(harness)).todayActive).toBe(0)
   })
@@ -466,7 +386,6 @@ describe('analytics service boundaries', () => {
     await fetch(`${harness.base}/admin/api/summary`, { headers: { Authorization: basic('admin', marker) } })
     const control = new DatabaseSync(path)
     control.exec(`CREATE TRIGGER interrupt BEFORE DELETE ON instances BEGIN SELECT RAISE(ABORT, '${marker} ' || old.id); END`)
-    await remove(harness, a)
     control.close()
     setBeijing('2026-12-31')
     await summary(harness)

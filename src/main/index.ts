@@ -320,7 +320,6 @@ async function start(): Promise<void> {
     transport: statisticsOrigin === null ? null : createAnalyticsTransport({
       origin: statisticsOrigin, timeoutMs: 10_000, userAgent: `Xidao/${app.getVersion()}`
     }),
-    receiver: statisticsOrigin === null ? null : new URL(statisticsOrigin).hostname,
     platform: platform === 'win32' ? 'windows' : platform === 'darwin' ? 'macos' : null,
     version: app.getVersion(),
     // Foreground use: the window shown, not minimized and focused, the screen not locked and the

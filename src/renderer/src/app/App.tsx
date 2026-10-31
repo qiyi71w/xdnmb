@@ -1616,7 +1616,7 @@ export function App() {
             />
           )}
           {analyticsChoice.shown && (
-            <AnalyticsChoiceDialog receiver={analyticsChoice.receiver} onClose={closeAnalyticsChoice} fallbackFocus={activeTabFocus} />
+            <AnalyticsChoiceDialog onClose={closeAnalyticsChoice} fallbackFocus={activeTabFocus} />
           )}
           {automaticAnnouncement.announcement !== null && (
             <AnnouncementDialog announcement={automaticAnnouncement.announcement} onClose={closeAnnouncement} fallbackFocus={activeTabFocus} />

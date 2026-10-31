@@ -26,62 +26,34 @@ export interface AnalyticsState {
   choice: AnalyticsChoice
   /** What the next start will read. */
   saved: AnalyticsChoice
-  /** A statistics identity exists on this device, so the service may hold records linked to it. */
-  hasIdentity: boolean
-  /** A requested deletion has not been confirmed by the service; statistics stay off until it is. */
-  deletionPending: boolean
-  /** Host name of the receiving service, for the disclosure; `null` when not configured. */
-  receiver: string | null
 }
 
 export type AnalyticsChoiceResult =
   | { result: 'saved'; state: AnalyticsState }
   /** The choice applies to this run only; the next start reads `state.saved`. */
   | { result: 'not-saved'; state: AnalyticsState }
-  /** Not changed. `deletion-pending`: finish the deletion first; `protection-unavailable`: no OS secret storage. */
-  | { result: 'refused'; reason: 'unavailable' | 'deletion-pending' | 'protection-unavailable'; state: AnalyticsState }
-
-export type AnalyticsDeletionFailure =
-  /** No answer: offline, timed out or refused connection. */
-  | 'network'
-  /** The service is busy (rate limited) or failed; nothing was deleted. */
-  | 'service'
-  /** The service did not accept this device's credentials. */
-  | 'rejected'
-  /** The credentials cannot be read without OS secret storage. */
-  | 'protection-unavailable'
-  /** The deletion could not be recorded locally first, so it was not sent. */
-  | 'storage'
-
-export type AnalyticsDeletionResult =
-  | { result: 'deleted'; state: AnalyticsState }
-  | { result: 'failed'; reason: AnalyticsDeletionFailure; state: AnalyticsState }
+  /** Not changed. `protection-unavailable`: no OS secret storage. */
+  | { result: 'refused'; reason: 'unavailable' | 'protection-unavailable'; state: AnalyticsState }
 
 export interface AnalyticsApi {
   getState(): Promise<AnalyticsState>
   setChoice(choice: 'on' | 'off'): Promise<AnalyticsChoiceResult>
-  /** Stops statistics, then asks the service to delete the records linked to this device. */
-  deleteData(): Promise<AnalyticsDeletionResult>
 }
 
 /** The stored record (settings key `analytics`). The token is OS-protected ciphertext, base64. */
 export interface AnalyticsRecord {
   choice: AnalyticsChoice
   identity: { instanceId: string; protectedToken: string } | null
-  deletionPending: boolean
   /** Statistics day (as the service reported it) of the last accepted activity report. */
   reportedDay: string | null
 }
 
-export const EMPTY_ANALYTICS_RECORD: AnalyticsRecord = { choice: 'unset', identity: null, deletionPending: false, reportedDay: null }
+export const EMPTY_ANALYTICS_RECORD: AnalyticsRecord = { choice: 'unset', identity: null, reportedDay: null }
 
 const CHOICES: readonly string[] = ['unset', 'off', 'on']
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/
 
-/**
- * A stored value read back; anything unreadable is the empty record (never answered, off). A
- * pending deletion keeps its identity and forces `off`, so no reading can turn it back on.
- */
+/** A stored value read back; anything unreadable is the empty record (never answered, off). */
 export function analyticsRecord(value: unknown): AnalyticsRecord {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return EMPTY_ANALYTICS_RECORD
   const input = value as Record<string, unknown>
@@ -95,7 +67,6 @@ export function analyticsRecord(value: unknown): AnalyticsRecord {
       identity = { instanceId, protectedToken }
     }
   }
-  const deletionPending = input.deletionPending === true && identity !== null
   const reportedDay = typeof input.reportedDay === 'string' && ANALYTICS_STAT_DAY_PATTERN.test(input.reportedDay) ? input.reportedDay : null
-  return { choice: deletionPending ? 'off' : choice, identity, deletionPending, reportedDay }
+  return { choice, identity, reportedDay }
 }

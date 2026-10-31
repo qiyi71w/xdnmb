@@ -7,8 +7,7 @@ export const ANALYTICS_PROTOCOL_VERSION = 1
 
 export const ANALYTICS_PATHS = {
   register: '/v1/instances',
-  activity: '/v1/activity',
-  deletion: '/v1/deletion'
+  activity: '/v1/activity'
 } as const
 
 /** Request bodies above this size are rejected with `payload_too_large`. */
@@ -19,7 +18,7 @@ export const ANALYTICS_PLATFORMS: readonly AnalyticsPlatform[] = ['windows', 'ma
 
 /** 16 random bytes, base64url without padding. Identifies an instance; never authorizes. */
 export const ANALYTICS_INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{22}$/
-/** 32 random bytes, base64url without padding. Authorizes operations on its own instance only. */
+/** 32 random bytes, base64url without padding. Authorizes reports of its own instance only. */
 export const ANALYTICS_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
 /** Xidao release version: `major.minor.patch` with an optional short pre-release tag. */
 export const ANALYTICS_VERSION_PATTERN = /^\d{1,4}\.\d{1,4}\.\d{1,4}(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,23})?$/
@@ -41,10 +40,6 @@ export interface AnalyticsActivityRequest extends AnalyticsCredentials {
   platform: AnalyticsPlatform
 }
 
-export interface AnalyticsDeletionRequest extends AnalyticsCredentials {
-  protocol: typeof ANALYTICS_PROTOCOL_VERSION
-}
-
 /** `201` for a new registration. Registration alone is never counted as activity. */
 export type AnalyticsRegisterResponse = AnalyticsCredentials
 
@@ -52,11 +47,6 @@ export type AnalyticsRegisterResponse = AnalyticsCredentials
 export interface AnalyticsActivityResponse {
   statDay: string
   duplicate: boolean
-}
-
-/** `200`; no record linked to the credentials remains, including when none existed. */
-export interface AnalyticsDeletionResponse {
-  deleted: true
 }
 
 export type AnalyticsErrorCode =
