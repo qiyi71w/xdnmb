@@ -15,8 +15,9 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.server.json",
     "test": "node scripts/run-tests.mjs",
+    "analytics": "node --disable-warning=ExperimentalWarning server/analytics/main.ts",
     "dist:win": "electron-vite build && electron-builder --win --publish never",
     "dist:mac": "electron-vite build && electron-builder --mac --publish never"
   },
