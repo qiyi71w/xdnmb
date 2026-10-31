@@ -1,3 +1,5 @@
+import { isAnnouncementIdentity } from '../shared/announcements'
+import type { AnnouncementService } from './announcements/service'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import {
   CLIPBOARD_EDIT_COMMANDS, IpcChannel, MAX_CLIPBOARD_TEXT_LENGTH, type AppStatus, type ClipboardEditCommand, type DirectoryStrategy,
@@ -66,6 +68,7 @@ class InvalidRequestError extends Error {
 }
 
 interface IpcDeps {
+  announcements: AnnouncementService
   content: ContentService
   search: SearchService
   onlineSearch: OnlineSearchService
@@ -312,7 +315,7 @@ export interface IpcRegistration {
 
 export function registerIpc({
   reading, images, identities, account, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
-  updates, getStatus, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
+  announcements, updates, getStatus, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): IpcRegistration {
   const owner = (sender: WebContents): string => String(sender.id)
   const operations = new OperationRegistry()
@@ -339,6 +342,15 @@ export function registerIpc({
       return handler(event, input)
     })
   }
+
+  handle(IpcChannel.announcementGetState, async () => announcements.getState())
+  handle(IpcChannel.announcementRefresh, async () => announcements.refresh())
+  handle(IpcChannel.announcementTakeAutomatic, async () => announcements.takeAutomatic())
+  handle(IpcChannel.announcementSuppress, async (_event, raw) => {
+    const input = searchRecord(raw, ['date', 'content'])
+    if (!isAnnouncementIdentity(input)) throw new InvalidRequestError()
+    return announcements.suppress(input)
+  })
 
   handle(IpcChannel.listBlocks, async () => store.listBlocks())
   handle(IpcChannel.setBlock, async (_event, raw) => {

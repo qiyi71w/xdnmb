@@ -51,7 +51,8 @@ export function LifecycleHost({
   onSettingsChange,
   closeModals,
   buildWorkspace,
-  whenRestored
+  whenRestored,
+  onStartupChecked
 }: {
   platform: AppPlatform | null
   onSettingsChange: (settings: AppSettings) => void
@@ -61,6 +62,12 @@ export function LifecycleHost({
   buildWorkspace: () => Workspace | null
   /** Settles once the startup restore (tabs and reopened drafts) is done. */
   whenRestored: () => Promise<void>
+  /**
+   * Called once the startup check for results the last quit could not store has settled (its
+   * dialog, if any, is being shown); also when that check could not be read. Startup prompts wait
+   * for it so they never land on that dialog.
+   */
+  onStartupChecked?: () => void
 }) {
   const { store } = useEditorWorkspace()
   const [choiceOpen, setChoiceOpen] = useState(false)
@@ -249,6 +256,10 @@ export function LifecycleHost({
   }, [quitRunning, platform])
 
   // ---------- Results the last quit could not store ----------
+  const startupChecked = useRef(onStartupChecked)
+  useLayoutEffect(() => {
+    startupChecked.current = onStartupChecked
+  })
   useEffect(() => {
     let alive = true
     void (async () => {
@@ -256,7 +267,11 @@ export function LifecycleHost({
       const { attempts } = await window.xidao.lifecycle.listUnstoredResults()
       // A running quit owns the window and its questions; it also closes this dialog when it starts.
       if (alive && !quitting.current && attempts.length > 0) setUnstored(attempts)
-    })().catch(ignore)
+    })()
+      .catch(ignore)
+      .finally(() => {
+        if (alive) startupChecked.current?.()
+      })
     return () => {
       alive = false
     }

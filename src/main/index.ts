@@ -1,3 +1,5 @@
+import { ANNOUNCEMENT_URL, MAX_ANNOUNCEMENT_LENGTH } from '../shared/announcements'
+import { createAnnouncementService, type AnnouncementService } from './announcements/service'
 import {
   app, BaseWindow, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, powerMonitor, protocol, session, shell, Tray,
   type IpcMainInvokeEvent, type MenuItemConstructorOptions
@@ -78,6 +80,7 @@ let lifecycle: Lifecycle | null = null
 let tray: Tray | null = null
 let search: SearchService | null = null
 let updates: UpdateService | null = null
+let announcements: AnnouncementService | null = null
 /**
  * Windows: a hidden window that exists for the whole run, so a shutdown, restart or log-off is noticed
  * even after the main window has closed while a quit finishes (the system asks every top-level window).
@@ -288,6 +291,19 @@ async function start(): Promise<void> {
   })
   store = openedStore
   if (openedStore.status.state !== 'ready') console.error('[storage] status', openedStore.status.state)
+  const announcementService = createAnnouncementService({
+    store: openedStore,
+    transport: createForumTransport({
+      allowedOrigins: [new URL(ANNOUNCEMENT_URL).origin],
+      timeoutMs: 10_000,
+      maxCompressedBytes: MAX_ANNOUNCEMENT_LENGTH,
+      maxDecodedBytes: MAX_ANNOUNCEMENT_LENGTH,
+      userAgent: `Xidao/${app.getVersion()}`
+    }),
+    isForeground: () => mainWindow !== null && mainWindow.isVisible() && !mainWindow.isMinimized() && mainWindow.isFocused()
+  })
+  announcements = announcementService
+  void announcementService.start()
   const protector = createSafeStorageProtector()
   const scheduler = createRequestScheduler()
 
@@ -539,6 +555,7 @@ async function start(): Promise<void> {
   }
 
   ipc = registerIpc({
+    announcements: announcementService,
     reading,
     images,
     identities,
@@ -631,6 +648,7 @@ async function finishStorage(): Promise<void> {
   if (!opened || storeClosed) return
   storeClosed = true
   await search?.stop()
+  await announcements?.stop()
   await content?.stop()
   await opened.close()
   await updates?.launchInstaller()

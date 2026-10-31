@@ -1,3 +1,4 @@
+import type { AnnouncementsApi } from './announcements'
 import type { BlocksApi } from './blocks'
 import type { CookieColorsApi } from './cookieColors'
 import type { AccountApi } from './account'
@@ -210,6 +211,7 @@ export type ThemeExportResult = { status: 'exported' } | { status: 'cancelled' }
 
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
+  announcements: AnnouncementsApi
   blocks: BlocksApi
   cookieColors: CookieColorsApi
   content: ContentApi
@@ -389,6 +391,10 @@ export interface XidaoApi {
 
 /** IPC channel names. Each maps 1:1 to an XidaoApi method; there is no generic channel. */
 export const IpcChannel = {
+  announcementGetState: 'announcements:get-state',
+  announcementRefresh: 'announcements:refresh',
+  announcementTakeAutomatic: 'announcements:take-automatic',
+  announcementSuppress: 'announcements:suppress',
   listBlocks: 'blocks:list',
   setBlock: 'blocks:set',
   listCookieColors: 'cookie-colors:list',

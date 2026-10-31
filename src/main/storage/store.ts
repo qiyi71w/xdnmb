@@ -154,6 +154,8 @@ export async function openReadingStore(options: {
     recordVisit: (threadId, at) => request('recordVisit', threadId, at),
     loadSettings: () => request('loadSettings'),
     saveSettings: (settings) => request('saveSettings', settings),
+    loadAnnouncements: () => request('loadAnnouncements'),
+    saveAnnouncements: (record) => request('saveAnnouncements', record),
     listBlocks: () => request('listBlocks'),
     setBlock: (kind, value, blocked, at) => request('setBlock', kind, value, blocked, at),
     listCookieColors: () => request('listCookieColors'),
