@@ -83,6 +83,8 @@ interface TokenBucket {
   wait(): number
   /** Consumes one token; returns seconds to wait when none is available. */
   take(): number
+  /** Returns a token taken for work that turned out not to count against the limit. */
+  give(): void
 }
 
 type PublicHandler = (body: Record<string, unknown>, response: ServerResponse) => void
@@ -195,13 +197,16 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
 
   async function handleAdmin(request: IncomingMessage, response: ServerResponse, path: string): Promise<void> {
     // Every /admin path is checked before routing, so unknown paths reveal nothing either.
-    const check = await options.admin.check(request.headers.authorization, buckets.adminFailures.wait() === 0)
+    const check = await options.admin.check(request.headers.authorization, {
+      reserve: () => buckets.adminFailures.take() === 0,
+      refund: () => buckets.adminFailures.give()
+    })
     if (check === 'throttled') {
       response.setHeader('Retry-After', String(buckets.adminFailures.wait()))
       return sendText(response, 429, '登录尝试过多，请稍后再试。')
     }
     if (check !== 'ok') {
-      if (check === 'invalid') buckets.adminFailures.take()
+      // The failed check already used its reserved token.
       response.setHeader('WWW-Authenticate', 'Basic realm="Xidao analytics", charset="UTF-8"')
       return sendText(response, 401, '需要作者登录后查看统计。')
     }
@@ -331,6 +336,10 @@ function createBucket(limit: BucketLimit, clock: () => number): TokenBucket {
       const wait = secondsUntilToken()
       if (wait === 0) tokens -= 1
       return wait
+    },
+    give() {
+      refill()
+      tokens = Math.min(limit.capacity, tokens + 1)
     }
   }
 }

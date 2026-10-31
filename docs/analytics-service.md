@@ -99,7 +99,7 @@ node server/analytics/main.ts restore <文件>   # 用备份新建数据库并�
 ```bash
 docker run -d --name xidao-analytics --restart unless-stopped \
   --user 64787:64787 --read-only --tmpfs /tmp:size=8m --cap-drop ALL \
-  --security-opt no-new-privileges --memory 256m --pids-limit 64 \
+  --security-opt no-new-privileges --memory 256m --cpus 1 --pids-limit 64 \
   --log-driver json-file --log-opt max-size=1m --log-opt max-file=3 \
   --env-file /opt/xidao-analytics/analytics.env \
   -v /opt/xidao-analytics/app:/app:ro -v /opt/xidao-analytics/data:/data \
@@ -131,7 +131,7 @@ server {
 
 ## 私人看板与认证
 
-看板位于 `/admin/`，数据接口为 `/admin/api/summary`。所有 `/admin` 路径（包括不存在的路径）都先经过单管理员 HTTP Basic 认证：服务端只保存密码的 scrypt 哈希（Node 内置实现），认证通过后 10 分钟内复用校验结果。上报凭证不能访问看板。失败的登录尝试全进程限流（突发 10 次，之后约每 12 秒 1 次），已通过认证的会话不受影响。Basic 认证必须经 HTTPS 传输；反向代理需原样转发 `Authorization` 请求头，不应另设绕过认证的路径。浏览器会记住凭证直至关闭，看板没有“退出登录”。
+看板位于 `/admin/`，数据接口为 `/admin/api/summary`。所有 `/admin` 路径（包括不存在的路径）都先经过单管理员 HTTP Basic 认证：服务端只保存密码的 scrypt 哈希（Node 内置实现），认证通过后 10 分钟内复用校验结果。上报凭证不能访问看板。失败的登录尝试全进程限流（突发 10 次，之后约每 12 秒 1 次），已通过认证的会话不受影响。每次需要重新计算 scrypt 的校验都先占用一次额度、成功后归还，所以同时到达的大量猜测也只有额度内的部分会进入 scrypt，其余立即得到 `429`。Basic 认证必须经 HTTPS 传输；反向代理需原样转发 `Authorization` 请求头，不应另设绕过认证的路径。浏览器会记住凭证直至关闭，看板没有“退出登录”。
 
 看板展示今日与近 30 天活跃实例、两个时段的版本／平台分布（数量与占比），以及可选近 30 天、近 90 天或全部保留数据的日活趋势表。读取失败时保留上次成功读取的数据并标明读取时间，不显示为 0；页面只从本服务加载脚本与样式。
 
@@ -168,7 +168,7 @@ server {
 
 ## 验证范围
 
-`tests/analytics-service.test.ts` 用真实本地 HTTP、临时 SQLite 文件和受控时钟覆盖：同日重复与并发上报、北京时间零点、第 30／31 日窗口、最后上报归属、登记不计数、他人凭证拒绝、重复删除、删除与上报并发、事务中断回滚与重启后重试、31 日与 12 个月清理、清理失败后重试、备份只含日汇总、字段白名单与大小限制、限流与容量、看板全路径认证，以及日志中不出现合成敏感标记、标识、凭证与地址。
+`tests/analytics-service.test.ts` 用真实本地 HTTP、临时 SQLite 文件和受控时钟覆盖：同日重复与并发上报、北京时间零点、第 30／31 日窗口、最后上报归属、登记不计数、他人凭证拒绝、重复删除、删除与上报并发、事务中断回滚与重启后重试、31 日与 12 个月清理、清理失败后重试、备份只含日汇总、字段白名单与大小限制、限流与容量、看板全路径认证与并发登录猜测不超出额度，以及日志中不出现合成敏感标记、标识、凭证与地址。
 
 另在 Linux 上以 Node 24 实际运行服务进程，验证了：两个隔离实例上报到浏览器看板；删除、重启和停止服务后的看板状态；`SIGKILL` 中断并发上报和删除后重启的数据一致性；`backup`／`restore`／`cleanup` 命令；以及真实日志采样。这些都是本机受控演练，不代表正式域名、TLS、反向代理、云平台日志或主机备份已经通过核对。
 

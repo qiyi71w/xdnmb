@@ -442,6 +442,17 @@ describe('analytics service boundaries', () => {
     expect((await summary(harness)).todayActive).toBe(0)
   })
 
+  it('admits no more concurrent password checks than the login budget allows', async () => {
+    setBeijing('2026-10-31')
+    const harness = await start(tempDatabase())
+    const { capacity } = DEFAULT_RATE_LIMITS.adminFailures
+    // All guesses arrive before any password check completes; the clock does not move.
+    const statuses = await Promise.all(Array.from({ length: capacity * 2 }, (_, index) =>
+      fetch(`${harness.base}/admin/api/summary`, { headers: { Authorization: basic('admin', `guess-${index}`) } }).then((response) => response.status)))
+    expect(statuses.filter((status) => status === 401)).toHaveLength(capacity)
+    expect(statuses.filter((status) => status === 429)).toHaveLength(capacity)
+  })
+
   it('keeps request content, identifiers, credentials and addresses out of logs', async () => {
     setBeijing('2026-10-31')
     const path = tempDatabase()
