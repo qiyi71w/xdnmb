@@ -389,6 +389,84 @@ describe('desktop usage statistics', () => {
     expect(db.loadAnalytics().identity!.instanceId).not.toBe(before!.instanceId)
   })
 
+  it('a registration answered after the window left the foreground stores the identity but reports only at the next foreground moment', async () => {
+    const path = databasePath()
+    const db = open(path)
+    const service = await receiver({ wall: Date.parse('2026-10-31T12:00:00+08:00') })
+    const { clock, create, advance, settle } = harness(service.origin)
+    const held: Array<() => void> = []
+    service.set((request, response) => {
+      if (request.path === '/v1/instances') held.push(() => service.protocol(request, response))
+      else service.protocol(request, response)
+    })
+    const current = create(db)
+    await current.setChoice('on')
+    await until(() => held.length === 1)
+    clock.foreground = false
+    held[0]!()
+    await settle()
+    expect(service.requests.map((request) => request.path)).toEqual(['/v1/instances'])
+    expect(db.loadAnalytics().identity).not.toBeNull()
+    clock.foreground = true
+    advance(ANALYTICS_PACING.minSpacingMs)
+    current.poke()
+    await settle()
+    expect(service.requests.map((request) => request.path)).toEqual(['/v1/instances', '/v1/activity'])
+  })
+
+  it('a registration that succeeds with the last request of the day keeps its identity without exceeding the daily budget', async () => {
+    const path = databasePath()
+    const db = open(path)
+    const wall = { wall: 0 }
+    const service = await receiver(wall)
+    const { clock, create, advance, settle } = harness(service.origin, '2026-10-31T08:00:00+08:00')
+    Object.defineProperty(wall, 'wall', { get: () => clock.wall })
+    let failing = ANALYTICS_PACING.requestsPerDay - 1
+    service.set((request, response) => {
+      if (request.path === '/v1/instances' && failing > 0) {
+        failing--
+        service.json(response, 500, { error: 'server_error' })
+      } else service.protocol(request, response)
+    })
+    const current = create(db)
+    await current.setChoice('on')
+    await settle()
+    for (let i = 0; i < 48; i++) {
+      advance(ANALYTICS_PACING.recheckMs)
+      current.poke()
+      await settle()
+    }
+    expect(beijingDay(clock.wall)).toBe('2026-10-31')
+    expect(service.requests).toHaveLength(ANALYTICS_PACING.requestsPerDay)
+    expect(service.requests.every((request) => request.path === '/v1/instances')).toBe(true)
+    expect(db.loadAnalytics().identity).not.toBeNull()
+    // The next statistics day reports with the kept identity, without registering again.
+    advance(24 * 60 * 60_000)
+    current.poke()
+    await settle()
+    expect(service.requests.slice(ANALYTICS_PACING.requestsPerDay).map((request) => request.path)).toEqual(['/v1/activity'])
+  })
+
+  it('a deletion whose intent could not be stored stays unresolved for this run: turning on is refused until a deletion succeeds', async () => {
+    const path = databasePath()
+    const db = open(path)
+    const service = await receiver({ wall: Date.parse('2026-10-31T12:00:00+08:00') })
+    const { create, settle } = harness(service.origin)
+    const current = create(db)
+    await current.setChoice('on')
+    await settle()
+    denyAnalyticsWrites(path, true)
+    expect(await current.deleteData()).toMatchObject({ result: 'failed', reason: 'storage', state: { choice: 'off', deletionPending: true, hasIdentity: true } })
+    expect(service.requests.filter((request) => request.path === '/v1/deletion')).toHaveLength(0)
+    denyAnalyticsWrites(path, false)
+    expect(await current.setChoice('on')).toMatchObject({ result: 'refused', reason: 'deletion-pending' })
+    current.poke()
+    await settle()
+    expect(service.requests).toHaveLength(2)
+    expect(await current.deleteData()).toMatchObject({ result: 'deleted', state: { deletionPending: false, hasIdentity: false } })
+    expect(await current.setChoice('on')).toMatchObject({ result: 'saved' })
+  })
+
   it('deletion stops first, keeps the credentials while the service cannot confirm, blocks a new identity, and clears them once confirmed', async () => {
     const path = databasePath()
     let db = open(path)
@@ -441,7 +519,11 @@ describe('desktop usage statistics', () => {
     await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', () => resolve()))
     const port = (probe.address() as AddressInfo).port
     await new Promise<void>((resolve) => probe.close(() => resolve()))
-    const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/analytics/main.ts', 'serve'], {
+    // The service's wall clock starts at Beijing noon of a fixed day (its own clock seam is
+    // `Date.now`), so the statistics day never depends on when the suite runs.
+    const noon = '2026-10-31T12:00:00+08:00'
+    const clockShift = `data:text/javascript,const o=${Date.parse(noon)}-Date.now();const n=Date.now;Date.now=()=>n()+o`
+    const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', `--import=${clockShift}`, 'server/analytics/main.ts', 'serve'], {
       env: {
         ...process.env, ELECTRON_RUN_AS_NODE: '1',
         XIDAO_ANALYTICS_DB: join(folder, 'analytics.sqlite'),
@@ -466,11 +548,11 @@ describe('desktop usage statistics', () => {
 
     const path = databasePath()
     const db = open(path)
-    const { create, settle } = harness(origin, new Date().toISOString())
+    const { create, settle } = harness(origin, noon)
     const current = create(db)
     await current.setChoice('on')
     await settle()
-    expect(db.loadAnalytics().reportedDay).toBe(beijingDay(Date.now()))
+    expect(db.loadAnalytics().reportedDay).toBe('2026-10-31')
     const counted = await summary()
     expect(counted.todayActive).toBe(1)
     expect(counted.window.active).toBe(1)

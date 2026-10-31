@@ -13,7 +13,7 @@ export function AnalyticsDisclosure({ receiver, id }: { receiver: string | null;
       <dd>
         <p>每个北京时间自然日里，第一次在前台使用汐岛（窗口有焦点、未最小化、屏幕未锁定）时发送一次：</p>
         <ul>
-          <li>开启时随机生成的统计标识，与饼干、账号和设备信息无关</li>
+          <li>开启时随机生成的统计标识和配套凭证（凭证只用来证明上报或删除来自本机），与饼干、账号和设备信息无关</li>
           <li>汐岛版本号</li>
           <li>系统：Windows 或 macOS</li>
         </ul>

@@ -20,8 +20,9 @@ export function choiceFailureText(choice: 'on' | 'off', result: AnalyticsChoiceR
 
 export function deletionFailureText(reason: AnalyticsDeletionFailure): string {
   switch (reason) {
+    // No answer: the service may or may not have deleted; only a retry can confirm it.
     case 'network':
-      return '没能连上统计服务，记录还没有删除'
+      return '没有收到统计服务的确认，删除还没有完成'
     case 'service':
       return '统计服务暂时无法处理，记录还没有删除'
     case 'rejected':

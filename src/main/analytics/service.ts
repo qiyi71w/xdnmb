@@ -118,6 +118,11 @@ export function createAnalyticsService(options: {
   let cancelTimer: (() => void) | null = null
   /** Decrypted token of `record.identity`, kept in the main process for this run only. */
   let token: string | null = null
+  /**
+   * A deletion was requested but even its intent could not be stored: it stays unresolved for this
+   * run (statistics off, turning on refused) although the stored record does not say so.
+   */
+  let unresolvedDeletion = false
 
   let notBefore = -Infinity
   let lastAttemptAt = -Infinity
@@ -162,7 +167,7 @@ export function createAnalyticsService(options: {
       choice,
       saved: record.choice,
       hasIdentity: record.identity !== null,
-      deletionPending: record.deletionPending,
+      deletionPending: record.deletionPending || unresolvedDeletion,
       receiver: options.receiver
     }
   }
@@ -188,7 +193,7 @@ export function createAnalyticsService(options: {
   }
 
   function running(): boolean {
-    return started && !paused && availability === 'available' && choice === 'on' && !record.deletionPending && !halted
+    return started && !paused && availability === 'available' && choice === 'on' && !record.deletionPending && !unresolvedDeletion && !halted
   }
 
   /** Looks whether a report is due now; otherwise when to look again. Never more than one in flight. */
@@ -294,6 +299,9 @@ export function createAnalyticsService(options: {
     }
     const identity = record.identity
     if (identity === null || current !== generation) return
+    // A registration can outlast the moment that started it: report only foreground use, and only
+    // within today's budget (a registration may have spent its last request).
+    if (!options.isForeground() || budget.used >= ANALYTICS_PACING.requestsPerDay) return
     token ??= await options.protector.decrypt(Buffer.from(identity.protectedToken, 'base64'))
     if (current !== generation) return
     const response = await send(ANALYTICS_PATHS.activity, {
@@ -361,7 +369,7 @@ export function createAnalyticsService(options: {
         const saved = await update((latest) => ({ ...latest, choice: 'off' }))
         return { result: saved ? 'saved' : 'not-saved', state: state() }
       }
-      if (record.deletionPending) return { result: 'refused', reason: 'deletion-pending', state: state() }
+      if (record.deletionPending || unresolvedDeletion) return { result: 'refused', reason: 'deletion-pending', state: state() }
       if (!(await options.protector.isAvailable())) return { result: 'refused', reason: 'protection-unavailable', state: state() }
       const saved = await update((latest) => (latest.deletionPending ? null : { ...latest, choice: 'on' }))
       if (!saved) return { result: 'not-saved', state: state() }
@@ -384,11 +392,15 @@ export function createAnalyticsService(options: {
     if (record.identity === null) {
       // Nothing on this device links to the service: nothing to ask for.
       const stored = await update((latest) => (latest.identity !== null ? null : { ...latest, choice: 'off', deletionPending: false, reportedDay: null }))
+      unresolvedDeletion = false
       return stored || record.choice === 'off' ? { result: 'deleted', state: state() } : failed('storage')
     }
     if (transport === null) return failed('service')
     const recorded = await update((latest) => ({ ...latest, choice: 'off', deletionPending: latest.identity !== null }))
-    if (!recorded) return failed('storage')
+    if (!recorded) {
+      unresolvedDeletion = true
+      return failed('storage')
+    }
     const identity = record.identity
     if (identity === null) return { result: 'deleted', state: state() }
     let secret: string
@@ -417,6 +429,7 @@ export function createAnalyticsService(options: {
       const cleared = await update((latest) => (latest.identity?.instanceId !== identity.instanceId ? latest
         : { ...latest, choice: 'off', identity: null, deletionPending: false, reportedDay: null }))
       if (!cleared) return failed('storage')
+      unresolvedDeletion = false
       token = null
       return { result: 'deleted', state: state() }
     }
