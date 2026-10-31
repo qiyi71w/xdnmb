@@ -1,7 +1,28 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ChangeEvent,
+  type FocusEvent,
+  type FormEvent,
+  type ReactNode,
+  type RefObject
+} from 'react'
 import type { QuoteLocation, ReadError } from '../../../../shared/api'
 import type { BoardDirectory, ForumId, Post, PostId, ThreadId, TimelineId } from '../../../../shared/forum'
-import { MAX_SEARCH_QUERY_LENGTH, type ForumLinkTarget, type SearchHit } from '../../../../shared/online-search'
+import {
+  DEFAULT_XDS_SEARCH_FILTERS,
+  isXdsSearchFilters,
+  MAX_SEARCH_QUERY_LENGTH,
+  sameXdsSearchFilters,
+  type ForumLinkTarget,
+  type SearchHit,
+  type XdsSearchFilters
+} from '../../../../shared/online-search'
 import { Icon } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { Loading } from '../../components/Notices'
@@ -14,7 +35,9 @@ import { readResumePage } from '../thread/readingStart'
 import type { EntryInit } from '../tabs/tabsState'
 import { useThreadTabMenu, type ThreadTabMenu } from '../tabs/ThreadTabMenu'
 import type { OnlineSearchNotice, OnlineSearchResults, OnlineSearchSession } from './onlineSearchSession'
-import { CHANNEL_TEXT, channelHost, searchErrorLines } from './onlineSearchText'
+import { ChoiceField } from './FilterFields'
+import { CHANNEL_TEXT, searchErrorLines } from './onlineSearchText'
+import './search.css'
 import './online-search.css'
 
 const MAX_SOURCE_LENGTH = 80
@@ -125,11 +148,201 @@ function Status({ tone, children }: { tone: 'info' | 'error'; children: ReactNod
   )
 }
 
+// ---------- XDS filters ----------
+// The fields XDS documents for its search (https://xds.wol.moe/openapi.json); nmb-search has none.
+
+/** Why the panel's dates cannot be searched: a box with an unreadable date, or start after end. */
+type DateIssue = 'incomplete' | 'reversed'
+
+const DATE_VALUE = /^\d{4}-\d{2}-\d{2}$/
+
+const DATE_ISSUE_TEXT: Record<DateIssue, string> = {
+  incomplete: '日期没有填完整，填完或清空后才能搜索',
+  reversed: '开始日期晚于结束日期，改正后才能搜索'
+}
+
+const SCOPE_CHOICES: readonly { value: XdsSearchFilters['scope']; label: string }[] = [
+  { value: 'all', label: '不限' },
+  { value: 'threads', label: '主帖' },
+  { value: 'replies', label: '回复' }
+]
+
+const SORT_CHOICES: readonly { value: XdsSearchFilters['sort']; label: string }[] = [
+  { value: 'rank', label: '相关度' },
+  { value: 'time_desc', label: '从新到旧' },
+  { value: 'time_asc', label: '从旧到新' },
+  { value: 'replies_desc', label: '回复多的在前' },
+  { value: 'replies_asc', label: '回复少的在前' }
+]
+
+const MODE_CHOICES: readonly { value: XdsSearchFilters['mode']; label: string }[] = [
+  { value: 'terms', label: '分词' },
+  { value: 'exact', label: '连续出现' }
+]
+
+const MATCH_CHOICES: readonly { value: XdsSearchFilters['match']; label: string }[] = [
+  { value: 'thread', label: '只匹配主帖' },
+  { value: 'aggregate', label: '主帖或任一回复' }
+]
+
+const OP_CHOICES: readonly { value: XdsSearchFilters['op']; label: string }[] = [
+  { value: 'and', label: '全部命中' },
+  { value: 'or', label: '任一命中' },
+  { value: 'auto', label: '自动' }
+]
+
 /**
- * One channel of the 联网 side of the 搜索 page: a search box that requests only on submit, the
- * third-party notice for that channel, plain-text results with paging over the session's chain,
- * and result opening through the existing reader navigation. Its query, pages and view live in the
- * channel's OnlineSearchSession, so leaving, switching channel and coming back restore them without
+ * Fields changed from XDS's defaults, as 筛选（已启用 N 项） counts them: the two dates are one,
+ * and 多个词 counts only while it applies (串的匹配 主帖或任一回复), as it is shown only then.
+ */
+function xdsFilterCount(filters: XdsSearchFilters): number {
+  const base = DEFAULT_XDS_SEARCH_FILTERS
+  return (
+    (filters.fid !== base.fid ? 1 : 0) +
+    (filters.since !== base.since || filters.until !== base.until ? 1 : 0) +
+    (filters.scope !== base.scope ? 1 : 0) +
+    (filters.sort !== base.sort ? 1 : 0) +
+    (filters.mode !== base.mode ? 1 : 0) +
+    (filters.match !== base.match ? 1 : 0) +
+    (filters.match === 'aggregate' && filters.op !== base.op ? 1 : 0)
+  )
+}
+
+/**
+ * The XDS channel's filters, under its search bar: edits change only the draft (no request until
+ * 搜索). Named forums come from the forum directory already loaded, when there is one; without it
+ * only 全部版面 (and a forum already chosen, by its ID) is offered, and searching stays possible.
+ */
+function XdsFilterPanel({
+  id,
+  open,
+  filters,
+  directory,
+  badDates,
+  dateIssue,
+  dateBoxes,
+  sinceRef,
+  untilRef,
+  onFilter,
+  onDate,
+  onReset
+}: {
+  id: string
+  open: boolean
+  filters: XdsSearchFilters
+  directory: BoardDirectory | null
+  badDates: { since: boolean; until: boolean }
+  dateIssue: DateIssue | null
+  /** Key of the date boxes: changing it clears half-typed text. */
+  dateBoxes: number
+  sinceRef: RefObject<HTMLInputElement | null>
+  untilRef: RefObject<HTMLInputElement | null>
+  onFilter: <K extends keyof XdsSearchFilters>(key: K, value: XdsSearchFilters[K]) => void
+  onDate: (key: 'since' | 'until', input: HTMLInputElement) => void
+  onReset: () => void
+}) {
+  const fieldId = useId()
+  const issueId = `${fieldId}-issue`
+  const forumKnown = filters.fid === '' || directory?.groups.some((group) => group.forums.some((forum) => forum.id === filters.fid)) === true
+  const atDefaults = sameXdsSearchFilters(filters, DEFAULT_XDS_SEARCH_FILTERS) && dateIssue === null
+  const dateProps = (key: 'since' | 'until') => ({
+    type: 'date',
+    className: 'text-input',
+    max: '9999-12-31',
+    value: filters[key],
+    'aria-invalid': dateIssue === 'reversed' || badDates[key] ? true : undefined,
+    'aria-describedby': dateIssue !== null ? issueId : undefined,
+    onChange: (event: ChangeEvent<HTMLInputElement>) => onDate(key, event.currentTarget),
+    onBlur: (event: FocusEvent<HTMLInputElement>) => onDate(key, event.currentTarget)
+  })
+  return (
+    <div className="search-filters online-search-filters" id={id} hidden={!open}>
+      <div className="filter-fields">
+        <div className="filter-field">
+          <label className="filter-label" htmlFor={`${fieldId}-forum`}>
+            版面
+          </label>
+          <select id={`${fieldId}-forum`} className="select-input" value={filters.fid} onChange={(event) => onFilter('fid', event.target.value)}>
+            <option value="">全部版面</option>
+            {!forumKnown && <option value={filters.fid}>版面 {filters.fid}</option>}
+            {directory?.groups.map((group) =>
+              group.forums.length === 0 ? null : (
+                <optgroup key={group.id} label={group.name}>
+                  {group.forums.map((forum) => (
+                    <option key={forum.id} value={forum.id}>
+                      {forum.displayName}
+                    </option>
+                  ))}
+                </optgroup>
+              )
+            )}
+          </select>
+        </div>
+        <div className="filter-field">
+          <span className="filter-label" id={`${fieldId}-date`}>
+            发言日期
+          </span>
+          <div className="filter-dates" role="group" aria-labelledby={`${fieldId}-date`} key={dateBoxes}>
+            <input ref={sinceRef} aria-label="开始日期（含）" {...dateProps('since')} />
+            <span className="filter-dash" aria-hidden="true">
+              –
+            </span>
+            <input ref={untilRef} aria-label="结束日期（含）" {...dateProps('until')} />
+          </div>
+        </div>
+        <ChoiceField label="发言" choices={SCOPE_CHOICES} value={filters.scope} disabled={false} onChange={(scope) => onFilter('scope', scope)} />
+        <div className="filter-field">
+          <label className="filter-label" htmlFor={`${fieldId}-sort`}>
+            排序
+          </label>
+          <select
+            id={`${fieldId}-sort`}
+            className="select-input"
+            value={filters.sort}
+            onChange={(event) => {
+              const sort = SORT_CHOICES.find((choice) => choice.value === event.target.value)
+              if (sort !== undefined) onFilter('sort', sort.value)
+            }}
+          >
+            {SORT_CHOICES.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <ChoiceField label="关键词匹配" choices={MODE_CHOICES} value={filters.mode} disabled={false} onChange={(mode) => onFilter('mode', mode)} />
+        <ChoiceField label="串的匹配" choices={MATCH_CHOICES} value={filters.match} disabled={false} onChange={(match) => onFilter('match', match)} />
+        {filters.match === 'aggregate' && (
+          <ChoiceField label="多个词" choices={OP_CHOICES} value={filters.op} disabled={false} onChange={(op) => onFilter('op', op)} />
+        )}
+        {/* Stays focusable at the defaults, so focus is not lost after resetting. */}
+        <button
+          type="button"
+          className="btn btn-small btn-quiet online-search-filters-reset"
+          aria-disabled={atDefaults || undefined}
+          onClick={() => !atDefaults && onReset()}
+        >
+          <Icon name="refresh" size={14} />
+          恢复默认
+        </button>
+        {dateIssue !== null && (
+          <p className="field-warning filter-wide" id={issueId}>
+            <Icon name="alert" size={14} />
+            <span>{DATE_ISSUE_TEXT[dateIssue]}</span>
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One channel of the 联网 side of the 搜索 page: a search box that requests only on submit (XDS adds
+ * its documented filters beside 搜索), the third-party notice for that channel, plain-text results
+ * with paging over the session's chain, and result opening through the existing reader navigation.
+ * Its query, filters, pages and view live in the channel's OnlineSearchSession, so leaving,
+ * switching channel and coming back restore them without
  * any request. The page mounts one pane per shown channel: switching drops a running locate of the
  * channel left behind, so nothing opens from out of sight.
  */
@@ -404,19 +617,88 @@ export function OnlineSearchPane({
     // Runs only when the shown page changes.
   }, [shownPage])
 
-  // ---------- Search box ----------
+  // ---------- Search box and XDS filters ----------
   const query = state.draft.trim()
-  /** This exact query's run is still awaited: searching it again would only repeat the request. */
-  const samePending = state.pending?.kind === 'run' && state.pending.query === query
-  const canSubmit = query !== '' && query.length <= MAX_SEARCH_QUERY_LENGTH && !samePending
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    if (canSubmit) session.run(query)
+  const xds = session.channel === 'xds'
+  const filters = state.filters
+  const filtersId = useId()
+  const sinceRef = useRef<HTMLInputElement>(null)
+  const untilRef = useRef<HTMLInputElement>(null)
+  /**
+   * Date boxes holding text the browser cannot read as a whole date: the draft then has no date
+   * there, so searching would silently drop it. Pane-local (the boxes remount with the pane).
+   */
+  const [badDates, setBadDates] = useState({ since: false, until: false })
+  /** Bumped by 恢复默认: remounts the date boxes so half-typed text goes too. */
+  const [dateBoxes, setDateBoxes] = useState(0)
+  /** The date box to focus once the panel a refused search opened is shown. */
+  const focusDate = useRef<'since' | 'until' | null>(null)
+  const dateIssue: DateIssue | null = !xds
+    ? null
+    : badDates.since || badDates.until
+      ? 'incomplete'
+      : filters.since !== '' && filters.until !== '' && filters.since > filters.until
+        ? 'reversed'
+        : null
+  const filtersReady = !xds || (dateIssue === null && isXdsSearchFilters(filters))
+  /** This query with these filters is still awaited: searching again would only repeat the request. */
+  const samePending = session.hasPending(query)
+  const canSubmit = query !== '' && query.length <= MAX_SEARCH_QUERY_LENGTH && filtersReady && !samePending
+  const filterCount = xds ? xdsFilterCount(filters) : 0
+  /** Shown results were asked for with other filters than the ones now in the panel. */
+  const filtersChanged = xds && results !== null && results.filters !== null && !sameXdsSearchFilters(filters, results.filters)
+
+  const readDate = (key: 'since' | 'until', input: HTMLInputElement): void => {
+    const value = input.value
+    const bad = input.validity.badInput || (value !== '' && !DATE_VALUE.test(value))
+    setBadDates((before) => (before[key] === bad ? before : { ...before, [key]: bad }))
+    const next = bad ? '' : value
+    if (filters[key] !== next) session.setFilters({ ...filters, [key]: next })
   }
 
-  const rerun = (text: string) => {
+  const setFilter = <K extends keyof XdsSearchFilters>(key: K, value: XdsSearchFilters[K]): void => {
+    session.setFilters({ ...filters, [key]: value })
+  }
+
+  const resetFilters = (): void => {
+    session.setFilters({ ...DEFAULT_XDS_SEARCH_FILTERS })
+    setBadDates({ since: false, until: false })
+    setDateBoxes((count) => count + 1)
+  }
+
+  // A search refused for its dates opened the panel: focus the box to correct once it is shown.
+  useLayoutEffect(() => {
+    const key = focusDate.current
+    if (key === null || !state.filtersOpen) return
+    focusDate.current = null
+    ;(key === 'since' ? sinceRef : untilRef).current?.focus()
+  })
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    // A half-typed date fires no change while its value stays empty: read the boxes now.
+    const sinceBad = xds && (badDates.since || (sinceRef.current?.validity.badInput ?? false))
+    const untilBad = xds && (badDates.until || (untilRef.current?.validity.badInput ?? false))
+    if (canSubmit && !sinceBad && !untilBad) {
+      session.run(query)
+      return
+    }
+    if (!xds || query === '' || query.length > MAX_SEARCH_QUERY_LENGTH || samePending) return
+    if (!sinceBad && !untilBad && dateIssue === null) return
+    // Show why the search did not start, at the box to correct.
+    if (sinceBad !== badDates.since || untilBad !== badDates.until) setBadDates({ since: sinceBad, until: untilBad })
+    const key = sinceBad || (!untilBad && dateIssue === 'reversed') ? 'since' : 'until'
+    if (state.filtersOpen) (key === 'since' ? sinceRef : untilRef).current?.focus()
+    else {
+      focusDate.current = key
+      session.setFiltersOpen(true)
+    }
+  }
+
+  /** Searches again exactly as asked before: the request's own filters, never the panel's draft. */
+  const rerun = (text: string, snapshot: XdsSearchFilters | null) => {
     inputRef.current?.focus()
-    session.run(text)
+    session.run(text, snapshot ?? DEFAULT_XDS_SEARCH_FILTERS)
   }
 
   const openSite = () => {
@@ -427,7 +709,7 @@ export function OnlineSearchPane({
     )
   }
 
-  const runQuery = notice !== null && notice.kind !== 'closed' && notice.request.kind === 'run' ? notice.request.query : null
+  const runRequest = notice !== null && notice.kind !== 'closed' && notice.request.kind === 'run' ? notice.request : null
   const noticePage = notice !== null && notice.kind !== 'closed' && notice.request.kind === 'page' ? notice.request.page : null
 
   const hits = shownPage?.hits ?? []
@@ -440,30 +722,56 @@ export function OnlineSearchPane({
     <section className="online-search-page" aria-label={`联网搜索：${service}`}>
       <div className="online-search-scroll" ref={scrollRef} onScroll={onScroll}>
         <header className="online-search-header">
-          <form className="online-search-form" role="search" onSubmit={submit}>
+          <form className="search-form" role="search" onSubmit={submit}>
             <label className="visually-hidden" htmlFor={`online-search-input-${entryKey}`}>
               搜索词
             </label>
-            <input
-              ref={inputRef}
-              id={`online-search-input-${entryKey}`}
-              className="online-search-input"
-              type="text"
-              enterKeyHint="search"
-              autoComplete="off"
-              spellCheck={false}
-              maxLength={MAX_SEARCH_QUERY_LENGTH}
-              placeholder="搜索词"
-              aria-describedby={`online-search-about-${entryKey}`}
-              value={state.draft}
-              onChange={(event) => session.setDraft(event.target.value)}
-            />
-            {/* Unavailable stays focusable; `submit` refuses it from any input, and the session itself
-                drops a repeat of the query it is still running (before this re-renders). */}
-            <button type="submit" className="btn btn-page online-search-submit" aria-disabled={!canSubmit || undefined} aria-busy={samePending || undefined}>
-              <Icon name="search" />
+            <div className="search-field">
+              <Icon name="search" className="search-field-icon" />
+              {/* type=text, not search: Esc belongs to cancelling the running request, never to clearing. */}
+              <input
+                ref={inputRef}
+                id={`online-search-input-${entryKey}`}
+                className="search-input"
+                type="text"
+                enterKeyHint="search"
+                autoComplete="off"
+                spellCheck={false}
+                maxLength={MAX_SEARCH_QUERY_LENGTH}
+                placeholder="搜索词"
+                aria-describedby={`online-search-about-${entryKey}`}
+                value={state.draft}
+                onChange={(event) => session.setDraft(event.target.value)}
+              />
+            </div>
+            {/* Unavailable stays focusable; `submit` refuses it from any input (pointing at a date to
+                correct), and the session itself drops a repeat of the run it is still awaiting. */}
+            <button type="submit" className="btn btn-primary" aria-disabled={!canSubmit || undefined} aria-busy={samePending || undefined}>
               搜索
             </button>
+            {xds ? (
+              <button
+                type="button"
+                className={filterCount > 0 ? 'btn btn-page filter-toggle is-active' : 'btn btn-page filter-toggle'}
+                aria-expanded={state.filtersOpen}
+                aria-controls={filtersId}
+                aria-label={filterCount > 0 ? `筛选（已启用 ${filterCount} 项）` : '筛选'}
+                onClick={() => session.setFiltersOpen(!state.filtersOpen)}
+              >
+                <Icon name="filter" size={14} />
+                筛选
+                {/* A hidden 0 keeps 筛选's width (search.css); the name above says the count. */}
+                <span className={filterCount > 0 ? 'btn-count' : 'btn-count is-empty'}>{filterCount}</span>
+              </button>
+            ) : (
+              // nmb-search has no filters: an invisible 筛选 of the same width keeps the box and 搜索
+              // where they are on the other channel and on 本机. Not a control, not read out.
+              <span className="btn btn-page filter-toggle search-form-slot" aria-hidden="true">
+                <Icon name="filter" size={14} />
+                筛选
+                <span className="btn-count is-empty">0</span>
+              </span>
+            )}
           </form>
           {state.draft.length >= MAX_SEARCH_QUERY_LENGTH - 20 && (
             <p className="online-search-count">
@@ -472,10 +780,27 @@ export function OnlineSearchPane({
           )}
         </header>
 
+        {xds && (
+          <XdsFilterPanel
+            id={filtersId}
+            open={state.filtersOpen}
+            filters={filters}
+            directory={directory}
+            badDates={badDates}
+            dateIssue={dateIssue}
+            dateBoxes={dateBoxes}
+            sinceRef={sinceRef}
+            untilRef={untilRef}
+            onFilter={setFilter}
+            onDate={readDate}
+            onReset={resetFilters}
+          />
+        )}
+
         <div className="online-search-about" id={`online-search-about-${entryKey}`}>
           <p className="online-search-about-site">
             <span>
-              搜索词会发给第三方服务 {service}（{channelHost(session.channel)}），收录可能不全或过时
+              搜索词会发给第三方服务 {service}，收录可能不全或过时
             </span>
             <button type="button" className="btn btn-small btn-quiet" onClick={openSite}>
               <Icon name="external" size={14} />
@@ -507,8 +832,8 @@ export function OnlineSearchPane({
               </button>
             </div>
           )}
-          {notice !== null && notice.kind !== 'closed' && runQuery !== null && (
-            <RequestNotice notice={notice} service={service} onRetry={() => rerun(runQuery)} />
+          {notice !== null && notice.kind !== 'closed' && runRequest !== null && (
+            <RequestNotice notice={notice} service={service} onRetry={() => rerun(runRequest.query, runRequest.filters)} />
           )}
           {results !== null && !results.live && pending?.kind !== 'run' && (
             <div className="online-search-chain-end">
@@ -516,11 +841,17 @@ export function OnlineSearchPane({
                 <Icon name="info" size={14} />
                 「{results.query}」不能再取新页
               </p>
-              <button type="button" className="btn btn-small btn-page" onClick={() => rerun(results.query)}>
+              <button type="button" className="btn btn-small btn-page" onClick={() => rerun(results.query, results.filters)}>
                 <Icon name="refresh" size={14} />
                 重新搜索
               </button>
             </div>
+          )}
+          {filtersChanged && !(pending?.kind === 'run' && pending.filters !== null && sameXdsSearchFilters(pending.filters, filters)) && (
+            <p className="notice-inline online-search-filters-changed">
+              <Icon name="info" size={14} />
+              筛选已更改，搜索后生效
+            </p>
           )}
         </div>
 
@@ -595,7 +926,7 @@ export function OnlineSearchPane({
               <div className="online-search-chain-end">
                 <p className="list-end">{CHAIN_END_TEXT[results.next]}</p>
                 {results.next !== 'end' && (
-                  <button type="button" className="btn btn-small btn-page" onClick={() => rerun(results.query)}>
+                  <button type="button" className="btn btn-small btn-page" onClick={() => rerun(results.query, results.filters)}>
                     <Icon name="refresh" size={14} />
                     重新搜索「{results.query}」
                   </button>

@@ -2,9 +2,49 @@
 // normalized pages, never pagination tokens or arbitrary service endpoints.
 
 import type { PostId, ThreadId, TimelineId } from './forum'
+import { serverCalendarDate } from './search-filters'
 
 export const SEARCH_CHANNELS = ['xds', 'nmb-search'] as const
 export type SearchChannel = (typeof SEARCH_CHANNELS)[number]
+
+export interface XdsSearchFilters {
+  fid: string
+  since: string
+  until: string
+  scope: 'all' | 'threads' | 'replies'
+  sort: 'rank' | 'time_desc' | 'time_asc' | 'replies_desc' | 'replies_asc'
+  mode: 'terms' | 'exact'
+  match: 'thread' | 'aggregate'
+  op: 'and' | 'or' | 'auto'
+}
+
+export const DEFAULT_XDS_SEARCH_FILTERS: Readonly<XdsSearchFilters> = Object.freeze({
+  fid: '', since: '', until: '', scope: 'all', sort: 'rank', mode: 'terms', match: 'thread', op: 'and'
+})
+
+const FILTER_KEYS = ['fid', 'since', 'until', 'scope', 'sort', 'mode', 'match', 'op'] as const
+const filterDate = (value: unknown): value is string => typeof value === 'string' &&
+  (value === '' || (/^\d{4}-\d{2}-\d{2}$/.test(value) && serverCalendarDate(value) === value))
+
+/** Only the supported XDS fields cross IPC; calendar dates are never normalized or guessed. */
+export function isXdsSearchFilters(value: unknown): value is XdsSearchFilters {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const filters = value as Record<string, unknown>
+  if (Object.keys(filters).length !== FILTER_KEYS.length || FILTER_KEYS.some((key) => !Object.hasOwn(filters, key))) return false
+  return typeof filters.fid === 'string' && (filters.fid === '' || /^[1-9]\d{0,19}$/.test(filters.fid)) &&
+    filterDate(filters.since) && filterDate(filters.until) &&
+    (filters.since === '' || filters.until === '' || filters.since <= filters.until) &&
+    (filters.scope === 'all' || filters.scope === 'threads' || filters.scope === 'replies') &&
+    (filters.sort === 'rank' || filters.sort === 'time_desc' || filters.sort === 'time_asc' || filters.sort === 'replies_desc' || filters.sort === 'replies_asc') &&
+    (filters.mode === 'terms' || filters.mode === 'exact') &&
+    (filters.match === 'thread' || filters.match === 'aggregate') &&
+    (filters.op === 'and' || filters.op === 'or' || filters.op === 'auto')
+}
+
+export function sameXdsSearchFilters(a: XdsSearchFilters, b: XdsSearchFilters): boolean {
+  return a.fid === b.fid && a.since === b.since && a.until === b.until && a.scope === b.scope &&
+    a.sort === b.sort && a.mode === b.mode && a.match === b.match && a.op === b.op
+}
 
 /** Fixed websites opened only by an explicit user action. */
 export const SEARCH_SITE_URLS: Readonly<Record<SearchChannel, string>> = {

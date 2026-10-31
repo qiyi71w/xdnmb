@@ -1,4 +1,4 @@
-import { type SearchChannel, type SearchChainEnd, type SearchError, type SearchHit, type SearchNextState, type SearchOutcome, type SearchPage, type ThreadOfOutcome, parseForumLink } from '../../shared/online-search'
+import { type SearchChannel, type SearchChainEnd, type SearchError, type SearchHit, type SearchNextState, type SearchOutcome, type SearchPage, type ThreadOfOutcome, type XdsSearchFilters, isXdsSearchFilters, parseForumLink } from '../../shared/online-search'
 import { ForumReadError, ReadCancelledError, type ForumTransport } from '../forum/contract'
 import { createXdsSearchAdapter, retryDeadline, XDS_API_ORIGIN } from './xds'
 
@@ -27,7 +27,7 @@ const MAX_DATE_SECONDS = 4_102_444_800
  * obtained pages stay local and neither adapter requests a page until explicitly asked.
  */
 export interface SearchAdapter {
-  run(owner: string, sessionId: string, query: string): Promise<SearchOutcome>
+  run(owner: string, sessionId: string, query: string, filters: XdsSearchFilters | null): Promise<SearchOutcome>
   page(owner: string, sessionId: string, page: number): Promise<SearchOutcome>
   cancel(owner: string, sessionId: string): void
   close(owner: string, sessionId: string): void
@@ -35,7 +35,7 @@ export interface SearchAdapter {
 }
 
 export interface OnlineSearchService {
-  run(owner: string, sessionId: string, channel: SearchChannel, query: string): Promise<SearchOutcome>
+  run(owner: string, sessionId: string, channel: SearchChannel, query: string, filters: XdsSearchFilters | null): Promise<SearchOutcome>
   page(owner: string, sessionId: string, channel: SearchChannel, page: number): Promise<SearchOutcome>
   cancel(owner: string, sessionId: string, channel: SearchChannel): void
   close(owner: string, sessionId: string, channel: SearchChannel): void
@@ -309,10 +309,11 @@ export function createOnlineSearchService(options: {
     return outcome
   }
   return {
-    async run(owner, sessionId, channel, query) {
+    async run(owner, sessionId, channel, query, filters) {
+      if (channel === 'xds' ? !isXdsSearchFilters(filters) : filters !== null) throw new Error('invalid request')
       const error = gate(channel)
       if (error !== null) return { status: 'failed', error, next: 'end' }
-      return remember(channel, await adapters[channel].run(owner, sessionId, query))
+      return remember(channel, await adapters[channel].run(owner, sessionId, query, filters))
     },
     async page(owner, sessionId, channel, page) {
       // Obtained pages are still readable during a service cooldown; the adapter gates new reads.

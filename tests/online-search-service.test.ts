@@ -68,7 +68,7 @@ const status = (outcome: SearchOutcome) => ({ status: outcome.status, next: 'nex
 describe('online search session', () => {
   it('queries the fixed API path once per user action, then pages with only the opaque token and serves obtained pages without requests', async () => {
     const { search, seen } = await service(chain)
-    const first = await search.run('w1', 's1', 'nmb-search', '游戏 a&b')
+    const first = await search.run('w1', 's1', 'nmb-search', '游戏 a&b', null)
     expect(first).toMatchObject({ status: 'ok', cached: false, next: 'available', page: { pageNumber: 1 } })
     expect(seen[0]).toMatchObject({ path: '/api/v1/web', params: { s: '游戏 a&b' } })
     // No forum identity or credentials travel with search requests.
@@ -91,7 +91,7 @@ describe('online search session', () => {
       if (entry.params.npt === undefined) chain(entry, response)
       else pending.push(response)
     })
-    await search.run('w1', 's1', 'nmb-search', 'q')
+    await search.run('w1', 's1', 'nmb-search', 'q', null)
     const a = search.page('w1', 's1', 'nmb-search', 2)
     const b = search.page('w1', 's1', 'nmb-search', 2)
     await expect.poll(() => pending.length).toBe(1)
@@ -103,7 +103,7 @@ describe('online search session', () => {
 
   it('does not send a token idle for 15 minutes, keeping the obtained pages', async () => {
     const { search, seen, advance } = await service(chain)
-    await search.run('w1', 's1', 'nmb-search', 'q')
+    await search.run('w1', 's1', 'nmb-search', 'q', null)
     advance(SEARCH_TOKEN_IDLE_MS - 1)
     expect(await search.page('w1', 's1', 'nmb-search', 1)).toMatchObject({ status: 'ok', cached: true, next: 'available' })
     advance(1)
@@ -118,7 +118,7 @@ describe('online search session', () => {
       if (entry.params.npt !== undefined && fail) response.destroy()
       else chain(entry, response)
     })
-    await search.run('w1', 's1', 'nmb-search', 'q')
+    await search.run('w1', 's1', 'nmb-search', 'q', null)
     expect(await search.page('w1', 's1', 'nmb-search', 2)).toEqual({ status: 'failed', error: { kind: 'network', detail: 'connection' }, next: 'lost' })
     fail = false
     expect(await search.page('w1', 's1', 'nmb-search', 2)).toEqual({ status: 'unavailable', next: 'lost' })
@@ -128,7 +128,7 @@ describe('online search session', () => {
     // Cancelling an in-flight next page spends its token too.
     const held: ServerResponse[] = []
     const second = await service((entry, response) => (entry.params.npt === undefined ? chain(entry, response) : held.push(response)))
-    await second.search.run('w2', 's1', 'nmb-search', 'q')
+    await second.search.run('w2', 's1', 'nmb-search', 'q', null)
     const pending = second.search.page('w2', 's1', 'nmb-search', 2)
     await expect.poll(() => held.length).toBe(1)
     second.search.cancel('w2', 's1', 'nmb-search')
@@ -143,9 +143,9 @@ describe('online search session', () => {
       if (entry.params.s === 'old') held.push(response)
       else json(ok([item(9)], null))(entry, response)
     })
-    const old = search.run('w1', 's1', 'nmb-search', 'old')
+    const old = search.run('w1', 's1', 'nmb-search', 'old', null)
     await expect.poll(() => held.length).toBe(1)
-    const fresh = await search.run('w1', 's1', 'nmb-search', 'new')
+    const fresh = await search.run('w1', 's1', 'nmb-search', 'new', null)
     held[0]?.writeHead(200, { 'Content-Type': 'application/json' }).end(ok([item(1)], 'stale'))
     expect(await old).toEqual({ status: 'cancelled' })
     expect(fresh).toMatchObject({ status: 'ok', next: 'end', page: { hits: [{ title: '结果 9' }] } })
@@ -155,7 +155,7 @@ describe('online search session', () => {
 
   it('scopes sessions to their page and releases them on close', async () => {
     const { search, seen } = await service(chain)
-    await search.run('w1', 's1', 'nmb-search', 'q')
+    await search.run('w1', 's1', 'nmb-search', 'q', null)
     expect(await search.page('w2', 's1', 'nmb-search', 1)).toEqual({ status: 'closed' })
     search.closeAll('w1')
     expect(await search.page('w1', 's1', 'nmb-search', 1)).toEqual({ status: 'closed' })
@@ -178,21 +178,21 @@ describe('search response classification', () => {
   ])('classifies a %s', async (_name, respond, error) => {
     const { search } = await service(respond)
     // A status alone supplies no retry deadline and no guessed interval.
-    expect(await search.run('w1', 's1', 'nmb-search', 'q')).toEqual({ status: 'failed', error, next: 'end' })
+    expect(await search.run('w1', 's1', 'nmb-search', 'q', null)).toEqual({ status: 'failed', error, next: 'end' })
   })
 
   it('treats an empty web array as a normal empty result, distinct from failures', async () => {
     const { search } = await service(json(ok([], null)))
-    expect(await search.run('w1', 's1', 'nmb-search', 'q')).toMatchObject({ status: 'ok', next: 'end', page: { pageNumber: 1, hits: [] } })
+    expect(await search.run('w1', 's1', 'nmb-search', 'q', null)).toMatchObject({ status: 'ok', next: 'end', page: { pageNumber: 1, hits: [] } })
   })
 
   it('times out at the client limit and does not follow a redirect to another origin', async () => {
     const slow = await service(() => undefined, { timeoutMs: 50 })
-    expect(await slow.search.run('w1', 's1', 'nmb-search', 'q')).toMatchObject({ status: 'failed', error: { kind: 'network', detail: 'timeout' } })
+    expect(await slow.search.run('w1', 's1', 'nmb-search', 'q', null)).toMatchObject({ status: 'failed', error: { kind: 'network', detail: 'timeout' } })
 
     const elsewhere = await service(chain)
     const redirecting = await service((_seen, response) => response.writeHead(302, { Location: `${elsewhere.origin}/api/v1/web?s=q` }).end())
-    expect(await redirecting.search.run('w1', 's1', 'nmb-search', 'q')).toMatchObject({ status: 'failed', error: { kind: 'unknown-structure', detail: 'redirect' } })
+    expect(await redirecting.search.run('w1', 's1', 'nmb-search', 'q', null)).toMatchObject({ status: 'failed', error: { kind: 'unknown-structure', detail: 'redirect' } })
     expect(elsewhere.seen).toHaveLength(0)
   })
 
@@ -203,7 +203,7 @@ describe('search response classification', () => {
       { title: 'evil host', description: null, url: 'https://www.nmbxd1.com.evil.example/t/50000001', date: -5 },
       'not an object'
     ], null)))
-    const outcome = await search.run('w1', 's1', 'nmb-search', 'q')
+    const outcome = await search.run('w1', 's1', 'nmb-search', 'q', null)
     if (outcome.status !== 'ok') throw new Error(outcome.status)
     expect(outcome.page.hits).toEqual([
       { title: '<img src=x onerror=alert(1)> gnp.exe', description: 'a b c', url: null, date: '2023-11-14T22:13:20.000Z', target: null },
@@ -261,8 +261,8 @@ it('retains nmb Retry-After across sessions without spending an untouched token 
     if (entry.params.s === 'limited') return response.writeHead(429, { 'Retry-After': '5' }).end()
     chain(entry, response)
   })
-  await search.run('w', 'kept', 'nmb-search', 'q')
-  expect(await search.run('w', 'other', 'nmb-search', 'limited')).toMatchObject({ status: 'failed', error: { kind: 'rate-limited', retryAt: 1_800_000_005_000 } })
+  await search.run('w', 'kept', 'nmb-search', 'q', null)
+  expect(await search.run('w', 'other', 'nmb-search', 'limited', null)).toMatchObject({ status: 'failed', error: { kind: 'rate-limited', retryAt: 1_800_000_005_000 } })
   expect(await search.page('w', 'kept', 'nmb-search', 1)).toMatchObject({ status: 'ok', cached: true })
   expect(await search.page('w', 'kept', 'nmb-search', 2)).toMatchObject({ status: 'failed', next: 'available', error: { kind: 'rate-limited' } })
   expect(seen).toHaveLength(2)

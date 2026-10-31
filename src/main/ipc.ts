@@ -33,7 +33,7 @@ import { applyZoom, currentZoom } from './zoom'
 import type { SearchService } from './search/service'
 import type { SearchFilters, SearchScope } from '../shared/search'
 import { serverCalendarDate } from '../shared/search-filters'
-import { MAX_SEARCH_QUERY_LENGTH, SEARCH_CHANNELS, SEARCH_SITE_URLS, type SearchChannel } from '../shared/online-search'
+import { isXdsSearchFilters, MAX_SEARCH_QUERY_LENGTH, SEARCH_CHANNELS, SEARCH_SITE_URLS, type SearchChannel } from '../shared/online-search'
 import type { OnlineSearchService } from './online-search/service'
 import type { AccountService } from './account/service'
 
@@ -527,8 +527,12 @@ export function registerIpc({
   })
 
   handle(IpcChannel.runOnlineSearch, async (event, raw) => {
-    const input = searchRecord(raw, ['sessionId', 'channel', 'query'])
-    return onlineSearch.run(owner(event.sender), sessionId(input), searchChannel(input.channel), searchQuery(input.query))
+    const input = searchRecord(raw, ['sessionId', 'channel', 'query', 'filters'])
+    const channel = searchChannel(input.channel)
+    const filters = input.filters
+    if (filters !== null && !isXdsSearchFilters(filters)) throw new InvalidRequestError()
+    if (channel === 'xds' ? filters === null : filters !== null) throw new InvalidRequestError()
+    return onlineSearch.run(owner(event.sender), sessionId(input), channel, searchQuery(input.query), filters)
   })
   handle(IpcChannel.onlineSearchPage, async (event, raw) => {
     const input = searchRecord(raw, ['sessionId', 'channel', 'page'])

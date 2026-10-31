@@ -17,7 +17,7 @@ import type { RemindersApi } from './reminders'
 import type { AppSettings, ZoomAction, ZoomState } from './settings'
 import type { AppearanceIssue } from './theme'
 import type { SearchApi } from './search'
-import type { SearchChannel, SearchOutcome, SearchSessionId, ThreadOfOutcome } from './online-search'
+import type { SearchChannel, SearchOutcome, SearchSessionId, ThreadOfOutcome, XdsSearchFilters } from './online-search'
 import type { UpdatesApi } from './updates'
 
 /** Edit commands the main process runs on the requesting window, as its Edit menu would. */
@@ -249,7 +249,7 @@ export interface XidaoApi {
    */
   onlineSearch: {
     /** Starts a new query chain in the session (creating it), superseding any earlier chain; returns page 1. */
-    run(input: { sessionId: SearchSessionId; channel: SearchChannel; query: string }): Promise<SearchOutcome>
+    run(input: { sessionId: SearchSessionId; channel: SearchChannel; query: string; filters: XdsSearchFilters | null }): Promise<SearchOutcome>
     /**
      * Page `page` of this channel's current chain: obtained pages are local. XDS requests the next
      * numeric page and permits an explicit retry after failure; nmb-search spends its one-use token.

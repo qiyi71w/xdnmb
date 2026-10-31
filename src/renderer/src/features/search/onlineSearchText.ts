@@ -1,13 +1,8 @@
-import { SEARCH_SITE_URLS, type SearchChannel, type SearchError } from '../../../../shared/online-search'
+import type { SearchChannel, SearchError } from '../../../../shared/online-search'
 import { formatClockTime } from '../../lib/time'
 
 /** Names of the third-party search services, as users see them on their sites. */
 export const CHANNEL_TEXT: Record<SearchChannel, string> = { xds: 'XDS', 'nmb-search': 'nmb-search' }
-
-/** Host of the channel's fixed website (`xds.wol.moe`), for saying where a query goes. */
-export function channelHost(channel: SearchChannel): string {
-  return new URL(SEARCH_SITE_URLS[channel]).host
-}
 
 /**
  * Reason lines of a failure of `service` (a channel name). The service's own message is shown
