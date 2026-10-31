@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import type { StatementSync } from 'node:sqlite'
+import { ANALYTICS_PLATFORMS, ANALYTICS_VERSION_PATTERN } from '../../src/shared/analytics-protocol.ts'
 import type { AnalyticsCredentials, AnalyticsPlatform } from '../../src/shared/analytics-protocol.ts'
 import { activeWindowStart, addDays, detailCutoff, isValidDay, summaryCutoff } from './days.ts'
 import { isJsonObject } from './json.ts'
@@ -14,7 +15,8 @@ import { isJsonObject } from './json.ts'
 //   that day. Today's row is the only one that can change.
 // - `service_days`: one anonymous row per day on which the service ran. It separates a
 //   real zero from a day without data. When a day's linked rows expire, its active count
-//   is frozen here; those frozen counts no longer contain any instance identifier.
+//   is frozen here and its version and platform counts move to `day_buckets`; neither
+//   table contains any instance identifier.
 //
 // Every write runs in one IMMEDIATE transaction, so deletion, late activity and cleanup
 // are serialized and either fully apply or leave the previous state.
@@ -40,6 +42,13 @@ CREATE TABLE service_days (
   day TEXT PRIMARY KEY,
   frozen_active INTEGER CHECK (frozen_active IS NULL OR frozen_active >= 0)
 ) STRICT;
+CREATE TABLE day_buckets (
+  day TEXT NOT NULL REFERENCES service_days(day) ON DELETE CASCADE,
+  dimension TEXT NOT NULL CHECK (dimension IN ('version', 'platform')),
+  value TEXT NOT NULL,
+  count INTEGER NOT NULL CHECK (count > 0),
+  PRIMARY KEY (day, dimension, value)
+) STRICT, WITHOUT ROWID;
 `
 
 export class AnalyticsSchemaError extends Error {
@@ -101,11 +110,17 @@ export interface AnalyticsSummary {
   trend: { from: string; to: string; days: TrendDay[] }
 }
 
+/** Anonymous summary of one finished day; every instance appears in exactly one bucket per dimension. */
+export interface DaySummary extends Distribution {
+  day: string
+  active: number
+}
+
 export interface SummaryBackup {
   format: 'xidao-analytics-summaries'
   version: 1
   createdDay: string
-  days: Array<{ day: string; active: number }>
+  days: DaySummary[]
 }
 
 export interface AnalyticsStore {
@@ -164,7 +179,7 @@ function migrate(db: DatabaseSync): void {
 function createStore(db: DatabaseSync): AnalyticsStore {
   const countInstances = db.prepare('SELECT count(*) AS n FROM instances')
   const insertInstance = db.prepare('INSERT INTO instances (id, token_hash, last_seen_day) VALUES (?, ?, ?)')
-  const selectTokenHash = db.prepare('SELECT token_hash FROM instances WHERE id = ?')
+  const selectInstance = db.prepare('SELECT token_hash, last_seen_day FROM instances WHERE id = ?')
   const selectActivity = db.prepare('SELECT 1 FROM daily_activity WHERE day = ? AND instance_id = ?')
   const insertActivity = db.prepare('INSERT INTO daily_activity (day, instance_id, version, platform) VALUES (?, ?, ?, ?)')
   const updateActivity = db.prepare('UPDATE daily_activity SET version = ?, platform = ? WHERE day = ? AND instance_id = ?')
@@ -172,18 +187,31 @@ function createStore(db: DatabaseSync): AnalyticsStore {
   const deleteActivityOf = db.prepare('DELETE FROM daily_activity WHERE instance_id = ?')
   const deleteInstanceRow = db.prepare('DELETE FROM instances WHERE id = ?')
   const markDay = db.prepare('INSERT OR IGNORE INTO service_days (day) VALUES (?)')
+  // Frozen buckets are written before `frozen_active`, which marks the day as frozen.
+  const freezeBuckets = db.prepare(`
+    INSERT INTO day_buckets (day, dimension, value, count)
+    SELECT a.day, 'version', a.version, count(*) FROM daily_activity a JOIN service_days s ON s.day = a.day
+    WHERE a.day < ?1 AND s.frozen_active IS NULL GROUP BY a.day, a.version
+    UNION ALL
+    SELECT a.day, 'platform', a.platform, count(*) FROM daily_activity a JOIN service_days s ON s.day = a.day
+    WHERE a.day < ?1 AND s.frozen_active IS NULL GROUP BY a.day, a.platform`)
   const freezeExpired = db.prepare(`
     UPDATE service_days
     SET frozen_active = (SELECT count(*) FROM daily_activity a WHERE a.day = service_days.day)
     WHERE day < ? AND frozen_active IS NULL`)
   const purgeActivity = db.prepare('DELETE FROM daily_activity WHERE day < ?')
   const purgeInstances = db.prepare('DELETE FROM instances WHERE last_seen_day < ?')
+  // Deleting a summary day also deletes its buckets (ON DELETE CASCADE).
   const purgeSummaries = db.prepare('DELETE FROM service_days WHERE day < ?')
   const countDay = db.prepare('SELECT count(*) AS n FROM daily_activity WHERE day = ?')
   const countWindow = db.prepare('SELECT count(DISTINCT instance_id) AS n FROM daily_activity WHERE day BETWEEN ? AND ?')
-  const todayBuckets = {
+  const dayBuckets = {
     versions: db.prepare('SELECT version AS value, count(*) AS n FROM daily_activity WHERE day = ? GROUP BY version'),
     platforms: db.prepare('SELECT platform AS value, count(*) AS n FROM daily_activity WHERE day = ? GROUP BY platform')
+  }
+  const frozenBuckets = {
+    versions: db.prepare("SELECT value, count AS n FROM day_buckets WHERE day = ? AND dimension = 'version'"),
+    platforms: db.prepare("SELECT value, count AS n FROM day_buckets WHERE day = ? AND dimension = 'platform'")
   }
   // An instance belongs to the bucket of its last report inside the window.
   const latestInWindow = `
@@ -202,12 +230,13 @@ function createStore(db: DatabaseSync): AnalyticsStore {
       (SELECT count(*) FROM daily_activity a WHERE a.day = s.day) AS live
     FROM service_days s WHERE day BETWEEN ? AND ? ORDER BY day`)
   const insertSummary = db.prepare('INSERT INTO service_days (day, frozen_active) VALUES (?, ?)')
+  const insertBucket = db.prepare('INSERT INTO day_buckets (day, dimension, value, count) VALUES (?, ?, ?, ?)')
 
-  function authorize(credentials: AnalyticsCredentials): 'ok' | 'unknown' | 'mismatch' {
-    const row = selectTokenHash.get(credentials.instanceId) as Row | undefined
-    if (!row) return 'unknown'
-    const stored = row.token_hash as Uint8Array
-    return timingSafeEqual(stored, hashToken(credentials.token)) ? 'ok' : 'mismatch'
+  function authorize(credentials: AnalyticsCredentials): { kind: 'ok'; lastSeenDay: string } | { kind: 'unknown' | 'mismatch' } {
+    const row = selectInstance.get(credentials.instanceId) as Row | undefined
+    if (!row) return { kind: 'unknown' }
+    if (!timingSafeEqual(row.token_hash as Uint8Array, hashToken(credentials.token))) return { kind: 'mismatch' }
+    return { kind: 'ok', lastSeenDay: String(row.last_seen_day) }
   }
 
   function distribution(statements: { versions: StatementSync; platforms: StatementSync }, ...params: string[]): Distribution {
@@ -238,7 +267,12 @@ function createStore(db: DatabaseSync): AnalyticsStore {
 
     recordActivity(day, credentials, version, platform) {
       return immediate(db, () => {
-        if (authorize(credentials) !== 'ok') return { kind: 'invalid_credentials' } as const
+        const authorization = authorize(credentials)
+        // An identity past its retention stays invalid even while cleanup has not removed it,
+        // so a failed cleanup can never renew it.
+        if (authorization.kind !== 'ok' || authorization.lastSeenDay < detailCutoff(day)) {
+          return { kind: 'invalid_credentials' } as const
+        }
         const duplicate = selectActivity.get(day, credentials.instanceId) !== undefined
         if (duplicate) updateActivity.run(version, platform, day, credentials.instanceId)
         else insertActivity.run(day, credentials.instanceId, version, platform)
@@ -250,7 +284,7 @@ function createStore(db: DatabaseSync): AnalyticsStore {
 
     deleteInstance(credentials) {
       const result = immediate(db, (): DeletionResult => {
-        const authorization = authorize(credentials)
+        const authorization = authorize(credentials).kind
         if (authorization === 'mismatch') return 'invalid_credentials'
         // Unknown credentials have nothing linked left: deleted earlier or already expired.
         if (authorization === 'unknown') return 'deleted'
@@ -268,12 +302,15 @@ function createStore(db: DatabaseSync): AnalyticsStore {
 
     cleanup(today) {
       const cutoff = detailCutoff(today)
-      const result = immediate(db, () => ({
-        frozenDays: Number(freezeExpired.run(cutoff).changes),
-        activityRows: Number(purgeActivity.run(cutoff).changes),
-        instances: Number(purgeInstances.run(cutoff).changes),
-        summaries: Number(purgeSummaries.run(summaryCutoff(today)).changes)
-      }))
+      const result = immediate(db, (): CleanupResult => {
+        freezeBuckets.run(cutoff)
+        return {
+          frozenDays: Number(freezeExpired.run(cutoff).changes),
+          activityRows: Number(purgeActivity.run(cutoff).changes),
+          instances: Number(purgeInstances.run(cutoff).changes),
+          summaries: Number(purgeSummaries.run(summaryCutoff(today)).changes)
+        }
+      })
       checkpoint()
       return result
     },
@@ -312,7 +349,7 @@ function createStore(db: DatabaseSync): AnalyticsStore {
             summaryOnlyDays
           },
           distributions: {
-            today: distribution(todayBuckets, today),
+            today: distribution(dayBuckets, today),
             window: distribution(windowBuckets, from, today)
           },
           trend: { from: trendFrom, to: today, days }
@@ -321,15 +358,17 @@ function createStore(db: DatabaseSync): AnalyticsStore {
     },
 
     exportSummaries(today) {
-      // Only finished days, as anonymous counts: a backup can never bring back an instance.
+      // Only finished days, as anonymous counts and buckets: a backup can never bring back an instance.
       return readTransaction(db, () => ({
         format: 'xidao-analytics-summaries' as const,
         version: 1 as const,
         createdDay: today,
-        days: (serviceDaysBetween.all(summaryCutoff(today), addDays(today, -1)) as Row[]).map((row) => ({
-          day: String(row.day),
-          active: row.frozen_active === null ? Number(row.live) : Number(row.frozen_active)
-        }))
+        days: (serviceDaysBetween.all(summaryCutoff(today), addDays(today, -1)) as Row[]).map((row): DaySummary => {
+          const day = String(row.day)
+          return row.frozen_active === null
+            ? { day, active: Number(row.live), ...distribution(dayBuckets, day) }
+            : { day, active: Number(row.frozen_active), ...distribution(frozenBuckets, day) }
+        })
       }))
     },
 
@@ -339,6 +378,8 @@ function createStore(db: DatabaseSync): AnalyticsStore {
         for (const entry of backup.days) {
           if (entry.day >= today) continue
           insertSummary.run(entry.day, entry.active)
+          for (const bucket of entry.versions) insertBucket.run(entry.day, 'version', bucket.value, bucket.count)
+          for (const bucket of entry.platforms) insertBucket.run(entry.day, 'platform', bucket.value, bucket.count)
           imported += 1
         }
         return imported
@@ -360,15 +401,36 @@ export function parseSummaryBackup(value: unknown): SummaryBackup {
     throw new Error('malformed summary backup')
   }
   const seen = new Set<string>()
-  const days = value.days.map((entry: unknown) => {
-    if (!isJsonObject(entry) || Object.keys(entry).length !== 2) throw new Error('malformed backup entry')
+  const days = value.days.map((entry: unknown): DaySummary => {
+    if (!isJsonObject(entry) || Object.keys(entry).length !== 4) throw new Error('malformed backup entry')
     const { day, active } = entry
     if (typeof day !== 'string' || !isValidDay(day) || seen.has(day)) throw new Error('invalid or duplicate backup day')
-    if (typeof active !== 'number' || !Number.isSafeInteger(active) || active < 0) throw new Error('invalid backup count')
+    if (!isCount(active)) throw new Error('invalid backup count')
     seen.add(day)
-    return { day, active }
+    const versions = parseBuckets(entry.versions, (bucket) => ANALYTICS_VERSION_PATTERN.test(bucket))
+    const platforms = parseBuckets(entry.platforms, (bucket) => ANALYTICS_PLATFORMS.includes(bucket as AnalyticsPlatform))
+    const total = (buckets: DistributionEntry[]): number => buckets.reduce((sum, bucket) => sum + bucket.count, 0)
+    if (total(versions) !== active || total(platforms) !== active) throw new Error('bucket counts do not match the active count')
+    return { day, active, versions, platforms }
   })
   return { format: value.format, version: value.version, createdDay: value.createdDay, days }
+}
+
+function parseBuckets(value: unknown, validValue: (bucket: string) => boolean): DistributionEntry[] {
+  if (!Array.isArray(value)) throw new Error('malformed backup buckets')
+  const seen = new Set<string>()
+  return value.map((bucket: unknown) => {
+    if (!isJsonObject(bucket) || Object.keys(bucket).length !== 2) throw new Error('malformed backup bucket')
+    const { value: name, count } = bucket
+    if (typeof name !== 'string' || !validValue(name) || seen.has(name)) throw new Error('invalid or duplicate backup bucket')
+    if (!isCount(count) || count === 0) throw new Error('invalid backup bucket count')
+    seen.add(name)
+    return { value: name, count }
+  })
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
 function hashToken(token: string): Buffer {

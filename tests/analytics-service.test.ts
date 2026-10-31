@@ -287,27 +287,34 @@ describe('analytics service retention', () => {
     const result = await summary(harness)
     expect(result.window.active).toBe(1)
     expect(trendDay(result, '2026-01-01')).toEqual({ day: '2026-01-01', active: 2, source: 'summary' })
+    // The expired day keeps its anonymous version and platform buckets.
+    expect(harness.store.exportSummaries('2026-02-09').days.find((entry) => entry.day === '2026-01-01')).toEqual({
+      day: '2026-01-01', active: 2, versions: [{ value: '1.0.0', count: 2 }], platforms: [{ value: 'windows', count: 2 }]
+    })
   })
 
   it('drops anonymous summaries after 12 months', async () => {
     setBeijing('2025-10-31')
     const path = tempDatabase()
     const harness = await start(path)
-    await report(harness, await register(harness))
+    await report(harness, await register(harness), '1.0.0', 'macos')
     setBeijing('2026-10-31')
     expect(trendDay(await summary(harness), '2025-10-31')).toEqual({ day: '2025-10-31', active: 1, source: 'summary' })
+    expect(rows(path, "SELECT count(*) AS n FROM day_buckets WHERE day = '2025-10-31'")[0]?.n).toBe(2)
     setBeijing('2026-11-01')
     const result = await summary(harness)
     expect(result.trend.from).toBe('2025-11-01')
     expect(rows(path, "SELECT * FROM service_days WHERE day = '2025-10-31'")).toEqual([])
+    expect(rows(path, "SELECT * FROM day_buckets WHERE day = '2025-10-31'")).toEqual([])
     expect(summaryCutoff('2024-02-29')).toBe('2023-02-28')
   })
 
-  it('retries cleanup after a failed run without blocking requests', async () => {
+  it('retries cleanup after a failed run without blocking requests or renewing expired identities', async () => {
     setBeijing('2026-10-01')
     const path = tempDatabase()
     const harness = await start(path)
-    await report(harness, await register(harness))
+    const expired = await register(harness)
+    await report(harness, expired)
     const control = new DatabaseSync(path)
     control.exec("CREATE TRIGGER interrupt BEFORE DELETE ON daily_activity BEGIN SELECT RAISE(ABORT, 'interrupted'); END")
 
@@ -315,12 +322,14 @@ describe('analytics service retention', () => {
     expect((await summary(harness)).todayActive).toBe(0)
     expect(harness.logs.some((line) => line.includes('"area":"maintenance"'))).toBe(true)
     expect(rows(path, "SELECT frozen_active FROM service_days WHERE day = '2026-10-01'")).toEqual([{ frozen_active: null }])
+    expect(await report(harness, expired)).toMatchObject({ status: 403, body: { error: 'invalid_credentials' } })
 
     control.exec('DROP TRIGGER interrupt')
     control.close()
     await summary(harness)
     expect(rows(path, 'SELECT count(*) AS n FROM daily_activity')[0]?.n).toBe(0)
     expect(rows(path, "SELECT frozen_active FROM service_days WHERE day = '2026-10-01'")).toEqual([{ frozen_active: 1 }])
+    expect(rows(path, 'SELECT count(*) AS n FROM instances')[0]?.n).toBe(0)
   })
 
   it('restores only anonymous day counts and refuses to overwrite a database', async () => {
@@ -338,14 +347,17 @@ describe('analytics service retention', () => {
     await summary(harness)
 
     const backup = parseSummaryBackup(JSON.parse(JSON.stringify(harness.store.exportSummaries('2026-10-03'))))
-    expect(backup.days).toEqual([{ day: '2026-10-01', active: 1 }, { day: '2026-10-02', active: 1 }])
+    const onlyA = { versions: [{ value: '1.0.0', count: 1 }], platforms: [{ value: 'windows', count: 1 }] }
+    expect(backup.days).toEqual([{ day: '2026-10-01', active: 1, ...onlyA }, { day: '2026-10-02', active: 1, ...onlyA }])
+    expect(() => parseSummaryBackup({ ...backup, days: [{ ...backup.days[0], active: 2 }] })).toThrow(/bucket/)
     const serialized = JSON.stringify(backup)
     expect(serialized.includes(a.instanceId) || serialized.includes(b.instanceId)).toBe(false)
     expect(() => openAnalyticsStore({ path, createOnly: true })).toThrow(/refusing to overwrite/)
 
     const restoredPath = tempDatabase()
     const restoredStore = openAnalyticsStore({ path: restoredPath, createOnly: true })
-    restoredStore.importSummaries({ ...backup, days: [{ day: '2025-09-30', active: 9 }, ...backup.days] }, '2026-10-03')
+    const expiredDay = { day: '2025-09-30', active: 9, versions: [{ value: '0.9.0', count: 9 }], platforms: [{ value: 'macos', count: 9 }] }
+    restoredStore.importSummaries({ ...backup, days: [expiredDay, ...backup.days] }, '2026-10-03')
     restoredStore.close()
     const restored = await start(restoredPath)
     expect(await report(restored, b)).toMatchObject({ status: 403 })
@@ -354,6 +366,7 @@ describe('analytics service retention', () => {
     expect(trendDay(result, '2026-10-01')).toEqual({ day: '2026-10-01', active: 1, source: 'summary' })
     expect(result.window.summaryOnlyDays).toBe(2)
     expect(rows(restoredPath, "SELECT * FROM service_days WHERE day = '2025-09-30'")).toEqual([])
+    expect(restored.store.exportSummaries('2026-10-03').days).toEqual(backup.days)
   })
 })
 
