@@ -126,7 +126,41 @@ async function launch(executablePath, args = [], timeout = 90_000) {
   const page = await app.firstWindow({ timeout: 60_000 })
   await page.waitForLoadState('domcontentloaded')
   await sleep(2500)
+  await settleStartupPrompts(app, page)
   return { app, page }
+}
+/**
+ * The dialogs a real profile raises by itself at startup, answered the way a user does before the
+ * checks begin: the first-run statistics question (release builds name a statistics origin), and
+ * the cold-start announcement from the live source. Both are modal and would cover the settings
+ * the checks open. The current announcement is marked 不再提示 first, so it is never granted later
+ * in the run (also not on later starts of the same profile); Esc keeps statistics off, so the app
+ * never contacts the statistics service.
+ */
+async function settleStartupPrompts(app, page) {
+  await app.evaluate(({ app, BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.show()
+    window.focus()
+    app.focus({ steal: true })
+  })
+  const notice = await page.evaluate(() => window.xidao.announcements.getState())
+  const suppressed = notice.source === 'current' && notice.latest?.enable === true
+    ? await page.evaluate(({ date, content }) => window.xidao.announcements.suppress({ date, content }), notice.latest)
+    : null
+  const start = Date.now()
+  for (;;) {
+    if (await page.locator('dialog.modal[open]').count() > 0) await page.keyboard.press('Escape')
+    else {
+      const statistics = await page.evaluate(() => window.xidao.analytics.getState())
+      if (statistics.availability !== 'available' || statistics.saved !== 'unset') {
+        log('startup prompts settled', { announcement: notice.outcome, suppressed, statistics })
+        return
+      }
+    }
+    if (Date.now() - start > 2 * UI_WAIT_MS) throw new Error('startup prompts did not settle')
+    await sleep(500)
+  }
 }
 const updateState = (page) => page.evaluate(() => window.xidao.updates.getState())
 async function waitFor(page, predicate, label, timeout = 180_000) {
