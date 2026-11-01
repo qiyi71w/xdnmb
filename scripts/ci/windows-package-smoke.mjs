@@ -170,12 +170,15 @@ async function install() {
   await appChecks(executable, 'installed')
 
   if (uninstaller === undefined) return
-  // The uninstaller copies itself to a temporary file and returns at once; the copy removes the files.
+  // The uninstaller copies itself to a temporary file and returns at once. The copy removes the
+  // files, then the shortcuts, and deletes the uninstall entry last (electron-builder's
+  // uninstaller.nsh), so the entry's removal marks the end of the uninstallation.
   const started = spawnSync(join(directory, uninstaller), ['/S'], { timeout: 120_000 })
   const deadline = Date.now() + 120_000
-  while (existsSync(executable) && Date.now() < deadline) await sleep(500)
-  check('silent uninstallation removes the app, its entry and shortcut', started.status === 0 && !existsSync(executable) && !registered(directory) && !existsSync(START_MENU_LINK), {
-    status: started.status, executable: existsSync(executable), shortcut: existsSync(START_MENU_LINK)
+  while (registered(directory) && Date.now() < deadline) await sleep(500)
+  const entry = registered(directory)
+  check('silent uninstallation removes the app, its entry and shortcut', started.status === 0 && !existsSync(executable) && !entry && !existsSync(START_MENU_LINK), {
+    status: started.status, executable: existsSync(executable), entry, shortcut: existsSync(START_MENU_LINK)
   })
   log('uninstalled', { remaining: existsSync(directory) ? readdirSync(directory) : null })
 }
