@@ -34,8 +34,10 @@ jobs:
 
       - run: npm ci
       # The tests' SQLite files go to runner.temp on the local D: disk; fsync on the C: system
-      # disk (the default TEMP) is tens of times slower and makes migration tests time out.
-      - run: npm test
+      # disk (the default TEMP) is tens of times slower. Hosted 4-core runners also differ about
+      # threefold in speed, and the migration tests (whole migration chains plus byte comparisons)
+      # take up to ~8 s on a slow one, beyond Vitest's 5 s default. No test asserts a duration.
+      - run: npm test -- --test-timeout=30000
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
