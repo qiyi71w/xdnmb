@@ -33,7 +33,8 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm test
+      # Migration tests do heavy file I/O, which is several times slower on the hosted Windows runner.
+      - run: npm test -- --test-timeout=60000
 
       - name: Build the installer (x64)
         run: npm run dist:win

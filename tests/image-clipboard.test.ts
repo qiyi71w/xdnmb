@@ -84,8 +84,11 @@ describe('original clipboard lifetime', () => {
     const oversized = Buffer.from(PNG); oversized.writeUInt32BE(32768, 16)
     expect(await service.copy(source(oversized, 'oversized.png'))).toEqual({ status: 'invalid-image' })
     const target = source()
-    const link = join(dir, 'link.gif'); symlinkSync(target, link)
-    expect(await service.copy(link)).toEqual({ status: 'failed' })
+    // Windows ignores O_NOFOLLOW; there the caller's lstat check (images service) refuses links.
+    if (process.platform !== 'win32') {
+      const link = join(dir, 'link.gif'); symlinkSync(target, link)
+      expect(await service.copy(link)).toEqual({ status: 'failed' })
+    }
     decode = async () => { throw new Error('corrupt compressed data') }
     expect(await service.copy(target)).toEqual({ status: 'invalid-image' })
     expect(uri).toBeNull(); expect(png).toBeNull()
