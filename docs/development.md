@@ -13,17 +13,18 @@ npm ci            # 安装锁定依赖
 npm run dev       # 开发模式（热更新）
 npm run build     # 构建到 out/
 npm start         # 运行构建产物
-npm run typecheck # 主进程、preload、共享代码与界面的类型检查
+npm run typecheck # 主进程、preload、共享代码、界面与统计服务的类型检查
 npm test          # Vitest，运行在 Electron 自带的 Node 中，与应用使用同一 SQLite 驱动
 npm run dist:win  # 在 Windows 上构建 x64 NSIS 安装程序与 latest.yml 到 dist/
 npm run dist:mac  # 在 macOS 上构建 x64／arm64 DMG 与 latest-mac.yml 到 dist/（DMG 由 hdiutil 生成，只能在 macOS 上构建）
+npm run analytics -- serve  # 本机运行使用统计服务（配置见 docs/analytics-service.md）
 ```
 
 ## 打包与发布
 
 打包配置见 `electron-builder.yml`：使用上游预编译 Electron，不编译 Chromium／Electron／Node；better-sqlite3 自带各平台的 N-API 预编译模块，打包时不需要编译原生代码。只打包 `out/`、`resources/icons/`、`package.json` 与 `LICENSE`。版本号取自 `package.json`；发布时把安装包与对应的 `latest.yml`（Windows）、`latest-mac.yml`（macOS，两种架构合在一个文件里）一起上传到 tag 为 `v<版本>` 的正式 GitHub Release，客户端依赖这些文件名与其中的 SHA-512。
 
-`.github/workflows/macos-packages.yml` 在 GitHub 的 Apple Silicon macOS 机器上运行类型检查和测试，构建两种架构的 DMG，再用 `scripts/ci/mac-update-smoke.mjs` 检查：两个应用的 CPU 架构与 SQLite 原生模块、应用身份、图标、临时签名、`latest-mac.yml` 中的 SHA-512；Intel 版在 Rosetta 下能启动并读写数据；Apple Silicon 版安装后，用只在更新网络会话内应答的受控发布源走完缺少元数据时检查失败（不显示为已是最新）、发现新版、校验失败丢弃、自动下载、打开 DMG、退出、按用户方式替换应用、下次启动显示新版本并保留设置。结果不依赖仓库实际发布了哪些 Release。DMG、检查记录和应用输出作为工作流产物保留 14 天，不发布 Release。这些是自动化检查，不包括 Gatekeeper 首次打开提示与钥匙串授权等需要真人操作的环节。
+`.github/workflows/macos-packages.yml` 在 GitHub 的 Apple Silicon macOS 机器上运行类型检查和测试，构建两种架构的 DMG，再用 `scripts/ci/mac-update-smoke.mjs` 检查：两个应用的 CPU 架构与 SQLite 原生模块、应用身份、图标、临时签名、`latest-mac.yml` 中的 SHA-512；Intel 版在 Rosetta 下能启动并读写数据；Apple Silicon 版安装后，用只在更新网络会话内应答的受控发布源走完缺少元数据时检查失败（不显示为已是最新）、发现新版、校验失败丢弃、自动下载、打开 DMG、退出、按用户方式替换应用、下次启动显示新版本并保留设置。每次启动后先像用户一样处理启动提示：使用统计首次询问按 Esc 保持关闭（不连接统计服务），当前公告标为“不再提示”，之后的检查不会被这些对话框遮挡。结果不依赖仓库实际发布了哪些 Release。DMG、检查记录和应用输出作为工作流产物保留 14 天，不发布 Release。这些是自动化检查，不包括 Gatekeeper 首次打开提示与钥匙串授权等需要真人操作的环节。
 
 ## 代码结构
 
@@ -45,8 +46,11 @@ npm run dist:mac  # 在 macOS 上构建 x64／arm64 DMG 与 latest-mac.yml 到 d
 | `src/main/reminders/` | 单次触发、单调定时与冷却、持久化退避、回复数基线比较、引用断点与请求预算、提醒通知 |
 | `src/main/appearance.ts`、`src/main/zoom.ts` | 设置串行更新、受限主题导入导出、缩放与按键 |
 | `src/main/updates/` | 固定来源的版本检查与下载（electron-updater、请求白名单、更新专用网络会话）、更新说明的安全解析、24 小时检查与就绪记录、退出安装与系统会话结束后的一次性启动安装 |
+| `src/main/announcements/`、`src/renderer/src/features/announcements/` | 冷启动公告读取、独立持久记录、一次性自动展示资格与设置主动查看 |
+| `src/main/analytics/`、`src/renderer/src/features/analytics/` | 自愿使用统计客户端：同意状态与持久记录、受保护凭证、前台日活调度与关闭；首次询问与“设置 › 使用统计” |
 | `src/main/ipc.ts`、`src/preload/` | 具名 IPC 与调用方校验 |
 | `src/renderer/` | React 界面 |
+| `server/analytics/` | 独立部署的自愿使用统计服务与私人看板（Node 24 内置 HTTP／SQLite，不随桌面应用打包）；协议常量在 `src/shared/analytics-protocol.ts`，协议、口径与运维见 [使用统计服务](analytics-service.md) |
 
 ## 数据与安全实现
 
@@ -71,6 +75,27 @@ npm run dist:mac  # 在 macOS 上构建 x64／arm64 DMG 与 latest-mac.yml 到 d
 - 界面页面启用 sandbox 与 context isolation，禁用 Node 集成与 webview，使用严格 CSP；不允许页面导航到其他地址或打开新窗口。权限仅为应用自己的主页面开放按需读取本机字体，其他权限均拒绝；官网登录窗口拒绝所有权限。界面只能调用少量具名操作，主进程校验调用页面（仅主窗口主框架中的应用页面）与参数，不提供任意网址、SQL 或文件访问。
 - 剪贴板只经两类具名操作：对发起请求的窗口执行剪切、复制、粘贴、全选之一，或写入应用给定的纯文字（复制串号、复制内容、复制饼干、复制选中文字，长度有上限）；以及上面的复制原图。界面不读取剪贴板内容，粘贴由主进程直接作用于焦点所在的输入框；剪贴板权限没有因此对页面开放。
 - 应用只运行一个实例；再次启动会唤起已运行的窗口。
+
+### 启动公告
+
+- 公告服务只读取固定 `https://nmb.ovear.info/nmb-notice.json`，专用传输无凭据来源、不跟随重定向，总超时 10 秒，压缩与解压响应各限 128 KiB。冷启动后台读取一次，窗口恢复不触发读取；设置中的主动重试共用在途请求。
+- `enable` 必须为布尔值；仅 `true` 且安全解析后有可见正文才能自动展示。`date` 保留完整字符串或安全整数，不截成日期；抑制身份直接比较完整 `date` 与原始正文，同日期正文修订可再次提示。正文复用受限解析与展示，不执行 HTML，不加载外部图片；引用只在明确点击后定位，不因展示或悬停预取。
+- 最近公告与抑制选择一起保存在现有 `settings` 表的独立 `announcements` 行，无 schema 变更；普通缓存清理和其他设置更新不覆盖该行。写入串行化，“不再提示”持久化成功后才关闭；失败可继续关闭本次提示，不伪报已保存。初始记录不可读时不覆盖未知选择，也不自动弹窗。
+- main 原子发放一次自动展示资格，并检查原生窗口可见、未最小化且聚焦；renderer 还须等工作区与启动发送恢复检查完成，避开编辑器、其他模态、输入焦点和发送操作。迟到结果保留等待，不夺取现场。网络或协议失败保留本地副本供主动查看，不以旧副本自动弹窗。
+- 聚焦验证覆盖真实临时 SQLite 重开、只读失败、清理保留、写入竞争、IPC 调用方与参数边界。Linux 实际 Electron 验证延迟响应与恢复编辑器、关闭／抑制／同日期修订、主动重试、键盘焦点、浅深色及窄窗 200% 缩放；这些证据不替代 Windows／macOS 原生验收。
+
+### 使用统计客户端
+
+- 接收服务来源在构建时由 `MAIN_VITE_XIDAO_ANALYTICS_ORIGIN` 固定，只接受不带路径的 HTTPS 来源，或仅用于隔离开发／验收的本机回环 HTTP。正式值写在随仓库提交的 `.env.production`，electron-vite 在 `npm run build` 与两个 dist 命令中读取它，所以本地打包与 CI 构建取值一致；开发模式不读取该文件。构建时环境里已有的同名变量优先：隔离验收构建可指向回环服务，设为空值则关闭此功能。未设置、来源不合格、Linux 或数据库不可写时功能不可用：不询问、不发送，设置里说明原因。renderer 不能指定地址，也拿不到凭证。
+- 同意状态为未选择／关闭／开启，与统计标识、受保护凭证和最近成功上报的统计日一起保存在 `settings` 表的独立 `analytics` 行，无 schema 变更；旧数据库没有该行即为未选择（关闭），其他设置更新与缓存清理不改动它。凭证经 `safeStorage`（Windows DPAPI、macOS 钥匙串）加密后以 base64 存放，系统保护不可用时拒绝开启、也不登记。
+- 只有“开启”持久化成功后才登记与上报；登记得到的标识与凭证先落盘再发第一次活跃上报。“关闭”先停止本轮调度并中止在途请求，再保存；保存失败时本次运行保持关闭，下次启动按实际存储状态处理。每轮统计有代次，已停止轮次的迟到响应不写记录、不改调度。
+- 前台由主进程判定：窗口可见、未最小化、聚焦，且未锁屏（`lock-screen`／`unlock-screen` 与 `getSystemIdleState`）、未休眠。窗口的 show／restore／focus、解锁与唤醒触发检查，另有最长 15 分钟、并在北京时间零点后 1 秒到期的复查定时器覆盖前台跨日。服务端返回的 `statDay` 记为已上报，同一统计日不再请求。
+- 请求节奏：单次在途、10 秒超时、两次自动尝试至少间隔 60 秒（单调时钟，不受系统时间调整影响）；无响应或 5xx 依次退避 5 分钟／30 分钟／2 小时，`429` 遵守 `Retry-After`（至少 60 秒、最多 24 小时），`capacity_exhausted` 等 2 小时，其他 4xx 本次运行不再自动尝试；每个本地统计日每次运行最多 6 个自动请求（登记与上报合计）。登记响应返回、或本次运行首次解密已存凭证之后，都重新检查前台与剩余预算，再决定是否上报；否则只保留身份，等下一个合格的前台时刻。服务端统计日与本机不一致时 30 分钟后在预算内复查。不建立离线队列，不补报。`403 invalid_credentials` 表示服务端已无此身份（31 个统计日没有上报而过期）：仅在仍开启时丢弃旧身份并重新登记。
+- 关闭只停止以后的上报，本机保留标识与凭证，再次开启沿用；服务端的关联记录只按保留期过期。
+- 首次询问是 renderer 的第一个启动提示，复用公告的启动提示资格（工作区恢复完成、前台、无模态／输入／发送）；公告在询问结束后才能取得自动展示资格。退出流程只把未回答的询问收起，取消退出后仍会再问。
+- 聚焦测试 `tests/analytics-client.test.ts` 用真实临时 SQLite、本机受控 HTTP 与受控时钟覆盖：旧数据库默认未选择、同意前零请求、受保护凭证先落盘、同日去重与重启、前台跨零点与后台不计、登记或凭证解密期间离开前台不上报、保存失败与关闭失败、关闭中止在途请求且迟到响应无效、退避与 `Retry-After` 与日预算、身份失效后重新登记；另以实际服务进程验证上报、看板计数、关闭后不再上报且当天计数保留。`tests/renderer/analytics-choice-prompt.test.ts` 覆盖询问与公告的先后。
+- 原生实际客户端验证（从源码 `npm run build` 的未打包应用，隔离数据目录与独立的系统凭据项，`MAIN_VITE_XIDAO_ANALYTICS_ORIGIN` 指向本机隔离的统计服务进程，服务与客户端共用同一偏移后的墙上时钟以演练跨日，论坛与其他出站请求被拒绝）。Windows 11 x64 与 Apple Silicon macOS 各跑同一组场景并全部通过：首次询问的焦点、Tab、480 px 与 200% 缩放、Esc 保存关闭后才出现公告；设置开启只发一次登记与一次上报，请求体为协议白名单字段、平台分别为 `windows`／`macos`，凭证以 `safeStorage` 的 `v10` 密文保存（Windows 密钥由 DPAPI 保护，macOS 密钥在钥匙串）且数据库中无明文；看板计数；焦点／隐藏／最小化风暴无额外请求；关闭跨重启保持；同日去重；前台跨北京时间零点上报一次；最小化跨零点不计、恢复后上报一次。首次询问与设置页的现行界面尚未做原生走查。锁屏未做原生演练，只由 `lock-screen`／`getSystemIdleState` 接入与受控时钟测试覆盖；Intel Mac 未单独实测，统计逻辑与 Apple Silicon 相同，平台差异只在系统凭据与窗口事件。这些都是隔离的本机演练，不代表正式接收来源或部署已验收。
+- 正式接收来源的组合验证：Windows 11 x64 上从 `.env.production` 构建、未覆盖来源的未打包应用（隔离数据目录与独立系统凭据项，公告走受控源，论坛等其他出站被拒绝），对已部署的服务串行完成首次 Esc 关闭零统计请求、设置开启后一次登记与一次上报、真实浏览器看板（HTTPS＋Basic 认证）计入该实例与 `windows` 分桶、焦点风暴与关闭后无请求、关闭跨重启保持且不撤回已计数的当天、本机库中无明文凭证。跨日、锁屏与 macOS 差异沿用上一条的隔离演练；服务器侧的部署、日志与保留核对见 [使用统计服务](analytics-service.md#正式部署)。
 
 ### 联网搜索与串号定位
 

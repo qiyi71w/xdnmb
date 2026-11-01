@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>汐岛使用统计</title>
+  <link rel="stylesheet" href="/admin/dashboard.css">
+  <script src="/admin/dashboard.js" defer></script>
+</head>
+<body>
+  <main class="paper">
+    <header class="page-head">
+      <div>
+        <h1>汐岛使用统计</h1>
+        <p class="scope">只计自愿开启统计的安装实例，不等于用户人数。日期按北京时间（UTC+8）。</p>
+      </div>
+      <div class="head-actions">
+        <p id="status" class="status" role="status">正在读取统计…</p>
+        <button type="button" id="refresh" class="page-button">刷新</button>
+      </div>
+    </header>
+
+    <div id="problem" class="problem" hidden>
+      <p id="problem-text" role="alert"></p>
+      <button type="button" id="retry" class="page-button">重试</button>
+    </div>
+
+    <div id="content" hidden>
+      <section class="totals" aria-label="活跃实例">
+        <div class="total">
+          <h2>今日活跃实例</h2>
+          <p class="value" id="today-active"></p>
+          <p class="note" id="today-note"></p>
+        </div>
+        <div class="total">
+          <h2>近 30 天活跃实例</h2>
+          <p class="value" id="window-active"></p>
+          <p class="note" id="window-note"></p>
+        </div>
+      </section>
+
+      <section aria-labelledby="distribution-title">
+        <h2 id="distribution-title">版本与平台</h2>
+        <p class="note">实例按该时段内最后一次上报归入版本与平台。</p>
+        <div class="tables">
+          <table id="versions">
+            <caption>版本</caption>
+            <thead><tr><th scope="col">版本</th><th scope="col" class="number">今日</th><th scope="col" class="number">近 30 天</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <table id="platforms">
+            <caption>平台</caption>
+            <thead><tr><th scope="col">平台</th><th scope="col" class="number">今日</th><th scope="col" class="number">近 30 天</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="trend-title">
+        <div class="section-head">
+          <h2 id="trend-title">日活趋势</h2>
+          <label class="range">范围
+            <select id="range">
+              <option value="30">近 30 天</option>
+              <option value="90">近 90 天</option>
+              <option value="all">全部保留数据（12 个月）</option>
+            </select>
+          </label>
+        </div>
+        <table id="trend" class="trend">
+          <caption class="visually-hidden">每日活跃实例，最新日期在前</caption>
+          <thead><tr><th scope="col">日期</th><th scope="col">日活实例</th><th scope="col">状态</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

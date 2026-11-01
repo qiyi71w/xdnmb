@@ -1,0 +1,95 @@
+/* Announcements (features/announcements): the startup dialog and 设置 › 公告. The text sits on
+   paper (never on glass); everything wraps, and the dialog's actions stay outside its scrolling
+   body, so 确认 and 不再提示 remain reachable in narrow windows and at 200% zoom. */
+
+.announcement-dialog {
+  width: min(600px, calc(100vw - 32px));
+}
+
+.announcement-body {
+  gap: 8px;
+}
+
+.announcement-text {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-s);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.announcement-text:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* In 设置 a long announcement scrolls inside its own box instead of stretching the page. */
+.announcement-text.is-settings {
+  max-height: min(28em, 60vh);
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.announcement-quote-status p,
+.announcement-status p {
+  margin: 0;
+}
+
+.announcement-quote-line,
+.announcement-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.announcement-quote-line .spinner,
+.announcement-status-line .spinner {
+  flex: none;
+}
+
+.announcement-actions {
+  align-items: center;
+}
+
+.announcement-failure {
+  flex: 1 1 100%;
+  margin: 0;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+
+.announcement-failure .icon,
+.announcement-status .notice-inline .icon {
+  flex: none;
+  margin-top: 3px;
+}
+
+.announcement-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.announcement-status {
+  flex: 1 1 14em;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.announcement-status .notice-inline {
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+
+.announcement-view {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}

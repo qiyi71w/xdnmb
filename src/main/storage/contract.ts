@@ -1,3 +1,5 @@
+import type { AnnouncementRecord } from '../../shared/announcements'
+import type { AnalyticsRecord } from '../../shared/analytics'
 import type { BlockKind, LocalBlock } from '../../shared/blocks'
 import type { CookieColor, CookieColorName } from '../../shared/cookieColors'
 import type { StorageStatus } from '../../shared/api'
@@ -111,6 +113,11 @@ export interface ReadingStore {
   setCookieColor(cookieId: string, color: CookieColorName | null, at: string): Promise<void>
   removeCookieColor(cookieId: string): Promise<void>
   saveSettings(settings: AppSettings): Promise<void>
+  loadAnnouncements(): Promise<AnnouncementRecord>
+  saveAnnouncements(record: AnnouncementRecord): Promise<void>
+  /** The usage-statistics record; a missing or unreadable one is `unset` (off). */
+  loadAnalytics(): Promise<AnalyticsRecord>
+  saveAnalytics(record: AnalyticsRecord): Promise<void>
 
   /** Image location of a stored post; null when the post is not stored or has no image. */
   getPostImage(postId: PostId): Promise<PostImage | null>

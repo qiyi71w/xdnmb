@@ -1,3 +1,5 @@
+import { announcementRecord, type AnnouncementRecord } from '../../shared/announcements'
+import { analyticsRecord, type AnalyticsRecord } from '../../shared/analytics'
 import type { LocalBlock } from '../../shared/blocks'
 import { IMPORTED_COOKIE_COLOR, isCookieColorName, type CookieColor, type CookieColorName } from '../../shared/cookieColors'
 import Database from 'better-sqlite3'
@@ -730,6 +732,33 @@ class SqliteReadingDatabase implements ReadingDatabase {
       `)
       for (const [key, value] of Object.entries(settings)) statement.run(key, JSON.stringify(value))
     })()
+  }
+
+  loadAnnouncements(): AnnouncementRecord {
+    if (!this.db) throw new StorageWriteRefusedError(this.currentStatus)
+    const row = this.db.prepare<[], { value_json: string }>("SELECT value_json FROM settings WHERE key = 'announcements'").get()
+    return announcementRecord(row ? JSON.parse(row.value_json) : null)
+  }
+
+  saveAnnouncements(record: AnnouncementRecord): void {
+    this.writable().prepare(`
+      INSERT INTO settings (key, value_json) VALUES ('announcements', ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json
+    `).run(JSON.stringify(record))
+  }
+
+  loadAnalytics(): AnalyticsRecord {
+    if (!this.db) throw new StorageWriteRefusedError(this.currentStatus)
+    const row = this.db.prepare<[], { value_json: string }>("SELECT value_json FROM settings WHERE key = 'analytics'").get()
+    if (!row) return analyticsRecord(null)
+    try { return analyticsRecord(JSON.parse(row.value_json)) } catch { return analyticsRecord(null) }
+  }
+
+  saveAnalytics(record: AnalyticsRecord): void {
+    this.writable().prepare(`
+      INSERT INTO settings (key, value_json) VALUES ('analytics', ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json
+    `).run(JSON.stringify(record))
   }
 
   /** The workspace saved at the last real quit, as given; `null` when none was saved. */

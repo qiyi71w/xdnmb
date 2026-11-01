@@ -32,6 +32,8 @@ import { SubscriptionSection } from '../features/subscriptions/SubscriptionSecti
 import type { SubscriptionsState } from '../features/subscriptions/useSubscriptions'
 import { BoardManageSection, FeatureVisibilitySection } from '../features/directory/NavigationSettings'
 import { useBlocks } from '../features/thread/useBlocks'
+import { AnnouncementSection } from '../features/announcements/AnnouncementSection'
+import { AnalyticsSection } from '../features/analytics/AnalyticsSection'
 import { AboutSection } from '../features/updates/AboutSection'
 import '../features/directory/shell.css'
 
@@ -77,6 +79,8 @@ const CATEGORIES: readonly { id: string; title: string; sections: readonly { id:
     sections: [
       { id: 'window', title: '窗口' },
       { id: 'cache', title: '存储与缓存' },
+      { id: 'announcements', title: '公告' },
+      { id: 'analytics', title: '使用统计' },
       { id: 'about', title: '关于' }
     ]
   }
@@ -519,6 +523,10 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
       return <WindowSection settings={settings} write={write} />
     case 'cache':
       return <CacheSection active={active} />
+    case 'announcements':
+      return <AnnouncementSection active={active} />
+    case 'analytics':
+      return <AnalyticsSection active={active} />
     case 'about':
       return <AboutSection settings={settings} write={write} active={active} />
   }
