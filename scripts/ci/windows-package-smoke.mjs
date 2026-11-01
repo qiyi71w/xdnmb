@@ -169,10 +169,6 @@ async function install() {
   check('installation registered with uninstaller and start menu shortcut', uninstaller !== undefined && registered(directory) && existsSync(START_MENU_LINK), {
     uninstaller, shortcut: existsSync(START_MENU_LINK)
   })
-  const target = spawnSync('powershell', ['-NoProfile', '-Command',
-    `[Console]::OutputEncoding = [Text.Encoding]::UTF8; (New-Object -ComObject WScript.Shell).CreateShortcut('${START_MENU_LINK}').TargetPath`
-  ], { encoding: 'utf8' }).stdout.trim()
-  log('start menu shortcut target', { target })
 
   await appChecks(executable, 'installed')
 
