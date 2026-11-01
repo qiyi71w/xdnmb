@@ -1,5 +1,5 @@
 // What usage statistics are for and what they send. The first-run question and 设置 › 系统 ›
-// 使用统计 show the same text; it must match the public privacy notes (README) and what the main
+// 使用统计 show the same text; it must match the public user notes (docs/analytics-service.md) and what the main
 // process actually sends.
 
 import './analytics.css'
