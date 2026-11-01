@@ -33,15 +33,9 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - name: Diagnose I/O (temporary)
-        shell: pwsh
-        run: |
-          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusEnabled, AMRunningMode | Format-List
-          Get-Volume -DriveLetter C, D | Format-Table DriveLetter, FileSystem, Size, SizeRemaining
-          node scripts/ci/tmp-io-probe.mjs "$env:TEMP" "${{ runner.temp }}"
-
-      # Temporary diagnosis: tests write their SQLite files under runner.temp (D:).
-      - run: npm test -- --test-timeout=60000
+      # The tests' SQLite files go to runner.temp on the local D: disk; fsync on the C: system
+      # disk (the default TEMP) is tens of times slower and makes migration tests time out.
+      - run: npm test
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
