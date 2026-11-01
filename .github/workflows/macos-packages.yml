@@ -61,7 +61,7 @@ jobs:
       - name: Update chain on Apple Silicon
         run: node scripts/ci/mac-update-smoke.mjs update
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: macos-packages-${{ github.sha }}
