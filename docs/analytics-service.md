@@ -161,7 +161,7 @@ server {
 
 ## 正式部署
 
-汐岛正式版本的统计来源是 `https://xidao-stats.qiyi71w.com`（写在仓库的 `.env.production` 中）。以下是部署时核对过的事实：
+汐岛正式版本的统计来源写在仓库的 `.env.production` 中。以下是部署时核对过的事实：
 
 - 服务器：作者自己的云服务器。服务按上文以 Docker 容器运行，随 Docker 开机自启；同一台主机上的反向代理终止 HTTPS。
 - 网络链路：DNS 记录不经 CDN 代理，客户端直接与这台主机建立 TLS，中间没有其他会解密请求的代理。证书由 Let's Encrypt 签发，certbot 用 webroot 方式自动续期，续期钩子安装证书并重载代理；已用 `certbot renew --dry-run` 验证续期流程。只接受 TLS 1.2 与 1.3。
