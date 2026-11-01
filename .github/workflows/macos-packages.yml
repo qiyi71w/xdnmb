@@ -4,7 +4,12 @@ name: macOS packages
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
+    # Tag pushes ignore path filters, so a release tag always builds.
+    paths-ignore: [README.md, 'docs/**']
   pull_request:
+    paths-ignore: [README.md, 'docs/**']
   workflow_dispatch:
 
 permissions:

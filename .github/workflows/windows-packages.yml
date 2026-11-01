@@ -1,0 +1,59 @@
+# Windows packages: builds the x64 NSIS installer and checks it, including a silent install,
+# two starts of the installed app and a silent uninstall. The installer is kept as a workflow
+# artifact only; no GitHub Release is created.
+name: Windows packages
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    # Tag pushes ignore path filters, so a release tag always builds.
+    paths-ignore: [README.md, 'docs/**']
+  pull_request:
+    paths-ignore: [README.md, 'docs/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nsis:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+
+      - name: Build the installer (x64)
+        run: npm run dist:win
+
+      - name: Install check tools
+        run: npm install --no-save playwright-core@1.56.1
+
+      - name: Inspect packages
+        run: node scripts/ci/windows-package-smoke.mjs inspect
+
+      - name: Install, start and uninstall
+        run: node scripts/ci/windows-package-smoke.mjs install
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-packages-${{ github.sha }}
+          path: |
+            dist/*.exe
+            dist/latest.yml
+            windows-smoke/
+          if-no-files-found: warn
+          retention-days: 14
