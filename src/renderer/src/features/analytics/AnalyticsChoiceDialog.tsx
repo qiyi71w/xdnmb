@@ -139,7 +139,7 @@ export function AnalyticsChoiceDialog({
         </button>
         <button
           type="button"
-          className="btn"
+          className="btn btn-primary"
           aria-disabled={busy || undefined}
           aria-busy={saving === 'on' || undefined}
           aria-describedby={failure !== null ? failureId : undefined}
