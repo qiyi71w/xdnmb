@@ -84,8 +84,11 @@ describe('original clipboard lifetime', () => {
     const oversized = Buffer.from(PNG); oversized.writeUInt32BE(32768, 16)
     expect(await service.copy(source(oversized, 'oversized.png'))).toEqual({ status: 'invalid-image' })
     const target = source()
-    const link = join(dir, 'link.gif'); symlinkSync(target, link)
-    expect(await service.copy(link)).toEqual({ status: 'failed' })
+    // Windows ignores O_NOFOLLOW; there the caller's lstat check (images service) refuses links.
+    if (process.platform !== 'win32') {
+      const link = join(dir, 'link.gif'); symlinkSync(target, link)
+      expect(await service.copy(link)).toEqual({ status: 'failed' })
+    }
     decode = async () => { throw new Error('corrupt compressed data') }
     expect(await service.copy(target)).toEqual({ status: 'invalid-image' })
     expect(uri).toBeNull(); expect(png).toBeNull()
@@ -131,6 +134,20 @@ describe('original clipboard lifetime', () => {
     expect(readFileSync(copied)).toEqual(GIF)
     await clipboard().recover()
     expect(readFileSync(copied)).toEqual(GIF)
+  })
+
+  it('refuses a stored original that was replaced by a link, on every platform', async () => {
+    const images = await openManagedImageFiles(join(dir, 'images'))
+    const partial = images.partialPath(); writeFileSync(partial, GIF)
+    const name = await images.commit(partial, 'gif')
+    db.savePost(post(), '2026-10-30T00:00:00Z')
+    db.commitImageResource({ kind: 'original', sourceUrl: 'https://image.example/image/2026-10-30/image.png', fileName: name, format: 'gif', bytes: GIF.length, width: 1, height: 1, fetchedAt: '2026-10-30T00:00:00Z' }, [])
+    // Same size as the recorded original, so only the link itself can be the reason to refuse.
+    const stored = images.pathOf(name)!
+    rmSync(stored); symlinkSync(source(GIF, 'elsewhere.gif'), stored)
+    const service = createImageService({ store: asStore(db), files: images, origin: 'https://image.example', clipboard: clipboard(), download: async () => { throw new Error('must not download') } })
+    expect(await service.copyOriginal('10', `xidao-image://file/${name}`)).toEqual({ status: 'not-loaded' })
+    expect(uri).toBeNull(); expect(png).toBeNull()
   })
 
   it('never substitutes a thumbnail and releases only its own holder after a failed copy', async () => {

@@ -20,7 +20,14 @@ const processes: ChildProcess[] = []
 
 afterEach(async () => {
   for (const db of databases.splice(0)) db.close()
-  for (const child of processes.splice(0)) child.kill('SIGKILL')
+  // Windows keeps a killed process's files locked until it has exited, so wait before removing them.
+  await Promise.all(processes.splice(0).map((child) => {
+    if (child.exitCode !== null || child.signalCode !== null) return undefined
+    const { promise, resolve } = Promise.withResolvers<void>()
+    child.once('exit', () => resolve())
+    child.kill('SIGKILL')
+    return promise
+  }))
   await Promise.all(servers.splice(0).map((server) => {
     const { promise, resolve } = Promise.withResolvers<void>()
     server.close(() => resolve())

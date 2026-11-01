@@ -1,0 +1,8 @@
+# Action updates only. npm dependencies are pinned exactly and upgraded by hand, because Electron and
+# better-sqlite3 upgrades need native-module and migration checks.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

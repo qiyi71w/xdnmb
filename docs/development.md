@@ -24,7 +24,11 @@ npm run analytics -- serve  # 本机运行使用统计服务（配置见 docs/an
 
 打包配置见 `electron-builder.yml`：使用上游预编译 Electron，不编译 Chromium／Electron／Node；better-sqlite3 自带各平台的 N-API 预编译模块，打包时不需要编译原生代码。只打包 `out/`、`resources/icons/`、`package.json` 与 `LICENSE`。版本号取自 `package.json`；发布时把安装包与对应的 `latest.yml`（Windows）、`latest-mac.yml`（macOS，两种架构合在一个文件里）一起上传到 tag 为 `v<版本>` 的正式 GitHub Release，客户端依赖这些文件名与其中的 SHA-512。
 
+GitHub Actions 有三个工作流。`.github/workflows/ci.yml` 的 `check` 在 Ubuntu 上依次运行类型检查、测试和生产构建，每个 PR（包括只改文档的）及推送到 `main` 时都会运行；`main` 受规则保护：只能经 PR 合并、保持线性历史、禁止强推和删除，`check` 通过才能合并，管理员也不例外。两个打包工作流在 PR、推送到 `main`、推送 `v*` tag 及手动触发时运行；只改 `README.md` 或 `docs/` 时跳过（tag 推送不受路径过滤影响），它们的结果显示在 PR 上，但不是合并的必要条件。Dependabot 每月检查一次 Action 版本；npm 依赖仍手工升级。
+
 `.github/workflows/macos-packages.yml` 在 GitHub 的 Apple Silicon macOS 机器上运行类型检查和测试，构建两种架构的 DMG，再用 `scripts/ci/mac-update-smoke.mjs` 检查：两个应用的 CPU 架构与 SQLite 原生模块、应用身份、图标、临时签名、`latest-mac.yml` 中的 SHA-512；Intel 版在 Rosetta 下能启动并读写数据；Apple Silicon 版安装后，用只在更新网络会话内应答的受控发布源走完缺少元数据时检查失败（不显示为已是最新）、发现新版、校验失败丢弃、自动下载、打开 DMG、退出、按用户方式替换应用、下次启动显示新版本并保留设置。每次启动后先像用户一样处理启动提示：使用统计首次询问按 Esc 保持关闭（不连接统计服务），当前公告标为“不再提示”，之后的检查不会被这些对话框遮挡。结果不依赖仓库实际发布了哪些 Release。DMG、检查记录和应用输出作为工作流产物保留 14 天，不发布 Release。这些是自动化检查，不包括 Gatekeeper 首次打开提示与钥匙串授权等需要真人操作的环节。
+
+`.github/workflows/windows-packages.yml` 在 GitHub 的 Windows x64 机器上运行测试，构建 NSIS 安装程序，再用 `scripts/ci/windows-package-smoke.mjs` 检查：`latest.yml` 中的 SHA-512、`xidao.exe` 与 SQLite 原生模块的 CPU 架构、版本资源中的产品名与版本、内嵌图标与 `resources/icons/xidao-icon.ico` 一致、固定的更新来源；随后为当前用户静默安装到新目录，确认卸载登记和开始菜单快捷方式，用独立数据目录启动已安装的应用，检查存储可写、系统密钥保护（DPAPI）可用、按 Windows 方式更新，保存一项设置并在重启后读回，最后静默卸载并确认文件、登记和快捷方式已移除。启动提示的处理与 macOS 相同。安装程序、检查记录和应用输出作为工作流产物保留 14 天，不发布 Release。这些检查不包括更新链（发现、下载、退出时安装新版），也不包括 SmartScreen 提示、为所有用户安装时的管理员授权等需要真人操作的环节。
 
 ## 代码结构
 
