@@ -10,7 +10,6 @@ import { createReadStream } from 'node:fs'
 import { lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { pathToFileURL } from 'node:url'
 import { LIFECYCLE_REQUEST_CHANNEL, type AppPlatform } from '../shared/api'
 import { IMAGE_FORMAT_EXTENSION, IMAGE_SCHEME } from '../shared/images'
 import { createContentService, type ContentService } from './content/service'
@@ -25,6 +24,7 @@ import { createElectronOriginalClipboard } from './images/clipboard-electron'
 import { createImageDownloader } from './images/transport'
 import { createSafeStorageProtector } from './identity/protection'
 import { createIdentityService } from './identity/service'
+import { createAppDocumentMatcher } from './app-document'
 import { registerIpc, type IpcRegistration } from './ipc'
 import { createLifecycle, type FinishingSummary, type Lifecycle, type MainWindowHost } from './lifecycle/controller'
 import { createReadingService } from './reading/service'
@@ -66,12 +66,7 @@ const APP_ID = 'io.github.qiyi71w.xidao'
 
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL
 const rendererFile = join(import.meta.dirname, '../renderer/index.html')
-const rendererFileUrl = pathToFileURL(rendererFile).href
-
-function isAppDocument(url: string): boolean {
-  if (rendererDevUrl) return URL.canParse(url) && new URL(url).origin === new URL(rendererDevUrl).origin
-  return url.split(/[?#]/)[0] === rendererFileUrl
-}
+const isAppDocument = createAppDocumentMatcher({ rendererFile, devUrl: rendererDevUrl, windows: process.platform === 'win32' })
 
 let mainWindow: BrowserWindow | null = null
 let store: AppStore | null = null
