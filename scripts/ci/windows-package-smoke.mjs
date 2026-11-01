@@ -25,8 +25,8 @@ const MACHINE_X64 = 0x8664
 const RT_ICON = 3
 const RT_VERSION = 16
 /**
- * The temporary folder in its long form. The runner's TEMP is an 8.3 short path (RUNNER~1); the
- * checks install where users do, under long paths.
+ * The temporary folder in its long form (the runner's TEMP is an 8.3 short path); `install` picks
+ * the spelling of the installation folder itself.
  */
 const TEMP = realpathSync.native(tmpdir())
 
@@ -155,7 +155,10 @@ async function appChecks(executable, label) {
 }
 
 async function install() {
-  const directory = mkdtempSync(join(TEMP, 'xidao-install-'))
+  // Spelled the way a user may type it in the installer: a lowercase drive letter, and a folder name
+  // with a space, Chinese, `~` and brackets. The app is started from this spelling and must still
+  // recognize its own page.
+  const directory = join(mkdtempSync(join(TEMP, 'xidao-install-')), '汐岛 [~1]').replace(/^[A-Z]:/, (drive) => drive.toLowerCase())
   // `/D=` must be the last argument and unquoted.
   const installer = spawnSync(INSTALLER, ['/S', `/D=${directory}`], { timeout: 300_000 })
   const executable = join(directory, EXECUTABLE)
@@ -166,6 +169,10 @@ async function install() {
   check('installation registered with uninstaller and start menu shortcut', uninstaller !== undefined && registered(directory) && existsSync(START_MENU_LINK), {
     uninstaller, shortcut: existsSync(START_MENU_LINK)
   })
+  const target = spawnSync('powershell', ['-NoProfile', '-Command',
+    `[Console]::OutputEncoding = [Text.Encoding]::UTF8; (New-Object -ComObject WScript.Shell).CreateShortcut('${START_MENU_LINK}').TargetPath`
+  ], { encoding: 'utf8' }).stdout.trim()
+  log('start menu shortcut target', { target })
 
   await appChecks(executable, 'installed')
 
