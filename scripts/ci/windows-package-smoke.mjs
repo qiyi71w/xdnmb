@@ -6,7 +6,7 @@
 //            uninstall silently
 // The app keeps a profile only under its own data directory; nothing outside the runner is written.
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSmoke, metadataFiles, metadataVersion, sha512, sleep } from './smoke.mjs'
@@ -24,6 +24,11 @@ const UNINSTALL_KEYS = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Unin
 const MACHINE_X64 = 0x8664
 const RT_ICON = 3
 const RT_VERSION = 16
+/**
+ * The temporary folder in its long form. The runner's TEMP is an 8.3 short path (RUNNER~1); the
+ * checks install where users do, under long paths.
+ */
+const TEMP = realpathSync.native(tmpdir())
 
 /** The app's processes, recorded when a quit is stuck. */
 function diagnose() {
@@ -127,7 +132,7 @@ const registered = (directory) => spawnSync('reg', ['query', UNINSTALL_KEYS, '/s
  * update path, then a setting saved before a restart and read back after it.
  */
 async function appChecks(executable, label) {
-  const data = mkdtempSync(join(tmpdir(), 'xidao-data-'))
+  const data = mkdtempSync(join(TEMP, 'xidao-data-'))
   let { app, page } = await launch(executable, [`--user-data-dir=${data}`])
   const arch = await app.evaluate(() => process.arch)
   const status = await page.evaluate(() => window.xidao.app.getStatus())
@@ -150,7 +155,7 @@ async function appChecks(executable, label) {
 }
 
 async function install() {
-  const directory = mkdtempSync(join(tmpdir(), 'xidao-install-'))
+  const directory = mkdtempSync(join(TEMP, 'xidao-install-'))
   // `/D=` must be the last argument and unquoted.
   const installer = spawnSync(INSTALLER, ['/S', `/D=${directory}`], { timeout: 300_000 })
   const executable = join(directory, EXECUTABLE)
