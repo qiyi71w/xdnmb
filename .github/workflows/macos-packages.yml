@@ -27,7 +27,7 @@ jobs:
       # electron-builder skips signing on pull_request builds; the ad-hoc identity '-' needs no secrets.
       CSC_FOR_PULL_REQUEST: 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
