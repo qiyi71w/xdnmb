@@ -33,8 +33,18 @@ jobs:
           cache: npm
 
       - run: npm ci
-      # Migration tests do heavy file I/O, which is several times slower on the hosted Windows runner.
+      - name: Diagnose I/O (temporary)
+        shell: pwsh
+        run: |
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusEnabled, AMRunningMode | Format-List
+          Get-Volume -DriveLetter C, D | Format-Table DriveLetter, FileSystem, Size, SizeRemaining
+          node scripts/ci/tmp-io-probe.mjs "$env:TEMP" "${{ runner.temp }}"
+
+      # Temporary diagnosis: tests write their SQLite files under runner.temp (D:).
       - run: npm test -- --test-timeout=60000
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
 
       - name: Build the installer (x64)
         run: npm run dist:win
