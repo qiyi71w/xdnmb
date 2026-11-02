@@ -539,8 +539,9 @@ class SqliteReadingDatabase implements ReadingDatabase {
           WHERE julianday(excluded.fetched_at) >= julianday(thread_reply_counts.fetched_at)
         `).run(page.threadId, page.mode, page.replyCount, fetchedAt)
       }
-      // Only a reader's fresh read moves a reminder baseline, in the same transaction as its page.
-      if (purpose === 'display' && page.replyCount !== null) this.reminders.absorbDisplayed(page.threadId, page.mode, page.replyCount)
+      // A reader's fresh read moves a reminder baseline; any fresh page may prove a local reply. Both
+      // commit with the page.
+      this.reminders.pageSaved(page, purpose === 'display')
       return this.getThreadCoverage(page.threadId, page.mode)
     })()
   }
@@ -1114,6 +1115,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
         attachmentId: payload.attachmentId, at: input.at
       })
       if (!row) throw new Error('publication insert returned no row')
+      if (payload.target.kind === 'reply') this.reminders.recordIntent(row.id, payload.target.threadId)
       return publicationAttempt(row)
     }).immediate()
   }
@@ -1190,7 +1192,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
         db.prepare('UPDATE publication_attempts SET attachment_id = NULL, saved_draft_id = ? WHERE id = ?')
           .run(savedDraftId, input.id)
       }
-      if (input.state === 'confirmed' && attempt.payload.target.kind === 'reply') this.reminders.confirmedPublication(input.threadId!)
+      if (input.state === 'confirmed' && attempt.payload.target.kind === 'reply') this.reminders.confirmedPublication(Number(input.id), input.threadId!)
       const finished = this.getPublication(input.id)
       if (!finished) throw new Error('publication result returned no row')
       return finished

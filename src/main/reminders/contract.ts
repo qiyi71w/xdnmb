@@ -31,8 +31,6 @@ export interface ReminderUpdate {
   at: string
   /** The check that owns this write; used for the final, post-correction notification decision. */
   roundId?: string
-  /** Page 1's reply IDs only when every original slot on that page is present and ordered. */
-  firstPageReplyIds?: PostId[]
   baseline?: number
   /**
    * 全串／PO: the baseline this check compared page 1 with. When a reader's read has advanced the

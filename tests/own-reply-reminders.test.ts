@@ -1,70 +1,86 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, expect, it } from 'vitest'
+import type { ThreadReadPurpose } from '../src/shared/api'
 import { EMPTY_FIELDS } from '../src/shared/drafts'
+import type { ReadingMode } from '../src/shared/forum'
 import { createDraftService } from '../src/main/drafts/service'
 import { createForumClient } from '../src/main/forum/client'
 import { createForumTransport } from '../src/main/forum/transport'
 import { openManagedImageFiles } from '../src/main/images/files'
 import { createPublicationAdapter } from '../src/main/publication/adapter'
 import { createPublicationService } from '../src/main/publication/service'
+import { createReadingService } from '../src/main/reading/service'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 import { createReminderService } from '../src/main/reminders/service'
 import { openReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS } from '../src/main/storage/migrations'
 import { asStore } from './helpers/store'
 
+// A reply sent from this app leaves the 全串／PO reminder count only when two reads place it in
+// uncleared counted growth: the largest reply count committed before its send intent, and the
+// smallest count of a page seen holding it. Real SQLite, a controlled local forum, and the real
+// publication, reading and reminder services. Peers write as `Peer`; the head is the PO's.
+
 const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => { for (const clean of cleanups.splice(0).reverse()) await clean() })
-const at = '2026-10-30T04:00:00.000Z'
+const t0 = Date.parse('2026-10-30T04:00:00.000Z')
+const at = new Date(t0).toISOString()
+const NOTICE = '1 个串有新提醒'
 
 interface ForumPost {
   id: string; resto: string; fid: string; user_hash: string; content: string; title: string; name: string
   img: string; ext: string; now: string; admin: number; sage: number
 }
 
-function post(id: string, content = 'old', author = 'Po'): ForumPost {
+function post(id: string, author: string, content = 'reply'): ForumPost {
   return { id, resto: '100', fid: '1', user_hash: author, content, title: '', name: '', img: '', ext: '',
     now: '2026-10-30(五)12:00:00', admin: 0, sage: 0 }
 }
 
-async function harness(options: { nonPo?: boolean; initialCount?: number } = {}) {
+type SendWait = 'confirmed' | 'unknown' | 'lookup-held' | 'post-held'
+
+async function harness(options: { own?: 'Po' | 'Other'; initialCount?: number; afterSendMs?: number | null } = {}) {
   const folder = mkdtempSync(join(tmpdir(), 'xidao-own-reminders-'))
   cleanups.push(() => rmSync(folder, { recursive: true, force: true }))
   const path = join(folder, 'app.sqlite')
   let db = openReadingDatabase(path)
   cleanups.push(() => db.close())
-  const author = options.nonPo ? 'Other' : 'Po'
+  const author = options.own ?? 'Po'
   const credential = db.insertCredential({ name: 'synthetic', cookieId: author, source: 'raw', importedAt: at, ciphertext: Buffer.from(author) }).id
   const files = await openManagedImageFiles(join(folder, 'draft-images'))
-  const replies = Array.from({ length: options.initialCount ?? 10 }, (_, index) => post(String(1000 + index)))
-  const hidden = new Set<string>()
+  const replies = Array.from({ length: options.initialCount ?? 10 }, (_, index) => post(String(1000 + index), 'Peer'))
   let next = 3000
   let last: ForumPost | null = null
+  /** Subtracted from the 全串 ReplyCount: the forum's count falls. */
+  let drop = 0
   let holdLookup = false
-  let loseResponse = false
-  const hooks: { afterBatch?: () => Promise<void> } = {}
   let lookupRelease: (() => void) | null = null
+  let holdPost = false
+  let postRelease: (() => void) | null = null
+  let loseResponse = false
   let holdSnapshot = false
   let snapshotRelease: (() => void) | null = null
   let snapshotCaptured = Promise.withResolvers<void>()
-  const requests: Array<{ path: string; cookie: string }> = []
+  const hooks: { afterBatch?: () => Promise<void> } = {}
+  const requests: string[] = []
   const server = createServer(async (request, response) => {
     const url = new URL(request.url!, 'http://local')
-    requests.push({ path: `${url.pathname}${url.search}`, cookie: request.headers.cookie ?? '' })
+    requests.push(`${url.pathname}${url.search}`)
     const send = (value: unknown) => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)) }
     if (url.pathname === '/api/getForumList') { send([{ id: '1', name: 'test', forums: [{ id: '1', name: 'test', msg: '', interval: 0 }] }]); return }
     if (url.pathname === '/api/getTimelineList') { send([]); return }
     if (url.pathname === '/api/thread' || url.pathname === '/api/po') {
-      const items = url.pathname === '/api/po' ? replies.filter((reply) => reply.user_hash === 'Po') : replies
+      const po = url.pathname === '/api/po'
+      const items = po ? replies.filter((reply) => reply.user_hash === 'Po') : replies
       const page = Number(url.searchParams.get('page'))
-      const value = { ...post('100', 'head'), resto: '0', ReplyCount: items.length,
-        Replies: items.slice((page - 1) * 19, page * 19).filter((reply) => !hidden.has(reply.id)) }
-      if (holdSnapshot && !request.headers.cookie && url.pathname === '/api/thread') {
+      const value = { ...post('100', 'Po', 'head'), resto: '0', ReplyCount: items.length - (po ? 0 : drop),
+        Replies: items.slice((page - 1) * 19, page * 19) }
+      if (holdSnapshot && !po) {
         holdSnapshot = false
         snapshotRelease = () => send(value)
         snapshotCaptured.resolve()
@@ -76,11 +92,14 @@ async function harness(options: { nonPo?: boolean; initialCount?: number } = {})
       for await (const chunk of request) body += String(chunk)
       const content = /name="content"\r\n\r\n([\s\S]*?)\r\n--/.exec(body)?.[1]
       if (content === undefined) throw new Error('missing multipart content')
-      last = post(String(++next), content, author)
-      replies.push(last)
-      if (loseResponse) { loseResponse = false; request.socket.destroy(); return }
-      response.setHeader('Content-Type', 'text/html')
-      response.end('<p class="success">成功</p>')
+      const accept = () => {
+        last = post(String(++next), author, content)
+        replies.push(last)
+        if (loseResponse) { loseResponse = false; request.socket.destroy(); return }
+        response.setHeader('Content-Type', 'text/html')
+        response.end('<p class="success">成功</p>')
+      }
+      if (holdPost) { holdPost = false; postRelease = accept } else accept()
       return
     }
     if (url.pathname === '/Api/getLastPost') {
@@ -105,21 +124,28 @@ async function harness(options: { nonPo?: boolean; initialCount?: number } = {})
   const origin = `http://127.0.0.1:${address.port}`
   const notifications: string[] = []
   let monotonic = 0
+  let wall = t0
+  /** One clock for every service: each reading is a second later than the one before. */
+  const tick = () => new Date(wall += 1000)
   const clientFor = (userhash: string | null) => createForumClient({ baseUrl: origin, browseIdentity: async () => userhash,
     transport: createForumTransport({ allowedOrigins: [origin], credentialOrigins: [origin] }) })
   const protector = { isAvailable: async () => true, encrypt: async (value: string) => Buffer.from(value), decrypt: async (value: Uint8Array) => Buffer.from(value).toString() }
+  const signal = new AbortController().signal
   const start = async (onRecover = false) => {
     const store = asStore(db)
     const reminders = createReminderService({ store, client: clientFor(null), scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }),
       afterBatch: async () => { await hooks.afterBatch?.() },
-      now: () => at, monotonicNow: () => monotonic, notifier: { show(message) { notifications.push(message.body); return true } } })
+      now: () => tick().toISOString(), monotonicNow: () => monotonic, notifier: { show(message) { notifications.push(message.body); return true } } })
+    const reading = createReadingService({ client: clientFor(null), store, scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }),
+      now: tick, displayReads: reminders.displayReads })
     const drafts = createDraftService({ store, files })
     const publication = createPublicationService({ store, drafts, files, protector, clientFor: (hash) => clientFor(hash),
-      adapter: createPublicationAdapter({ origin, apiOrigin: origin }), now: () => new Date(at), checks: { afterSendMs: null, onRecover, gapMs: 0 },
+      adapter: createPublicationAdapter({ origin, apiOrigin: origin }), now: tick,
+      checks: { afterSendMs: options.afterSendMs ?? null, onRecover, gapMs: 0 },
       onRecorded: () => reminders.publicationConfirmed(), onChecked: () => reminders.publicationConfirmed() })
     await drafts.recover()
     await publication.recover()
-    return { reminders, publication }
+    return { reminders, reading, publication }
   }
   let current = await start()
   cleanups.push(() => current.reminders.stop('quit'))
@@ -138,20 +164,32 @@ async function harness(options: { nonPo?: boolean; initialCount?: number } = {})
   }
   await check()
   return {
-    get db() { return db }, get publication() { return current.publication }, get reminders() { return current.reminders },
-    path, requests, replies, hidden, notifications, row, check, hooks,
-    peer(po = true) { const value = post(String(++next), 'peer reply', po ? 'Po' : 'Other'); replies.push(value); return value.id },
+    get db() { return db }, get reminders() { return current.reminders },
+    path, requests, notifications, row, check, hooks,
+    counts: async () => (await row()).counts,
+    peer(by = 'Peer') { const value = post(String(++next), by, 'peer reply'); replies.push(value); return value.id },
+    setDrop(value: number) { drop = value },
     holdConfirmation() { holdLookup = true },
     releaseConfirmation() { holdLookup = false; lookupRelease?.() },
+    holdPost() { holdPost = true },
+    releasePost() { postRelease?.() },
     loseNextResponse() { loseResponse = true },
-    async send(content = 'own reply', wait: boolean | 'unknown' = true) {
+    async send(content = 'own reply', wait: SendWait = 'confirmed') {
       const result = await current.publication.submit({ requestId: randomUUID(), editorId: 'editor',
         payload: { draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: credential,
           fields: { ...EMPTY_FIELDS, content }, attachmentId: null } })
       if (result.kind !== 'attempt') throw new Error(`submission refused: ${JSON.stringify(result)}`)
-      if (wait) await expect.poll(() => db.getPublication(result.attempt.id)?.state).toBe(wait === 'unknown' ? 'unknown' : 'confirmed')
-      else await expect.poll(() => lookupRelease !== null).toBe(true)
+      if (wait === 'confirmed' || wait === 'unknown') await expect.poll(() => db.getPublication(result.attempt.id)?.state).toBe(wait)
+      else if (wait === 'lookup-held') await expect.poll(() => lookupRelease !== null).toBe(true)
+      else await expect.poll(() => postRelease !== null).toBe(true)
       return result.attempt.id
+    },
+    async confirmed(id: string) { await expect.poll(() => db.getPublication(id)?.state).toBe('confirmed') },
+    async read(mode: ReadingMode, page: number, purpose: ThreadReadPurpose) {
+      expect(await current.reading.readThreadPage('100', mode, page, signal, purpose)).toMatchObject({ status: 'fresh' })
+    },
+    async locateEnd(mode: ReadingMode, purpose: ThreadReadPurpose) {
+      expect(await current.reading.locateThreadEnd('100', mode, signal, purpose)).toMatchObject({ status: 'fresh' })
     },
     holdNextSnapshot() { holdSnapshot = true; snapshotCaptured = Promise.withResolvers<void>(); return snapshotCaptured.promise },
     releaseSnapshot() { snapshotRelease?.() },
@@ -161,30 +199,100 @@ async function harness(options: { nonPo?: boolean; initialCount?: number } = {})
   }
 }
 
-it('excludes proven own PO increments through actual publication confirmation and both engine modes, retaining peers', async () => {
-  const h = await harness()
+it('long thread, only my reply: the post-send read proves it and the next check counts 0, reading only page 1', async () => {
+  const h = await harness({ initialCount: 200 })
+  await h.read('all', 11, 'display')
   await h.send()
+  // Sending then locating the reply reads the last page, 201 replies, with the reply on it.
+  await h.locateEnd('all', 'display')
   await h.check()
-  expect((await h.row()).counts).toEqual({ all: 0, po: 0, quote: 0 })
+  expect(await h.counts()).toEqual({ all: 0, po: 0, quote: 0 })
   expect(h.notifications).toEqual([])
-  expect(h.requests.map((request) => request.path)).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
-  h.peer()
-  await h.send('second own reply')
-  await h.check()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
-  expect(h.notifications).toEqual(['1 个串有新提醒'])
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
 })
 
-it('does not deduct a non-PO local reply from PO growth', async () => {
-  const h = await harness({ nonPo: true })
+it('long thread with peers alongside: a later read of 203 holding my reply leaves exactly the peers', async () => {
+  const h = await harness({ initialCount: 199 })
+  h.peer()
+  // The reader's read absorbs 199→200; the check growth after it holds two peers and my reply.
+  await h.read('all', 11, 'display')
+  h.peer()
   await h.send()
   h.peer()
   await h.check()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
-  expect(h.notifications).toEqual(['1 个串有新提醒'])
+  // PO page 1 already shows my PO-cookie reply: its PO growth is mine alone.
+  expect(await h.counts()).toEqual({ all: 3, po: 0, quote: 0 })
+  expect(h.notifications).toEqual([NOTICE])
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
+  await h.read('all', 11, 'display')
+  expect(await h.counts()).toEqual({ all: 2, po: 0, quote: 0 })
 })
 
-it('does not move a confirmed reply into an older in-flight snapshot interval', async () => {
+it('a reply with a non-PO cookie never touches the PO count; a peer PO reply still counts', async () => {
+  const h = await harness({ own: 'Other' })
+  await h.send()
+  h.peer('Po')
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 1, po: 1, quote: 0 })
+  expect(h.notifications).toEqual([NOTICE])
+})
+
+it('an unknown sending 饼干 ID is not related to PO: only the 全串 count drops the reply', async () => {
+  const h = await harness()
+  h.sql((connection) => connection.exec('UPDATE credentials SET cookie_id = NULL'))
+  await h.send()
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 0, po: 1, quote: 0 })
+  expect(h.notifications).toEqual([NOTICE])
+})
+
+it('a check reading page 1 while the send is unconfirmed is corrected once the reply confirms, from that saved page', async () => {
+  const h = await harness()
+  h.holdConfirmation()
+  const id = await h.send('in flight', 'lookup-held')
+  await h.check()
+  // Unconfirmed replies take no part.
+  expect(await h.counts()).toEqual({ all: 1, po: 1, quote: 0 })
+  expect(h.notifications).toEqual([NOTICE])
+  h.releaseConfirmation()
+  await h.confirmed(id)
+  expect(await h.counts()).toEqual({ all: 0, po: 0, quote: 0 })
+  h.peer()
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
+})
+
+it('growth cleared before the proof is never negative and never taken from later growth', async () => {
+  const h = await harness()
+  h.holdConfirmation()
+  const id = await h.send('clear before confirmation', 'lookup-held')
+  await h.check()
+  await h.reminders.clear({ threadId: '100', source: 'manual' })
+  h.releaseConfirmation()
+  await h.confirmed(id)
+  expect(await h.counts()).toEqual({ all: 0, po: 0, quote: 0 })
+  h.peer()
+  h.peer('Po')
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 2, po: 1, quote: 0 })
+})
+
+it('a reader’s absorption inside the interval leaves an ordinary count, never taking a peer', async () => {
+  const h = await harness({ initialCount: 30 })
+  h.holdPost()
+  const id = await h.send('sent while a peer replied', 'post-held')
+  h.peer()
+  await h.read('all', 2, 'display')
+  h.releasePost()
+  await h.confirmed(id)
+  h.peer()
+  await h.check()
+  // (30, 33] mixes the reader's absorption 30→31 with counted growth 31→33: unprovable.
+  await h.read('all', 2, 'display')
+  expect(await h.counts()).toEqual({ all: 2, po: 0, quote: 0 })
+})
+
+it('spanning two check rounds deducts once and keeps the earlier peer in the count', async () => {
   const h = await harness()
   h.peer()
   const captured = h.holdNextSnapshot()
@@ -193,90 +301,123 @@ it('does not move a confirmed reply into an older in-flight snapshot interval', 
   await h.send()
   h.releaseSnapshot()
   await h.reminders.whenIdle()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
+  expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
   await h.check()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
-  expect(h.notifications).toEqual(['1 个串有新提醒'])
+  expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
+  // Which round holds my reply is unknown, so the later round still decides its notification.
+  expect(h.notifications).toEqual([NOTICE, NOTICE])
 })
 
-it('corrects a late confirmation once, persists it across restart, and cannot retract the earlier notification', async () => {
-  const h = await harness()
-  h.holdConfirmation()
-  const id = await h.send('late reply', false)
+it('a pending reply survives a restart, a duplicate confirmation deducts nothing more', async () => {
+  const h = await harness({ initialCount: 30 })
+  const id = await h.send()
   await h.check()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
-  h.releaseConfirmation()
-  await expect.poll(() => h.db.getPublication(id)?.state).toBe('confirmed')
-  expect((await h.row()).counts).toEqual({ all: 0, po: 0, quote: 0 })
+  expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
+  await h.restart()
+  await h.read('all', 2, 'lookup')
+  expect(await h.counts()).toEqual({ all: 0, po: 0, quote: 0 })
   const attempt = h.db.getPublication(id)!
   h.db.finishPublication({ id, state: 'confirmed', problem: null, postId: attempt.postId, threadId: '100', at })
   await h.restart()
+  await h.read('all', 2, 'lookup')
   h.peer()
   await h.check()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
-  expect(h.notifications).toEqual(['1 个串有新提醒', '1 个串有新提醒'])
+  expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
+  expect(h.notifications).toEqual([NOTICE, NOTICE])
 })
 
-it('marks late evidence from a cleared interval without deducting later peers', async () => {
-  const h = await harness()
-  h.holdConfirmation()
-  const id = await h.send('clear before confirmation', false)
-  await h.check()
-  await h.reminders.clear({ threadId: '100', source: 'manual' })
-  h.peer()
-  await h.check()
-  h.releaseConfirmation()
-  await expect.poll(() => h.db.getPublication(id)?.state).toBe('confirmed')
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
-  expect(h.sql((connection) => connection.prepare("SELECT status FROM reminder_local_replies WHERE publication_id = ? ORDER BY kind").all(id)))
-    .toEqual([{ status: 'cleared' }, { status: 'cleared' }])
-})
-
-it('does not reuse an old generation deduction after rules are disabled and re-enabled', async () => {
-  const h = await harness()
-  h.holdConfirmation()
-  const id = await h.send('old generation', false)
-  await h.check()
+it('a reply whose intent came before the rule generation is not deducted in it', async () => {
+  const h = await harness({ initialCount: 30 })
+  h.holdPost()
+  const id = await h.send('old generation', 'post-held')
   for (const kind of ['all', 'po'] as const) { h.db.setReminderRule('100', kind, false, at); h.db.setReminderRule('100', kind, true, at) }
   await h.check()
+  h.releasePost()
+  await h.confirmed(id)
+  await h.check()
+  await h.read('all', 2, 'display')
+  expect(await h.counts()).toEqual({ all: 1, po: 1, quote: 0 })
+})
+
+it('a falling reply count voids pending evidence, including a page saved before confirmation', async () => {
+  const h = await harness({ initialCount: 30 })
+  h.holdConfirmation()
+  const id = await h.send('before the count fell', 'lookup-held')
+  await h.check()
+  // Page 2 (31 replies) holding the reply is saved while it is still unconfirmed.
+  await h.read('all', 2, 'lookup')
+  h.setDrop(2)
+  await h.check()
+  h.setDrop(0)
   h.releaseConfirmation()
-  await expect.poll(() => h.db.getPublication(id)?.state).toBe('confirmed')
-  h.peer()
+  await h.confirmed(id)
   await h.check()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
+  // 全串: 1 before the fall, then 29→31 not taken from; the PO count never fell and drops my reply.
+  expect(await h.counts()).toEqual({ all: 3, po: 0, quote: 0 })
 })
 
-it.each(['long', 'deleted'] as const)('keeps normal counts and notification when %s evidence cannot prove a local ordinal', async (kind) => {
-  const h = await harness({ initialCount: kind === 'long' ? 200 : 10 })
-  const id = await h.send()
-  if (kind === 'deleted') h.hidden.add(h.replies[0]!.id)
-  await h.check()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
-  expect(h.notifications).toEqual(['1 个串有新提醒'])
-  expect(h.sql((connection) => connection.prepare('SELECT status FROM reminder_local_replies WHERE publication_id = ? ORDER BY kind').all(id)))
-    .toEqual([{ status: 'pending' }, { status: 'pending' }])
-  expect(h.requests).toHaveLength(2)
-})
-
-it.each(['marker', 'count'] as const)('rolls back %s failure together with interval consumption and retries safely after reopening SQLite', async (failure) => {
+it.each(['marker', 'count', 'segment'] as const)('a failed %s write rolls back the whole deduction and is applied once after reopening', async (failure) => {
   const h = await harness()
-  const id = await h.send()
-  h.sql((connection) => connection.exec(failure === 'marker'
-    ? "CREATE TRIGGER fail_reminder BEFORE UPDATE OF status ON reminder_local_replies WHEN NEW.status = 'excluded' BEGIN SELECT RAISE(ABORT, 'marker failure'); END;"
-    : "CREATE TRIGGER fail_reminder BEFORE UPDATE OF count ON reminder_state WHEN NEW.count < OLD.count BEGIN SELECT RAISE(ABORT, 'count failure'); END;"))
+  await h.send()
+  const triggers = {
+    marker: "CREATE TRIGGER fail_reminder BEFORE UPDATE OF status ON reminder_local_replies WHEN NEW.status = 'excluded' BEGIN SELECT RAISE(ABORT, 'marker failure'); END;",
+    count: 'CREATE TRIGGER fail_reminder BEFORE UPDATE OF count ON reminder_state WHEN NEW.count < OLD.count BEGIN SELECT RAISE(ABORT, \'count failure\'); END;',
+    segment: 'CREATE TRIGGER fail_reminder BEFORE UPDATE OF excluded ON reminder_baseline_segments BEGIN SELECT RAISE(ABORT, \'segment failure\'); END;'
+  }
+  h.sql((connection) => connection.exec(triggers[failure]))
   await h.check()
-  expect((await h.row()).counts).toEqual({ all: 0, po: 0, quote: 0 })
+  expect(await h.counts()).toEqual({ all: 0, po: 0, quote: 0 })
   expect(h.notifications).toEqual([])
   await h.restart()
-  expect(h.db.reminderStates().map((state) => state.baseline)).toEqual([10, 10])
-  expect(h.sql((connection) => connection.prepare('SELECT status FROM reminder_local_replies WHERE publication_id = ? ORDER BY kind').all(id)))
-    .toEqual([{ status: 'pending' }, { status: 'pending' }])
+  expect(h.db.reminderStates().map((state) => state.baseline)).toEqual([10, 0])
   h.sql((connection) => connection.exec('DROP TRIGGER fail_reminder'))
   await h.check()
-  expect((await h.row()).counts).toEqual({ all: 0, po: 0, quote: 0 })
+  expect(await h.counts()).toEqual({ all: 0, po: 0, quote: 0 })
+  expect(h.notifications).toEqual([])
   h.peer()
   await h.check()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
+  expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
+})
+
+it('a confirmation committed before the final decision suppresses an only-own notification', async () => {
+  const h = await harness()
+  h.holdConfirmation()
+  const id = await h.send('confirm before notification', 'lookup-held')
+  h.hooks.afterBatch = async () => {
+    h.releaseConfirmation()
+    await h.confirmed(id)
+  }
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 0, po: 0, quote: 0 })
+  expect(h.notifications).toEqual([])
+})
+
+it('the startup publication check confirming an unknown send deducts it', async () => {
+  const h = await harness()
+  h.loseNextResponse()
+  const id = await h.send('startup checked reply', 'unknown')
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 1, po: 1, quote: 0 })
+  await h.restart(true)
+  await h.confirmed(id)
+  expect(await h.counts()).toEqual({ all: 0, po: 0, quote: 0 })
+  h.peer()
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
+})
+
+it('the background check after a lost response confirms the send and deducts it', async () => {
+  const h = await harness({ afterSendMs: 300 })
+  h.loseNextResponse()
+  const id = await h.send('background checked reply', 'unknown')
+  // The automatic check's read of page 1 waits until the reminder check has counted the reply.
+  const captured = h.holdNextSnapshot()
+  await captured
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 1, po: 1, quote: 0 })
+  h.releaseSnapshot()
+  await h.confirmed(id)
+  expect(await h.counts()).toEqual({ all: 0, po: 0, quote: 0 })
 })
 
 it('upgrades v21 without resetting generations, existing counts, confirmations or credentials', () => {
@@ -302,68 +443,4 @@ it('upgrades v21 without resetting generations, existing counts, confirmations o
     expect(db.listCredentials()[0]!.cookieId).toBe('Po')
     expect(Buffer.from(db.loadCredentialCiphertext('1')!)).toEqual(Buffer.from('synthetic'))
   } finally { db.close() }
-})
-
-it('suppresses only-own notification when late confirmation commits before the final decision', async () => {
-  const h = await harness()
-  h.holdConfirmation()
-  const id = await h.send('confirm before notification', false)
-  h.hooks.afterBatch = async () => {
-    h.releaseConfirmation()
-    await expect.poll(() => h.db.getPublication(id)?.state).toBe('confirmed')
-  }
-  await h.check()
-  expect((await h.row()).counts).toEqual({ all: 0, po: 0, quote: 0 })
-  expect(h.notifications).toEqual([])
-})
-
-it('consumes reliable positions when the actual startup publication check confirms an unknown send', async () => {
-  const h = await harness()
-  h.loseNextResponse()
-  const id = await h.send('startup checked reply', 'unknown')
-  await h.check()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
-  await h.restart(true)
-  await expect.poll(() => h.db.getPublication(id)?.state).toBe('confirmed')
-  expect((await h.row()).counts).toEqual({ all: 0, po: 0, quote: 0 })
-  h.peer()
-  await h.check()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
-})
-
-it.each(['head', 'duplicate', 'reversed'] as const)('does not trust a %s reply sequence as ordinal evidence', async (kind) => {
-  const h = await harness()
-  await h.send()
-  const original = h.replies[0]!
-  if (kind === 'head') h.replies[0] = { ...original, id: '100' }
-  else if (kind === 'duplicate') h.replies[0] = { ...original, id: h.replies[1]!.id }
-  else [h.replies[0], h.replies[1]] = [h.replies[1]!, original]
-  await h.check()
-  expect((await h.row()).counts).toEqual({ all: 1, po: 1, quote: 0 })
-  expect(h.notifications).toEqual(['1 个串有新提醒'])
-  h.replies[0] = original
-})
-
-it('rolls back an interrupted v22 upgrade without altering the v21 database', () => {
-  const folder = mkdtempSync(join(tmpdir(), 'xidao-reminder-migrate-fail-'))
-  cleanups.push(() => rmSync(folder, { recursive: true, force: true }))
-  const path = join(folder, 'app.sqlite')
-  const old = new Database(path)
-  for (const migration of MIGRATIONS.filter((migration) => migration.version <= 21)) migration.up(old)
-  old.pragma('user_version = 21')
-  old.close()
-  const before = readFileSync(path)
-  const failed = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 21), {
-    version: 22,
-    up(connection) {
-      MIGRATIONS.find((migration) => migration.version === 22)!.up(connection)
-      throw new Error('interrupted reminder provenance migration')
-    }
-  }])
-  expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
-  failed.close()
-  expect(readFileSync(path)).toEqual(before)
-  const recovered = openReadingDatabase(path)
-  expect(recovered.status.state).toBe('ready')
-  recovered.close()
 })

@@ -301,6 +301,8 @@ export function createReminderService(deps: {
     saved(threadId, mode) {
       const queued = openReads.get(threadId)
       if (mode === 'po' && queued !== undefined) queued.readerSaved = true
+      // The saved page may have proven a confirmed local reply and corrected a count.
+      changed()
     }
   }
   /** Resolves when `arm` calls its `done`; an abort disarms it and rejects. */
@@ -364,6 +366,8 @@ export function createReminderService(deps: {
         if (openReads.get(threadId) === read) openReads.delete(threadId)
         return proceed()
       })
+      // Its saved PO page may have proven a confirmed local reply and corrected the PO count.
+      changed()
     } catch (error) {
       // A failed read leaves the PO baseline as it was. Rate limits and captchas back off like a check.
       if (error instanceof ForumReadError && error.error.kind === 'rate-limited') await rateLimited().catch(() => undefined)

@@ -777,6 +777,38 @@ export const MIGRATIONS: readonly Migration[] = [
         CREATE INDEX reminder_segment_round ON reminder_baseline_segments(round_id);
         CREATE INDEX reminder_segment_range ON reminder_baseline_segments(thread_id, kind, generation, count_from, count_to);`)
     }
+  },
+  {
+    // A local reply is attributed by reply counts, not by page 1 ordinals: per 全串／PO rule
+    // generation it keeps the largest reply count committed before its send intent, the smallest
+    // count of a page seen holding it, the segment boundary at the intent, and its one-time result.
+    // The page 1 ordinal table and its trust flag go away. Earlier replies have no pre-send count:
+    // a pending one becomes unprovable; settled ones keep their result; closed ones belonged to
+    // generations that no longer exist. Personal records, untouched by cache cleanup.
+    version: 25,
+    up(db) {
+      db.exec(`CREATE TABLE reminder_local_replies_v25 (
+          publication_id INTEGER NOT NULL,
+          thread_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('all', 'po')),
+          generation INTEGER NOT NULL,
+          before_count INTEGER CHECK (before_count >= 0),
+          after_segment INTEGER NOT NULL DEFAULT 0,
+          proof_count INTEGER CHECK (proof_count >= 0),
+          status TEXT NOT NULL CHECK (status IN ('pending', 'excluded', 'absorbed', 'unprovable')),
+          CHECK (status <> 'pending' OR before_count IS NOT NULL),
+          PRIMARY KEY (publication_id, kind, generation)
+        );
+        INSERT INTO reminder_local_replies_v25 (publication_id, thread_id, kind, generation, status)
+          SELECT publication_id, thread_id, kind, generation, CASE status
+            WHEN 'excluded' THEN 'excluded' WHEN 'pending' THEN 'unprovable' ELSE 'absorbed' END
+          FROM reminder_local_replies WHERE status <> 'closed';
+        DROP TABLE reminder_local_replies;
+        ALTER TABLE reminder_local_replies_v25 RENAME TO reminder_local_replies;
+        CREATE INDEX reminder_local_reply_thread ON reminder_local_replies(thread_id, status);
+        DROP TABLE reminder_reply_positions;
+        ALTER TABLE reminder_state DROP COLUMN own_positions_trusted;`)
+    }
   }
 ]
 

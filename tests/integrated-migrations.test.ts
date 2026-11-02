@@ -973,7 +973,8 @@ describe('schema v24: reminder baselines record ordered segments', () => {
     const raw = new Database(path, { readonly: true })
     try { return raw.prepare(sql).all() } finally { raw.close() }
   }
-  const kept = ['reminder_rules', 'reminder_state', 'reminder_reply_positions', 'reminder_local_replies', 'reminder_checker', 'publication_attempts']
+  // v25 replaces the local reply tables and drops a reminder_state column (checked below).
+  const kept = ['reminder_rules', 'reminder_checker', 'publication_attempts']
   const shown = (threadPage: number): ThreadPage => ({ threadId: '900', mode: 'all', page: 1, head: post('900'), replies: [],
     replyCount: threadPage, skippedItems: 0, endCandidate: false })
 
@@ -1032,6 +1033,98 @@ describe('schema v24: reminder baselines record ordered segments', () => {
     expect(db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all).toBe(2)
     expect(() => db.saveThreadPage(shown(15), later, 'display')).toThrow(StorageWriteRefusedError)
     expect(() => db.setReminderRule('900', 'all', false, later)).toThrow(StorageWriteRefusedError)
+    db.close()
+    expect(readFileSync(path)).toEqual(original)
+  })
+})
+
+describe('schema v25: local replies are attributed by reply counts, not page 1 ordinals', () => {
+  /**
+   * A v24 database: a counting 全串 rule (generation 3, baseline 11, count 1) with an uncleared
+   * check segment 10→11, and confirmed replies left by v1.1.0 as pending, excluded, cleared,
+   * baseline and (an older generation) closed, plus a page 1 ordinal.
+   */
+  function v24(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 24)).close()
+    const raw = new Database(path)
+    try {
+      raw.prepare("INSERT INTO reminder_rules VALUES ('900', 'all', 1, 3, ?, NULL, ?)").run(at, at)
+      raw.prepare(`INSERT INTO reminder_state (thread_id, kind, baseline, count, first_page, increased_at, checked_at, issues_json)
+        VALUES ('900', 'all', 11, 1, 1, ?, ?, '[]')`).run(later, later)
+      raw.prepare(`INSERT INTO reminder_baseline_segments (id, thread_id, kind, generation, source, round_id, count_from, count_to, added)
+        VALUES (1, '900', 'all', 3, 'check', 'round-a', 10, 11, 1)`).run()
+      raw.prepare("INSERT INTO credentials (id, name, source, imported_at, ciphertext, cookie_id) VALUES (41, 'v24', 'raw', ?, ?, 'Po')").run(at, Buffer.from('v24'))
+      const publication = raw.prepare(`INSERT INTO publication_attempts (id, request_id, editor_id, payload_json, credential_id, forum_id, state, created_at, updated_at, post_id, thread_id, cookie_id)
+        VALUES (?, ?, 'editor', ?, 41, '4', 'confirmed', ?, ?, ?, '900', 'Po')`)
+      const statuses = ['pending', 'excluded', 'cleared', 'baseline', 'closed'] as const
+      for (const [index, status] of statuses.entries()) {
+        const id = 41 + index
+        publication.run(id, `v24-${id}`, JSON.stringify({ target: { kind: 'reply', threadId: '900' } }), at, at, `90${id}`)
+        raw.prepare('INSERT INTO reminder_local_replies VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, '900', `90${id}`, 'all', status === 'closed' ? 2 : 3, status, null)
+      }
+      raw.prepare("INSERT INTO reminder_reply_positions VALUES ('900', 'all', 3, '9041', 11, 11)").run()
+    } finally { raw.close() }
+    return path
+  }
+  const rows = (path: string, sql: string) => {
+    const raw = new Database(path, { readonly: true })
+    try { return raw.prepare(sql).all() } finally { raw.close() }
+  }
+  const kept = ['reminder_rules', 'reminder_baseline_segments', 'reminder_checker', 'publication_attempts', 'credentials']
+  const stateColumns = 'SELECT thread_id, kind, baseline, checked_post_id, count, first_page, increased_at, unverified, issues_json, last_error_json, checked_at FROM reminder_state ORDER BY 1, 2'
+  const holding = (postId: string, count: number): ThreadPage => ({ threadId: '900', mode: 'all', page: 1, head: post('900'),
+    replies: [post(postId)], replyCount: count, skippedItems: 0, endCandidate: false })
+
+  it('keeps rules, generations, counts, growth and sends; a pending v1.1.0 reply becomes unprovable', () => {
+    const path = v24()
+    const before = kept.map((table) => rows(path, `SELECT * FROM ${table} ORDER BY 1, 2`))
+    const state = rows(path, stateColumns)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(kept.map((table) => rows(path, `SELECT * FROM ${table} ORDER BY 1, 2`))).toEqual(before)
+    expect(rows(path, stateColumns)).toEqual(state)
+    expect(rows(path, 'SELECT publication_id, generation, before_count, proof_count, status FROM reminder_local_replies ORDER BY 1')).toEqual([
+      { publication_id: 41, generation: 3, before_count: null, proof_count: null, status: 'unprovable' },
+      { publication_id: 42, generation: 3, before_count: null, proof_count: null, status: 'excluded' },
+      { publication_id: 43, generation: 3, before_count: null, proof_count: null, status: 'absorbed' },
+      { publication_id: 44, generation: 3, before_count: null, proof_count: null, status: 'absorbed' }
+    ])
+    expect(rows(path, "SELECT name FROM sqlite_master WHERE name = 'reminder_reply_positions'")).toEqual([])
+    // A page now showing the pending reply inside the counted growth does not deduct a guess.
+    db.saveThreadPage(holding('9041', 11), later, 'lookup')
+    expect(db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all).toBe(1)
+    expect(rows(path, 'SELECT status FROM reminder_local_replies WHERE publication_id = 41')).toEqual([{ status: 'unprovable' }])
+  })
+
+  it('leaves the v24 file byte for byte when the upgrade fails, then upgrades', () => {
+    const path = v24()
+    const original = readFileSync(path)
+    const failed = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 24), {
+      version: 25, up(connection) {
+        MIGRATIONS.find((migration) => migration.version === 25)!.up(connection)
+        throw new Error('injected failure after replacing the local reply table')
+      }
+    }])
+    connections.push(failed)
+    expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failed.close()
+    expect(readFileSync(path)).toEqual(original)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(rows(path, 'SELECT count(*) AS replies FROM reminder_local_replies')).toEqual([{ replies: 4 }])
+  })
+
+  it('opens a newer schema read-only: counts stay readable, a page that could prove a reply is refused', () => {
+    const path = v24()
+    open(path).close()
+    const raw = new Database(path)
+    try { raw.pragma(`user_version = ${supportedVersion + 1}`) } finally { raw.close() }
+    const original = readFileSync(path)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'read-only', reason: 'newer-schema', schemaVersion: supportedVersion + 1, supportedVersion })
+    expect(db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all).toBe(1)
+    expect(() => db.saveThreadPage(holding('9041', 11), later, 'lookup')).toThrow(StorageWriteRefusedError)
     db.close()
     expect(readFileSync(path)).toEqual(original)
   })
