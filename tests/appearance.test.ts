@@ -213,6 +213,31 @@ describe('theme documents', () => {
 })
 
 describe('settings', () => {
+  it('persists image masking and opacity, rejects invalid updates atomically and recovers older settings', async () => {
+    expect(settingsFromStored(new Map())).toMatchObject({ imageMaskEnabled: false, imageMaskOpacity: 100 })
+    expect(settingsFromStored(new Map<string, unknown>([
+      ['imageMaskEnabled', true], ['imageMaskOpacity', 101], ['density', 'compact']
+    ]))).toMatchObject({ imageMaskEnabled: true, imageMaskOpacity: 100, density: 'compact' })
+    const path = join(folder(), 'image-mask.sqlite')
+    const first = open(path)
+    const service = createSettingsService(storeOf(first))
+    const saved = await service.update({ imageMaskEnabled: true, imageMaskOpacity: 65 })
+    expect(saved).toMatchObject({ saved: true, issues: [], settings: { imageMaskEnabled: true, imageMaskOpacity: 65 } })
+    for (const value of [-1, 101, 0.5, NaN, Infinity, '50', null]) {
+      const refused = await service.update({ imageMaskEnabled: false, imageMaskOpacity: value })
+      expect(refused.saved).toBe(false)
+      expect(refused.settings).toEqual(saved.settings)
+    }
+    expect((await service.update({ imageMaskEnabled: 'true' })).saved).toBe(false)
+    first.close()
+    databases.splice(databases.indexOf(first), 1)
+    const reopened = open(path)
+    expect(reopened.loadSettings()).toMatchObject({ imageMaskEnabled: true, imageMaskOpacity: 65 })
+    const next = createSettingsService(storeOf(reopened))
+    expect(await next.update({ imageMaskOpacity: 0 })).toMatchObject({ saved: true, settings: { imageMaskEnabled: true, imageMaskOpacity: 0 } })
+    expect(await next.update({ imageMaskOpacity: 100 })).toMatchObject({ saved: true, settings: { imageMaskOpacity: 100 } })
+  })
+
   it('refuses a whole update when any part is invalid', () => {
     const result = applySettingsPatch(DEFAULT_SETTINGS, { density: 'compact', reading: { font: 'sans', fontSize: 99, readingWidth: 42 } })
     expect(result).toEqual({ ok: false, issues: [{ kind: 'field', field: 'reading.fontSize', problem: 'range' }] })

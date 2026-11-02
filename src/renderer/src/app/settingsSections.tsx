@@ -734,6 +734,26 @@ export function ReadingSection({ settings, write }: { settings: AppSettings; wri
         <figcaption className="setting-help">预览</figcaption>
         <p className="reading-preview-text">潮水退去，纸页留下。</p>
       </figure>
+      <SettingRow labelId="setting-image-mask" label="图片遮罩">
+        <Switch
+          labelledBy="setting-image-mask"
+          checked={settings.imageMaskEnabled}
+          onToggle={() => write({ imageMaskEnabled: !settings.imageMaskEnabled })}
+        />
+      </SettingRow>
+      {settings.imageMaskEnabled && (
+        <SettingRow labelId="setting-image-mask-opacity" label="遮罩不透明度">
+          <Slider
+            labelledBy="setting-image-mask-opacity"
+            min={0}
+            max={100}
+            step={1}
+            value={settings.imageMaskOpacity}
+            valueText={`${settings.imageMaskOpacity}%`}
+            onChange={(imageMaskOpacity) => write({ imageMaskOpacity }, INPUT_DELAY)}
+          />
+        </SettingRow>
+      )}
     </Section>
   )
 }

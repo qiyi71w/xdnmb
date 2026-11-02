@@ -73,6 +73,29 @@
   overflow-wrap: anywhere;
 }
 
+/* ---------- 图片遮罩 ----------
+   A solid cover over a reading thumbnail (post slot or list row) until revealed; the colour of the
+   防剧透 mask, so it follows the theme. Its opacity is the setting's, set inline. Painted from the
+   thumbnail's first frame: an image decoding underneath never shows uncovered. */
+.image-mask {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in oklch, var(--ink-2) 65%, var(--paper));
+  pointer-events: none;
+}
+
+.post-image-open.is-masked,
+.row-thumb.is-masked {
+  cursor: pointer;
+}
+
+@media (forced-colors: active) {
+  .image-mask {
+    forced-color-adjust: none;
+    background: GrayText;
+  }
+}
+
 /* ---------- Image viewer ----------
    Covers the reader or thread list that opened it (not the navigation or other panes). Frosted
    like the reader toolbar; the image itself sits on the stage unblurred. */

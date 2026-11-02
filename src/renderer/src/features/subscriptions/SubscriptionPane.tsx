@@ -31,6 +31,7 @@ import { formatRecordTime } from '../../lib/time'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
+import { useImageMaskSubpage } from '../image/imageMask'
 import { useImageScope } from '../image/useImageLoad'
 import { useListImageViewer } from '../image/useListImageViewer'
 import { ListFilterPanel, ListFilterToggle, useListFilter } from '../search/FilterFields'
@@ -188,6 +189,9 @@ export function SubscriptionPane({
 
   // ---------- Reads ----------
   const { key: collection, state: collected } = useCollection(overview?.source ?? 'app')
+  // The list, 同步与合并 and each collection shown (App／网页 source, UUID or binding) are separate
+  // pages for the 图片遮罩: switching masks their images again. Refreshing the same one keeps them.
+  useImageMaskSubpage(`${view}:${collection ?? ''}`)
   /**
    * The collection a round was started for since this page was last shown. Showing the page (on
    * mount, when restored or remembered, or brought back) and every change of the collection it
