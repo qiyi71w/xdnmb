@@ -28,6 +28,10 @@ interface SegmentRow {
   id: number; source: 'check' | 'open'; count_from: number | null; count_to: number | null
   added: number; excluded: number; cleared: number
 }
+interface FollowUpRow {
+  publication_id: number; thread_id: string; kind: 'all' | 'po'; generation: number
+  before_count: number; after_segment: number; post_id: string; baseline: number
+}
 type LocalReplyResult = 'excluded' | 'absorbed' | 'unprovable'
 
 function emptyRules(): ThreadReminders['rules'] {
@@ -275,24 +279,58 @@ export class ReminderDatabase {
   }
 
   /**
-   * Confirmed pending replies without proof whose follow-up read was not sent, in enabled rules
-   * with a baseline. A reply qualifies only while the baseline growth since its pre-send count, if
-   * any, is entirely uncleared check growth: then the check counting up to a page that holds it
-   * settles it with a deduction. Open absorption, cleared or uncounted growth already in
-   * the interval would make it unprovable whatever the page shows, so no page is read for it.
+   * Confirmed pending replies of the thread without proof whose follow-up read was not sent, in
+   * enabled rules with a baseline. A reply qualifies only while the baseline growth since its
+   * pre-send count, if any, is entirely uncleared check growth: then the check counting up to a page
+   * that holds it settles it with a deduction. Open absorption, cleared or uncounted growth already
+   * in the interval would make it unprovable whatever the page shows, so no page is read for it.
    */
-  followUps(): ReminderFollowUp[] {
-    const db = this.readable()
-    const rows = db.prepare<[], { publication_id: number; thread_id: string; kind: 'all' | 'po'; generation: number
-      before_count: number; after_segment: number; post_id: string; baseline: number }>(`
+  followUps(threadId: string): ReminderFollowUp[] {
+    return this.useful(this.followUpRows('l.thread_id = ? AND l.follow_up_sent = 0', [threadId]))
+      .map((row) => ({ publicationId: row.publication_id, kind: row.kind, generation: row.generation, threadId: row.thread_id,
+        postId: row.post_id, beforeCount: row.before_count }))
+  }
+
+  /**
+   * Right before a follow-up request goes out: of these replies, taken from this check's own
+   * `followUps`, those still qualifying are marked sent in one transaction and returned. Whatever
+   * committed since (a proof, an open, a fall, a new generation) is seen here, so no request goes
+   * out for a reply it can no longer settle.
+   */
+  claimFollowUps(keys: LocalReplyKey[]): LocalReplyKey[] {
+    const db = this.database()
+    const mark = db.prepare('UPDATE reminder_local_replies SET follow_up_sent = 1 WHERE publication_id = ? AND kind = ? AND generation = ?')
+    return db.transaction(() => {
+      const rows = keys.flatMap((key) => this.followUpRows('l.publication_id = ? AND l.kind = ? AND l.generation = ?',
+        [key.publicationId, key.kind, key.generation]))
+      return this.useful(rows).map((row) => {
+        mark.run(row.publication_id, row.kind, row.generation)
+        return { publicationId: row.publication_id, kind: row.kind, generation: row.generation }
+      })
+    }).immediate()
+  }
+
+  /** Claimed, but their request never went out: a later check may still read their page. */
+  releaseFollowUps(keys: LocalReplyKey[]): void {
+    const db = this.database()
+    const mark = db.prepare('UPDATE reminder_local_replies SET follow_up_sent = 0 WHERE publication_id = ? AND kind = ? AND generation = ?')
+    db.transaction(() => { for (const key of keys) mark.run(key.publicationId, key.kind, key.generation) }).immediate()
+  }
+
+  private followUpRows(where: string, args: Array<string | number>): FollowUpRow[] {
+    return this.readable().prepare<Array<string | number>, FollowUpRow>(`
       SELECT l.publication_id, l.thread_id, l.kind, l.generation, l.before_count, l.after_segment, p.post_id, s.baseline
       FROM reminder_local_replies l
       JOIN publication_attempts p ON p.id = l.publication_id AND p.state = 'confirmed'
       JOIN reminder_rules r ON r.thread_id = l.thread_id AND r.kind = l.kind AND r.generation = l.generation AND r.enabled = 1
       JOIN reminder_state s ON s.thread_id = l.thread_id AND s.kind = l.kind
-      WHERE l.status = 'pending' AND l.proof_count IS NULL AND l.follow_up_sent = 0 AND s.baseline IS NOT NULL
-      ORDER BY l.thread_id, l.kind, l.before_count, l.publication_id`).all()
-    const segments = db.prepare<[string, string, number, number], SegmentRow>(`SELECT id, source, count_from, count_to, added, excluded, cleared
+      WHERE l.status = 'pending' AND l.proof_count IS NULL AND s.baseline IS NOT NULL AND ${where}
+      ORDER BY l.kind, l.before_count, l.publication_id`).all(...args)
+  }
+
+  /** Rows whose baseline growth since the pre-send count is still entirely uncleared check growth. */
+  private useful(rows: FollowUpRow[]): FollowUpRow[] {
+    const segments = this.readable().prepare<[string, string, number, number], SegmentRow>(`SELECT id, source, count_from, count_to, added, excluded, cleared
       FROM reminder_baseline_segments WHERE thread_id = ? AND kind = ? AND generation = ? AND id > ? ORDER BY id`)
     return rows.filter((row) => {
       const after = segments.all(row.thread_id, row.kind, row.generation, row.after_segment)
@@ -300,14 +338,7 @@ export class ReminderDatabase {
       const inside = after.filter((segment) => segment.count_to! > row.before_count && segment.count_from! < row.baseline)
       if (inside.some((segment) => segment.source !== 'check' || segment.cleared !== 0)) return false
       return covered(inside, row.before_count, row.baseline) >= row.baseline - row.before_count
-    }).map((row) => ({ publicationId: row.publication_id, kind: row.kind, generation: row.generation, threadId: row.thread_id,
-      postId: row.post_id, beforeCount: row.before_count }))
-  }
-
-  sendFollowUps(keys: LocalReplyKey[]): void {
-    const db = this.database()
-    const mark = db.prepare('UPDATE reminder_local_replies SET follow_up_sent = 1 WHERE publication_id = ? AND kind = ? AND generation = ?')
-    db.transaction(() => { for (const key of keys) mark.run(key.publicationId, key.kind, key.generation) }).immediate()
+    })
   }
 
   missFollowUps(keys: LocalReplyKey[]): void {

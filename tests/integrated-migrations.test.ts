@@ -1198,7 +1198,7 @@ describe('schema v26: local replies keep whether their follow-up page was read',
       { publication_id: 51, follow_up_sent: 0 }, { publication_id: 52, follow_up_sent: 0 }
     ])
     // The pending reply can still have its page: the growth since 39 is uncleared check growth.
-    expect(db.reminderFollowUps()).toEqual([{ publicationId: 51, kind: 'all', generation: 2, threadId: '900', postId: '9051', beforeCount: 39 }])
+    expect(db.reminderFollowUps('900')).toEqual([{ publicationId: 51, kind: 'all', generation: 2, threadId: '900', postId: '9051', beforeCount: 39 }])
   })
 
   it('leaves the v25 file byte for byte when the upgrade fails, then upgrades', () => {

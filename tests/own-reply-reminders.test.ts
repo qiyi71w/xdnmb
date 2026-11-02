@@ -70,7 +70,8 @@ async function harness(options: { own?: 'Po' | 'Other'; initialCount?: number; a
   const hidden = new Set<string>()
   /** The next read of this page fails with an HTTP error. */
   let failing: string | null = null
-  const hooks: { afterBatch?: () => Promise<void> } = {}
+  /** `beforeClaim`: runs once a follow-up request is admitted, before it claims its replies. */
+  const hooks: { afterBatch?: () => Promise<void>; beforeClaim?: () => Promise<void> } = {}
   const requests: string[] = []
   const server = createServer(async (request, response) => {
     const url = new URL(request.url!, 'http://local')
@@ -143,6 +144,13 @@ async function harness(options: { own?: 'Po' | 'Other'; initialCount?: number; a
   const signal = new AbortController().signal
   const start = async (onRecover = false) => {
     const store = asStore(db)
+    const claim = store.claimReminderFollowUps
+    store.claimReminderFollowUps = async (keys) => {
+      const before = hooks.beforeClaim
+      hooks.beforeClaim = undefined
+      await before?.()
+      return claim(keys)
+    }
     const reminders = createReminderService({ store, client: clientFor(null), scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }),
       afterBatch: async () => { await hooks.afterBatch?.() },
       now: () => tick().toISOString(), monotonicNow: () => monotonic, notifier: { show(message) { notifications.push(message.body); return true } } })
@@ -335,6 +343,47 @@ it('no follow-up page when an open already absorbed part of the interval: findin
   await h.check()
   expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
   expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
+})
+
+it('no follow-up page when the check’s own page 1 shows a fall that voids the reply', async () => {
+  const h = await harness({ initialCount: 200, own: 'Other' })
+  await h.send()
+  h.peer(); h.peer()
+  await h.read('all', 1, 'lookup')
+  // Page 1 now reads 202 after 203 was saved: the fall leaves the reply unprovable.
+  h.setDrop(1)
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 2, po: 0, quote: 0 })
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
+})
+
+it('no follow-up request once a proof, an open or a new generation committed while it waited to go out', async () => {
+  const cases = [
+    // A lookup page shows the reply: proven, so this check's growth to 203 deducts it without a follow-up.
+    { name: 'proof', reader: ['all', 11, 'lookup'], counts: { all: 2, po: 0, quote: 0 }, page: 11 },
+    // The reader absorbs 200→203: no counted growth is left to deduct from.
+    { name: 'open', reader: ['all', 1, 'display'], counts: { all: 0, po: 0, quote: 0 }, page: 1 },
+    { name: 'generation', reader: null, counts: { all: 0, po: 0, quote: 0 }, page: null }
+  ] as const
+  for (const item of cases) {
+    const h = await harness({ initialCount: 200, own: 'Other' })
+    await h.send()
+    h.peer(); h.peer()
+    let ran = false
+    h.hooks.beforeClaim = async () => {
+      ran = true
+      if (item.reader === null) {
+        h.db.setReminderRule('100', 'all', false, at)
+        h.db.setReminderRule('100', 'all', true, at)
+      } else await h.read(item.reader[0], item.reader[1], item.reader[2])
+    }
+    await h.check()
+    expect(ran, item.name).toBe(true)
+    expect(await h.counts(), item.name).toEqual(item.counts)
+    // The only page beyond the check's page 1 is the reader's own read.
+    expect(h.requests, item.name).toEqual(['/api/thread?id=100&page=1',
+      ...item.page === null ? [] : [`/api/thread?id=100&page=${item.page}`], '/api/po?id=100&page=1'])
+  }
 })
 
 it('a reply with a non-PO cookie never touches the PO count; a peer PO reply still counts', async () => {

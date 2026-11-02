@@ -56,7 +56,11 @@ interface FollowUpRun {
   replies: ReminderFollowUp[]
   /** Refused without a cookie; read again with the browse cookie. */
   withCookie: boolean
+  /** A request for it went out: its replies' chance is used, whatever became of that request. */
+  sent: boolean
 }
+/** Right before its request: none of the follow-up's replies can be settled by its page any more. */
+class FollowUpNotNeeded extends Error {}
 type Step = 'all' | 'po' | 'quote'
 interface ThreadRun {
   threadId: string
@@ -68,6 +72,11 @@ interface ThreadRun {
   first: Partial<Record<ReadingMode, ThreadPage>>
   /** Modes whose reply-count read was refused without a cookie; read again with the browse cookie. */
   withCookie: Set<ReadingMode>
+  /**
+   * Publications of the follow-up candidates confirmed before this check first asked for page 1:
+   * only their replies are certain to be inside a page 1 count, so only they can be planned.
+   */
+  confirmed: Set<number> | null
   followUps: Partial<Record<ReadingMode, FollowUpRun>>
   quote: QuoteRun | null
 }
@@ -103,7 +112,6 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   const states = new Map((await store.reminderStates()).map((state) => [`${state.threadId}:${state.kind}`, state]))
   const cookieIds = new Set(await store.reminderCookieIds())
   const hasCookie = (await store.listCredentials()).length > 0
-  const followUps = await store.reminderFollowUps()
   const runs: ThreadRun[] = []
   let remaining = ROUND_READS
   let complete = true
@@ -116,7 +124,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     if (kinds.all || kinds.quote) steps.push('all')
     if (kinds.po) steps.push('po')
     if (kinds.quote) steps.push('quote')
-    runs.push({ threadId, attempted: false, kinds, steps, first: {}, withCookie: new Set(), followUps: {}, quote: null })
+    runs.push({ threadId, attempted: false, kinds, steps, first: {}, withCookie: new Set(), confirmed: null, followUps: {}, quote: null })
   }
 
   async function write(run: ThreadRun, kind: ReminderKind, update: Omit<ReminderUpdate, 'threadId' | 'kind' | 'generation' | 'at'>): Promise<void> {
@@ -151,12 +159,24 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
 
   /**
    * Each transport request consumes one slot, including a separately scheduled page-100 probe.
-   * `sending` runs once the lane admits the request, right before it goes out.
+   * A follow-up's request claims its replies once the lane admits it: only those still qualifying
+   * go on, and none left skips the request. The request is sent in the same synchronous step that
+   * last checks for cancellation; cancelled before that, an unsent follow-up hands its claim back.
    */
-  function requestRunner(run: ThreadRun, budget: { remaining: number }, sending?: () => Promise<void>): ForumRequestRunner {
+  function requestRunner(run: ThreadRun, budget: { remaining: number }, followUp?: FollowUpRun): ForumRequestRunner {
     return (signal, work) => deps.scheduler.run('background', signal, async (requestSignal) => {
       if (requestSignal.aborted) throw new ReadCancelledError()
-      await sending?.()
+      if (followUp !== undefined) {
+        const claimed = await store.claimReminderFollowUps(followUp.replies.map(key))
+        // One plan holds one kind and generation: the publication tells its replies apart.
+        followUp.replies = followUp.replies.filter((reply) => claimed.some((item) => item.publicationId === reply.publicationId))
+        if (requestSignal.aborted) {
+          if (!followUp.sent && claimed.length > 0) await store.releaseReminderFollowUps(claimed)
+          throw new ReadCancelledError()
+        }
+        if (followUp.replies.length === 0) throw new FollowUpNotNeeded()
+        followUp.sent = true
+      }
       run.attempted = true
       budget.remaining--
       remaining--
@@ -164,12 +184,12 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     })
   }
   async function readPage(budget: { remaining: number }, run: ThreadRun, mode: ReadingMode, number: number, anonymous: boolean,
-    sending?: () => Promise<void>): Promise<ThreadPage | null> {
+    followUp?: FollowUpRun): Promise<ThreadPage | null> {
     if (input.signal.aborted) throw new ReadCancelledError()
     // Reserve room for a possible probe without charging for an HTTP request that never happens.
     const reserve = number > 100 ? 2 : 1
     if (Math.min(budget.remaining, remaining) < reserve) return null
-    const value = await deps.client.getThreadPage(run.threadId, mode, number, input.signal, { anonymous, requestRunner: requestRunner(run, budget, sending) })
+    const value = await deps.client.getThreadPage(run.threadId, mode, number, input.signal, { anonymous, requestRunner: requestRunner(run, budget, followUp) })
     assertReadablePage(value, await store.getThreadCoverage(value.threadId, value.mode))
     await store.saveThreadPage(value, now())
     return value
@@ -182,8 +202,10 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   const holds = (page: ThreadPage, reply: ReminderFollowUp) => page.replies.some((item) => item.id === reply.postId)
 
   /**
-   * After page 1 of `mode`: local replies of the kind that page 1's count has passed get one page,
-   * the one right after their pre-send count. Where that is page 1, page 1 decides at no cost; the
+   * After page 1 of `mode` is saved: local replies of the kind that page 1's count has passed get
+   * one page, the one right after their pre-send count. Of the replies confirmed before page 1 was
+   * asked for, those still qualifying are read from storage now, so what page 1 itself changed (a
+   * fall voiding them, a proof) counts. Where that page is page 1, page 1 decides at no cost; the
    * rest wait for the first such page, shared by every reply on it. Replies not reached stay for a
    * later check.
    */
@@ -191,27 +213,29 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     const value = run.kinds[mode]
     const count = first.replyCount
     if (!value || count === null) return
-    const replies = followUps.filter((reply) => reply.threadId === run.threadId && reply.kind === mode
-      && reply.generation === value.rule.generation && reply.beforeCount < count)
+    const replies = (await store.reminderFollowUps(run.threadId)).filter((reply) => run.confirmed!.has(reply.publicationId)
+      && reply.kind === mode && reply.generation === value.rule.generation && reply.beforeCount < count)
     const missed = replies.filter((reply) => pageOf(reply.beforeCount + 1) === 1 && !holds(first, reply))
     if (missed.length > 0) await store.missReminderFollowUps(missed.map(key))
     const later = replies.filter((reply) => pageOf(reply.beforeCount + 1) > 1)
     if (later.length === 0) return
     const page = pageOf(later[0]!.beforeCount + 1)
-    run.followUps[mode] = { page, replies: later.filter((reply) => pageOf(reply.beforeCount + 1) === page), withCookie: false }
+    run.followUps[mode] = { page, replies: later.filter((reply) => pageOf(reply.beforeCount + 1) === page), withCookie: false, sent: false }
   }
 
   /**
    * Page 1 of `mode`, and any follow-up page: the reply count against the 全串 or PO baseline;
    * 全部 also sets up the quote pages. A follow-up page holding a reply proves it and its count is
    * this check's count, so the counted growth covers the reply's whole interval. A page without
-   * them leaves them unprovable; a failed one counts page 1. Its chance is used once the request
-   * goes out; one not sent (budget, abort) is tried by a later check.
+   * them leaves them unprovable; a failed one counts page 1, as does a follow-up no longer needed
+   * when its request would go out. Its chance is used once a request actually goes out; one not
+   * sent (budget, abort) is tried by a later check.
    */
   async function countStep(run: ThreadRun, mode: ReadingMode, budget: { remaining: number }): Promise<boolean> {
     let first = run.first[mode]
     if (first === undefined) {
       let page: ThreadPage | null
+      run.confirmed ??= new Set((await store.reminderFollowUps(run.threadId)).map((reply) => reply.publicationId))
       try {
         page = await readPage(budget, run, mode, 1, !run.withCookie.has(mode))
       } catch (error) {
@@ -230,16 +254,18 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     if (plan !== undefined) {
       let page: ThreadPage | null = null
       try {
-        page = await readPage(budget, run, mode, plan.page, !plan.withCookie, () => store.sendReminderFollowUps(plan.replies.map(key)))
+        page = await readPage(budget, run, mode, plan.page, !plan.withCookie, plan)
         if (page === null) return false
       } catch (error) {
         if (refusedAnonymous(error, plan.withCookie)) {
           plan.withCookie = true
           return true
         }
-        if (!(error instanceof ForumReadError)) throw error
-        // A rate limit or captcha still stops the round once page 1 is counted.
-        if (error.error.kind === 'rate-limited') stop = error
+        if (!(error instanceof FollowUpNotNeeded)) {
+          if (!(error instanceof ForumReadError)) throw error
+          // A rate limit or captcha still stops the round once page 1 is counted.
+          if (error.error.kind === 'rate-limited') stop = error
+        }
       }
       delete run.followUps[mode]
       const found = page
@@ -403,7 +429,8 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
             if (!(step === 'quote' ? await quoteStep(run, budget) : await countStep(run, step, budget))) break
           }
         } catch (error) {
-          if (input.signal.aborted || error instanceof ReadCancelledError) break
+          // Cancellation ends the round quietly; a storage failure (a claim not handed back) never does.
+          if (error instanceof ReadCancelledError || (input.signal.aborted && error instanceof ForumReadError)) break
           if (!(error instanceof ForumReadError)) throw error
           await failStep(run, error.error)
           if (error.error.kind === 'rate-limited') rateLimit = error.error

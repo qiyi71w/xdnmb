@@ -97,10 +97,15 @@ export interface ReminderStore {
   reminderQuoteSources(postIds: PostId[]): Promise<QuoteSource[]>
   /** `false` when the rule was disabled or re-enabled since the snapshot: nothing was written. */
   updateReminderState(update: ReminderUpdate): Promise<boolean>
-  /** Local replies a check may read one more page for. */
-  reminderFollowUps(): Promise<ReminderFollowUp[]>
-  /** Their follow-up read is going out now: no later check reads one for them. */
-  sendReminderFollowUps(keys: LocalReplyKey[]): Promise<void>
+  /** Local replies of the thread a check may read one more page for. */
+  reminderFollowUps(threadId: ThreadId): Promise<ReminderFollowUp[]>
+  /**
+   * Their follow-up read is about to go out: those still qualifying are marked sent, so no later
+   * check reads one for them, and returned. None returned: the request is not needed.
+   */
+  claimReminderFollowUps(keys: LocalReplyKey[]): Promise<LocalReplyKey[]>
+  /** Claimed, but the request never went out: a later check may read their page after all. */
+  releaseReminderFollowUps(keys: LocalReplyKey[]): Promise<void>
   /** Their follow-up page did not hold them: still pending without proof, they become unprovable. */
   missReminderFollowUps(keys: LocalReplyKey[]): Promise<void>
   /** Threads with an uncleared, unexcluded increment from this check, in current generations. */

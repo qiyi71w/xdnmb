@@ -31,18 +31,25 @@ function post(id: string, content = '', userHash = 'Someone') {
 
 async function harness() {
   const folder = mkdtempSync(join(tmpdir(), 'xidao-reminder-budget-'))
-  const db = openReadingDatabase(join(folder, 'app.sqlite'))
+  const path = join(folder, 'app.sqlite')
+  let db = openReadingDatabase(path)
   const credentialId = db.insertCredential({ name: 'Mine', cookieId: 'Mine', source: 'raw', importedAt: at, ciphertext: Uint8Array.of(1) }).id
-  const store = asStore(db)
+  let store = asStore(db)
   const threads = new Map<string, { count: number; refsPerReply: number }>()
   const seen: Array<{ id: string; path: string; page: number }> = []
-  const remote = { rateLimitPage: 0, captcha: false }
+  /** `holdPage`: that page's next response waits; `held` settles once its request arrived. */
+  const remote = { rateLimitPage: 0, captcha: false, holdPage: 0, held: Promise.withResolvers<void>() }
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://local')
     const id = url.searchParams.get('id') ?? ''
     const page = Number(url.searchParams.get('page') ?? 0)
     seen.push({ id, path: url.pathname, page })
     response.setHeader('Content-Type', 'application/json')
+    if (page === remote.holdPage && page > 0) {
+      remote.holdPage = 0
+      remote.held.resolve()
+      return
+    }
     if (page === remote.rateLimitPage && page > 0) {
       if (remote.captcha) response.end(JSON.stringify('饼干需要验证码'))
       else { response.statusCode = 429; response.end('{}') }
@@ -61,7 +68,8 @@ async function harness() {
     }
     response.end(JSON.stringify({ ...post(id), ReplyCount: thread.count, Replies: replies }))
   })
-  resources.push({ folder, db, server })
+  const resource = { folder, db, server }
+  resources.push(resource)
   const listening = Promise.withResolvers<void>()
   server.listen(0, '127.0.0.1', () => listening.resolve())
   await listening.promise
@@ -73,16 +81,25 @@ async function harness() {
   const scheduler = createRequestScheduler({ backgroundSpacingMs: 0 })
   let round = 0
   return {
-    db, credentialId, store, threads, seen, remote,
+    get db() { return db }, get store() { return store }, credentialId, threads, seen, remote,
     async enable(id: string, ...kinds: Array<'all' | 'quote' | 'po'>) {
       for (const kind of kinds) await store.setReminderRule(id, kind, true, at)
     },
-    async round() {
+    async round(signal = new AbortController().signal) {
       seen.length = 0
       const checkedAt = new Date(Date.parse(at) + ++round * 60_000).toISOString()
       return runReminderRound({ store, client, scheduler, now: () => checkedAt, changed() {} }, {
-        rules: await store.reminderRuleSnapshots(), signal: new AbortController().signal, increased: new Set()
+        rules: await store.reminderRuleSnapshots(), signal, increased: new Set()
       })
+    },
+    async allCount() {
+      return (await store.reminderOverview()).threads.find((row) => row.threadId === '100')?.counts.all
+    },
+    /** Closes the database and opens the file again, as a restart does. */
+    reopen() {
+      db.close()
+      db = resource.db = openReadingDatabase(path)
+      store = asStore(db)
     }
   }
 }
@@ -209,17 +226,22 @@ describe('reminder HTTP budgets', () => {
     expect(h.seen.length).toBeLessThanOrEqual(100)
   })
 
-  it('a follow-up page the round budget cannot send waits for the next round, which sends it first', async () => {
+  /** Thread 100 checked at 200, then a confirmed local reply, number 201, and a peer: page 1 reads 202. */
+  async function pendingReply() {
     const h = await harness()
     const thread = { count: 200, refsPerReply: 0 }
     h.threads.set('100', thread)
     await h.enable('100', 'all')
     await h.round()
-    // A confirmed local reply, number 201 of thread 100, then a peer: page 1 reads 202.
     const sent = h.db.createPublication({ requestId: 'own', editorId: 'editor', forumId: '4', at,
       payload: { draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: h.credentialId, fields: { ...EMPTY_FIELDS, content: 'mine' }, attachmentId: null } })
     h.db.finishPublication({ id: sent.id, state: 'confirmed', problem: null, postId: '1000201', threadId: '100', at })
     thread.count = 202
+    return h
+  }
+
+  it('a follow-up page the round budget cannot send waits for the next round, which sends it first', async () => {
+    const h = await pendingReply()
     // 99 threads never checked come first: thread 100's page 1 is the round's 100th request.
     for (let n = 101; n < 200; n++) {
       h.threads.set(String(n), { count: 0, refsPerReply: 0 })
@@ -228,11 +250,68 @@ describe('reminder HTTP budgets', () => {
     expect((await h.round()).complete).toBe(false)
     expect(h.seen).toHaveLength(100)
     expect(h.seen.filter((read) => read.id === '100').map((read) => read.page)).toEqual([1])
-    expect((await h.store.reminderOverview()).threads.find((row) => row.threadId === '100')?.counts.all).toBe(0)
+    expect(await h.allCount()).toBe(0)
     await h.round()
     expect(h.seen.slice(0, 2).map((read) => `${read.id}:${read.page}`)).toEqual(['100:1', '100:11'])
-    expect((await h.store.reminderOverview()).threads.find((row) => row.threadId === '100')?.counts.all).toBe(1)
+    expect(await h.allCount()).toBe(1)
     await h.round()
     expect(h.seen.filter((read) => read.id === '100').map((read) => read.page)).toEqual([1])
+  })
+
+  it('a follow-up cancelled before its request goes out keeps its chance, also across reopening the database', async () => {
+    const h = await pendingReply()
+    const claim = h.store.claimReminderFollowUps
+    const claimed = Promise.withResolvers<void>()
+    const answer = Promise.withResolvers<void>()
+    // The claim has committed in the worker; the check is cancelled while its answer is on the way back.
+    h.store.claimReminderFollowUps = async (keys) => {
+      const value = await claim(keys)
+      claimed.resolve()
+      await answer.promise
+      return value
+    }
+    const abort = new AbortController()
+    const round = h.round(abort.signal)
+    await claimed.promise
+    abort.abort()
+    answer.resolve()
+    await round
+    expect(h.seen.map((read) => read.page)).toEqual([1])
+    expect(await h.allCount()).toBe(0)
+    h.reopen()
+    await h.round()
+    expect(h.seen.map((read) => read.page)).toEqual([1, 11])
+    expect(await h.allCount()).toBe(1)
+    await h.round()
+    expect(h.seen.map((read) => read.page)).toEqual([1])
+  })
+
+  it('a claim that cannot be handed back after a cancellation fails the round instead of passing as cancelled', async () => {
+    const h = await pendingReply()
+    const claim = h.store.claimReminderFollowUps
+    const abort = new AbortController()
+    h.store.claimReminderFollowUps = async (keys) => {
+      const value = await claim(keys)
+      abort.abort()
+      return value
+    }
+    h.store.releaseReminderFollowUps = async () => { throw new Error('storage refused') }
+    await expect(h.round(abort.signal)).rejects.toThrow('storage refused')
+    expect(h.seen.map((read) => read.page)).toEqual([1])
+  })
+
+  it('a follow-up whose request went out has used its chance, even when the check is cancelled before the answer', async () => {
+    const h = await pendingReply()
+    h.remote.holdPage = 11
+    const abort = new AbortController()
+    const round = h.round(abort.signal)
+    await h.remote.held.promise
+    abort.abort()
+    await round
+    expect(h.seen.map((read) => read.page)).toEqual([1, 11])
+    h.reopen()
+    await h.round()
+    expect(h.seen.map((read) => read.page)).toEqual([1])
+    expect(await h.allCount()).toBe(2)
   })
 })
