@@ -269,7 +269,9 @@ const api: XidaoApi = {
   app: {
     getStatus: () => ipcRenderer.invoke(IpcChannel.getStatus),
     restartToRetryUpgrade: () => ipcRenderer.invoke(IpcChannel.restartToRetryUpgrade),
-    restartToUpgradeWithoutBackup: () => ipcRenderer.invoke(IpcChannel.restartToUpgradeWithoutBackup)
+    restartToUpgradeWithoutBackup: () => ipcRenderer.invoke(IpcChannel.restartToUpgradeWithoutBackup),
+    getRestoreInfo: () => ipcRenderer.invoke(IpcChannel.getRestoreInfo),
+    restoreBackupAndRestart: () => ipcRenderer.invoke(IpcChannel.restoreBackupAndRestart)
   }
 }
 

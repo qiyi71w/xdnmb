@@ -160,6 +160,7 @@ const NAV_FULL = 8 + RAIL_WIDTH
 
 export function App() {
   const [storage, setStorage] = useState<StorageStatus | null>(null)
+  const [restoreAbandoned, setRestoreAbandoned] = useState(false)
   const [platform, setPlatform] = useState<AppPlatform | null>(null)
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
   useAppearance(settings)
@@ -212,6 +213,7 @@ export function App() {
       .then((status) => {
         if (!alive) return
         setStorage(status.storage)
+        setRestoreAbandoned(status.restoreAbandoned)
         setPlatform(status.platform)
       })
       .catch(() => undefined)
@@ -1466,7 +1468,7 @@ export function App() {
           style={platform === 'darwin' ? ({ '--page-zoom': String(pageZoom) } as CSSProperties) : undefined}
           ref={appRef}
         >
-          <StorageBanner storage={storage} />
+          <StorageBanner storage={storage} restoreAbandoned={restoreAbandoned} />
           <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
           <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
           <ContentRegistryContext.Provider value={registry}>

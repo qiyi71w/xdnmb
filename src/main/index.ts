@@ -34,6 +34,8 @@ import { createRequestScheduler } from './reading/scheduler'
 import type { AppStore } from './storage/contract'
 import { openReadingStore } from './storage/store'
 import { markUpgradeWithoutBackup } from './storage/backup'
+import { settleRestore, type RestoreOutcome } from './storage/restore-journal'
+import { createRestoreService } from './storage/restore-service'
 import { createUpgradeService } from './storage/upgrade'
 import createStorageWorker from './storage/worker?nodeWorker'
 import { createSubscriptionService } from './subscriptions/service'
@@ -298,12 +300,23 @@ async function start(): Promise<void> {
   denyAll.setPermissionCheckHandler((contents, permission, _origin, details) =>
     permission === 'local-fonts' && contents === mainWindow?.webContents && details.isMainFrame && typeof details.requestingUrl === 'string' && isAppDocument(details.requestingUrl))
 
-  // A restore that a later version prepares runs here: the lock is held, the previous process has
-  // ended, and the database is not open yet.
+  // A restore the previous run prepared is carried out (or abandoned) here: the lock is held, the
+  // previous process has ended, and the database is not open yet. One that cannot be settled
+  // leaves the database unopened this run; the next start continues it.
+  const databasePath = join(app.getPath('userData'), 'xidao.sqlite')
+  let restore: RestoreOutcome | null
+  try {
+    restore = settleRestore(databasePath)
+  } catch {
+    console.error('[storage] restore not settled')
+    restore = null
+  }
+  if (restore === 'abandoned') console.error('[storage] restore abandoned')
   const openedStore = await openReadingStore({
-    databasePath: join(app.getPath('userData'), 'xidao.sqlite'),
+    databasePath,
     appVersion: app.getVersion(),
-    createWorker: createStorageWorker
+    createWorker: createStorageWorker,
+    skipOpen: restore === null
   })
   store = openedStore
   if (openedStore.status.state !== 'ready') console.error('[storage] status', openedStore.status.state)
@@ -622,12 +635,13 @@ async function start(): Promise<void> {
       reminders.configure(saved)
       updateService.configure(saved)
     }),
-    getStatus: () => ({ storage: openedStore.status, platform }),
+    getStatus: () => ({ storage: openedStore.status, platform, restoreAbandoned: restore === 'abandoned' }),
     upgrade: createUpgradeService({
       status: () => openedStore.status,
       markWithoutBackup: (schemaVersion) => markUpgradeWithoutBackup(app.getPath('userData'), schemaVersion),
       restart: () => controller.requestQuit('restart')
     }),
+    restore: createRestoreService({ store: openedStore, restart: () => controller.requestQuit('restart') }),
     async chooseSavePath(sender, suggestedName, format) {
       const window = BrowserWindow.fromWebContents(sender)
       const extension = IMAGE_FORMAT_EXTENSION[format]

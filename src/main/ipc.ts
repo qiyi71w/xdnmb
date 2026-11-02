@@ -40,6 +40,7 @@ import { MAX_SEARCH_QUERY_LENGTH, SEARCH_CHANNELS, SEARCH_SITE_URLS, type Search
 import type { OnlineSearchService } from './online-search/service'
 import type { AccountService } from './account/service'
 import type { UpgradeService } from './storage/upgrade'
+import type { RestoreService } from './storage/restore-service'
 
 function searchChannel(value: unknown): SearchChannel {
   if (typeof value !== 'string' || !(SEARCH_CHANNELS as readonly string[]).includes(value)) throw new InvalidRequestError()
@@ -90,6 +91,8 @@ interface IpcDeps {
   getStatus: () => AppStatus
   /** 重新启动重试 / 不备份升级 after a failed pre-upgrade backup. */
   upgrade: UpgradeService
+  /** 读取恢复信息 / 恢复并重新启动 while a newer version's data is open read-only. */
+  restore: RestoreService
   /** Operating system light/dark preference, for exporting a built-in scheme under `system`. */
   systemPrefersDark: () => boolean
   /** True only for the app's own renderer document in its main frame. */
@@ -330,7 +333,7 @@ export interface IpcRegistration {
 
 export function registerIpc({
   reading, images, identities, account, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
-  analytics, announcements, updates, getStatus, upgrade, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
+  analytics, announcements, updates, getStatus, upgrade, restore, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): IpcRegistration {
   const owner = (sender: WebContents): string => String(sender.id)
   const operations = new OperationRegistry()
@@ -979,6 +982,14 @@ export function registerIpc({
   handle(IpcChannel.restartToUpgradeWithoutBackup, async (_event, raw) => {
     if (raw !== undefined) throw new InvalidRequestError()
     return upgrade.restartWithoutBackup()
+  })
+  handle(IpcChannel.getRestoreInfo, async (_event, raw) => {
+    if (raw !== undefined) throw new InvalidRequestError()
+    return restore.info()
+  })
+  handle(IpcChannel.restoreBackupAndRestart, async (_event, raw) => {
+    if (raw !== undefined) throw new InvalidRequestError()
+    return restore.restoreAndRestart()
   })
 
   return {

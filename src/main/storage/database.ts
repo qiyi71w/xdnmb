@@ -40,6 +40,7 @@ import { emptyReadingState } from './reading-state'
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
 import { takeUpgradeWithoutBackup, writePreUpgradeBackup } from './backup'
+import { prepareRestore, restoreInfo, type RestoreSource } from './restore'
 import { RetainedContentDatabase, contentTick, touchThread } from './retained'
 import { ReminderDatabase } from './reminders'
 import { SearchDatabase, projectSearchPost } from './search'
@@ -276,7 +277,9 @@ const UPSERT_POST = `
 class SqliteReadingDatabase implements ReadingDatabase {
   constructor(
     private db: Database.Database | null,
-    private currentStatus: StorageStatus
+    private currentStatus: StorageStatus,
+    /** The app's own database (opened with the pre-upgrade backup), which alone can be restored. */
+    private readonly restorablePath: string | null = null
   ) {}
 
   private readonly content = new RetainedContentDatabase(
@@ -350,6 +353,16 @@ class SqliteReadingDatabase implements ReadingDatabase {
 
   get status(): StorageStatus {
     return this.currentStatus
+  }
+
+  restoreInfo: ReadingDatabase['restoreInfo'] = () => restoreInfo(this.restoreSource())
+  prepareRestore: ReadingDatabase['prepareRestore'] = () => prepareRestore(this.restoreSource())
+
+  /** Only a newer version's database, open read-only, is restored from its pre-upgrade backup. */
+  private restoreSource(): RestoreSource | null {
+    const status = this.currentStatus
+    if (status.state !== 'read-only' || this.db === null || this.restorablePath === null) return null
+    return { current: this.db, databasePath: this.restorablePath, supportedVersion: status.supportedVersion }
   }
 
   private writable(): Database.Database {
@@ -1578,15 +1591,20 @@ export function openReadingDatabase(
     if (refused !== null) return new SqliteReadingDatabase(null, refused)
   }
   try {
+    // A newer version's database is only ever opened read-only: closing a writable connection
+    // would checkpoint its WAL into the file, and that version then finds it changed.
+    if (existsSync(databasePath)) {
+      db = new Database(databasePath, { readonly: true, fileMustExist: true, timeout: 5000 })
+      schemaVersion = Number(db.pragma('user_version', { simple: true }))
+      if (schemaVersion > supportedVersion) {
+        return new SqliteReadingDatabase(db, {
+          state: 'read-only', reason: 'newer-schema', schemaVersion, supportedVersion
+        }, preUpgrade === null ? null : databasePath)
+      }
+      db.close()
+    }
     db = new Database(databasePath, { timeout: 5000 })
     schemaVersion = Number(db.pragma('user_version', { simple: true }))
-    if (schemaVersion > supportedVersion) {
-      db.close()
-      db = new Database(databasePath, { readonly: true, fileMustExist: true, timeout: 5000 })
-      return new SqliteReadingDatabase(db, {
-        state: 'read-only', reason: 'newer-schema', schemaVersion, supportedVersion
-      })
-    }
     db.pragma('foreign_keys = ON')
     db.pragma('busy_timeout = 5000')
   } catch {

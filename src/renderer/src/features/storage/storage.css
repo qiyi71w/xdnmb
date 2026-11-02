@@ -19,6 +19,10 @@
   font-weight: 400;
 }
 
+.storage-banner-note {
+  align-self: center;
+}
+
 .storage-upgrade-dialog {
   width: min(440px, calc(100vw - 32px));
 }
