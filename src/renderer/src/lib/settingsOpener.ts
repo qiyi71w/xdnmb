@@ -16,6 +16,8 @@ export type SettingsSectionId =
   | 'publication'
   | 'window'
   | 'cache'
+  | 'announcements'
+  | 'analytics'
   | 'about'
   | 'blocks'
   | 'cookieColors'

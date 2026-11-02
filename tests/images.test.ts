@@ -456,13 +456,16 @@ describe('saving the original', () => {
     mkdirSync(folder)
     const target = join(folder, 'existing.jpg')
     writeFileSync(target, 'existing')
-    chmodSync(folder, 0o555)
+    // POSIX refuses new files in a folder without write permission; Windows ignores folder modes
+    // but refuses to replace a read-only file. Either way the copy cannot be written.
+    const locked = process.platform === 'win32' ? target : folder
+    chmodSync(locked, process.platform === 'win32' ? 0o444 : 0o555)
     try {
       expect(await images.saveOriginal('60000002', async () => target)).toEqual({ status: 'failed' })
       expect(readFileSync(target, 'utf8')).toBe('existing')
       expect(readdirSync(folder)).toEqual(['existing.jpg'])
     } finally {
-      chmodSync(folder, 0o755)
+      chmodSync(locked, process.platform === 'win32' ? 0o644 : 0o755)
     }
   })
 })

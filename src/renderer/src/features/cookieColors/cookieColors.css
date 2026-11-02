@@ -26,8 +26,9 @@
   max-width: 16rem;
 }
 
-/* The eight colors: 24px targets around an 18px dot. The chosen one has a ring and a check mark,
-   not color alone; keyboard focus is the accent outline outside the ring. */
+/* 默认 (the theme's plain 饼干 ID color) set a little apart, then the eight colors: 24px targets
+   around an 18px dot. The chosen one has a ring and a check mark, not color alone; keyboard focus
+   is the accent outline outside the ring. */
 .cookie-swatches {
   display: inline-flex;
   flex-wrap: wrap;
@@ -41,6 +42,11 @@
   width: 24px;
   height: 24px;
   cursor: pointer;
+}
+
+.cookie-swatch.is-default,
+.cookie-color-picker-swatch.is-default {
+  margin-inline-end: 6px;
 }
 
 .cookie-swatch-input {
@@ -81,8 +87,8 @@
   outline-offset: 4px;
 }
 
-/* 饼干颜色… palette (a context menu's layer): the ID in its color with the current color named,
-   eight swatches in a row, then 清除颜色. The current swatch has a ring and a check mark. */
+/* 饼干颜色… palette (a context menu's layer): the ID in its color with the current choice named,
+   then 默认 and the eight swatches in a row. The current swatch has a ring and a check mark. */
 .cookie-color-picker {
   min-width: 0;
 }

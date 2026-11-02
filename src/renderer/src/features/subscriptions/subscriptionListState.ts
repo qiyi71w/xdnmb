@@ -7,55 +7,10 @@ import type {
   SubscriptionOverview,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
-import type { ThreadId } from '../../../../shared/forum'
+import { completeSubscriptionObservation } from '../../../../shared/subscriptions'
+import type { ThreadId, ThreadSummary } from '../../../../shared/forum'
 import { needsReconcile, sourceBlocker } from './subscriptionText'
 import type { ActiveWrite, ChangeRequest, WriteNotice } from './useSubscriptions'
-
-export type ListActivity = 'idle' | 'stored' | 'first' | 'next'
-
-/**
- * One subscription list view. Observations are never cleared by a failed, refused, cancelled or
- * partial read: a newer observation without any page keeps the previous one on screen as `earlier`
- * (labelled as older), and only a selection change (source, UUID or binding) starts over.
- */
-export interface SubscriptionListState {
-  /** Source + identity references + generation the observations below belong to. */
-  selection: string | null
-  /** Latest observation for this selection: read here, or the stored one. */
-  shown: SubscriptionObservation | null
-  /** `shown` came from local storage, not from a read made in this view. */
-  shownStored: boolean
-  /** Previous observation kept on screen while `shown` has no page. */
-  earlier: SubscriptionObservation | null
-  activity: ListActivity
-  /** 停止 was requested for the running read; its (cancelled) observation is still applied. */
-  stopRequested: boolean
-  /** The last read was refused before any request (unconfigured, locked, busy…). */
-  refusal: SubscriptionFailure | null
-  /** The last local call rejected (IPC failure). */
-  internalError: 'stored' | 'read' | null
-}
-
-export type SubscriptionListAction =
-  | { type: 'reset'; selection: string }
-  | { type: 'start'; activity: Exclude<ListActivity, 'idle'> }
-  | { type: 'stored'; observation: SubscriptionObservation | null }
-  | { type: 'stop-requested' }
-  | { type: 'observed'; observation: SubscriptionObservation }
-  | { type: 'refused'; reason: SubscriptionFailure }
-  | { type: 'internal'; where: 'stored' | 'read' }
-  | { type: 'idle' }
-
-export const initialSubscriptionListState: SubscriptionListState = {
-  selection: null,
-  shown: null,
-  shownStored: false,
-  earlier: null,
-  activity: 'idle',
-  stopRequested: false,
-  refusal: null,
-  internalError: null
-}
 
 /** Leaving a result's page clears only that same successful notice, never an unsettled or newer write. */
 export function clearSuccessfulWriteOnLeave(current: WriteNotice | null, displayed: WriteNotice | null): WriteNotice | null {
@@ -64,16 +19,23 @@ export function clearSuccessfulWriteOnLeave(current: WriteNotice | null, display
   return operation.reportError?.kind !== 'rate-limited' && !needsReconcile(operation) ? null : current
 }
 
-/** Identity of what the list shows; any change drops results still arriving for the old one. */
-export function selectionKey(overview: SubscriptionOverview): string {
-  const { context } = overview
-  return [overview.source, context.generation, context.appCredentialId ?? '-', context.webCredentialId ?? '-'].join('|')
-}
-
-/** The observation whose threads are on screen: the latest with any page, else the earlier one. */
-export function displayedObservation(state: SubscriptionListState): SubscriptionObservation | null {
-  if (state.shown !== null && state.shown.pages.length > 0) return state.shown
-  return state.earlier
+/**
+ * The last result line once `closed` was dismissed: dropped only when it is that entry's own result
+ * (the recorded entry itself, or the orphan intent of the same change: source, thread, action and
+ * identity generation). Any other result, e.g. a newer 核对 of the same thread elsewhere, stays.
+ */
+export function noticeAfterDismiss(current: WriteNotice | null, closed: SubscriptionOperation): WriteNotice | null {
+  if (current === null) return null
+  const { write, outcome } = current
+  if (outcome.type === 'done') return outcome.operation.id === closed.id ? null : current
+  const orphan =
+    write.kind === 'change' &&
+    (outcome.type === 'failed' || outcome.reason === 'result-storage') &&
+    write.source === closed.source &&
+    write.threadId === closed.threadId &&
+    write.action === closed.action &&
+    write.generation === closed.context.generation
+  return orphan ? null : current
 }
 
 /** Local reference of the remote collection a source writes to: the App UUID ref or the web sync credential. */
@@ -82,10 +44,177 @@ export function sourceObjectRef(context: SubscriptionContext, source: Subscripti
 }
 
 /**
+ * Identity of one remote collection as read: its source, the identity generation and both local
+ * references. Evidence and reads of one key never show for another, and App and 网页 never share one.
+ */
+export function collectionKey(source: SubscriptionSource, context: SubscriptionContext): string {
+  return [source, context.generation, context.appCredentialId ?? '-', context.webCredentialId ?? '-'].join('|')
+}
+
+export function observationKey(observation: SubscriptionObservation): string {
+  return collectionKey(observation.source, observation.context)
+}
+
+/**
+ * One remote collection in this window, shared by every view of it and owned by the app, not by a
+ * view: leaving a view never cancels its read. The read task, the last complete display snapshot and
+ * the latest evidence are kept apart. A failed, cancelled or partial read never replaces the
+ * snapshot; only a contiguous read that reached the end candidate does.
+ */
+export interface CollectionState {
+  /** The stored snapshot and latest observation, read from local storage once per collection (`idle`: not asked yet). */
+  local: 'idle' | 'loading' | 'loaded' | 'failed'
+  /** Last complete observation: what the list shows while a newer read runs or after it failed. */
+  snapshot: SubscriptionObservation | null
+  /** Newest observation, stored, read here or a write's readback, whatever its end: the latest evidence and read state. */
+  latest: SubscriptionObservation | null
+  /** Newest observation with any page: shown, as not read to the end, while there is no snapshot. */
+  partial: SubscriptionObservation | null
+  /** A read round of this collection is running. */
+  reading: boolean
+  /** 停止读取 was requested for the running round: no further page starts. */
+  stopRequested: boolean
+  /** The last round ended because 停止读取 was requested (not a failure, not a timeout). */
+  stopped: boolean
+  /** The last round was refused before any request (unconfigured, locked, busy…). */
+  refusal: SubscriptionFailure | null
+  /** The last round's local call rejected (IPC failure). */
+  internalError: boolean
+}
+
+export const unloadedCollection: CollectionState = {
+  local: 'idle',
+  snapshot: null,
+  latest: null,
+  partial: null,
+  reading: false,
+  stopRequested: false,
+  stopped: false,
+  refusal: null,
+  internalError: false
+}
+
+export type CollectionEvent =
+  | { type: 'load' }
+  | { type: 'local'; snapshot: SubscriptionObservation | null; latest: SubscriptionObservation | null }
+  | { type: 'local-failed' }
+  | { type: 'start' }
+  | { type: 'stop-requested' }
+  | { type: 'observed'; observation: SubscriptionObservation }
+  /** A write's readback or 核对 read of this collection, from the journal; also of dismissed entries. */
+  | { type: 'evidence'; observation: SubscriptionObservation }
+  | { type: 'refused'; reason: SubscriptionFailure }
+  | { type: 'internal' }
+  | { type: 'end' }
+
+/**
+ * Takes an observation wherever it is not older than what it would replace, so arrival order (a
+ * slow local read, a write's readback, a running round) never puts older evidence over newer.
+ * Another state of the same observation replaces it only by progress: a stored or journal copy
+ * (`live` false) only with more pages, so a late copy never undoes pages read since or the stop or
+ * error that ended the running read; a page result of this window's round (`live`) also with as many
+ * (its failure, cancellation or later success at the same page count). Returns `state` itself when
+ * nothing changes.
+ */
+function absorb(state: CollectionState, observation: SubscriptionObservation | null, live: boolean): CollectionState {
+  if (observation === null) return state
+  const later = (current: SubscriptionObservation | null) => {
+    if (current === null) return true
+    if (current.id !== observation.id || current.startedAt !== observation.startedAt) return observation.startedAt >= current.startedAt
+    return live ? observation.pages.length >= current.pages.length : observation.pages.length > current.pages.length
+  }
+  const latest = later(state.latest) ? observation : state.latest
+  const partial = observation.pages.length > 0 && later(state.partial) ? observation : state.partial
+  const snapshot = completeSubscriptionObservation(observation) && later(state.snapshot) ? observation : state.snapshot
+  return latest === state.latest && partial === state.partial && snapshot === state.snapshot ? state : { ...state, latest, partial, snapshot }
+}
+
+export function collectionReducer(state: CollectionState, event: CollectionEvent): CollectionState {
+  switch (event.type) {
+    case 'load':
+      return { ...state, local: 'loading' }
+    case 'local':
+      // A round or readback that already landed here may be newer than what storage held.
+      return absorb(
+        completeSubscriptionObservation(event.snapshot) ? absorb({ ...state, local: 'loaded' }, event.snapshot, false) : { ...state, local: 'loaded' },
+        event.latest,
+        false
+      )
+    case 'local-failed':
+      return { ...state, local: 'failed' }
+    case 'start':
+      return { ...state, reading: true, stopRequested: false, stopped: false, refusal: null, internalError: false }
+    case 'stop-requested':
+      return state.reading ? { ...state, stopRequested: true } : state
+    case 'observed':
+      return absorb(state, event.observation, true)
+    case 'evidence':
+      return absorb(state, event.observation, false)
+    case 'refused':
+      // A refusal caused by the requested stop is the stop itself.
+      return state.stopRequested && event.reason === 'cancelled' ? state : { ...state, refusal: event.reason }
+    case 'internal':
+      return { ...state, internalError: true }
+    case 'end':
+      return { ...state, reading: false, stopped: state.stopRequested, stopRequested: false }
+  }
+}
+
+/**
+ * What a list shows: the last complete snapshot, kept whole until a newer round reads to the end;
+ * without one, the pages obtained so far, never presented as complete.
+ */
+export function collectionDisplay(state: CollectionState): { observation: SubscriptionObservation | null; complete: boolean } {
+  if (state.snapshot !== null) return { observation: state.snapshot, complete: true }
+  return { observation: state.partial, complete: false }
+}
+
+/** The newest confirmed write of a thread to `key`'s collection, still undecided by a list read at or after it. */
+function confirmedWrites(operations: readonly SubscriptionOperation[], key: string): Map<ThreadId, SubscriptionOperation> {
+  const writes = new Map<ThreadId, SubscriptionOperation>()
+  const seen = new Set<ThreadId>()
+  for (const operation of operations) {
+    if (operation.state !== 'settled' || operation.report === 'rejected' || seen.has(operation.threadId)) continue
+    if (collectionKey(operation.source, operation.context) !== key) continue
+    seen.add(operation.threadId)
+    if (operation.verification === 'present' || operation.verification === 'absent-supported') writes.set(operation.threadId, operation)
+  }
+  return writes
+}
+
+/**
+ * Threads a list shows: those of the displayed observation, with confirmed writes made after it was
+ * read applied (an added thread from its readback, a confirmed removal dropped). The snapshot itself
+ * never confirms a write; the write's own readback does. `operations` are newest first.
+ */
+export function listedThreads(
+  observation: SubscriptionObservation | null,
+  operations: readonly SubscriptionOperation[],
+  key: string
+): ThreadSummary[] {
+  const seen = new Map<ThreadId, ThreadSummary>()
+  for (const page of observation?.pages ?? []) for (const thread of page.threads) if (!seen.has(thread.head.id)) seen.set(thread.head.id, thread)
+  const since = observation?.startedAt ?? ''
+  const added: ThreadSummary[] = []
+  for (const [threadId, operation] of confirmedWrites(operations, key)) {
+    if (operation.createdAt <= since) continue
+    if (operation.verification === 'absent-supported') {
+      seen.delete(threadId)
+      continue
+    }
+    if (seen.has(threadId)) continue
+    const thread = operation.after?.pages.flatMap((page) => page.threads).find((item) => item.head.id === threadId)
+    if (thread !== undefined) added.push(thread)
+  }
+  return [...added, ...seen.values()]
+}
+
+/**
  * Whether an unresolved journal entry blocks a new write to the same thread of the same remote
  * collection. Only the source's own reference counts: a generation bump caused by the other
  * source (e.g. a web rebinding) does not release an unresolved App write. Different local refs
- * that happen to hold the same secret are left to the backend's authoritative `busy` refusal.
+ * that happen to hold the same secret are left to the backend's authoritative `busy` refusal. A
+ * dismissed entry no longer blocks: the next write is the user's explicit choice.
  */
 export function blocksNewWrite(
   operation: SubscriptionOperation,
@@ -93,6 +222,7 @@ export function blocksNewWrite(
 ): boolean {
   return (
     operation.state !== 'settled' &&
+    operation.dismissedAt === undefined &&
     operation.source === target.source &&
     operation.threadId === target.threadId &&
     sourceObjectRef(operation.context, operation.source) === target.objectRef
@@ -100,6 +230,18 @@ export function blocksNewWrite(
 }
 
 type ActiveChange = Pick<ActiveWrite, 'kind' | 'source' | 'threadId' | 'action' | 'generation'> | null
+
+/**
+ * Whether the active write or 核对 is about this thread in this collection: same source, thread and
+ * identity generation. Its object is frozen at its start, so after an identity change it no longer
+ * shows as running for the collection now shown.
+ */
+export function activeFor(
+  active: ActiveChange,
+  target: { source: SubscriptionSource; threadId: ThreadId; generation: number }
+): boolean {
+  return active !== null && active.source === target.source && active.threadId === target.threadId && active.generation === target.generation
+}
 
 /**
  * Whether a persisted `pending` entry is this app's own change that is still running. Once that
@@ -118,45 +260,37 @@ export function isRunningChange(operation: SubscriptionOperation, active: Active
   )
 }
 
-/** Whether a journal entry offers the read-only 核对: unresolved results and orphan pending intents. */
+/**
+ * Whether a journal entry offers the read-only 核对 and its ×: unresolved results and orphan pending
+ * intents that were not dismissed.
+ */
 export function isReconcilable(operation: SubscriptionOperation, active: ActiveChange): boolean {
+  if (operation.dismissedAt !== undefined) return false
   if (operation.state === 'pending') return !isRunningChange(operation, active)
   return needsReconcile(operation)
 }
 
-/** A source's stored list observation as read for the identity shown; a failed read is no evidence. */
-export type StoredObservation = { kind: 'loading' } | { kind: 'failed' } | { kind: 'read'; observation: SubscriptionObservation | null }
-
-/** An observation whose reading stopped on an error or was cancelled: a thread it lists is there, nothing else is known. */
-export function readFailed(observation: SubscriptionObservation): boolean {
-  return observation.error !== null || observation.cancelled
-}
-
-/**
- * What a source shows after a new local read for the same identity: a failed read, or a stored
- * observation whose reading failed or was cancelled, never replaces an earlier one read without error.
- */
-export function nextStoredObservation(current: StoredObservation, next: StoredObservation): StoredObservation {
-  const failed = next.kind === 'failed' || (next.kind === 'read' && next.observation !== null && readFailed(next.observation))
-  const valid = current.kind === 'read' && current.observation !== null && !readFailed(current.observation)
-  return failed && valid ? current : next
-}
-
 export type ThreadMembership =
-  | { kind: 'loading' | 'failed' | 'in' | 'out' }
+  /** Nothing known yet, and the stored list or a read of it is still on its way. */
+  | { kind: 'loading' }
+  /** No evidence either way: no complete list and no read that listed the thread. `failed`: the last attempt failed. */
+  | { kind: 'unread'; failed: boolean }
+  /** Evidence from a list read or a confirmed write, as of `at`. */
+  | { kind: 'in' | 'out'; at: string }
   | { kind: 'unknown'; operation: SubscriptionOperation }
 
 /**
  * Whether a thread is in one remote collection. `operations` are that collection's journal entries
  * for the thread, newest first. An unresolved entry after the latest confirmed write wins whatever
- * was observed later (a failed readback proves nothing), so only the read-only 核对 follows.
- * Otherwise the newer of that confirmed write and a stored observation read without error decides.
- * Rejected writes are no evidence; a failed or cancelled read only shows the threads it did list,
- * never that one is absent.
+ * was observed later (a failed readback proves nothing), so only the read-only 核对 or its × follow;
+ * a dismissed entry proves nothing either way. Otherwise the newest evidence decides: a confirmed
+ * write, a read that listed the thread (even if it stopped early), or a complete read without it.
+ * A partial, failed or cancelled read without the thread, or no read at all, is unknown, never "not
+ * subscribed".
  */
 export function threadMembership(
   threadId: ThreadId,
-  stored: StoredObservation,
+  collection: CollectionState | null,
   operations: readonly SubscriptionOperation[],
   active: ActiveChange
 ): ThreadMembership {
@@ -168,15 +302,22 @@ export function threadMembership(
       break
     }
   }
-  const observation = stored.kind === 'read' ? stored.observation : null
-  const observedAt = observation !== null && !readFailed(observation) ? observation.startedAt : ''
-  if (confirmed !== undefined && confirmed.createdAt >= observedAt) {
-    if (confirmed.verification === 'present') return { kind: 'in' }
-    if (confirmed.verification === 'absent-supported') return { kind: 'out' }
+  // Candidates in order of precedence on equal times: a confirmed write first.
+  const evidence: { kind: 'in' | 'out'; at: string }[] = []
+  if (confirmed?.verification === 'present') evidence.push({ kind: 'in', at: confirmed.createdAt })
+  else if (confirmed?.verification === 'absent-supported') evidence.push({ kind: 'out', at: confirmed.createdAt })
+  // The newest read with pages keeps a thread it listed when a newer read stopped before any page.
+  for (const observation of [collection?.latest ?? null, collection?.partial ?? null, collection?.snapshot ?? null]) {
+    if (observation === null) continue
+    if (observation.ids.includes(threadId)) evidence.push({ kind: 'in', at: observation.startedAt })
+    else if (completeSubscriptionObservation(observation)) evidence.push({ kind: 'out', at: observation.startedAt })
   }
-  if (stored.kind !== 'read') return { kind: stored.kind }
-  if (observation?.ids.includes(threadId) === true) return { kind: 'in' }
-  return observation !== null && readFailed(observation) ? { kind: 'failed' } : { kind: 'out' }
+  const newest = evidence.reduce<{ kind: 'in' | 'out'; at: string } | null>((best, item) => (best === null || item.at > best.at ? item : best), null)
+  if (newest !== null) return newest
+  if (collection === null || collection.local === 'idle' || collection.local === 'loading' || collection.reading) return { kind: 'loading' }
+  const failed =
+    collection.local === 'failed' || collection.refusal !== null || collection.internalError || (collection.latest?.error ?? null) !== null
+  return { kind: 'unread', failed }
 }
 
 /** What a press of 订阅／已订阅／取消订阅／加入 does now: the one write itself, or why it cannot start. */
@@ -221,46 +362,5 @@ export function decideChange({
   return {
     kind: 'write',
     request: { source, threadId, action, expectedGeneration: overview.context.generation, label }
-  }
-}
-
-export function subscriptionListReducer(state: SubscriptionListState, action: SubscriptionListAction): SubscriptionListState {
-  switch (action.type) {
-    case 'reset':
-      return { ...initialSubscriptionListState, selection: action.selection }
-    case 'start':
-      return { ...state, activity: action.activity, stopRequested: false, refusal: null, internalError: null }
-    case 'stored':
-      // A read that already landed is newer than whatever storage returns.
-      if (state.shown !== null && !state.shownStored) return { ...state, activity: state.activity === 'stored' ? 'idle' : state.activity }
-      return {
-        ...state,
-        shown: action.observation,
-        shownStored: action.observation !== null,
-        activity: state.activity === 'stored' ? 'idle' : state.activity
-      }
-    case 'stop-requested':
-      return state.activity === 'first' || state.activity === 'next' ? { ...state, stopRequested: true } : state
-    case 'observed': {
-      const { observation } = action
-      const keepPrevious = observation.pages.length === 0
-      const previous = state.shown !== null && state.shown.pages.length > 0 ? state.shown : state.earlier
-      return {
-        ...state,
-        shown: observation,
-        shownStored: false,
-        earlier: keepPrevious ? previous : null,
-        activity: 'idle',
-        stopRequested: false,
-        refusal: null,
-        internalError: null
-      }
-    }
-    case 'refused':
-      return { ...state, activity: 'idle', stopRequested: false, refusal: action.reason }
-    case 'internal':
-      return { ...state, activity: 'idle', stopRequested: false, internalError: action.where }
-    case 'idle':
-      return { ...state, activity: 'idle', stopRequested: false }
   }
 }

@@ -89,7 +89,7 @@ export function TabView({
    * An online search result opened from entry `entryKey` as a new `online-search` step; false when
    * that entry is no longer current.
    */
-  onOpenFromOnlineSearch: (entryKey: number, init: EntryInit) => boolean
+  onOpenFromOnlineSearch: (entryKey: number, init: EntryInit, newTab?: boolean) => boolean
   /** The list width divider of the split view changed the width (`done` at the end of a change). */
   onResizeList: (width: number, done: boolean) => void
 }) {

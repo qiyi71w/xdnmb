@@ -15,6 +15,7 @@ interface StateRow {
   thread_id: string; kind: ReminderKind; baseline: number | null; checked_post_id: string | null; count: number
   first_page: number | null; increased_at: string | null; unverified: number; issues_json: string
   last_error_json: string | null; checked_at: string | null
+  own_positions_trusted: number
 }
 
 function emptyRules(): ThreadReminders['rules'] {
@@ -74,6 +75,10 @@ export class ReminderDatabase {
           .run(at, threadId, kind)
       }
       db.prepare('DELETE FROM reminder_state WHERE thread_id = ? AND kind = ?').run(threadId, kind)
+      db.prepare("UPDATE reminder_local_replies SET status = 'closed' WHERE thread_id = ? AND kind = ? AND status = 'pending'").run(threadId, kind)
+      db.prepare('DELETE FROM reminder_reply_positions WHERE thread_id = ? AND kind = ?').run(threadId, kind)
+      db.prepare('DELETE FROM reminder_count_increments WHERE thread_id = ? AND kind = ?').run(threadId, kind)
+      if (enabled) this.registerConfirmed(threadId)
       return this.getRules([threadId])[0]!
     }).immediate()
   }
@@ -86,6 +91,9 @@ export class ReminderDatabase {
       return [...new Set(threadIds)].filter((threadId) => {
         if (update.run(reason, at, threadId).changes === 0) return false
         drop.run(threadId)
+        db.prepare("UPDATE reminder_local_replies SET status = 'closed' WHERE thread_id = ? AND status = 'pending'").run(threadId)
+        db.prepare('DELETE FROM reminder_reply_positions WHERE thread_id = ?').run(threadId)
+        db.prepare('DELETE FROM reminder_count_increments WHERE thread_id = ?').run(threadId)
         return true
       })
     }).immediate()
@@ -119,6 +127,63 @@ export class ReminderDatabase {
     return [...new Set(postIds)].map((postId) => ({ postId, own: own.get(postId) !== undefined, cookieId: this.peekPost(postId)?.userHash ?? null }))
   }
 
+  /** Called inside the publication result transaction, including startup/background confirmation. */
+  confirmedPublication(threadId: string): void {
+    this.registerConfirmed(threadId)
+    this.consumeConfirmed(threadId)
+  }
+
+  private registerConfirmed(threadId: string): void {
+    this.database().prepare(`INSERT OR IGNORE INTO reminder_local_replies
+      (publication_id, thread_id, post_id, kind, generation)
+      SELECT p.id, p.thread_id, p.post_id, r.kind, r.generation
+      FROM publication_attempts p JOIN reminder_rules r ON r.thread_id = p.thread_id
+      WHERE p.thread_id = ? AND p.state = 'confirmed' AND json_extract(p.payload_json, '$.target.kind') = 'reply'
+        AND r.enabled = 1 AND r.kind IN ('all', 'po')`).run(threadId)
+  }
+
+  /** An exact, mode-specific ordinal is the only link from a publication to a counter interval. */
+  private consumeConfirmed(threadId: string): void {
+    const db = this.database()
+    const matches = db.prepare<[string], { publication_id: number; kind: string; generation: number; increment_id: number; cleared: number }>(`
+      SELECT l.publication_id, l.kind, l.generation, i.id AS increment_id, i.cleared
+      FROM reminder_local_replies l
+      JOIN reminder_rules r ON r.thread_id = l.thread_id AND r.kind = l.kind AND r.generation = l.generation AND r.enabled = 1
+      JOIN reminder_state s ON s.thread_id = r.thread_id AND s.kind = r.kind AND s.own_positions_trusted = 1
+      JOIN reminder_reply_positions p ON p.thread_id = l.thread_id AND p.kind = l.kind AND p.generation = l.generation AND p.post_id = l.post_id
+      JOIN reminder_count_increments i ON i.thread_id = l.thread_id AND i.kind = l.kind AND i.generation = l.generation
+        AND p.ordinal > i.count_from AND p.ordinal <= i.count_to
+      WHERE l.thread_id = ? AND l.status = 'pending' ORDER BY i.id`).all(threadId)
+    const mark = db.prepare(`UPDATE reminder_local_replies SET status = ?, increment_id = ?
+      WHERE publication_id = ? AND kind = ? AND generation = ? AND status = 'pending'`)
+    for (const match of matches) {
+      if (mark.run(match.cleared ? 'cleared' : 'excluded', match.increment_id, match.publication_id, match.kind, match.generation).changes === 0) continue
+      db.prepare('UPDATE reminder_count_increments SET excluded = excluded + 1 WHERE id = ?').run(match.increment_id)
+      if (!match.cleared) {
+        const corrected = db.prepare(`UPDATE reminder_state SET count = count - 1,
+          first_page = CASE WHEN count = 1 THEN NULL ELSE first_page END
+          WHERE thread_id = ? AND kind = ? AND count > 0`).run(threadId, match.kind)
+        if (corrected.changes !== 1) throw new Error('reminder interval count mismatch')
+      }
+    }
+    // An ordinal already in the initialization baseline is not a deduction from any later count.
+    db.prepare(`UPDATE reminder_local_replies AS l SET status = 'baseline'
+      WHERE l.thread_id = ? AND l.status = 'pending' AND EXISTS (
+        SELECT 1 FROM reminder_reply_positions p JOIN reminder_state s USING(thread_id, kind)
+        JOIN reminder_rules r ON r.thread_id = p.thread_id AND r.kind = p.kind AND r.generation = p.generation
+        WHERE p.thread_id = l.thread_id AND p.kind = l.kind AND p.generation = l.generation AND p.post_id = l.post_id
+          AND r.enabled = 1 AND s.own_positions_trusted = 1 AND p.ordinal <= s.baseline
+      )`).run(threadId)
+  }
+
+  increasedThreads(roundId: string): string[] {
+    return this.readable().prepare<[string], { thread_id: string }>(`SELECT DISTINCT i.thread_id
+      FROM reminder_count_increments i JOIN reminder_rules r USING(thread_id, kind, generation)
+      JOIN reminder_state s USING(thread_id, kind)
+      WHERE i.round_id = ? AND r.enabled = 1 AND i.cleared = 0 AND i.added > i.excluded AND s.count > 0
+      ORDER BY i.thread_id`).all(roundId).map((row) => row.thread_id)
+  }
+
   update(value: ReminderUpdate): boolean {
     const db = this.database()
     return db.transaction(() => {
@@ -126,6 +191,7 @@ export class ReminderDatabase {
       const rule = db.prepare<[string, string], RuleRow>('SELECT * FROM reminder_rules WHERE thread_id = ? AND kind = ?').get(value.threadId, value.kind)
       if (rule?.enabled !== 1 || rule.generation !== value.generation) return false
       db.prepare('INSERT INTO reminder_state (thread_id, kind) VALUES (?, ?) ON CONFLICT DO NOTHING').run(value.threadId, value.kind)
+      const previous = db.prepare<[string, string], StateRow>('SELECT * FROM reminder_state WHERE thread_id = ? AND kind = ?').get(value.threadId, value.kind)!
       const add = value.add ?? 0
       db.prepare(`UPDATE reminder_state SET
           baseline = coalesce(@baseline, baseline),
@@ -143,13 +209,38 @@ export class ReminderDatabase {
         issues: value.issues === undefined ? null : JSON.stringify([...new Set(value.issues)]),
         lastError: value.lastError ? JSON.stringify(value.lastError) : null, markChecked: value.checked ? 1 : 0
       })
+      if (value.baseline !== undefined && previous.baseline !== null && value.baseline < previous.baseline) {
+        // A counter rebase no longer shares the old ordinal space. Keep ordinary reminders, but
+        // do not reuse any publication position until the user starts a new rule generation.
+        db.prepare('UPDATE reminder_state SET own_positions_trusted = 0 WHERE thread_id = ? AND kind = ?').run(value.threadId, value.kind)
+      }
+      if (add > 0) {
+        const counted = value.kind !== 'quote' && previous.baseline !== null && value.baseline === previous.baseline + add
+        db.prepare(`INSERT INTO reminder_count_increments
+          (thread_id, kind, generation, round_id, count_from, count_to, added) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+          .run(value.threadId, value.kind, value.generation, value.roundId ?? '', counted ? previous.baseline : null, counted ? value.baseline! : null, add)
+      }
+      const ids = value.firstPageReplyIds
+      if (value.kind !== 'quote' && value.baseline !== undefined && Number.isSafeInteger(value.baseline) && ids !== undefined
+        && ids.length === Math.min(19, value.baseline)
+        && ids.every((id, index) => /^[1-9]\d{0,19}$/.test(id) && (index === 0 || comparePostIds(ids[index - 1]!, id) < 0))) {
+        const position = db.prepare(`INSERT INTO reminder_reply_positions (thread_id, kind, generation, post_id, ordinal, observed_count)
+          VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(thread_id, kind, generation, post_id) DO UPDATE SET
+          ordinal = CASE WHEN ordinal = excluded.ordinal THEN ordinal ELSE NULL END`)
+        for (const [index, id] of ids.entries()) position.run(value.threadId, value.kind, value.generation, id, index + 1, value.baseline)
+      }
+      this.consumeConfirmed(value.threadId)
       return true
     }).immediate()
   }
 
   clearCounts(threadId: string): boolean {
-    return this.database().prepare('UPDATE reminder_state SET count = 0, first_page = NULL, unverified = 0 WHERE thread_id = ? AND (count > 0 OR unverified > 0)')
-      .run(threadId).changes > 0
+    const db = this.database()
+    return db.transaction(() => {
+      db.prepare('UPDATE reminder_count_increments SET cleared = 1 WHERE thread_id = ?').run(threadId)
+      return db.prepare('UPDATE reminder_state SET count = 0, first_page = NULL, unverified = 0 WHERE thread_id = ? AND (count > 0 OR unverified > 0)')
+        .run(threadId).changes > 0
+    }).immediate()
   }
 
   finishCheck(at: string): void {

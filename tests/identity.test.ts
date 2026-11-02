@@ -413,18 +413,24 @@ describe('饼干标色 for imported cookies', () => {
     expect(colors(db)).toMatchObject({ Filled: 'blue' })
   })
 
-  it('never gives back a cleared or changed automatic color, and keeps colors of removed cookies', async () => {
+  it('never gives back a 默认, changed or removed automatic color, nor colors a hand-added ID, and keeps entries of removed cookies', async () => {
     const { db, service } = setup()
+    db.addCookieColor('Hand1', '2026-10-26T00:00:00.000Z')
     const a = await imported(service, SECRET_A, 'A', 'Mine1')
     const b = await imported(service, SECRET_B, 'B', 'Mine2')
     db.setCookieColor('Mine1', null, '2026-10-26T00:00:00.000Z')
     db.setCookieColor('Mine2', 'amber', '2026-10-26T00:00:00.000Z')
     expect(await service.remove(a.id)).toEqual({ ok: true })
-    await imported(service, SECRET_A, 'A again', 'Mine1')
+    const again = await imported(service, SECRET_A, 'A again', 'Mine1')
     expect(await service.setCookieId(b.id, 'Mine2')).toEqual({ ok: true })
-    expect(colors(db)).toEqual({ Mine2: 'amber' })
+    // A hand-added ID in 默认 stays 默认 when an imported cookie later gets that ID.
+    expect(await service.setCookieId(b.id, 'Hand1')).toEqual({ ok: true })
+    expect(colors(db)).toEqual({ Hand1: null, Mine1: null, Mine2: 'amber' })
     expect(await service.remove(b.id)).toEqual({ ok: true })
-    expect(colors(db)).toEqual({ Mine2: 'amber' })
+    db.removeCookieColor('Mine1')
+    expect(await service.remove(again.id)).toEqual({ ok: true })
+    await imported(service, SECRET_A, 'A once more', 'Mine1')
+    expect(colors(db)).toEqual({ Hand1: null, Mine2: 'amber' })
   })
 })
 

@@ -1,3 +1,5 @@
+import type { AnnouncementRecord } from '../../shared/announcements'
+import type { AnalyticsRecord } from '../../shared/analytics'
 import type { BlockKind, LocalBlock } from '../../shared/blocks'
 import type { CookieColor, CookieColorName } from '../../shared/cookieColors'
 import type { StorageStatus } from '../../shared/api'
@@ -103,10 +105,19 @@ export interface ReadingStore {
   loadSettings(): Promise<AppSettings>
   listBlocks(): Promise<LocalBlock[]>
   setBlock(kind: BlockKind, value: string, blocked: boolean, at: string): Promise<void>
-  /** Every 饼干 ID with a color, oldest first; rows with a color name this version does not know are left out. */
+  /** Every listed 饼干 ID, oldest first; a color name this version does not know reads as 默认 (null). */
   listCookieColors(): Promise<CookieColor[]>
+  /** Lists a 饼干 ID in 默认; resolves false when it was already listed (left unchanged). */
+  addCookieColor(cookieId: string, at: string): Promise<boolean>
+  /** A palette color or 默认 (null); a listed ID keeps its place and date, an unlisted one is added. */
   setCookieColor(cookieId: string, color: CookieColorName | null, at: string): Promise<void>
+  removeCookieColor(cookieId: string): Promise<void>
   saveSettings(settings: AppSettings): Promise<void>
+  loadAnnouncements(): Promise<AnnouncementRecord>
+  saveAnnouncements(record: AnnouncementRecord): Promise<void>
+  /** The usage-statistics record; a missing or unreadable one is `unset` (off). */
+  loadAnalytics(): Promise<AnalyticsRecord>
+  saveAnalytics(record: AnalyticsRecord): Promise<void>
 
   /** Image location of a stored post; null when the post is not stored or has no image. */
   getPostImage(postId: PostId): Promise<PostImage | null>
@@ -239,7 +250,7 @@ export interface SubscriptionStore {
   loadSubscriptionAppCiphertext(id: string): Promise<Uint8Array | null>
   listSubscriptionAppCredentials(): Promise<string[]>
   setSubscriptionSource(source: SubscriptionSource): Promise<void>
-  loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly?: boolean): Promise<SubscriptionObservation | null>
+  loadSubscriptionObservation(source: SubscriptionSource, context: SubscriptionContext, validOnly?: boolean | 'complete'): Promise<SubscriptionObservation | null>
   loadSubscriptionObservationById(id: string): Promise<SubscriptionObservation | null>
   saveSubscriptionObservation(observation: SubscriptionObservation): Promise<void>
   saveSubscriptionOperation(operation: SubscriptionOperation): Promise<void>

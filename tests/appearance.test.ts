@@ -339,6 +339,22 @@ describe('settings', () => {
     expect(open(path).loadSettings()).toEqual({ ...DEFAULT_SETTINGS, defaultSubscriptionSource: 'web' })
   })
 
+  it('defaults old and new settings to XDS and persists an explicit nmb-search preference without changing other settings', async () => {
+    expect(settingsFromStored(new Map()).onlineSearchChannel).toBe('xds')
+    expect(settingsFromStored(new Map([['onlineSearchChannel', 'unknown']])).onlineSearchChannel).toBe('xds')
+    expect(applySettingsPatch(DEFAULT_SETTINGS, { onlineSearchChannel: 'other' }).ok).toBe(false)
+    const path = join(folder(), 'search-settings.sqlite')
+    const first = open(path)
+    const service = createSettingsService(storeOf(first))
+    expect(await service.update({ onlineSearchChannel: 'nmb-search', density: 'compact' })).toMatchObject({ saved: true })
+    first.close()
+    databases.splice(databases.indexOf(first), 1)
+    const reopened = open(path)
+    expect(reopened.loadSettings()).toEqual({ ...DEFAULT_SETTINGS, onlineSearchChannel: 'nmb-search', density: 'compact' })
+    expect(await createSettingsService(storeOf(reopened)).update({ reminderInterval: 30 })).toMatchObject({ saved: true })
+    expect(reopened.loadSettings().onlineSearchChannel).toBe('nmb-search')
+  })
+
   it.each([
     ['a timeline order', { boards: { ...navigation.boards, order: { timelines: ['timeline:1'] } } }, 'boards.order'],
     ['a timeline in a group order', { boards: { ...navigation.boards, order: { 'group-1': ['timeline:1'] } } }, 'boards.order'],

@@ -232,8 +232,10 @@ export function createForumClient(options: {
         const replies: Post[] = []
         const seen = new Set<string>()
         let skippedItems = 0
+        let replyItems = 0
         for (const raw of value.Replies as unknown[]) {
           if (isTips(raw)) continue
+          replyItems++
           const reply = normalizePost(raw)
           if (reply === null) { skippedItems++; continue }
           if (seen.has(reply.id)) continue
@@ -244,6 +246,7 @@ export function createForumClient(options: {
           threadId, mode, page: number, head, replies,
           replyCount: nonNegativeNumber(value.ReplyCount),
           skippedItems,
+          replySequenceIntact: skippedItems === 0 && replyItems === replies.length && replies.length <= 19 && !replies.some((reply) => reply.id === head.id),
           endCandidate: replies.length === 0 && skippedItems === 0
         }
       }

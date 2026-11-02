@@ -8,6 +8,7 @@ import {
   type ImageError,
   type ImageFormat,
   type ImageKind,
+  type ImageCopyOutcome,
   type ImageLoadOutcome,
   type ImageSaveOutcome,
   type LoadedImage
@@ -16,6 +17,7 @@ import type { ImageHolder, ImageResourceRecord, ReadingStore } from '../storage/
 import type { ManagedImageFiles } from './files'
 import { inspectImage } from './format'
 import { ImageFetchCancelledError, ImageFetchError, type ImageDownloader } from './transport'
+import type { OriginalClipboard } from './clipboard'
 
 /** Forum image paths look like `2022-07-21/62d8ca6cdfabd` with an extension such as `.jpg`. */
 const IMAGE_PATH = /^\d{4}-\d{2}-\d{2}\/[A-Za-z0-9_]{1,64}$/
@@ -46,6 +48,7 @@ export interface ImageService {
   releaseOwner(owner: string): Promise<void>
   /** `choosePath` asks the user where to save (null: dismissed). */
   saveOriginal(postId: PostId, choosePath: (suggestedName: string, format: ImageFormat) => Promise<string | null>): Promise<ImageSaveOutcome>
+  copyOriginal(postId: PostId, url: string): Promise<ImageCopyOutcome>
   /**
    * Cleanup rule shared by every later cleanup (cache quota, manual clearing): removes the records
    * and files of those resources no holder protects. Returns the removed file names.
@@ -113,6 +116,7 @@ export function createImageService(options: {
   origin: string
   maxConcurrent?: number
   now?: () => Date
+  clipboard?: OriginalClipboard
 }): ImageService {
   const { store, files, download, origin } = options
   const now = options.now ?? (() => new Date())
@@ -343,6 +347,24 @@ export function createImageService(options: {
       } catch {
         await unlink(partial).catch(() => undefined)
         return { status: 'failed' }
+      }
+    },
+
+    async copyOriginal(postId, identity) {
+      if (options.clipboard === undefined) return { status: 'failed' }
+      const holder = `clipboard-copy:${randomBytes(16).toString('hex')}:`
+      try {
+        const image = await store.getPostImage(postId)
+        const url = image === null ? null : sourceUrl(image, 'original')
+        const resource = url === null ? null : await store.findImageResource('original', url, reading(holder))
+        if (resource === null || identity !== `${IMAGE_SCHEME}://file/${resource.fileName}`) return { status: 'not-loaded' }
+        const path = await storedPath(resource)
+        if (path === null) return { status: 'not-loaded' }
+        return await options.clipboard.copy(path)
+      } catch {
+        return { status: 'failed' }
+      } finally {
+        await store.releaseImageHolders('reading', holder).catch(() => undefined)
       }
     },
 

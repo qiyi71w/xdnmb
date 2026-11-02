@@ -76,8 +76,8 @@ export interface UpdateService {
   prepareExit(reason: ExitReason): Promise<void>
   /** After storage has closed: starts the installer prepared by `prepareExit`, if any. */
   launchInstaller(): Promise<void>
-  /** Session end never installs now; `draftsLost` is the lifecycle's synchronous current-quit snapshot. */
-  endSession(draftsLost: boolean): void
+  /** Session end never installs now; `unsaved` is the lifecycle's synchronous current-quit snapshot. */
+  endSession(unsaved: boolean): void
 }
 
 /** Timers wake at most this far apart and compare wall-clock time, so sleep or a clock change cannot stretch the 24 hours. */
@@ -366,11 +366,11 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       }
     },
 
-    endSession(draftsLost) {
+    endSession(unsaved) {
       if (sessionEnded) return
       sessionEnded = true
       armed = null
-      if (deps.platform !== 'windows' || deps.unavailable !== null || draftsLost ||
+      if (deps.platform !== 'windows' || deps.unavailable !== null || unsaved ||
           settings?.updateAutoInstall !== true || release?.download.status !== 'ready' || record.ready === null) return
       try {
         deps.pendingInstall.save(record.ready)

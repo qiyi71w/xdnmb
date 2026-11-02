@@ -509,4 +509,19 @@ describe('quote location', () => {
     expect(await reading.locateQuote('901', signal(), { threadId: '900', page: null }))
       .toMatchObject({ status: 'failed', threadId: '900', error: { kind: 'not-found' } })
   })
+
+  it('uses an XDS parent-only clue for one verification, never a guessed reply page or a scan', async () => {
+    const f = quoteForum({ '700': { all: [['701'], ['702']] } })
+    const reading = service(f.client)
+    const before = db.getReadingState('700')
+    expect(await reading.locateQuote('702', signal(), { threadId: '700', page: null }))
+      .toMatchObject({ status: 'thread-known', threadId: '700' })
+    expect(f.requests).toEqual(['700/all/1'])
+    expect(db.getReadingState('700').positions).toEqual(before.positions)
+    expect(db.listHistory()).toEqual([])
+    f.requests.length = 0
+    expect(await reading.locateQuote('701', signal(), { threadId: '700', page: null }))
+      .toMatchObject({ status: 'located', threadId: '700', target: { postId: '701', page: 1 } })
+    expect(f.requests).toEqual(['700/all/1'])
+  })
 })

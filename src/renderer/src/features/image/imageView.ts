@@ -1,5 +1,5 @@
 import type { PostId } from '../../../../shared/forum'
-import type { ImageError, ImageSaveOutcome, ImageViewId, LoadedImage } from '../../../../shared/images'
+import type { ImageCopyOutcome, ImageError, ImageSaveOutcome, ImageViewId, LoadedImage } from '../../../../shared/images'
 
 /** Thumbnails start loading this far outside the scroller viewport (above and below). */
 const NEAR_MARGIN = '800px 0px'
@@ -94,6 +94,28 @@ export const SAVE_TEXT: Record<ImageSaveOutcome['status'], string> = {
   cancelled: '已取消保存',
   'not-loaded': '原图尚未取得，未保存',
   failed: '保存失败，未改动已有文件'
+}
+
+/** A copy's result: how the original went onto the clipboard, or why it did not. */
+type CopyResult =
+  | Extract<ImageCopyOutcome, { status: 'copied' }>['representation']
+  | Exclude<ImageCopyOutcome, { status: 'copied' }>['status']
+
+/**
+ * `image`: the whole decoded still image. `file`: an animation as its original encoded file, which a
+ * receiving app may take as an attachment. Every other result put nothing new on the clipboard.
+ */
+export const COPY_TEXT: Record<CopyResult, string> = {
+  image: '已复制原图',
+  file: '已复制动图原文件',
+  'not-loaded': '原图尚未取得，未复制',
+  'invalid-image': '原图文件校验未通过，未复制',
+  busy: '剪贴板操作进行中，未复制，请稍后再试',
+  failed: '复制失败，未能写入剪贴板'
+}
+
+export function describeCopyOutcome(outcome: ImageCopyOutcome): string {
+  return COPY_TEXT[outcome.status === 'copied' ? outcome.representation : outcome.status]
 }
 
 export function formatBytes(bytes: number): string {

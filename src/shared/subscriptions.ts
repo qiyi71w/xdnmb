@@ -43,6 +43,13 @@ export interface SubscriptionObservation {
   cancelled: boolean
 }
 
+/** Only a contiguous read ending in a valid empty page proves collection completeness. */
+export function completeSubscriptionObservation(value: SubscriptionObservation | null): boolean {
+  return value !== null && value.error === null && !value.cancelled && value.nextPage === null &&
+    value.pages.length > 0 && value.pages.every((page, index) => page.page === index + 1 &&
+      page.endCandidate === (index === value.pages.length - 1))
+}
+
 export interface SubscriptionOperation {
   id: string
   source: SubscriptionSource
@@ -53,6 +60,8 @@ export interface SubscriptionOperation {
   /** Frozen human-readable object label; never UUID or userhash. */
   objectLabel: string
   state: 'pending' | 'settled' | 'needs-reconciliation'
+  /** Independent local closure; absent in historical records. Never changes the remote report or evidence. */
+  dismissedAt?: string
   report: 'pending' | 'success' | 'rejected' | 'unknown'
   reportError: ReadError | null
   before: SubscriptionObservation | null
@@ -77,6 +86,8 @@ export interface SubscriptionsApi {
   selectSource(input: { source: SubscriptionSource }): Promise<SubscriptionResult<SubscriptionOverview>>
   /** Local only, for the current identity combination. Failed reads never erase old observations. */
   getObservation(input: { source: SubscriptionSource }): Promise<SubscriptionObservation | null>
+  /** Last proven complete display snapshot, independent of the latest read task. */
+  getSnapshot(input: { source: SubscriptionSource }): Promise<SubscriptionObservation | null>
   /** One background page. null starts a new observation; an ID continues that fixed observation. */
   read(input: { source: SubscriptionSource; observationId: string | null; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionObservation>>
   /** Explicit write, intent durable before request. Signal cancellation affects readback only. */
@@ -85,6 +96,8 @@ export interface SubscriptionsApi {
   getOperations(): Promise<SubscriptionOperation[]>
   /** Read-only check using the attempt's fixed references, never the currently selected ones. */
   reconcile(input: { id: string; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionOperation>>
+  /** Durable local closure only; refuses while subscription mutation or reconciliation runs. */
+  dismiss(input: { id: string }): Promise<SubscriptionResult<SubscriptionOperation>>
   /** Historical local object references only; never decrypted UUIDs. */
   getMergeSources(): Promise<SubscriptionMergeSource[]>
   /** Fresh, bounded background reads. Previews live only in this process and never execute on restart. */

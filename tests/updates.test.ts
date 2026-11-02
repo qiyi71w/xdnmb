@@ -207,12 +207,12 @@ describe('software updates', () => {
     expect(existsSync(packagePath())).toBe(false)
   })
 
-  it('installs at exit only for an install quit, or an ordinary quit with automatic install on; never after unsaved drafts, at a session end or with a changed package', async () => {
-    const cases: Array<[Partial<UpdateSettings>, 'quit' | 'install' | 'drafts-lost' | 'session-end', boolean[]]> = [
+  it('installs at exit only for an install quit, or an ordinary quit with automatic install on; never after unsaved drafts or workspace, at a session end or with a changed package', async () => {
+    const cases: Array<[Partial<UpdateSettings>, 'quit' | 'install' | 'unsaved' | 'session-end', boolean[]]> = [
       [{ updateAutoInstall: false }, 'quit', []],
       [{ updateAutoInstall: true }, 'quit', [false]],
       [{ updateAutoInstall: false }, 'install', [true]],
-      [{ updateAutoInstall: true }, 'drafts-lost', []],
+      [{ updateAutoInstall: true }, 'unsaved', []],
       [{ updateAutoInstall: true }, 'session-end', []]
     ]
     const marker = createInstallMarkerStore(join(dir, 'update-launched.json'))
@@ -248,12 +248,12 @@ describe('software updates', () => {
     await ready.instance.launchInstaller()
     expect(ready.installers).toEqual([])
 
-    for (const reason of ['quit', 'drafts-lost'] as const) {
+    for (const reason of ['quit', 'unsaved'] as const) {
       const s = service(fakeEngine())
       await s.instance.start(settings({ updateAutoInstall: true }))
       await s.instance.prepareExit(reason)
       expect(pending.consume()).toBeNull()
-      if (reason === 'drafts-lost') {
+      if (reason === 'unsaved') {
         s.instance.endSession(true)
         expect(pending.consume()).toBeNull()
       }
@@ -273,7 +273,7 @@ describe('software updates', () => {
     expect(pending.consume()).toBeNull()
   })
 
-  it.each([[false, false], [true, false], [false, true]])('snapshots draft eligibility during lifecycle finishing (saved=%s, reopened=%s)', async (draftsSaved, reopened) => {
+  it.each([[false, false], [true, false], [false, true]])('snapshots save eligibility during lifecycle finishing (saved=%s, reopened=%s)', async (saved, reopened) => {
     const s = service(fakeEngine())
     await s.instance.start(settings({ updateAutoInstall: true }))
     const finishing = Promise.withResolvers<void>()
@@ -291,14 +291,14 @@ describe('software updates', () => {
     })
     await lifecycle.start()
     lifecycle.requestQuit()
-    lifecycle.completeQuit(draftsSaved)
+    lifecycle.completeQuit(saved)
     expect(lifecycle.phase).toBe('finishing')
     if (reopened) lifecycle.reopen()
     // Native session event arrives before the asynchronous quit reaches prepareExit.
-    s.instance.endSession(lifecycle.draftsLost)
+    s.instance.endSession(lifecycle.unsaved)
     lifecycle.endSession()
     const pending = createPendingInstallStore(join(dir, 'update-on-start.json')).consume()
-    expect(pending !== null).toBe(draftsSaved || reopened)
+    expect(pending !== null).toBe(saved || reopened)
     finishing.resolve()
     if (reopened) await settle()
     else await exited.promise

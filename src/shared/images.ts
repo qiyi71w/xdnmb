@@ -90,6 +90,11 @@ export type ImageSaveOutcome =
   | { status: 'not-loaded' }
   | { status: 'failed' }
 
+/** Copy never downloads or substitutes a thumbnail; file means the original animation encoding. */
+export type ImageCopyOutcome =
+  | { status: 'copied'; representation: 'image' | 'file' }
+  | { status: 'not-loaded' | 'invalid-image' | 'busy' | 'failed' }
+
 export interface ImageLoadRequest {
   operationId: string
   viewId: ImageViewId

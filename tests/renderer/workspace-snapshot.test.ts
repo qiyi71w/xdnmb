@@ -100,6 +100,32 @@ describe('workspace snapshot', () => {
     expect(restored).toEqual(expected)
   })
 
+  it('keeps No. reading candidates and link clues of a saved main post, and rejects malformed ones', () => {
+    const value = workspace()
+    const entry = value.tabs.tabs[0]!.entries[1]!
+    const saved = entry.kind === 'online-search' ? null : entry.thread?.head
+    if (saved == null) throw new Error('fixture')
+    saved.content = [
+      { type: 'quoteRef', postId: '12345678901234567890', raw: 'No.12345678901234567890', readingOnly: true },
+      { type: 'quoteRef', postId: '68810699', raw: 'https://www.nmbxd1.com/t/68810621?r=68810699', hint: { threadId: '68810621', page: null } },
+      { type: 'quoteRef', postId: '68810621', raw: 'https://www.nmbxd1.com/t/68810621?page=3', hint: { threadId: '68810621', page: 3 } }
+    ]
+    const restored = parseWorkspace(serializeWorkspace(value))!.tabs.tabs[0]!.entries[1]!
+    expect(restored.kind === 'online-search' ? null : restored.thread?.head?.content).toEqual(saved.content)
+
+    const variants: Array<(node: Record<string, unknown>) => void> = [
+      (node) => (node.readingOnly = false),
+      (node) => (node.hint = { threadId: '68810621', page: 0 }),
+      (node) => (node.hint = { threadId: 'x', page: null }),
+      (node) => (node.hint = null)
+    ]
+    for (const change of variants) {
+      const raw = JSON.parse(serializeWorkspace(value))
+      change(raw.tabs.tabs[0].entries[1].thread.head.content[0])
+      expect(parseWorkspace(JSON.stringify(raw))).toBeNull()
+    }
+  })
+
   it('restores subscription tabs and quote-return entries with a fresh reading-data generation', () => {
     const value = workspace()
     const list = value.tabs.tabs[0]!.entries[1]!

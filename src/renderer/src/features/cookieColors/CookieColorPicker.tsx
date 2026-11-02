@@ -1,17 +1,16 @@
 // 饼干颜色… from a post or thread-row context menu: a small palette beside the 饼干 ID (at the menu's
-// place when that ID is not in view), the eight colors and 清除颜色. Choosing saves at once.
+// place when that ID is not in view), 默认 and the eight colors. Choosing saves at once.
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { COOKIE_COLORS, type CookieColorName } from '../../../../shared/cookieColors'
+import type { CookieColorName } from '../../../../shared/cookieColors'
 import { validateCookieId } from '../../../../shared/identity'
-import { cookieColorToken } from '../../../../shared/theme'
 import { isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
 import { useCover } from '../../lib/appCovered'
 import { openLayer } from '../../lib/layers'
-import { COOKIE_COLOR_LABELS } from './cookieColorNames'
+import { COOKIE_COLOR_CHOICES, cookieColorLabel, cookieSwatchFill } from './cookieColorNames'
 import { setCookieColor, useCookieColor } from './cookieColorsStore'
 import '../../components/context-menu.css'
 import './cookieColors.css'
@@ -88,13 +87,14 @@ function visibleCookieId(owner: HTMLElement, cookieId: string): DOMRect | null {
 }
 
 /**
- * Focus starts on the current color (else the first). Arrow keys, Home and End move; Enter or
- * Space chooses. Esc, Tab, a press outside, scrolling, resizing or leaving the window closes it
- * like a context menu; `onClose(true)` hands focus back to the post or row. A choice that does not
- * save keeps the palette open with the reason.
+ * Focus starts on the current choice (默认 for an ID that is not listed). Arrow keys, Home and End
+ * move; Enter or Space chooses. Esc, Tab, a press outside, scrolling, resizing or leaving the
+ * window closes it like a context menu; `onClose(true)` hands focus back to the post or row. A
+ * choice that does not save keeps the palette open with the reason. Choosing 默认 for a listed ID
+ * keeps it listed; 设置 › 饼干颜色 removes IDs.
  */
 function CookieColorPicker({ request: { cookieId, point, owner }, onClose }: { request: PickerRequest; onClose: (returnFocus: boolean) => void }) {
-  const current = useCookieColor(cookieId)
+  const current = useCookieColor(cookieId) ?? null
   const boxRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
@@ -167,7 +167,7 @@ function CookieColorPicker({ request: { cookieId, point, owner }, onClose }: { r
 
   const choose = async (color: CookieColorName | null) => {
     if (saving) return
-    if (color === (current ?? null)) {
+    if (color === current) {
       onClose(true)
       return
     }
@@ -216,22 +216,23 @@ function CookieColorPicker({ request: { cookieId, point, owner }, onClose }: { r
     >
       <p className="cookie-color-picker-state">
         <CookieId cookieId={cookieId} />
-        <span>{current === undefined ? '未标色' : `当前：${COOKIE_COLOR_LABELS[current]}`}</span>
+        <span>当前：{cookieColorLabel(current)}</span>
       </p>
       <div ref={menuRef} role="menu" aria-label={`饼干颜色：${cookieId}`} aria-busy={saving || undefined} className="context-menu-items">
         <div role="group" aria-label="颜色" className="cookie-color-picker-swatches">
-          {COOKIE_COLORS.map((color) => {
+          {COOKIE_COLOR_CHOICES.map((color) => {
             const on = current === color
-            const style = { '--swatch': `var(--${cookieColorToken(color)})` } as CSSProperties
+            const style = { '--swatch': cookieSwatchFill(color) } as CSSProperties
+            const label = cookieColorLabel(color)
             return (
               <button
-                key={color}
+                key={color ?? 'default'}
                 type="button"
                 role="menuitemradio"
                 aria-checked={on}
-                aria-label={COOKIE_COLOR_LABELS[color]}
-                title={COOKIE_COLOR_LABELS[color]}
-                className="cookie-color-picker-swatch"
+                aria-label={label}
+                title={label}
+                className={color === null ? 'cookie-color-picker-swatch is-default' : 'cookie-color-picker-swatch'}
                 style={style}
                 tabIndex={-1}
                 onClick={() => void choose(color)}
@@ -243,20 +244,6 @@ function CookieColorPicker({ request: { cookieId, point, owner }, onClose }: { r
             )
           })}
         </div>
-        <div role="separator" className="context-menu-separator" />
-        <button
-          type="button"
-          role="menuitem"
-          aria-disabled={current === undefined || undefined}
-          title={current === undefined ? '这个饼干 ID 没有颜色' : undefined}
-          className="context-menu-item"
-          tabIndex={-1}
-          onClick={() => {
-            if (current !== undefined) void choose(null)
-          }}
-        >
-          <span className="context-menu-label">清除颜色</span>
-        </button>
       </div>
       <div className="context-menu-footer" role="status">
         {failed && (

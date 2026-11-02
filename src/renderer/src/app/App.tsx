@@ -21,6 +21,10 @@ import {
 } from '../features/directory/navStore'
 import { useDirectory } from '../features/directory/useDirectory'
 import { HistoryPageContext, type HistoryPageHost } from '../features/content/RetainedPane'
+import { AnalyticsChoiceDialog, useAnalyticsChoicePrompt } from '../features/analytics/AnalyticsChoiceDialog'
+import { AnnouncementNavigationContext } from '../features/announcements/AnnouncementBody'
+import { AnnouncementDialog, useAutomaticAnnouncement, useFocusConditions } from '../features/announcements/AnnouncementDialog'
+import { isTextEntry, promptEligible } from '../features/announcements/startupPrompt'
 import { DraftLibraryDialog } from '../features/drafts/DraftLibraryDialog'
 import { editorFor, editorForDraft, editorOnScreen, wantsWrite } from '../features/editor/editorsState'
 import { DraftSaveFailedDialog } from '../features/editor/DraftSaveFailedDialog'
@@ -367,6 +371,50 @@ export function App() {
   })
   const pendingTabFocus = useRef(false)
 
+  // ---------- Startup prompts (the statistics question, then the automatic announcement) ----------
+  /**
+   * The startup restore finished (tabs, reopened drafts) and the lifecycle check after it settled,
+   * so a dialog that check raises is already up. Set once by `LifecycleHost`.
+   */
+  const [startupChecked, setStartupChecked] = useState(false)
+  const markStartupChecked = useCallback(() => setStartupChecked(true), [])
+  const focusConditions = useFocusConditions()
+  const sending = editors.state.editors.some((editor) => {
+    const publication = editor.publication
+    return (
+      publication !== null &&
+      (publication.phase === 'submitting' || publication.phase === 'prompt' || (publication.phase === 'uncertain' && publication.checking))
+    )
+  })
+  /**
+   * Where every startup prompt asks whether it may appear now. Editing (the compose panel is a
+   * modal), any other dialog or menu, a running quit (its dialog), typing, a settling send and a
+   * background window all hold it back.
+   */
+  const promptAllowed = promptEligible({
+    restored: tabs !== null && startupChecked,
+    foreground: focusConditions.foreground,
+    covered: coverage.covered,
+    typing: focusConditions.typing,
+    sending
+  })
+  /** The same, read live right before a held prompt is shown. */
+  const promptStillAllowed = useCallback(
+    () =>
+      !stateRef.current.covered &&
+      document.querySelector('dialog[open]') === null &&
+      document.visibilityState === 'visible' &&
+      document.hasFocus() &&
+      !isTextEntry(document.activeElement),
+    []
+  )
+  // The first-run statistics question comes first; the announcement waits until it is settled
+  // (never asked, answered, or unreadable) and then for its own eligible moment.
+  const analyticsChoice = useAnalyticsChoicePrompt(promptAllowed, promptStillAllowed)
+  const { close: closeAnalyticsChoice, drop: dropAnalyticsChoice } = analyticsChoice
+  const automaticAnnouncement = useAutomaticAnnouncement(promptAllowed && analyticsChoice.settled, promptStillAllowed)
+  const { close: closeAnnouncement } = automaticAnnouncement
+
   // ---------- Quote cards (preview, locate, quote navigation) ----------
   const quote = useQuoteNavigation({
     tabs,
@@ -601,13 +649,15 @@ export function App() {
   )
 
   /**
-   * An online search result opens as a new `online-search` step of the tab still showing that page
-   * (back reads 返回搜索结果 and the page comes back from its session without a new request).
+   * A target from the 搜索 page (an online result, or 按串号打开) opens as a new `online-search` step
+   * of the tab still showing that page (back reads 返回搜索结果 and the page comes back from its
+   * memory without a new request), or with `newTab` in a new active tab, leaving the page as it is.
    */
-  const openFromOnlineSearch = useCallback((entryKey: number, init: EntryInit): boolean => {
+  const openFromOnlineSearch = useCallback((entryKey: number, init: EntryInit, newTab = false): boolean => {
     const tab = stateRef.current.tabs?.tabs.find((item) => currentEntry(item).key === entryKey)
     if (tab === undefined) return false
-    dispatch({ type: 'navigate', tabId: tab.id, entry: init, origin: 'online-search' })
+    if (newTab) dispatch({ type: 'open-tab', entry: init, split: stateRef.current.settings.newTabSplitDefault })
+    else dispatch({ type: 'navigate', tabId: tab.id, entry: init, origin: 'online-search' })
     return true
   }, [])
 
@@ -1024,11 +1074,20 @@ export function App() {
     setClosing(null)
     searchCommands.close()
     quote.cardProps?.onClose()
-  }, [closeNav, searchCommands, quote.cardProps])
+    // Closed for this run only, as 确认 would: nothing is stored.
+    closeAnnouncement()
+    // Unanswered: asked again if the quit is cancelled, and at the next start.
+    dropAnalyticsChoice()
+  }, [closeNav, searchCommands, quote.cardProps, closeAnnouncement, dropAnalyticsChoice])
 
   /** Opens a sent record's place from 历史 in a new active tab (global split default). */
   const openEntryInTab = useCallback((entry: EntryInit) => {
     dispatch({ type: 'open-tab', entry, split: stateRef.current.settings.newTabSplitDefault })
+  }, [])
+
+  /** A thread an announcement's >>No. reference located, in a new active tab (global split default). */
+  const openAnnouncementThread = useCallback((thread: ThreadOpen) => {
+    dispatch({ type: 'open-tab', entry: { kind: 'thread', thread }, split: stateRef.current.settings.newTabSplitDefault })
   }, [])
 
   /** Opens a thread from a list row / thread menu in a new active tab (global split default). */
@@ -1389,6 +1448,7 @@ export function App() {
       <ListOpenerContext value={openList}>
       <ThreadTabOpenerContext value={openThreadInTab}>
       <HistoryPageContext value={historyHost}>
+      <AnnouncementNavigationContext value={openAnnouncementThread}>
         <div
           className={platform === 'darwin' ? 'app is-macos' : 'app'}
           style={platform === 'darwin' ? ({ '--page-zoom': String(pageZoom) } as CSSProperties) : undefined}
@@ -1556,6 +1616,12 @@ export function App() {
               onAnswer={(answer) => void resolvePrompt(promptEditor.id, answer)}
             />
           )}
+          {analyticsChoice.shown && (
+            <AnalyticsChoiceDialog onClose={closeAnalyticsChoice} fallbackFocus={activeTabFocus} />
+          )}
+          {automaticAnnouncement.announcement !== null && (
+            <AnnouncementDialog announcement={automaticAnnouncement.announcement} onClose={closeAnnouncement} fallbackFocus={activeTabFocus} />
+          )}
           {closing !== null && (
             <DraftSaveFailedDialog
               label="关闭标签"
@@ -1575,10 +1641,12 @@ export function App() {
             closeModals={closeForQuit}
             buildWorkspace={buildWorkspace}
             whenRestored={whenRestored}
+            onStartupChecked={markStartupChecked}
           />
           <EditContextMenuHost />
           <CookieColorPickerHost />
         </div>
+      </AnnouncementNavigationContext>
       </HistoryPageContext>
       </ThreadTabOpenerContext>
       </ListOpenerContext>

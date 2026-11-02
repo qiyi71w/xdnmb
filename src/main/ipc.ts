@@ -1,3 +1,6 @@
+import type { AnalyticsService } from './analytics/service'
+import { isAnnouncementIdentity } from '../shared/announcements'
+import type { AnnouncementService } from './announcements/service'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import {
   CLIPBOARD_EDIT_COMMANDS, IpcChannel, MAX_CLIPBOARD_TEXT_LENGTH, type AppStatus, type ClipboardEditCommand, type DirectoryStrategy,
@@ -33,9 +36,14 @@ import { applyZoom, currentZoom } from './zoom'
 import type { SearchService } from './search/service'
 import type { SearchFilters, SearchScope } from '../shared/search'
 import { serverCalendarDate } from '../shared/search-filters'
-import { MAX_SEARCH_QUERY_LENGTH, SEARCH_SITE_URL } from '../shared/online-search'
+import { MAX_SEARCH_QUERY_LENGTH, SEARCH_CHANNELS, SEARCH_SITE_URLS, type SearchChannel } from '../shared/online-search'
 import type { OnlineSearchService } from './online-search/service'
 import type { AccountService } from './account/service'
+
+function searchChannel(value: unknown): SearchChannel {
+  if (typeof value !== 'string' || !(SEARCH_CHANNELS as readonly string[]).includes(value)) throw new InvalidRequestError()
+  return value as SearchChannel
+}
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
@@ -61,6 +69,8 @@ class InvalidRequestError extends Error {
 }
 
 interface IpcDeps {
+  analytics: AnalyticsService
+  announcements: AnnouncementService
   content: ContentService
   search: SearchService
   onlineSearch: OnlineSearchService
@@ -307,7 +317,7 @@ export interface IpcRegistration {
 
 export function registerIpc({
   reading, images, identities, account, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
-  updates, getStatus, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
+  analytics, announcements, updates, getStatus, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): IpcRegistration {
   const owner = (sender: WebContents): string => String(sender.id)
   const operations = new OperationRegistry()
@@ -335,6 +345,21 @@ export function registerIpc({
     })
   }
 
+  handle(IpcChannel.analyticsGetState, async () => analytics.getState())
+  handle(IpcChannel.analyticsSetChoice, async (_event, raw) => {
+    if (raw !== 'on' && raw !== 'off') throw new InvalidRequestError()
+    return analytics.setChoice(raw)
+  })
+
+  handle(IpcChannel.announcementGetState, async () => announcements.getState())
+  handle(IpcChannel.announcementRefresh, async () => announcements.refresh())
+  handle(IpcChannel.announcementTakeAutomatic, async () => announcements.takeAutomatic())
+  handle(IpcChannel.announcementSuppress, async (_event, raw) => {
+    const input = searchRecord(raw, ['date', 'content'])
+    if (!isAnnouncementIdentity(input)) throw new InvalidRequestError()
+    return announcements.suppress(input)
+  })
+
   handle(IpcChannel.listBlocks, async () => store.listBlocks())
   handle(IpcChannel.setBlock, async (_event, raw) => {
     const input = record(raw)
@@ -345,15 +370,31 @@ export function registerIpc({
     return { saved: await attempt(() => store.setBlock(kind, value, blocked, new Date().toISOString())) }
   })
   handle(IpcChannel.listCookieColors, async () => store.listCookieColors())
+  /** Matched verbatim, so the ID must already be in the form stored: trimmed and within the 饼干 ID rules. */
+  const listedCookieId = (value: unknown): string => {
+    if (typeof value !== 'string') throw new InvalidRequestError()
+    const checked = validateCookieId(value)
+    if (!checked.ok || checked.cookieId !== value) throw new InvalidRequestError()
+    return value
+  }
+  handle(IpcChannel.addCookieColor, async (_event, raw) => {
+    const cookieId = listedCookieId(searchRecord(raw, ['cookieId']).cookieId)
+    try {
+      return { saved: true, added: await store.addCookieColor(cookieId, new Date().toISOString()) }
+    } catch {
+      return { saved: false }
+    }
+  })
   handle(IpcChannel.setCookieColor, async (_event, raw) => {
     const input = searchRecord(raw, ['cookieId', 'color'])
-    const { cookieId, color } = input
-    if (typeof cookieId !== 'string') throw new InvalidRequestError()
-    const checked = validateCookieId(cookieId)
-    // Matched verbatim, so the ID must already be in the form stored: trimmed and within the 饼干 ID rules.
-    if (!checked.ok || checked.cookieId !== cookieId) throw new InvalidRequestError()
+    const cookieId = listedCookieId(input.cookieId)
+    const { color } = input
     if (color !== null && !isCookieColorName(color)) throw new InvalidRequestError()
     return { saved: await attempt(() => store.setCookieColor(cookieId, color, new Date().toISOString())) }
+  })
+  handle(IpcChannel.removeCookieColor, async (_event, raw) => {
+    const cookieId = listedCookieId(searchRecord(raw, ['cookieId']).cookieId)
+    return { saved: await attempt(() => store.removeCookieColor(cookieId)) }
   })
 
   handle(IpcChannel.searchStart, async (event, raw) => {
@@ -506,24 +547,33 @@ export function registerIpc({
   })
 
   handle(IpcChannel.runOnlineSearch, async (event, raw) => {
-    const input = record(raw)
-    return onlineSearch.run(owner(event.sender), sessionId(input), searchQuery(input.query))
+    const input = searchRecord(raw, ['sessionId', 'channel', 'query'])
+    return onlineSearch.run(owner(event.sender), sessionId(input), searchChannel(input.channel), searchQuery(input.query))
   })
   handle(IpcChannel.onlineSearchPage, async (event, raw) => {
-    const input = record(raw)
+    const input = searchRecord(raw, ['sessionId', 'channel', 'page'])
     const pageNumber = input.page
     if (typeof pageNumber !== 'number' || !Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > MAX_SEARCH_PAGE) throw new InvalidRequestError()
-    return onlineSearch.page(owner(event.sender), sessionId(input), pageNumber)
+    return onlineSearch.page(owner(event.sender), sessionId(input), searchChannel(input.channel), pageNumber)
   })
   handle(IpcChannel.cancelOnlineSearch, async (event, raw) => {
-    onlineSearch.cancel(owner(event.sender), sessionId(record(raw)))
+    const input = searchRecord(raw, ['sessionId', 'channel'])
+    onlineSearch.cancel(owner(event.sender), sessionId(input), searchChannel(input.channel))
   })
   handle(IpcChannel.closeOnlineSearch, async (event, raw) => {
-    onlineSearch.close(owner(event.sender), sessionId(record(raw)))
+    const input = searchRecord(raw, ['sessionId', 'channel'])
+    onlineSearch.close(owner(event.sender), sessionId(input), searchChannel(input.channel))
   })
-  handle(IpcChannel.openOnlineSearchSite, async () => {
-    await shell.openExternal(SEARCH_SITE_URL)
+  handle(IpcChannel.openOnlineSearchSite, async (_event, raw) => {
+    const input = searchRecord(raw, ['channel'])
+    await shell.openExternal(SEARCH_SITE_URLS[searchChannel(input.channel)])
     return { opened: true }
+  })
+  handle(IpcChannel.searchThreadOf, async (event, raw) => {
+    const input = searchRecord(raw, ['operationId', 'postId'])
+    if (typeof input.postId !== 'string' || !/^[1-9]\d{0,19}$/.test(input.postId)) throw new InvalidRequestError()
+    const postId = input.postId
+    return operations.run(event.sender, operationId(input), (signal) => onlineSearch.threadOf(postId, signal))
   })
 
   handle(IpcChannel.cancel, async (event, raw) => {
@@ -650,6 +700,13 @@ export function registerIpc({
     return images.saveOriginal(postId, (suggestedName, format) => chooseSavePath(event.sender, suggestedName, format))
   })
 
+  handle(IpcChannel.copyOriginalImage, async (_event, raw) => {
+    const input = searchRecord(raw, ['postId', 'url'])
+    const postId = forumId(input.postId)
+    if (typeof input.url !== 'string' || !/^xidao-image:\/\/file\/[0-9a-f]{32}\.(jpg|png|gif|webp)$/.test(input.url)) throw new InvalidRequestError()
+    return images.copyOriginal(postId, input.url)
+  })
+
   handle(IpcChannel.accountOverview, async () => account.getOverview())
   handle(IpcChannel.accountLogin, async () => account.login())
   handle(IpcChannel.accountList, async () => account.list())
@@ -744,6 +801,9 @@ export function registerIpc({
   handle(IpcChannel.subscriptionObservation, async (_event, raw) =>
     subscriptions.getObservation({ source: subscriptionSource(record(raw).source) }))
 
+  handle(IpcChannel.subscriptionSnapshot, async (_event, raw) =>
+    subscriptions.getSnapshot({ source: subscriptionSource(record(raw).source) }))
+
   handle(IpcChannel.subscriptionRead, async (event, raw) => {
     const input = record(raw)
     const request = {
@@ -782,6 +842,9 @@ export function registerIpc({
     enforceQuota()
     return result
   })
+
+  handle(IpcChannel.subscriptionDismiss, async (_event, raw) =>
+    subscriptions.dismiss({ id: viewId(record(raw).id) }))
 
   handle(IpcChannel.subscriptionMergeSources, async () => subscriptions.getMergeSources())
   handle(IpcChannel.subscriptionPlans, async () => subscriptions.getPlans())
@@ -843,9 +906,9 @@ export function registerIpc({
   handle(IpcChannel.lifecyclePresentQuit, async () => lifecycle.presentQuit())
   handle(IpcChannel.lifecycleCancelQuit, async () => lifecycle.cancelQuit())
   handle(IpcChannel.lifecycleCompleteQuit, async (_event, raw) => {
-    const draftsSaved = record(raw).draftsSaved
-    if (typeof draftsSaved !== 'boolean') throw new InvalidRequestError()
-    lifecycle.completeQuit(draftsSaved)
+    const saved = record(raw).saved
+    if (typeof saved !== 'boolean') throw new InvalidRequestError()
+    lifecycle.completeQuit(saved)
   })
   handle(IpcChannel.loadWorkspace, async () => {
     try {
@@ -857,7 +920,8 @@ export function registerIpc({
   handle(IpcChannel.saveWorkspace, async (_event, raw) => {
     const workspace = record(raw).workspace
     if (typeof workspace !== 'string' || workspace.length > MAX_WORKSPACE_LENGTH) throw new InvalidRequestError()
-    return { ok: await attempt(() => store.saveWorkspace(workspace, new Date().toISOString())) }
+    const ok = await attempt(() => store.saveWorkspace(workspace, new Date().toISOString()))
+    return { ok, writable: ok || store.status.state === 'ready' }
   })
   handle(IpcChannel.listLaunchNotices, async () => {
     try {

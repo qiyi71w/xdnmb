@@ -5,7 +5,8 @@ import { registerIpc } from '../src/main/ipc'
 
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, input: unknown) => unknown>(),
-  written: [] as string[]
+  written: [] as string[],
+  imageCopies: [] as unknown[]
 }))
 vi.mock('electron', () => ({
   ipcMain: { handle(channel: string, handler: (event: unknown, input: unknown) => unknown) { electron.handlers.set(channel, handler) } },
@@ -30,11 +31,13 @@ const other = sender(2)
 beforeEach(() => {
   electron.handlers.clear()
   electron.written.length = 0
+  electron.imageCopies.length = 0
   main.calls.length = 0
   other.calls.length = 0
   // Only reminders is touched while registering; every other service is reached through a handler.
   registerIpc({
     reminders: { onChanged: () => () => undefined },
+    images: { copyOriginal: async (postId: string, url: string) => { electron.imageCopies.push({ postId, url }); return { status: 'copied', representation: 'image' } } },
     isTrustedSender: (event: IpcMainInvokeEvent) => (event.sender as unknown) === main
   } as unknown as Parameters<typeof registerIpc>[0])
 })
@@ -73,5 +76,20 @@ describe('clipboard IPC', () => {
       await expect(run(main, { command: 'writeText', text })).rejects.toThrow('invalid request')
     }
     expect(electron.written).toHaveLength(1)
+  })
+
+  it('only permits the trusted document to copy an exact managed original identity, never arbitrary paths or MIME payloads', async () => {
+    const handler = electron.handlers.get(IpcChannel.copyOriginalImage)!
+    const valid = { postId: '123', url: `xidao-image://file/${'a'.repeat(32)}.png` }
+    const copy = (from: FakeSender, input: unknown) => Promise.resolve().then(() => handler({ sender: from }, input))
+    await expect(copy(other, valid)).rejects.toThrow('invalid request')
+    for (const input of [
+      { ...valid, url: 'file:///etc/passwd' }, { ...valid, url: '/tmp/image.png' },
+      { ...valid, url: 'xidao-image://file/../secret.png' }, { ...valid, path: '/tmp/image.png' },
+      { ...valid, types: { 'text/uri-list': 'file:///secret' } }, { ...valid, postId: 123 }, null
+    ]) await expect(copy(main, input)).rejects.toThrow('invalid request')
+    expect(electron.imageCopies).toEqual([])
+    expect(await copy(main, valid)).toEqual({ status: 'copied', representation: 'image' })
+    expect(electron.imageCopies).toEqual([valid])
   })
 })

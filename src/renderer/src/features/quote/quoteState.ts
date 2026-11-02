@@ -1,6 +1,7 @@
-import type { QuoteLocation, QuotePreview, ReadError, ReadOutcome } from '../../../../shared/api'
+import type { LocateHint, QuoteLocation, QuotePreview, ReadError, ReadOutcome } from '../../../../shared/api'
 import type { PostId } from '../../../../shared/forum'
 import { quoteHostId, type QuoteAnchor } from './QuoteContext'
+import type { ThreadLookup } from './threadLookup'
 
 /**
  * What a locate request is for. `navigate` (click / Enter) and `new-tab` (在新标签页打开 in the
@@ -39,7 +40,14 @@ export interface QuoteSource {
   focus: QuoteAnchor
   /** Selected reference inside a preview; `focus` remains the original, persistent trigger. */
   reference?: QuoteAnchor
+  /** Verified forum link clue of the reference, passed to every locate of this card. */
+  hint?: LocateHint
+  /** Set for a selected number (no element): where the card sits and where focus goes back. */
+  selection?: { range: Range; returnFocus: HTMLElement | null }
 }
+
+/** What an explicit XDS lookup left on the card when it located nothing the reader could follow. */
+export type LookupNote = Extract<ThreadLookup, { status: 'unconfirmed' | 'not-indexed' | 'search-failed' }>
 
 /**
  * One quote card. Every request carries the card `id` and its own `seq`; a result is applied only
@@ -56,14 +64,20 @@ export interface QuoteCard {
   /**
    * `result` null while running; `locate` null when no locate was asked for or it was cancelled.
    * `known` is set while 打开原串 runs: the `thread-known` result it started from. A failure to read
-   * the resume page is stored as a `failed` result with the thread's ID.
+   * the resume page is stored as a `failed` result with the thread's ID. `viaLookup` marks a locate
+   * that follows an explicit 向 XDS 查询所属串 (XDS named the thread, the reader checks it);
+   * `fallback` is what cancelling it goes back to.
    */
   locate: {
     seq: number
     intent: LocateIntent
     result: QuoteLocation | null
     known?: Extract<QuoteLocation, { status: 'thread-known' }>
+    viaLookup?: true
+    fallback?: QuoteLocation
   } | null
+  /** Result of the last explicit XDS lookup that gave the reader nothing to follow. */
+  lookup?: LookupNote | null
 }
 
 export interface QuoteState {
@@ -84,6 +98,13 @@ export type QuoteAction =
   | { type: 'locate-done'; cardId: number; seq: number; result: QuoteLocation }
   /** Esc while locating: drops the running locate; the card and the reading position stay. */
   | { type: 'cancel-locate'; cardId: number }
+  /**
+   * 向 XDS 查询所属串 after an `unknown-thread` result: an explicit, disclosed request. It keeps the
+   * intent of the locate it follows, so a located result still jumps (or stays, for `resolve`).
+   */
+  | { type: 'lookup-start'; cardId: number }
+  /** The lookup located nothing to follow: back to `unknown-thread`, with what XDS said. */
+  | { type: 'lookup-done'; cardId: number; seq: number; note: LookupNote }
   /** Manual 重试: reloads the preview and, after a failed locate, resolves again without jumping. */
   | { type: 'retry'; cardId: number }
   /** Pointer left both the quote and the card: closes an unpinned card. */
@@ -173,7 +194,8 @@ export function quoteReducer(state: QuoteState, action: QuoteAction): QuoteState
         card: {
           ...card,
           pinned: card.pinned || action.intent !== 'resolve',
-          locate: { seq: state.nextSeq, intent: action.intent, result: null }
+          locate: { seq: state.nextSeq, intent: action.intent, result: null },
+          lookup: null
         },
         nextSeq: state.nextSeq + 1
       }
@@ -196,10 +218,31 @@ export function quoteReducer(state: QuoteState, action: QuoteAction): QuoteState
     case 'cancel-locate': {
       const card = current(state, action.cardId)
       if (card === null || card.locate === null || card.locate.result !== null) return state
-      // Cancelling 打开原串 goes back to what was known before it, so it can be chosen again.
-      const known = card.locate.known
-      const locate = known === undefined ? null : { seq: card.locate.seq, intent: 'resolve' as const, result: known }
+      // Cancelling 打开原串 or an XDS lookup goes back to what was known before it, so it can be chosen again.
+      const before = card.locate.known ?? card.locate.fallback
+      const locate = before === undefined ? null : { seq: card.locate.seq, intent: 'resolve' as const, result: before }
       return { ...state, card: { ...card, locate } }
+    }
+    case 'lookup-start': {
+      const card = current(state, action.cardId)
+      const before = card?.locate
+      if (card === null || before === null || before === undefined || before.result?.status !== 'unknown-thread' || before.intent === 'open-thread') return state
+      return {
+        ...state,
+        card: {
+          ...card,
+          pinned: true,
+          locate: { seq: state.nextSeq, intent: before.intent, result: null, viaLookup: true, fallback: before.result },
+          lookup: null
+        },
+        nextSeq: state.nextSeq + 1
+      }
+    }
+    case 'lookup-done': {
+      if (!isCurrentLocate(state, action.cardId, action.seq)) return state
+      const card = state.card as QuoteCard
+      const fallback = card.locate?.fallback ?? { status: 'unknown-thread' as const }
+      return { ...state, card: { ...card, locate: { seq: action.seq, intent: 'resolve', result: fallback }, lookup: action.note } }
     }
     case 'retry': {
       const card = current(state, action.cardId)

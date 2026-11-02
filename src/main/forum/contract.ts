@@ -22,6 +22,8 @@ export interface TransportResponse {
   mediaType: string | null
   /** Body decoded per Content-Encoding and charset. */
   text: string
+  /** Service-specific Retry-After; forum reads do not infer a retry policy. */
+  retryAfter?: string
 }
 
 /**

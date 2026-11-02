@@ -453,7 +453,80 @@
 
 .search-page-bar {
   flex: none;
+  display: grid;
+  gap: 8px;
   padding: 12px 12px 0 16px;
+}
+
+/* 本机｜联网, then (联网 only) XDS｜nmb-search; wraps under each other when narrow or zoomed. */
+.search-page-switches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+/* 按串号打开: one line (label, box, 打开) that wraps at 200% instead of clipping. */
+.number-open {
+  display: grid;
+  gap: 6px;
+}
+
+.number-open-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.number-open-label {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.number-open-input {
+  flex: 1 1 12em;
+  min-width: 0;
+  min-height: 30px;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+}
+
+.number-open-input:focus-visible {
+  outline-offset: 0;
+  border-color: transparent;
+}
+
+.number-open-status {
+  display: grid;
+  gap: 6px;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.number-open-result {
+  display: grid;
+  gap: 6px;
+}
+
+.number-open-preview {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  background: var(--paper);
+}
+
+.number-open-preview .quote-card-meta-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
 }
 
 .search-page-side {

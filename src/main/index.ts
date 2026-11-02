@@ -1,3 +1,7 @@
+import { createAnalyticsService, type AnalyticsService } from './analytics/service'
+import { analyticsOrigin, createAnalyticsTransport } from './analytics/transport'
+import { ANNOUNCEMENT_URL, MAX_ANNOUNCEMENT_LENGTH } from '../shared/announcements'
+import { createAnnouncementService, type AnnouncementService } from './announcements/service'
 import {
   app, BaseWindow, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, powerMonitor, protocol, session, shell, Tray,
   type IpcMainInvokeEvent, type MenuItemConstructorOptions
@@ -6,7 +10,6 @@ import { createReadStream } from 'node:fs'
 import { lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { pathToFileURL } from 'node:url'
 import { LIFECYCLE_REQUEST_CHANNEL, type AppPlatform } from '../shared/api'
 import { IMAGE_FORMAT_EXTENSION, IMAGE_SCHEME } from '../shared/images'
 import { createContentService, type ContentService } from './content/service'
@@ -17,9 +20,11 @@ import { createForumClient } from './forum/client'
 import { createForumTransport } from './forum/transport'
 import { IMAGE_MEDIA_TYPE, openManagedImageFiles, type ManagedImageFiles } from './images/files'
 import { createImageService } from './images/service'
+import { createElectronOriginalClipboard } from './images/clipboard-electron'
 import { createImageDownloader } from './images/transport'
 import { createSafeStorageProtector } from './identity/protection'
 import { createIdentityService } from './identity/service'
+import { createAppDocumentMatcher } from './app-document'
 import { registerIpc, type IpcRegistration } from './ipc'
 import { createLifecycle, type FinishingSummary, type Lifecycle, type MainWindowHost } from './lifecycle/controller'
 import { createReadingService } from './reading/service'
@@ -45,6 +50,7 @@ import { createReminderNotifier } from './reminders/notifier'
 import { applyZoom, zoomActionOf } from './zoom'
 import { createSearchService, type SearchService } from './search/service'
 import { createOnlineSearchService, SEARCH_API_ORIGIN } from './online-search/service'
+import { XDS_API_ORIGIN } from './online-search/xds'
 import { createAccountService } from './account/service'
 import { createAccountClient, requestAccountPage } from './account/client'
 import { isAccountLoginNavigation, openAccountLogin } from './account/login'
@@ -60,12 +66,7 @@ const APP_ID = 'io.github.qiyi71w.xidao'
 
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL
 const rendererFile = join(import.meta.dirname, '../renderer/index.html')
-const rendererFileUrl = pathToFileURL(rendererFile).href
-
-function isAppDocument(url: string): boolean {
-  if (rendererDevUrl) return URL.canParse(url) && new URL(url).origin === new URL(rendererDevUrl).origin
-  return url.split(/[?#]/)[0] === rendererFileUrl
-}
+const isAppDocument = createAppDocumentMatcher({ rendererFile, devUrl: rendererDevUrl, windows: process.platform === 'win32' })
 
 let mainWindow: BrowserWindow | null = null
 let store: AppStore | null = null
@@ -76,6 +77,8 @@ let lifecycle: Lifecycle | null = null
 let tray: Tray | null = null
 let search: SearchService | null = null
 let updates: UpdateService | null = null
+let announcements: AnnouncementService | null = null
+let analytics: AnalyticsService | null = null
 /**
  * Windows: a hidden window that exists for the whole run, so a shutdown, restart or log-off is noticed
  * even after the main window has closed while a quit finishes (the system asks every top-level window).
@@ -250,7 +253,7 @@ async function start(): Promise<void> {
     sessionSentinel = new BaseWindow({ show: false, skipTaskbar: true, width: 1, height: 1 })
     const endSession = () => {
       sessionEnding = true
-      updates?.endSession(lifecycle?.draftsLost ?? false)
+      updates?.endSession(lifecycle?.unsaved ?? false)
       lifecycle?.endSession()
     }
     sessionSentinel.on('query-session-end', endSession)
@@ -286,7 +289,46 @@ async function start(): Promise<void> {
   })
   store = openedStore
   if (openedStore.status.state !== 'ready') console.error('[storage] status', openedStore.status.state)
+  const announcementService = createAnnouncementService({
+    store: openedStore,
+    transport: createForumTransport({
+      allowedOrigins: [new URL(ANNOUNCEMENT_URL).origin],
+      timeoutMs: 10_000,
+      maxCompressedBytes: MAX_ANNOUNCEMENT_LENGTH,
+      maxDecodedBytes: MAX_ANNOUNCEMENT_LENGTH,
+      userAgent: `Xidao/${app.getVersion()}`
+    }),
+    isForeground: () => mainWindow !== null && mainWindow.isVisible() && !mainWindow.isMinimized() && mainWindow.isFocused()
+  })
+  announcements = announcementService
+  void announcementService.start()
   const protector = createSafeStorageProtector()
+  // Voluntary usage statistics: the receiving origin is fixed at build time; a build without one
+  // has the feature unavailable rather than sending anywhere else.
+  const statisticsOrigin = analyticsOrigin(import.meta.env.MAIN_VITE_XIDAO_ANALYTICS_ORIGIN)
+  let screenLocked = false
+  let suspended = false
+  const analyticsService = createAnalyticsService({
+    store: openedStore,
+    storageReady: () => openedStore.status.state === 'ready',
+    protector,
+    transport: statisticsOrigin === null ? null : createAnalyticsTransport({
+      origin: statisticsOrigin, timeoutMs: 10_000, userAgent: `Xidao/${app.getVersion()}`
+    }),
+    platform: platform === 'win32' ? 'windows' : platform === 'darwin' ? 'macos' : null,
+    version: app.getVersion(),
+    // Foreground use: the window shown, not minimized and focused, the screen not locked and the
+    // system not asleep. Nothing about what the user does in the window is read.
+    isForeground: () =>
+      !screenLocked && !suspended && powerMonitor.getSystemIdleState(1) !== 'locked' &&
+      mainWindow !== null && mainWindow.isVisible() && !mainWindow.isMinimized() && mainWindow.isFocused()
+  })
+  analytics = analyticsService
+  void analyticsService.start()
+  powerMonitor.on('lock-screen', () => { screenLocked = true })
+  powerMonitor.on('unlock-screen', () => { screenLocked = false; analyticsService.poke() })
+  powerMonitor.on('suspend', () => { suspended = true })
+  powerMonitor.on('resume', () => { suspended = false; analyticsService.poke() })
   const scheduler = createRequestScheduler()
 
   const identities = createIdentityService({
@@ -339,11 +381,24 @@ async function start(): Promise<void> {
   await subscriptions.recover().catch(() => console.error('[subscriptions] recovery failed'))
 
   const imageFiles = await openManagedImageFiles(join(app.getPath('userData'), 'images'))
+  const clipboardFiles = await openManagedImageFiles(join(app.getPath('userData'), 'clipboard-images'))
+  const imageClipboard = createElectronOriginalClipboard(clipboardFiles)
+  await imageClipboard.recover().catch(() => console.error('[images] clipboard recovery deferred'))
+  const clipboardCleanup = setInterval(() => {
+    void imageClipboard.recover().catch(() => undefined)
+  }, 30_000)
+  clipboardCleanup.unref()
+  app.once('will-quit', () => {
+    clearInterval(clipboardCleanup)
+    // Do not delete the current native file reference on exit; restart checks ownership again.
+    void imageClipboard.recover().catch(() => undefined)
+  })
   const images = createImageService({
     store: openedStore,
     files: imageFiles,
     download: createImageDownloader({ allowedOrigins: [IMAGE_ORIGIN] }),
-    origin: IMAGE_ORIGIN
+    origin: IMAGE_ORIGIN,
+    clipboard: imageClipboard
   })
   // Before any view can load images: drop last run's reading holders and leftover files.
   await images.recover().catch(() => console.error('[images] recovery failed'))
@@ -375,8 +430,12 @@ async function start(): Promise<void> {
       baseUrl: FORUM_API_ORIGIN, browseIdentity: async () => userhash
     }),
     adapter: createPublicationAdapter(),
-    onRecorded: (attempt) => { void failures.recorded(attempt).catch(() => console.error('[publication] failure notice unavailable')) },
-    onChecked: () => {
+    onRecorded: (attempt) => {
+      if (attempt.state === 'confirmed') reminders.publicationConfirmed()
+      void failures.recorded(attempt).catch(() => console.error('[publication] failure notice unavailable'))
+    },
+    onChecked: (attempt) => {
+      if (attempt.state === 'confirmed') reminders.publicationConfirmed()
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.webContents.isDestroyed()) window.webContents.send(PUBLICATION_CHANGED_CHANNEL)
       }
@@ -403,7 +462,14 @@ async function start(): Promise<void> {
     transport: createForumTransport({
       allowedOrigins: [SEARCH_API_ORIGIN],
       maxCompressedBytes: 2 * 1024 * 1024,
-      maxDecodedBytes: 4 * 1024 * 1024
+      maxDecodedBytes: 4 * 1024 * 1024,
+      userAgent: `Xidao/${app.getVersion()}`
+    }),
+    xdsTransport: createForumTransport({
+      allowedOrigins: [XDS_API_ORIGIN],
+      maxCompressedBytes: 2 * 1024 * 1024,
+      maxDecodedBytes: 4 * 1024 * 1024,
+      userAgent: `Xidao/${app.getVersion()}`
     })
   })
 
@@ -423,9 +489,9 @@ async function start(): Promise<void> {
       if (mainWindow === window) mainWindow = null
     })
     // Failures whose system notification did not show are owed an in-app notice once the window is shown.
-    window.on('show', () => failures.windowShown())
-    window.on('restore', () => failures.windowShown())
-    window.on('focus', () => failures.windowShown())
+    window.on('show', () => { failures.windowShown(); analyticsService.poke() })
+    window.on('restore', () => { failures.windowShown(); analyticsService.poke() })
+    window.on('focus', () => { failures.windowShown(); analyticsService.poke() })
   }
   const updateService = createUpdateService({
     platform: availability.platform,
@@ -457,6 +523,7 @@ async function start(): Promise<void> {
       await reminders.startScheduling().catch(() => console.error('[reminders] scheduling unavailable'))
       retained.resume()
       searchService.resume()
+      analyticsService.resume()
       void searchService.recover().catch(() => console.error('[search] index unavailable'))
       const { promise, resolve } = Promise.withResolvers<void>()
       const window = createWindow()
@@ -490,7 +557,7 @@ async function start(): Promise<void> {
       ipc?.cancelAll()
       // Nothing is downloaded while quitting; a package that is not ready is not installed.
       updateService.stop()
-      backgroundStopped = Promise.all([retained.stop(), reminders.stop('quit'), searchService.stop()]).then(() => undefined)
+      backgroundStopped = Promise.all([retained.stop(), reminders.stop('quit'), searchService.stop(), analyticsService.stop()]).then(() => undefined)
       await backgroundStopped
     },
     notify: notifyUnfinished,
@@ -508,11 +575,13 @@ async function start(): Promise<void> {
   })
   lifecycle = controller
   if (sessionEnding) {
-    updateService.endSession(controller.draftsLost)
+    updateService.endSession(controller.unsaved)
     controller.endSession()
   }
 
   ipc = registerIpc({
+    analytics: analyticsService,
+    announcements: announcementService,
     reading,
     images,
     identities,
@@ -605,6 +674,8 @@ async function finishStorage(): Promise<void> {
   if (!opened || storeClosed) return
   storeClosed = true
   await search?.stop()
+  await announcements?.stop()
+  await analytics?.stop()
   await content?.stop()
   await opened.close()
   await updates?.launchInstaller()

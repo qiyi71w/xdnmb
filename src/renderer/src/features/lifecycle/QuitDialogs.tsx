@@ -91,7 +91,7 @@ export function QuitUncheckedDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-/** Saving the workspace failed: the quit waits here and never continues without it. */
+/** Saving the workspace failed although storage takes writes: the quit waits here and never continues without it. */
 export function WorkspaceSaveFailedDialog({
   saving,
   onRetry,

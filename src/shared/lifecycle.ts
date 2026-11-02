@@ -58,16 +58,20 @@ export interface LifecycleApi {
   /** The quit was cancelled or could not save; the app keeps running unchanged. */
   cancelQuit(): Promise<void>
   /**
-   * The unsaved editors were handled and the workspace was saved: the window closes and the main
+   * The unsaved editors and the workspace were handled: the window closes and the main
    * process finishes sends that already started, then exits. Opening the app again before that
-   * cancels the exit. `draftsSaved: false`: the user quit although some drafts could not be saved;
-   * no update is installed at this exit.
+   * cancels the exit. `saved: false`: the user quit although some drafts or the workspace could not
+   * be saved; no update is installed at this exit.
    */
-  completeQuit(input: { draftsSaved: boolean }): Promise<void>
+  completeQuit(input: { saved: boolean }): Promise<void>
   /** The workspace saved at the last real quit, as written by `saveWorkspace`; `null` when none. */
   loadWorkspace(): Promise<WorkspaceLoadResult>
-  /** Replaces the saved workspace. `ok: false`: not saved (storage unavailable, read-only or failed). */
-  saveWorkspace(input: { workspace: string }): Promise<{ ok: boolean }>
+  /**
+   * Replaces the saved workspace. `ok: false`: not saved (storage unavailable, read-only or failed).
+   * `writable: false`: storage refuses every write for the rest of this run (read-only or
+   * unavailable), so retrying cannot save it; the previously saved workspace stays as it was.
+   */
+  saveWorkspace(input: { workspace: string }): Promise<{ ok: boolean; writable: boolean }>
   /**
    * Sends whose result became failed or unknown while no window was open (finishing after a quit),
    * or that were found unfinished at startup. Each stays listed until dismissed.
