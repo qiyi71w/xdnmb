@@ -1513,11 +1513,12 @@ export function App() {
             </QuoteControllerContext.Provider>
           </ContentRegistryContext.Provider>
           {/* Outside every reader's content: a quote card is not part of any thread view. Its nested
-              quotes still go through the quote controller (click, Enter, menu, new tab). */}
+              quotes still go through the quote controller (click, Enter, menu, new tab). One mount
+              per card: another quote's card starts with its own image scope and no viewer. */}
           {quote.cardProps !== null && (
             <QuoteControllerContext.Provider value={quote.controller}>
               <QuoteActiveContext.Provider value={quote.activeKey}>
-                <QuoteCard {...quote.cardProps} />
+                <QuoteCard key={quote.cardProps.card.id} {...quote.cardProps} />
               </QuoteActiveContext.Provider>
             </QuoteControllerContext.Provider>
           )}
