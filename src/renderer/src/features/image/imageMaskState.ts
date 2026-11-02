@@ -5,7 +5,7 @@ import { currentEntry, entryThread, type Tab } from '../tabs/tabsState'
  * 图片遮罩 reveals: which masked thumbnails the user uncovered during the current visit of each
  * tab's page. Renderer memory only, never saved. A tab's reveals are cleared whenever that visit
  * ends — its page changes, a side it showed (list or reader) leaves the screen, or it stops being the
- * active tab — and when masking is turned on again (enabled, or its opacity raised from 0%).
+ * active tab — and when masking is turned on again (enabled, or its blur strength raised from 0%).
  */
 
 /** What a tab shows now: its page and which of its sides are on screen. */

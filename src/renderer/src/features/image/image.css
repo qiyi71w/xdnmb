@@ -74,25 +74,47 @@
 }
 
 /* ---------- 图片遮罩 ----------
-   A solid cover over a reading thumbnail (post slot or list row) until revealed; the colour of the
-   防剧透 mask, so it follows the theme. Its opacity is the setting's, set inline. Painted from the
-   thumbnail's first frame: an image decoding underneath never shows uncovered. */
+   Frosted glass over a reading thumbnail (post slot or list row) until revealed, and over the 设置
+   preview: it blurs what is painted under it in its box, so the picture keeps its colours and loses
+   its detail, under a light tint of the paper colour that follows the theme. The host gives its box
+   width as --image-mask-size; --image-mask-strength (0–1, the setting, set inline) scales the blur
+   up to a tenth of that width, the saturation boost and the tint together, so the same strength
+   looks alike at every size. Painted from the thumbnail's first frame: an image decoding underneath
+   never shows sharp. Only this layer is filtered; the button, its border and focus ring stay crisp. */
 .image-mask {
   position: absolute;
   inset: 0;
-  background: color-mix(in oklch, var(--ink-2) 65%, var(--paper));
+  /* The backdrop is sampled in this layer's own shape: the host's overflow clip alone left its
+     square corners showing past the rounded box. */
+  border-radius: inherit;
+  backdrop-filter: blur(calc(var(--image-mask-size, 176px) * 0.1 * var(--image-mask-strength)))
+    saturate(calc(1 + 0.4 * var(--image-mask-strength)));
   pointer-events: none;
 }
 
-.post-image-open.is-masked,
-.row-thumb.is-masked {
+/* The tint never reaches a solid fill: at full strength the colours still show through. */
+.image-mask::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in oklch, var(--paper) 32%, transparent);
+  opacity: var(--image-mask-strength);
+}
+
+.post-image-open.is-masked {
+  --image-mask-size: var(--thumb-w);
   cursor: pointer;
 }
 
+.row-thumb.is-masked {
+  --image-mask-size: var(--row-thumb);
+  cursor: pointer;
+}
+
+/* Forced colours would replace the tint with the system canvas; the blur alone keeps working. */
 @media (forced-colors: active) {
   .image-mask {
     forced-color-adjust: none;
-    background: GrayText;
   }
 }
 

@@ -1,13 +1,14 @@
-import { createContext, useContext, useLayoutEffect, useMemo, useRef, type Dispatch, type ReactNode } from 'react'
+import { createContext, useContext, useLayoutEffect, useMemo, useRef, type CSSProperties, type Dispatch, type ReactNode } from 'react'
 import type { PostId } from '../../../../shared/forum'
 import { useSettings } from '../../lib/settingsContext'
 import { revealsOn, type ImageRevealsAction, type PageReveals, type RevealView } from './imageMaskState'
+import './image.css'
 
 /** 图片遮罩 of the reading thumbnails of one tab's page (its reader, lists and quote card). */
 export interface ImageMask {
-  /** Whether masking is on (enabled at an opacity above 0%). */
+  /** Whether masking is on (enabled at a blur strength above 0%). */
   active: boolean
-  /** Opacity in percent of the cover over the thumbnail of `postId`; null when it is not masked now. */
+  /** Blur strength in percent of the frost over the thumbnail of `postId`; null when it is not masked now. */
   cover: (postId: PostId) => number | null
   reveal: (postId: PostId) => void
   /** Ends the visit of the page: it switched to another of its own local pages (`useImageMaskSubpage`). */
@@ -56,25 +57,31 @@ export function ImageMaskScope({
   dispatch: Dispatch<ImageRevealsAction>
   children: ReactNode
 }) {
-  const { imageMaskEnabled, imageMaskOpacity } = useSettings().settings
-  const opacity = imageMaskEnabled && imageMaskOpacity > 0 ? imageMaskOpacity : null
+  const { imageMaskEnabled, imageMaskStrength } = useSettings().settings
+  const strength = imageMaskEnabled && imageMaskStrength > 0 ? imageMaskStrength : null
   const revealed = revealsOn(reveals, view)
   const visit = reveals?.visit ?? 0
   const page = view?.page ?? null
   const mask = useMemo<ImageMask>(
     () => ({
-      active: opacity !== null,
-      cover: (postId) => (opacity !== null && !revealed.has(postId) ? opacity : null),
+      active: strength !== null,
+      cover: (postId) => (strength !== null && !revealed.has(postId) ? strength : null),
       reveal: (postId) => dispatch({ type: 'reveal', tabId, page, postId }),
       leave: () => dispatch({ type: 'leave', tabId, page }),
       visit
     }),
-    [opacity, revealed, visit, dispatch, tabId, page]
+    [strength, revealed, visit, dispatch, tabId, page]
   )
   return <ImageMaskContext value={mask}>{children}</ImageMaskContext>
 }
 
-/** The cover over a masked thumbnail: the theme's mask colour at the chosen opacity. */
-export function ImageMaskCover({ opacity }: { opacity: number }) {
-  return <span className="image-mask" style={{ opacity: opacity / 100 }} aria-hidden="true" />
+/**
+ * The frost over a masked thumbnail (and the 设置 preview): blurs what lies under it in its box,
+ * keeping the picture's colours, with a light theme tint. `strength` (1–100) scales the blur, the
+ * saturation boost and the tint together (image.css); at 100 the detail is gone but the colours stay.
+ */
+export function ImageMaskCover({ strength }: { strength: number }) {
+  return (
+    <span className="image-mask" style={{ '--image-mask-strength': strength / 100 } as CSSProperties} aria-hidden="true" />
+  )
 }

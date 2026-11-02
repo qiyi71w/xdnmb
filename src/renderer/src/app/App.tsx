@@ -334,7 +334,7 @@ export function App() {
     dispatchReveals({ type: 'sync', views })
   }, [tabs, layout.singlePane])
   // Masking turned on (enabled, or raised from 0%) covers every image again.
-  const imageMasking = settings.imageMaskEnabled && settings.imageMaskOpacity > 0
+  const imageMasking = settings.imageMaskEnabled && settings.imageMaskStrength > 0
   useLayoutEffect(() => {
     if (imageMasking) dispatchReveals({ type: 'reset' })
   }, [imageMasking])

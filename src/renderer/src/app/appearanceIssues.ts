@@ -20,7 +20,7 @@ const FIELD_LABELS: Record<string, string> = {
   customThemeEnabled: '自定义主题',
   reading: '阅读参数',
   imageMaskEnabled: '图片遮罩',
-  imageMaskOpacity: '遮罩不透明度',
+  imageMaskStrength: '模糊强度',
   density: '密度',
   motion: '动态效果',
   newTabSplitDefault: '新标签默认开启分栏',
@@ -61,7 +61,7 @@ function rangeText(field: string): string {
       return `须为 ${THEME_LIMITS.fontSize.min}–${THEME_LIMITS.fontSize.max} 的整数`
     case 'readingWidth':
       return `须为 ${THEME_LIMITS.readingWidth.min}–${THEME_LIMITS.readingWidth.max} 的整数`
-    case 'imageMaskOpacity':
+    case 'imageMaskStrength':
       return '须为 0–100 的整数'
     default:
       return '超出允许范围'

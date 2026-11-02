@@ -13,8 +13,8 @@ import './image.css'
  * opens the list's image viewer whatever the thumbnail's state, and a failure keeps the placeholder
  * (the viewer shows the reason). `tabIndex` follows the row's, so a list keeps one tab stop per row.
  * In a local-only list (历史, 离线) the thumbnail never downloads; a missing one keeps the placeholder.
- * Under the 图片遮罩 the first activation only reveals the thumbnail (显示图片): it never opens the
- * row's thread or the viewer; the next opens the viewer.
+ * Under the 图片遮罩 the thumbnail is frosted and the first activation only reveals it (显示图片): it
+ * never opens the row's thread or the viewer; the next opens the viewer.
  */
 export function RowThumbnail({ postId, images, tabIndex }: { postId: PostId; images: ImageView; tabIndex: number }) {
   const thumb = useImageLoad(images.viewId, postId, 'thumb', images.localOnly)
@@ -56,7 +56,7 @@ export function RowThumbnail({ postId, images, tabIndex }: { postId: PostId; ima
           <Icon name="image" size={18} />
         </span>
       )}
-      {cover !== null && <ImageMaskCover opacity={cover} />}
+      {cover !== null && <ImageMaskCover strength={cover} />}
     </button>
   )
 }

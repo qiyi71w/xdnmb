@@ -102,8 +102,8 @@ export interface AppSettings {
   reading: ReadingParams
   /** Cover reading thumbnails until explicitly revealed during the current page visit. */
   imageMaskEnabled: boolean
-  /** Integer percent: 100 fully covers images; 0 leaves normal image activation unchanged. */
-  imageMaskOpacity: number
+  /** Integer blur strength: 100 applies the strongest frost; 0 leaves normal image activation unchanged. */
+  imageMaskStrength: number
   density: Density
   motion: MotionPreference
   rail: RailSettings
@@ -141,7 +141,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   customTheme: null,
   reading: DEFAULT_READING,
   imageMaskEnabled: false,
-  imageMaskOpacity: 100,
+  imageMaskStrength: 100,
   density: 'comfortable',
   motion: 'system',
   rail: { order: [], hidden: [] },
@@ -167,7 +167,7 @@ export const SETTING_KEYS = [
   'customTheme',
   'reading',
   'imageMaskEnabled',
-  'imageMaskOpacity',
+  'imageMaskStrength',
   'density',
   'motion',
   'rail',
@@ -353,7 +353,7 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
     case 'updateAutoDownload':
       parsed = typeof value === 'boolean' ? { ok: true, value } : { ok: false, issues: [{ kind: 'field', field: key, problem: 'type' }] }
       break
-    case 'imageMaskOpacity':
+    case 'imageMaskStrength':
       parsed = typeof value !== 'number' || !Number.isInteger(value)
         ? { ok: false, issues: [{ kind: 'field', field: key, problem: 'type' }] }
         : value < 0 || value > 100
