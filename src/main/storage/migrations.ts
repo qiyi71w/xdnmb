@@ -783,10 +783,12 @@ export const MIGRATIONS: readonly Migration[] = [
     // generation it keeps the largest reply count committed before its send intent, the smallest
     // count of a page seen holding it, the segment boundary at the intent, and its one-time result.
     // Per thread and mode, the largest reply count committed since the count last fell (in commit
-    // order, whatever the fetch times) is kept as the observation a send intent reads. Existing
-    // baselines seed it; pages saved before this version are not counted. The page 1 ordinal table and its trust
-    // flag go away. Earlier replies have no pre-send count: a pending one becomes unprovable;
-    // settled ones keep their result; closed ones belonged to generations that no longer exist.
+    // order, whatever the fetch times) is kept as the observation a send intent reads. Earlier
+    // versions kept no commit order, so it starts from the largest count already persisted: the
+    // baselines and every saved thread page, offline page and latest saved count. The page 1
+    // ordinal table and its trust flag go away. Earlier replies have no pre-send count: a pending
+    // one becomes unprovable; settled ones keep their result; closed ones belonged to generations
+    // that no longer exist.
     // Personal records, untouched by cache cleanup.
     version: 25,
     up(db) {
@@ -816,7 +818,12 @@ export const MIGRATIONS: readonly Migration[] = [
           PRIMARY KEY (thread_id, mode)
         );
         INSERT INTO reminder_count_observations (thread_id, mode, max_count)
-          SELECT thread_id, kind, baseline FROM reminder_state WHERE kind IN ('all', 'po') AND baseline IS NOT NULL;
+          SELECT thread_id, mode, max(count) FROM (
+            SELECT thread_id, kind AS mode, baseline AS count FROM reminder_state WHERE kind IN ('all', 'po') AND baseline IS NOT NULL
+            UNION ALL SELECT thread_id, mode, reply_count FROM thread_pages WHERE reply_count IS NOT NULL
+            UNION ALL SELECT thread_id, 'all', reply_count FROM offline_pages WHERE reply_count IS NOT NULL
+            UNION ALL SELECT thread_id, mode, reply_count FROM thread_reply_counts
+          ) GROUP BY thread_id, mode;
         DROP TABLE reminder_reply_positions;
         ALTER TABLE reminder_state DROP COLUMN own_positions_trusted;`)
     }

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
+import { EMPTY_FIELDS } from '../src/shared/drafts'
 import type { Post, ThreadPage } from '../src/shared/forum'
 import type { SubscriptionObservation, SubscriptionOperation, SubscriptionPlan } from '../src/shared/subscriptions'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
@@ -1091,12 +1092,40 @@ describe('schema v25: local replies are attributed by reply counts, not page 1 o
       { publication_id: 44, generation: 3, before_count: null, proof_count: null, status: 'absorbed' }
     ])
     expect(rows(path, "SELECT name FROM sqlite_master WHERE name = 'reminder_reply_positions'")).toEqual([])
-    // Each existing 全串／PO baseline is the observation a later send starts from.
-    expect(rows(path, 'SELECT * FROM reminder_count_observations')).toEqual([{ thread_id: '900', mode: 'all', max_count: 11 }])
+    // The 全串 baseline (no saved page of thread 900 is larger) is the observation a later send starts from.
+    expect(rows(path, "SELECT * FROM reminder_count_observations WHERE thread_id = '900'")).toEqual([{ thread_id: '900', mode: 'all', max_count: 11 }])
     // A page now showing the pending reply inside the counted growth does not deduct a guess.
     db.saveThreadPage(holding('9041', 11), later, 'lookup')
     expect(db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all).toBe(1)
     expect(rows(path, 'SELECT status FROM reminder_local_replies WHERE publication_id = 41')).toEqual([{ status: 'unprovable' }])
+  })
+
+  it('a send after the upgrade starts from the largest count of pages saved before it, not only the baseline', () => {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 24)).close()
+    const raw = new Database(path)
+    try {
+      // Baseline 200; a lookup of page 11 had already saved 203 replies.
+      raw.prepare("INSERT INTO reminder_rules VALUES ('900', 'all', 1, 1, ?, NULL, ?)").run(at, at)
+      raw.prepare("INSERT INTO reminder_state (thread_id, kind, baseline, count, issues_json) VALUES ('900', 'all', 200, 0, '[]')").run()
+      raw.prepare("INSERT OR IGNORE INTO posts (id, content_json, plain_text, fetched_at) VALUES ('900', '[]', '', ?)").run(at)
+      raw.prepare(`INSERT INTO thread_pages (thread_id, mode, page, head_id, fetched_at, reply_ids_json, reply_count, skipped_items, end_candidate)
+        VALUES ('900', 'all', 11, '900', ?, '[]', 203, 0, 0)`).run(at)
+    } finally { raw.close() }
+    const db = open(path)
+    const credentialId = db.insertCredential({ name: 'v25', cookieId: 'Po', source: 'raw', importedAt: later, ciphertext: Buffer.from('v25') }).id
+    const sent = db.createPublication({ requestId: 'after-upgrade', editorId: 'editor', forumId: '4', at: later,
+      payload: { draftId: null, target: { kind: 'reply', threadId: '900' }, credentialId, fields: { ...EMPTY_FIELDS, content: 'mine' }, attachmentId: null } })
+    const counted = () => db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all
+    // The reader absorbs 200→203 before the reply lands; a check then counts 203→204.
+    db.saveThreadPage({ ...holding('90199', 203), page: 11 }, later, 'display')
+    db.saveThreadPage({ ...holding('90200', 204), page: 11 }, later)
+    db.updateReminderState({ threadId: '900', kind: 'all', generation: 1, at: later, roundId: 'round', baseline: 204, countedFrom: 203, add: 1, firstPage: 11, checked: true })
+    db.finishPublication({ id: sent.id, state: 'confirmed', problem: null, postId: '90204', threadId: '900', at: later })
+    expect(counted()).toBe(1)
+    // (203, 204] is the check's growth alone: the reply leaves the count.
+    db.saveThreadPage({ ...holding('90204', 204), page: 11 }, later, 'lookup')
+    expect(counted()).toBe(0)
   })
 
   it('leaves the v24 file byte for byte when the upgrade fails, then upgrades', () => {
