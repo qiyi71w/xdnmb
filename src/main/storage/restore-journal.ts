@@ -34,13 +34,17 @@ const MAX_JOURNAL_BYTES = 16 * 1024 * 1024
 
 /**
  * `prepared`: the restore data is staged, the current data untouched. `moving-current`: the current
- * data is moving into `before-restore.partial/` (or, once that replaced `before-restore/`, is all
- * there). `placing-restore`: the current data is all in `before-restore/`; the restore data is moving
- * from staging into place. `returning-current`: abandoning after the restore data was partly placed;
- * what was placed is gone and the current data is moving back from `before-restore/`.
+ * data is moving into `before-restore.partial/` (made before this phase is written, and gone in this
+ * phase only once it has replaced `before-restore/`). `placing-restore`: the current data is all in
+ * `before-restore/`; the restore data is moving from staging into place. `returning-current`:
+ * abandoning; whatever restore data was placed is gone and the current data is moving back from the
+ * directory `returnFrom` names, which is recorded before anything moves back.
  */
 export type RestorePhase = 'prepared' | 'moving-current' | 'placing-restore' | 'returning-current'
 const PHASES: readonly RestorePhase[] = ['prepared', 'moving-current', 'placing-restore', 'returning-current']
+
+/** Where an abandoned restore finds the current data: `before-restore.partial/` or `before-restore/`. */
+export type ReturnSource = 'partial' | 'before'
 
 export interface RestoreJournal {
   format: 1
@@ -49,6 +53,8 @@ export interface RestoreJournal {
   databaseSize: number
   /** Every staged draft attachment copy, by managed name, with its size in bytes. */
   draftImages: { name: string; size: number }[]
+  /** Only with `returning-current`. */
+  returnFrom?: ReturnSource
 }
 
 /** What settling found: no restore pending, the restore done, or the restore given up (nothing changed). */
@@ -127,8 +133,9 @@ export function discardRestoreJournal(userDataDirectory: string): void {
 function parseJournal(text: string): RestoreJournal | null {
   const value: unknown = JSON.parse(text)
   if (!isRecord(value)) return null
-  const { format, phase, databaseSize, draftImages } = value
+  const { format, phase, databaseSize, draftImages, returnFrom } = value
   if (format !== 1 || !PHASES.includes(phase as RestorePhase)) return null
+  if (phase === 'returning-current' && returnFrom !== 'partial' && returnFrom !== 'before') return null
   if (typeof databaseSize !== 'number' || !Number.isSafeInteger(databaseSize) || databaseSize <= 0) return null
   if (!Array.isArray(draftImages)) return null
   const names = new Set<string>()
@@ -141,10 +148,15 @@ function parseJournal(text: string): RestoreJournal | null {
     names.add(name)
     images.push({ name, size })
   }
-  return { format, phase: phase as RestorePhase, databaseSize, draftImages: images }
+  const journal: RestoreJournal = { format, phase: phase as RestorePhase, databaseSize, draftImages: images }
+  if (phase === 'returning-current') journal.returnFrom = returnFrom as ReturnSource
+  return journal
 }
 
-/** The journal; null when there is none. Throws when one exists but cannot be read. */
+/**
+ * The journal; null when there provably is none (no such file, or `backups` is not a directory).
+ * Throws when one may exist but cannot be read.
+ */
 function readJournal(userDataDirectory: string): RestoreJournal | null {
   const path = journalPath(userDataDirectory)
   let text: string
@@ -152,7 +164,8 @@ function readJournal(userDataDirectory: string): RestoreJournal | null {
     if (lstatSync(path).size > MAX_JOURNAL_BYTES) throw new Error('restore journal unreadable')
     text = readFileSync(path, 'utf8')
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null
     throw error
   }
   const journal = parseJournal(text)
@@ -181,6 +194,9 @@ export function settleRestore(databasePath: string, options: { step?: () => void
 
   const journal = readJournal(userData)
   if (journal === null) {
+    // `backups` that is not a directory holds nothing of a restore; the pre-upgrade backup decides
+    // what that means for opening.
+    if (!lstatSync(backups, { throwIfNoEntry: false })?.isDirectory()) return 'none'
     // Leftovers of a preparation that ended before its journal was written: no journal locates
     // data there, and the current data never moves without one.
     rmSync(staging, { recursive: true, force: true })
@@ -206,9 +222,12 @@ export function settleRestore(databasePath: string, options: { step?: () => void
     step()
   }
 
-  const write = (phase: RestorePhase): void => {
-    writeRestoreJournal(userData, { ...journal, phase })
+  const write = (phase: RestorePhase, returnFrom?: ReturnSource): void => {
+    const next: RestoreJournal = { format: journal.format, phase, databaseSize: journal.databaseSize, draftImages: journal.draftImages }
+    if (returnFrom !== undefined) next.returnFrom = returnFrom
+    writeRestoreJournal(userData, next)
     journal.phase = phase
+    journal.returnFrom = returnFrom
     step()
   }
 
@@ -220,9 +239,13 @@ export function settleRestore(databasePath: string, options: { step?: () => void
     return outcome
   }
 
-  /** Puts the current data back from wherever it was moved to, then forgets the restore. */
-  const returnCurrent = (): RestoreOutcome => {
-    const holder = present(partial) ? partial : before
+  /**
+   * Abandons: records where the current data is before moving any of it back, so an interrupted
+   * return never takes another directory (such as an earlier restore's 降级前数据) for it.
+   */
+  const returnCurrent = (from: ReturnSource): RestoreOutcome => {
+    if (journal.phase !== 'returning-current') write('returning-current', from)
+    const holder = journal.returnFrom === 'partial' ? partial : before
     for (const item of currentItems) move(item, holder, userData)
     syncDirectory(userData)
     rmSync(holder, { recursive: true, force: true })
@@ -240,7 +263,8 @@ export function settleRestore(databasePath: string, options: { step?: () => void
   }
 
   if (journal.phase === 'moving-current') {
-    if (!restoreDataComplete([staging])) return returnCurrent()
+    // In this phase `partial` is gone only once it has become `before-restore/` (the swap below).
+    if (!restoreDataComplete([staging])) return returnCurrent(present(partial) ? 'partial' : 'before')
     // Until the swap, `partial` exists (it was made before this phase was written).
     if (present(partial)) {
       for (const item of currentItems) move(item, userData, partial)
@@ -257,17 +281,16 @@ export function settleRestore(databasePath: string, options: { step?: () => void
   }
 
   if (journal.phase === 'placing-restore') {
-    if (!restoreDataComplete([staging, userData])) {
-      // Only restore data has been placed (the current data is all in `before-restore/`).
-      for (const item of restoreItems) rmSync(join(userData, item), { recursive: true, force: true })
-      syncDirectory(userData)
-      write('returning-current')
-    } else {
+    if (restoreDataComplete([staging, userData])) {
       for (const item of restoreItems) move(item, staging, userData)
       syncDirectory(userData)
       return finish('restored')
     }
+    // Only restore data has been placed (the current data is all in `before-restore/`).
+    for (const item of restoreItems) rmSync(join(userData, item), { recursive: true, force: true })
+    syncDirectory(userData)
+    return returnCurrent('before')
   }
 
-  return returnCurrent()
+  return returnCurrent(journal.returnFrom ?? 'before')
 }

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -443,6 +443,71 @@ describe('restore journal', () => {
 
     writeFileSync(join(folder, 'backups', 'restore-journal.json'), '{"format":1,"phase":')
     expect(() => settleRestore(databaseOf(folder))).toThrow()
+    expect(completeIn(newer, [folder])).toBe(true)
+  })
+
+  it('abandons from any interrupted step of carrying out or abandoning, never taking an earlier 降级前数据 for the current data', () => {
+    const PREVIOUS_DATABASE = Buffer.from('an earlier restore’s 降级前数据')
+    const PREVIOUS_IMAGE = Buffer.from('an earlier restore’s draft image')
+    let chains = 0
+    for (let restoreStop = 0; ; restoreStop++) {
+      const { folder, newer } = prepared()
+      const previous = beforeRestoreDirectory(folder)
+      mkdirSync(join(previous, 'draft-images'), { recursive: true })
+      writeFileSync(join(previous, 'xidao.sqlite'), PREVIOUS_DATABASE)
+      writeFileSync(join(previous, 'draft-images', OLD_IMAGE), PREVIOUS_IMAGE)
+      if (restoreStop > 0 && !interrupted(folder, restoreStop)) break
+      // Make the restore data incomplete wherever it still is in staging, so the next start abandons.
+      const staging = restoreStagingDirectory(folder)
+      if (existsSync(join(staging, 'xidao.sqlite'))) {
+        writeFileSync(join(staging, 'xidao.sqlite'), readFileSync(join(staging, 'xidao.sqlite')).subarray(0, 1024))
+      } else if (existsSync(join(staging, 'draft-images', OLD_IMAGE))) {
+        rmSync(join(staging, 'draft-images', OLD_IMAGE))
+      } else continue
+      for (let abandonStop = 1; ; abandonStop++) {
+        const copy = userData()
+        cpSync(folder, copy, { recursive: true })
+        const stopped = interrupted(copy, abandonStop)
+        if (stopped) {
+          const pending = existsSync(join(copy, 'backups', 'restore-journal.json'))
+          expect(settleRestore(databaseOf(copy)), `restore step ${restoreStop}, abandon step ${abandonStop}`).toBe(pending ? 'abandoned' : 'none')
+        }
+        expect(completeIn(newer, [copy]), `restore step ${restoreStop}, abandon step ${abandonStop}`).toBe(true)
+        expect(readdirSync(join(copy, 'draft-images')).sort()).toEqual([NEW_IMAGE, OLD_IMAGE].sort())
+        expect(readFileSync(join(copy, 'draft-images', OLD_IMAGE))).not.toEqual(PREVIOUS_IMAGE)
+        expect(readFileSync(databaseOf(copy))).not.toEqual(PREVIOUS_DATABASE)
+        for (const leftover of ['restore-journal.json', 'restore-staging', 'before-restore.partial']) {
+          expect(existsSync(join(copy, 'backups', leftover))).toBe(false)
+        }
+        chains++
+        if (!stopped) break
+      }
+    }
+    expect(chains).toBeGreaterThan(20)
+  })
+
+  it('finds no restore when backups is not a directory, so the pre-upgrade backup failure shows', () => {
+    const folder = crashedNewer(oldInstall())
+    writeFileSync(join(folder, 'backups'), 'not a directory')
+    const database = sha(databaseOf(folder))
+    const wal = sha(`${databaseOf(folder)}-wal`)
+    expect(settleRestore(databaseOf(folder))).toBe('none')
+    // What the worker then opens: the upgrade needs a backup, which cannot be written.
+    const db = open(folder, NEW)
+    expect(db.status).toEqual({ state: 'unavailable', reason: 'backup-failed', schemaVersion: SUPPORTED, supportedVersion: SUPPORTED + 1 })
+    close(db)
+    expect(sha(databaseOf(folder))).toBe(database)
+    expect(sha(`${databaseOf(folder)}-wal`)).toBe(wal)
+  })
+
+  it('does not open when it cannot tell whether a journal exists', () => {
+    const { folder, newer } = prepared()
+    chmodSync(join(folder, 'backups'), 0o000)
+    try {
+      expect(() => settleRestore(databaseOf(folder))).toThrow()
+    } finally {
+      chmodSync(join(folder, 'backups'), 0o755)
+    }
     expect(completeIn(newer, [folder])).toBe(true)
   })
 })
