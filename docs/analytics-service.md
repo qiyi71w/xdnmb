@@ -97,7 +97,7 @@ node server/analytics/main.ts restore <文件>   # 用备份新建数据库并�
 | `XIDAO_ANALYTICS_DB` | 数据库文件路径（`hash-password` 以外的命令必需） |
 | `XIDAO_ANALYTICS_ADMIN_PASSWORD_HASH` | `hash-password` 的输出（`serve` 必需，缺少时拒绝启动） |
 | `XIDAO_ANALYTICS_ADMIN_USER` | 看板用户名，默认 `admin` |
-| `XIDAO_ANALYTICS_HOST`／`XIDAO_ANALYTICS_PORT` | 监听地址与端口，默认 `127.0.0.1:8787` |
+| `XIDAO_ANALYTICS_HOST`／`XIDAO_ANALYTICS_PORT` | 监听地址与端口，默认 `127.0.0.1:8787`；端口 `0` 由系统分配空闲端口，启动日志 `listening` 的 `port` 为实际端口 |
 | `XIDAO_ANALYTICS_MAX_INSTANCES` | 已登记实例上限，默认 100000 |
 
 同一数据库只运行一个 `serve` 进程。配置放在仅 root 可读（`0600`）的环境文件中。正式部署用官方 `node:24` 镜像运行（主机不需要安装 Node）：应用文件只读挂载，数据目录归一个不对应任何主机账户的专用 uid，只在本机回环地址发布端口：

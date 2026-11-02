@@ -1,6 +1,7 @@
 // Command-line entry of the usage-statistics service. Runs on plain Node.js 24 without
 // a build step or runtime dependencies; see docs/analytics-service.md.
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
+import type { AddressInfo } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createAdminAuthenticator, hashPassword, parsePasswordHash } from './auth.ts'
@@ -22,7 +23,7 @@ environment:
   XIDAO_ANALYTICS_ADMIN_PASSWORD_HASH   output of hash-password (serve)
   XIDAO_ANALYTICS_ADMIN_USER            dashboard user name, default "admin" (serve)
   XIDAO_ANALYTICS_HOST                  listen address, default 127.0.0.1 (serve)
-  XIDAO_ANALYTICS_PORT                  listen port, default 8787 (serve)
+  XIDAO_ANALYTICS_PORT                  listen port, default 8787; 0 lets the system pick one (serve)
   XIDAO_ANALYTICS_MAX_INSTANCES         registered-instance cap, default 100000 (serve)`
 
 const MIN_PASSWORD_LENGTH = 12
@@ -59,7 +60,7 @@ async function serve(): Promise<void> {
   const passwordHash = parsePasswordHash(requiredEnv('XIDAO_ANALYTICS_ADMIN_PASSWORD_HASH'))
   const username = process.env.XIDAO_ANALYTICS_ADMIN_USER?.trim() || 'admin'
   const host = process.env.XIDAO_ANALYTICS_HOST?.trim() || '127.0.0.1'
-  const port = integerEnv('XIDAO_ANALYTICS_PORT', 8787, 1, 65535)
+  const port = integerEnv('XIDAO_ANALYTICS_PORT', 8787, 0, 65535)
   const maxInstances = integerEnv('XIDAO_ANALYTICS_MAX_INSTANCES', 100_000, 1, 10_000_000)
   const dashboard = loadDashboard()
   const store = openAnalyticsStore({ path: requiredEnv('XIDAO_ANALYTICS_DB') })
@@ -77,7 +78,10 @@ async function serve(): Promise<void> {
   service.server.once('error', reject)
   service.server.listen(port, host, () => resolve())
   await promise
-  log('listening', { host, port })
+  // A TCP listener reports an AddressInfo; its port differs from the configured one when the
+  // system picked it (port 0).
+  const bound = service.server.address() as AddressInfo
+  log('listening', { host, port: bound.port })
 
   let stopping = false
   const stop = (): void => {
