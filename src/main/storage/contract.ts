@@ -2,7 +2,7 @@ import type { AnnouncementRecord } from '../../shared/announcements'
 import type { AnalyticsRecord } from '../../shared/analytics'
 import type { BlockKind, LocalBlock } from '../../shared/blocks'
 import type { CookieColor, CookieColorName } from '../../shared/cookieColors'
-import type { StorageStatus } from '../../shared/api'
+import type { StorageStatus, ThreadReadPurpose } from '../../shared/api'
 import type {
   BoardDirectory,
   FeedPage,
@@ -87,8 +87,13 @@ export interface ReadingStore {
   loadDirectory(): Promise<Stored<BoardDirectory> | null>
   saveFeedPage(page: FeedPage, fetchedAt: string): Promise<void>
   loadFeedPage(feed: FeedRef, page: number): Promise<Stored<FeedPage> | null>
-  /** Saves posts, post→thread relations and the page observation; returns coverage from the same transaction. */
-  saveThreadPage(page: ThreadPage, fetchedAt: string): Promise<ThreadCoverage>
+  /**
+   * Saves posts, post→thread relations and the page observation; returns coverage from the same
+   * transaction. A `display` save (a reader's fresh network read) also advances that mode's enabled,
+   * set reminder baseline to the page's reply count in that transaction; any other save leaves
+   * reminders alone.
+   */
+  saveThreadPage(page: ThreadPage, fetchedAt: string, purpose?: ThreadReadPurpose): Promise<ThreadCoverage>
   loadThreadPage(threadId: ThreadId, mode: ReadingMode, page: number): Promise<Stored<ThreadPage> | null>
   getThreadCoverage(threadId: ThreadId, mode: ReadingMode): Promise<ThreadCoverage>
   /** Saves one post's content without any thread relation (a quote preview carries none). */

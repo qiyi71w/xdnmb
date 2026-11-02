@@ -386,11 +386,13 @@ export function useSearch(options: Options) {
         const reading = await window.xidao.readingState.get({ threadId }).catch(() => null)
         if (!isCurrentLocate(stateRef.current, tabId, seq)) return
         const start = savedStart(reading, reading?.mode ?? 'all')
+        // Only checks the thread can be opened; the reader shown afterwards reads it for display.
         const outcome = await window.xidao.reading.readThreadPage({
           operationId: locateOperation(seq),
           threadId,
           mode: start.mode,
-          page: startPage(start.position)
+          page: startPage(start.position),
+          purpose: 'lookup'
         })
         if (!isCurrentLocate(stateRef.current, tabId, seq) || outcome.status === 'cancelled') return
         if (outcome.status === 'failed') {

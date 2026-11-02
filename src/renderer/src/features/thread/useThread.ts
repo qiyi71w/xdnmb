@@ -30,13 +30,16 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     holdRef.current = hold
   })
 
-  /** One page of the thread in this reader's mode, read only once the reader's content is held. */
+  /**
+   * One page of the thread in this reader's mode, read only once the reader's content is held. A
+   * reader's read is a `display` read: what it sees is no longer counted by 全串／PO reminders.
+   */
   const readThreadPage = useCallback(
     (page: number) =>
       scope.current.run<ThreadPageResult>(async (operationId) => {
         await holdRef.current()
         if (!scope.current.isActive(operationId)) return { status: 'cancelled' }
-        return window.xidao.reading.readThreadPage({ operationId, threadId: threadRef.current, mode: modeRef.current, page })
+        return window.xidao.reading.readThreadPage({ operationId, threadId: threadRef.current, mode: modeRef.current, page, purpose: 'display' })
       }),
     []
   )
@@ -93,7 +96,7 @@ export function useThread(threadId: ThreadId, mode: ReadingMode, initialHead: Po
     const settled = await scope.current.run<ThreadEndResult>(async (operationId) => {
       await holdRef.current()
       if (!scope.current.isActive(operationId)) return { status: 'cancelled' }
-      return window.xidao.reading.locateThreadEnd({ operationId, threadId: threadRef.current, mode: modeRef.current })
+      return window.xidao.reading.locateThreadEnd({ operationId, threadId: threadRef.current, mode: modeRef.current, purpose: 'display' })
     })
     switch (settled.type) {
       case 'stale':

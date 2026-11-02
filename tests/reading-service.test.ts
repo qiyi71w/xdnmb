@@ -76,7 +76,7 @@ function service(client: ForumClient) {
 
 async function locate(sizes: number[], replyCount: number | null) {
   const f = forum(sizes, replyCount)
-  const outcome = await service(f.client).locateThreadEnd(THREAD, 'all', new AbortController().signal)
+  const outcome = await service(f.client).locateThreadEnd(THREAD, 'all', new AbortController().signal, 'display')
   if (outcome.status !== 'fresh') throw new Error(`unexpected outcome ${outcome.status}`)
   return { result: outcome.data as ThreadEndResult, requested: f.requested }
 }
@@ -99,7 +99,7 @@ describe('locateThreadEnd (mode-specific count or bounded unknown-count probe)',
     const f = forum([7], 7)
     db.saveThreadPage({ threadId: THREAD, mode: 'all', page: 1, head: post(THREAD), replies: [post('60000000')],
       replyCount: 2194, skippedItems: 0, endCandidate: false }, '2026-10-24T00:00:00.000Z')
-    const outcome = await service(f.client).locateThreadEnd(THREAD, 'po', new AbortController().signal)
+    const outcome = await service(f.client).locateThreadEnd(THREAD, 'po', new AbortController().signal, 'display')
     expect(outcome).toMatchObject({ status: 'fresh', data: { status: 'located', lastPage: { page: { page: 1, mode: 'po', replyCount: 7 } } } })
     expect(f.requested).toEqual([1])
   })
@@ -133,7 +133,7 @@ describe('locateThreadEnd (mode-specific count or bounded unknown-count probe)',
     f.onRequest((page) => {
       if (page === 4) controller.abort()
     })
-    const outcome = await service(f.client).locateThreadEnd(THREAD, 'all', controller.signal)
+    const outcome = await service(f.client).locateThreadEnd(THREAD, 'all', controller.signal, 'display')
     expect(outcome.status).toBe('cancelled')
     expect(f.requested).toEqual([1, 4])
   })
@@ -143,7 +143,7 @@ describe('locateThreadEnd (mode-specific count or bounded unknown-count probe)',
     f.onRequest((page) => {
       if (page > 1) f.fail(new ForumReadError({ kind: 'rate-limited', detail: 'business', serverMessage: '验证码' }))
     })
-    const outcome = await service(f.client).locateThreadEnd(THREAD, 'all', new AbortController().signal)
+    const outcome = await service(f.client).locateThreadEnd(THREAD, 'all', new AbortController().signal, 'display')
     expect(outcome.status).toBe('fresh')
     if (outcome.status !== 'fresh') return
     expect(outcome.data).toMatchObject({
@@ -168,8 +168,8 @@ describe('readThreadPage', () => {
     } } })
     const reading = service(client)
     const signal = new AbortController().signal
-    expect(await reading.readThreadPage(THREAD, 'all', 1, signal)).toMatchObject({ status: 'fresh', data: { coverage: { reportedReplyCount: 2194 } } })
-    expect(await reading.locateThreadEnd(THREAD, 'all', signal)).toMatchObject({ status: 'failed', error: {
+    expect(await reading.readThreadPage(THREAD, 'all', 1, signal, 'display')).toMatchObject({ status: 'fresh', data: { coverage: { reportedReplyCount: 2194 } } })
+    expect(await reading.locateThreadEnd(THREAD, 'all', signal, 'display')).toMatchObject({ status: 'failed', error: {
       kind: 'page-cap', highestReadablePage: 100, readablePage: { data: { page: { page: 100 }, coverage: { reportedReplyCount: 2194 } } }
     } })
     expect(db.loadThreadPage(THREAD, 'all', 100)?.value.replies[0]?.id).toBe('60010000')
@@ -186,8 +186,8 @@ describe('readThreadPage', () => {
     } } })
     const reading = service(client)
     const signal = new AbortController().signal
-    await reading.readThreadPage(THREAD, 'all', 2, signal)
-    expect(await reading.readThreadPage(THREAD, 'all', 3, signal)).toMatchObject({
+    await reading.readThreadPage(THREAD, 'all', 2, signal, 'display')
+    expect(await reading.readThreadPage(THREAD, 'all', 3, signal, 'display')).toMatchObject({
       status: 'fresh', data: { page: { replies: [], endCandidate: true }, coverage: { endCandidatePage: 3 } }
     })
   })
@@ -198,13 +198,13 @@ describe('readThreadPage', () => {
     f.client.getThreadPage = async (threadId, mode, page, signal) => ({ ...await read(threadId, mode, page > 100 ? 100 : page, signal), page })
     const reading = service(f.client)
     const signal = new AbortController().signal
-    await reading.readThreadPage(THREAD, 'all', 100, signal)
-    expect(await reading.readThreadPage(THREAD, 'all', requested, signal)).toMatchObject({
+    await reading.readThreadPage(THREAD, 'all', 100, signal, 'display')
+    expect(await reading.readThreadPage(THREAD, 'all', requested, signal, 'display')).toMatchObject({
       status: 'failed', error: { kind: 'page-cap', highestReadablePage: 100 }
     })
     expect(db.loadThreadPage(THREAD, 'all', requested)).toBeNull()
     expect(db.getThreadCoverage(THREAD, 'all')).toMatchObject({ pages: [{ page: 100 }], endCandidatePage: null, obtainedReplyCount: 19 })
-    expect(await reading.locateThreadEnd(THREAD, 'all', signal)).toMatchObject({
+    expect(await reading.locateThreadEnd(THREAD, 'all', signal, 'display')).toMatchObject({
       status: 'failed', error: { kind: 'page-cap', highestReadablePage: 100 }
     })
   })
@@ -213,10 +213,10 @@ describe('readThreadPage', () => {
     const f = forum([19, 19], 38)
     const reading = service(f.client)
     const signal = new AbortController().signal
-    await reading.readThreadPage(THREAD, 'all', 1, signal)
+    await reading.readThreadPage(THREAD, 'all', 1, signal, 'display')
     f.client.getThreadPage = async (threadId, mode, page) => ({ threadId, mode, page, head: post(threadId),
       replies: [post('60000118'), post('60000200')], replyCount: 38, skippedItems: 0, endCandidate: false })
-    expect(await reading.readThreadPage(THREAD, 'all', 2, signal)).toMatchObject({ status: 'failed', error: { kind: 'page-cap', highestReadablePage: 1 } })
+    expect(await reading.readThreadPage(THREAD, 'all', 2, signal, 'display')).toMatchObject({ status: 'failed', error: { kind: 'page-cap', highestReadablePage: 1 } })
     expect(db.loadThreadPage(THREAD, 'all', 2)).toBeNull()
   })
 
@@ -227,12 +227,12 @@ describe('readThreadPage', () => {
     f.client.getThreadPage = async (...args) => ({ ...await read(...args), replyCount: count })
     const reading = service(f.client)
     const signal = new AbortController().signal
-    await reading.readThreadPage(THREAD, 'all', 1, signal)
+    await reading.readThreadPage(THREAD, 'all', 1, signal, 'display')
     count = 2194
-    const appended = await reading.readThreadPage(THREAD, 'all', 2, signal)
+    const appended = await reading.readThreadPage(THREAD, 'all', 2, signal, 'display')
     expect(appended).toMatchObject({ status: 'fresh', data: { coverage: { reportedReplyCount: 2194, countMismatch: null } } })
     count = 19
-    const refreshed = await reading.readThreadPage(THREAD, 'all', 2, signal)
+    const refreshed = await reading.readThreadPage(THREAD, 'all', 2, signal, 'display')
     expect(refreshed).toMatchObject({ status: 'fresh', data: { coverage: { reportedReplyCount: 19, countMismatch: null } } })
   })
 
@@ -240,11 +240,11 @@ describe('readThreadPage', () => {
     const f = forum([19, 3], 22)
     const reading = service(f.client)
     const signal = new AbortController().signal
-    const fresh = await reading.readThreadPage(THREAD, 'all', 1, signal)
+    const fresh = await reading.readThreadPage(THREAD, 'all', 1, signal, 'display')
     expect(fresh.status).toBe('fresh')
 
     f.fail(new ForumReadError({ kind: 'network', detail: 'timeout' }))
-    const cached = await reading.readThreadPage(THREAD, 'all', 1, signal)
+    const cached = await reading.readThreadPage(THREAD, 'all', 1, signal, 'display')
     expect(cached.status).toBe('cached')
     if (cached.status === 'cached' && fresh.status === 'fresh') {
       expect(cached.networkError).toEqual({ kind: 'network', detail: 'timeout' })
@@ -252,7 +252,7 @@ describe('readThreadPage', () => {
       expect(cached.data.page.replies.map((r) => r.id)).toEqual(fresh.data.page.replies.map((r) => r.id))
     }
 
-    const missing = await reading.readThreadPage(THREAD, 'all', 2, signal)
+    const missing = await reading.readThreadPage(THREAD, 'all', 2, signal, 'display')
     expect(missing).toEqual({ status: 'failed', error: { kind: 'network', detail: 'timeout' } })
   })
 
@@ -260,20 +260,20 @@ describe('readThreadPage', () => {
     const f = forum([19, 3], 22)
     const reading = service(f.client)
     const signal = new AbortController().signal
-    expect((await reading.readThreadPage(THREAD, 'all', 1, signal)).status).toBe('fresh')
+    expect((await reading.readThreadPage(THREAD, 'all', 1, signal, 'display')).status).toBe('fresh')
     f.fail(new ForumReadError({ kind: 'network', detail: 'connection' }))
-    expect(await reading.readThreadPage(THREAD, 'po', 1, signal)).toEqual({
+    expect(await reading.readThreadPage(THREAD, 'po', 1, signal, 'display')).toEqual({
       status: 'failed', error: { kind: 'network', detail: 'connection' }
     })
 
     f.fail(null)
-    const po = await reading.readThreadPage(THREAD, 'po', 2, signal)
+    const po = await reading.readThreadPage(THREAD, 'po', 2, signal, 'display')
     if (po.status !== 'fresh') throw new Error('expected fresh')
     expect(po.data.coverage.mode).toBe('po')
     expect(po.data.coverage.pages.map((page) => page.page)).toEqual([2])
     f.fail(new ForumReadError({ kind: 'network', detail: 'connection' }))
-    expect(await reading.readThreadPage(THREAD, 'all', 2, signal)).toMatchObject({ status: 'failed' })
-    const cachedPo = await reading.readThreadPage(THREAD, 'po', 2, signal)
+    expect(await reading.readThreadPage(THREAD, 'all', 2, signal, 'display')).toMatchObject({ status: 'failed' })
+    const cachedPo = await reading.readThreadPage(THREAD, 'po', 2, signal, 'display')
     expect(cachedPo).toMatchObject({ status: 'cached', data: { page: { mode: 'po', page: 2 } } })
   })
 
@@ -281,8 +281,8 @@ describe('readThreadPage', () => {
     const f = forum([19, 19, 2], 40)
     const reading = service(f.client)
     const signal = new AbortController().signal
-    await reading.readThreadPage(THREAD, 'all', 1, signal)
-    const last = await reading.readThreadPage(THREAD, 'all', 4, signal)
+    await reading.readThreadPage(THREAD, 'all', 1, signal, 'display')
+    const last = await reading.readThreadPage(THREAD, 'all', 4, signal, 'display')
     if (last.status !== 'fresh') throw new Error('expected fresh')
     expect(last.data.coverage.gaps).toEqual([2, 3])
     expect(last.data.coverage.endCandidatePage).toBe(4)
@@ -339,7 +339,7 @@ describe('quote preview', () => {
     const f = quoteForum({ '700': { all: [['701', '702']] } })
     const reading = service(f.client)
     expect(await reading.previewQuote('702', signal())).toMatchObject({ status: 'fresh', data: { post: { id: '702' }, threadId: null } })
-    await reading.readThreadPage('700', 'all', 1, signal())
+    await reading.readThreadPage('700', 'all', 1, signal(), 'display')
 
     f.fail(new ForumReadError({ kind: 'network', detail: 'timeout' }))
     expect(await reading.previewQuote('702', signal())).toMatchObject({
@@ -356,7 +356,7 @@ describe('quote preview', () => {
   it('keeps preview and location fetches separate from actual reading and visit records', async () => {
     const f = quoteForum({ '700': { all: [['701', '702']] } })
     const reading = service(f.client)
-    await reading.readThreadPage('700', 'all', 1, signal())
+    await reading.readThreadPage('700', 'all', 1, signal(), 'display')
     db.saveReadingPosition('700', 'all', { postId: '701', page: 1, offsetRatio: 0.5, viewportOffset: 0 }, '2026-10-24T00:01:00.000Z')
     const before = db.getReadingState('700')
 
@@ -375,7 +375,7 @@ describe('quote location', () => {
   it('verifies a recorded reply on its latest stored page only', async () => {
     const f = quoteForum({ '700': { all: [['701', '702'], ['703', '704']] } })
     const reading = service(f.client)
-    await reading.readThreadPage('700', 'all', 2, signal())
+    await reading.readThreadPage('700', 'all', 2, signal(), 'display')
     f.requests.length = 0
     expect(located(await reading.locateQuote('704', signal()))).toEqual({ threadId: '700', postId: '704', page: 2, mode: 'all', source: 'fresh' })
     expect(f.requests).toEqual(['700/all/2'])
@@ -384,8 +384,8 @@ describe('quote location', () => {
   it('keeps the thread preference out of it: a reply hidden by 只看 PO is located in all mode', async () => {
     const f = quoteForum({ '700': { all: [['701', '702']], po: [['702']] } })
     const reading = service(f.client)
-    await reading.readThreadPage('700', 'all', 1, signal())
-    await reading.readThreadPage('700', 'po', 1, signal())
+    await reading.readThreadPage('700', 'all', 1, signal(), 'display')
+    await reading.readThreadPage('700', 'po', 1, signal(), 'display')
     db.setReadingMode('700', 'po', new Date().toISOString())
     expect(located(await reading.locateQuote('701', signal()))).toMatchObject({ postId: '701', mode: 'all', page: 1 })
     expect(located(await reading.locateQuote('702', signal()))).toMatchObject({ postId: '702', mode: 'po', page: 1 })
@@ -395,7 +395,7 @@ describe('quote location', () => {
   it('reports only the thread when the reply moved off its recorded page, without scanning other pages', async () => {
     const f = quoteForum({ '700': { all: [['701', '702'], ['703', '704']] } })
     const reading = service(f.client)
-    await reading.readThreadPage('700', 'all', 2, signal())
+    await reading.readThreadPage('700', 'all', 2, signal(), 'display')
     f.set('700', { all: [['701', '702', '703'], ['704']] })
     f.requests.length = 0
     expect(await reading.locateQuote('703', signal())).toMatchObject({ status: 'thread-known', threadId: '700', head: { id: '700' } })
@@ -430,7 +430,7 @@ describe('quote location', () => {
   it('separates network failure from an unknown owner and locates on the stored page when offline', async () => {
     const f = quoteForum({ '700': { all: [['701']] } })
     const reading = service(f.client)
-    await reading.readThreadPage('700', 'all', 1, signal())
+    await reading.readThreadPage('700', 'all', 1, signal(), 'display')
     f.fail(new ForumReadError({ kind: 'network', detail: 'connection' }))
     expect(await reading.locateQuote('701', signal())).toMatchObject({
       status: 'located', source: 'cached', target: { postId: '701', page: 1, mode: 'all' }, networkError: { kind: 'network' }
@@ -445,7 +445,7 @@ describe('quote location', () => {
     db.beginOfflineCopy('700', false, at)
     db.saveOfflinePage(await f.client.getThreadPage('700', 'all', 2, signal()), at)
     f.set('700', { all: [[], []] })
-    await reading.readThreadPage('700', 'all', 2, signal())
+    await reading.readThreadPage('700', 'all', 2, signal(), 'display')
     while (db.evictContentBatch(true).more) { /* bounded storage batches */ }
     expect(db.findPostThread('701')?.pages.all).toBe(2)
     f.requests.length = 0
@@ -463,7 +463,7 @@ describe('quote location', () => {
   it('returns cancelled, not a location, when cancelled during the verifying read', async () => {
     const f = quoteForum({ '700': { all: [['701']] } })
     const reading = service(f.client)
-    await reading.readThreadPage('700', 'all', 1, signal())
+    await reading.readThreadPage('700', 'all', 1, signal(), 'display')
     const controller = new AbortController()
     f.onRequest(() => controller.abort())
     expect(await reading.locateQuote('701', controller.signal)).toEqual({ status: 'cancelled' })
@@ -484,7 +484,7 @@ describe('quote location', () => {
   it('tries the hinted page after the recorded page misses, and lets records override a link naming another thread', async () => {
     const f = quoteForum({ '700': { all: [['701', '702'], ['703', '704']] }, '800': { all: [['801']] } })
     const reading = service(f.client)
-    await reading.readThreadPage('700', 'all', 2, signal())
+    await reading.readThreadPage('700', 'all', 2, signal(), 'display')
     f.set('700', { all: [['701', '702', '703'], ['704']] })
     f.requests.length = 0
     expect(located(await reading.locateQuote('703', signal(), { threadId: '700', page: 1 })))

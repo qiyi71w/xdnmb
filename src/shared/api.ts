@@ -210,6 +210,15 @@ export type ThemeImportResult =
  */
 export type ThemeExportResult = { status: 'exported' } | { status: 'cancelled' } | { status: 'failed' }
 
+/**
+ * Why a thread page is read. `display`: a reader reads it to show the thread (opening, more pages,
+ * refresh, 末尾 and the reads after the user's own send); only these network reads advance the
+ * thread's 全串／PO reminder baselines. `lookup`: a read that only finds or checks a thread before
+ * anything is shown (search, quote cards, number open); it never changes reminders.
+ */
+export type ThreadReadPurpose = 'display' | 'lookup'
+export const THREAD_READ_PURPOSES: readonly ThreadReadPurpose[] = ['display', 'lookup']
+
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
   analytics: AnalyticsApi
@@ -226,10 +235,11 @@ export interface XidaoApi {
     /**
      * Foreground read of one thread page in the given mode (`po` reads the forum's PO-only pages);
      * falls back to the stored page of the same mode on failure. Modes never stand in for each other.
+     * A fresh `display` read advances that mode's reminder baseline; a stored fallback never does.
      */
-    readThreadPage(input: { operationId: OperationId; threadId: ThreadId; mode: ReadingMode; page: number }): Promise<ReadOutcome<ThreadPageResult>>
+    readThreadPage(input: { operationId: OperationId; threadId: ThreadId; mode: ReadingMode; page: number; purpose: ThreadReadPurpose }): Promise<ReadOutcome<ThreadPageResult>>
     /** Locate the count-based last page, or use a bounded probe if the mode's count is unknown. */
-    locateThreadEnd(input: { operationId: OperationId; threadId: ThreadId; mode: ReadingMode }): Promise<ReadOutcome<ThreadEndResult>>
+    locateThreadEnd(input: { operationId: OperationId; threadId: ThreadId; mode: ReadingMode; purpose: ThreadReadPurpose }): Promise<ReadOutcome<ThreadEndResult>>
     /** Cancels queued and in-flight reads of the operation. Unknown IDs are ignored. */
     cancel(input: { operationId: OperationId }): Promise<void>
   }

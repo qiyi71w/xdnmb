@@ -31,9 +31,12 @@ export interface ReminderUpdate {
   at: string
   /** The check that owns this write; used for the final, post-correction notification decision. */
   roundId?: string
-  /** Page 1's reply IDs only when every original slot on that page is present and ordered. */
-  firstPageReplyIds?: PostId[]
   baseline?: number
+  /**
+   * 全串／PO: the baseline this check compared page 1 with. When a reader's read has advanced the
+   * stored baseline since, only growth past the stored baseline is counted.
+   */
+  countedFrom?: number | null
   checkedPostId?: PostId
   /** New replies counted by this write. */
   add?: number
@@ -52,6 +55,24 @@ export interface QuoteSource {
   postId: PostId
   own: boolean
   cookieId: string | null
+}
+
+/** One local reply in one 全串／PO rule generation. */
+export interface LocalReplyKey {
+  publicationId: number
+  kind: 'all' | 'po'
+  generation: number
+}
+
+/**
+ * A confirmed local reply a check may still read one page for: pending, with a pre-send count and
+ * no proof yet, its follow-up read not sent, and the growth since its pre-send count so far only
+ * uncleared check growth, so that finding it can still lead to a deduction.
+ */
+export interface ReminderFollowUp extends LocalReplyKey {
+  threadId: ThreadId
+  postId: PostId
+  beforeCount: number
 }
 
 export interface ReminderBackoff {
@@ -76,6 +97,17 @@ export interface ReminderStore {
   reminderQuoteSources(postIds: PostId[]): Promise<QuoteSource[]>
   /** `false` when the rule was disabled or re-enabled since the snapshot: nothing was written. */
   updateReminderState(update: ReminderUpdate): Promise<boolean>
+  /** Local replies of the thread a check may read one more page for. */
+  reminderFollowUps(threadId: ThreadId): Promise<ReminderFollowUp[]>
+  /**
+   * Their follow-up read is about to go out: those still qualifying are marked sent, so no later
+   * check reads one for them, and returned. None returned: the request is not needed.
+   */
+  claimReminderFollowUps(keys: LocalReplyKey[]): Promise<LocalReplyKey[]>
+  /** Claimed, but the request never went out: a later check may read their page after all. */
+  releaseReminderFollowUps(keys: LocalReplyKey[]): Promise<void>
+  /** Their follow-up page did not hold them: still pending without proof, they become unprovable. */
+  missReminderFollowUps(keys: LocalReplyKey[]): Promise<void>
   /** Threads with an uncleared, unexcluded increment from this check, in current generations. */
   reminderIncreasedThreads(roundId: string): Promise<ThreadId[]>
   /** Every count of the thread becomes 0; `false` when there was nothing to clear. */

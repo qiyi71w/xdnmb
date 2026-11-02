@@ -36,7 +36,11 @@ export interface ForumTransport {
   get(url: URL, signal: AbortSignal, credential?: { userhash: string }): Promise<TransportResponse>
 }
 
-/** Internal per-call lane/budget seam: invoked once for each actual transport request. */
+/**
+ * Internal per-call lane/budget seam: invoked once for each actual transport request. `work` sends
+ * the request and classifies its response, so a runner sees a rate limit (HTTP 429, captcha page or
+ * business message) as `work`'s rejection before its slot ends.
+ */
 export type ForumRequestRunner = <T>(signal: AbortSignal, work: (signal: AbortSignal) => Promise<T>) => Promise<T>
 
 /** Public JSON read API of the forum, returning normalized content only. */

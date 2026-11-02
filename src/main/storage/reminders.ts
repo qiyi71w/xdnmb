@@ -1,11 +1,14 @@
 import type Database from 'better-sqlite3'
 import type { ReadError } from '../../shared/api'
-import { comparePostIds, type Post, type PostId, type ReadingMode } from '../../shared/forum'
+import { comparePostIds, type Post, type PostId, type ReadingMode, type ThreadPage } from '../../shared/forum'
 import {
   REMINDER_KINDS, type CoverageIssue, type ReminderCloseReason, type ReminderKind, type ReminderRule,
   type ReminderThreadRow, type ThreadReminders
 } from '../../shared/reminders'
-import type { QuoteSource, ReminderBackoff, ReminderKindState, ReminderStoredOverview, ReminderUpdate, RuleSnapshot } from '../reminders/contract'
+import { threadTotalPages } from '../../shared/threadPages'
+import type {
+  LocalReplyKey, QuoteSource, ReminderBackoff, ReminderFollowUp, ReminderKindState, ReminderStoredOverview, ReminderUpdate, RuleSnapshot
+} from '../reminders/contract'
 
 interface RuleRow {
   thread_id: string; kind: ReminderKind; enabled: number; generation: number; enabled_at: string
@@ -15,8 +18,21 @@ interface StateRow {
   thread_id: string; kind: ReminderKind; baseline: number | null; checked_post_id: string | null; count: number
   first_page: number | null; increased_at: string | null; unverified: number; issues_json: string
   last_error_json: string | null; checked_at: string | null
-  own_positions_trusted: number
 }
+/** A confirmed local reply whose 全串／PO baseline now covers its proof count. */
+interface SettleRow {
+  publication_id: number; kind: 'all' | 'po'; generation: number
+  before_count: number; after_segment: number; proof_count: number
+}
+interface SegmentRow {
+  id: number; source: 'check' | 'open'; count_from: number | null; count_to: number | null
+  added: number; excluded: number; cleared: number
+}
+interface FollowUpRow {
+  publication_id: number; thread_id: string; kind: 'all' | 'po'; generation: number
+  before_count: number; after_segment: number; post_id: string; baseline: number
+}
+type LocalReplyResult = 'excluded' | 'absorbed' | 'unprovable'
 
 function emptyRules(): ThreadReminders['rules'] {
   const disabled = (kind: ReminderKind): ReminderRule => ({ kind, enabled: false, closedBy: null, baseline: null })
@@ -26,6 +42,20 @@ function emptyRules(): ThreadReminders['rules'] {
 /** `a` later than `b` (ISO texts from one clock); null is earliest. */
 function later(a: string | null, b: string | null): boolean {
   return a !== null && (b === null || Date.parse(a) > Date.parse(b))
+}
+
+/** How much of the reply count interval `(from, to]` the segments' ranges cover together. */
+function covered(segments: SegmentRow[], from: number, to: number): number {
+  const parts = segments.map((segment) => [Math.max(from, segment.count_from!), Math.min(to, segment.count_to!)] as const)
+    .filter(([start, end]) => end > start).sort((a, b) => a[0] - b[0])
+  let total = 0
+  let reached = from
+  for (const [start, end] of parts) {
+    if (end <= reached) continue
+    total += end - Math.max(start, reached)
+    reached = end
+  }
+  return total
 }
 
 /** Durable personal records. No cascading FK to the evictable posts/thread_pages caches. */
@@ -75,10 +105,9 @@ export class ReminderDatabase {
           .run(at, threadId, kind)
       }
       db.prepare('DELETE FROM reminder_state WHERE thread_id = ? AND kind = ?').run(threadId, kind)
-      db.prepare("UPDATE reminder_local_replies SET status = 'closed' WHERE thread_id = ? AND kind = ? AND status = 'pending'").run(threadId, kind)
-      db.prepare('DELETE FROM reminder_reply_positions WHERE thread_id = ? AND kind = ?').run(threadId, kind)
-      db.prepare('DELETE FROM reminder_count_increments WHERE thread_id = ? AND kind = ?').run(threadId, kind)
-      if (enabled) this.registerConfirmed(threadId)
+      // A new generation starts without the old one's evidence: replies sent before it are not its.
+      db.prepare('DELETE FROM reminder_local_replies WHERE thread_id = ? AND kind = ?').run(threadId, kind)
+      db.prepare('DELETE FROM reminder_baseline_segments WHERE thread_id = ? AND kind = ?').run(threadId, kind)
       return this.getRules([threadId])[0]!
     }).immediate()
   }
@@ -91,9 +120,8 @@ export class ReminderDatabase {
       return [...new Set(threadIds)].filter((threadId) => {
         if (update.run(reason, at, threadId).changes === 0) return false
         drop.run(threadId)
-        db.prepare("UPDATE reminder_local_replies SET status = 'closed' WHERE thread_id = ? AND status = 'pending'").run(threadId)
-        db.prepare('DELETE FROM reminder_reply_positions WHERE thread_id = ?').run(threadId)
-        db.prepare('DELETE FROM reminder_count_increments WHERE thread_id = ?').run(threadId)
+        db.prepare('DELETE FROM reminder_local_replies WHERE thread_id = ?').run(threadId)
+        db.prepare('DELETE FROM reminder_baseline_segments WHERE thread_id = ?').run(threadId)
         return true
       })
     }).immediate()
@@ -127,60 +155,204 @@ export class ReminderDatabase {
     return [...new Set(postIds)].map((postId) => ({ postId, own: own.get(postId) !== undefined, cookieId: this.peekPost(postId)?.userHash ?? null }))
   }
 
-  /** Called inside the publication result transaction, including startup/background confirmation. */
-  confirmedPublication(threadId: string): void {
-    this.registerConfirmed(threadId)
-    this.consumeConfirmed(threadId)
-  }
-
-  private registerConfirmed(threadId: string): void {
-    this.database().prepare(`INSERT OR IGNORE INTO reminder_local_replies
-      (publication_id, thread_id, post_id, kind, generation)
-      SELECT p.id, p.thread_id, p.post_id, r.kind, r.generation
-      FROM publication_attempts p JOIN reminder_rules r ON r.thread_id = p.thread_id
-      WHERE p.thread_id = ? AND p.state = 'confirmed' AND json_extract(p.payload_json, '$.target.kind') = 'reply'
-        AND r.enabled = 1 AND r.kind IN ('all', 'po')`).run(threadId)
-  }
-
-  /** An exact, mode-specific ordinal is the only link from a publication to a counter interval. */
-  private consumeConfirmed(threadId: string): void {
+  /**
+   * Called in the transaction that persists a reply's send intent. For each enabled 全串 rule, and
+   * the PO rule when the sending 饼干 ID is known and equals the head's public one, the reply gets
+   * the largest reply count committed for that mode since the count last fell (saved pages and the
+   * baseline they set): a count the reply cannot be within. Without one it is unprovable there.
+   */
+  recordIntent(publicationId: number, threadId: string): void {
     const db = this.database()
-    const matches = db.prepare<[string], { publication_id: number; kind: string; generation: number; increment_id: number; cleared: number }>(`
-      SELECT l.publication_id, l.kind, l.generation, i.id AS increment_id, i.cleared
-      FROM reminder_local_replies l
-      JOIN reminder_rules r ON r.thread_id = l.thread_id AND r.kind = l.kind AND r.generation = l.generation AND r.enabled = 1
-      JOIN reminder_state s ON s.thread_id = r.thread_id AND s.kind = r.kind AND s.own_positions_trusted = 1
-      JOIN reminder_reply_positions p ON p.thread_id = l.thread_id AND p.kind = l.kind AND p.generation = l.generation AND p.post_id = l.post_id
-      JOIN reminder_count_increments i ON i.thread_id = l.thread_id AND i.kind = l.kind AND i.generation = l.generation
-        AND p.ordinal > i.count_from AND p.ordinal <= i.count_to
-      WHERE l.thread_id = ? AND l.status = 'pending' ORDER BY i.id`).all(threadId)
-    const mark = db.prepare(`UPDATE reminder_local_replies SET status = ?, increment_id = ?
-      WHERE publication_id = ? AND kind = ? AND generation = ? AND status = 'pending'`)
-    for (const match of matches) {
-      if (mark.run(match.cleared ? 'cleared' : 'excluded', match.increment_id, match.publication_id, match.kind, match.generation).changes === 0) continue
-      db.prepare('UPDATE reminder_count_increments SET excluded = excluded + 1 WHERE id = ?').run(match.increment_id)
-      if (!match.cleared) {
-        const corrected = db.prepare(`UPDATE reminder_state SET count = count - 1,
-          first_page = CASE WHEN count = 1 THEN NULL ELSE first_page END
-          WHERE thread_id = ? AND kind = ? AND count > 0`).run(threadId, match.kind)
-        if (corrected.changes !== 1) throw new Error('reminder interval count mismatch')
-      }
+    const po = db.prepare(`SELECT 1 FROM publication_attempts p JOIN posts h ON h.id = ?
+      WHERE p.id = ? AND p.cookie_id IS NOT NULL AND p.cookie_id = h.user_hash`).get(threadId, publicationId) !== undefined
+    // Every baseline comes from a saved page, so it is part of the observation; it stands in alone
+    // only where no page was saved since the observation began. One above the observation predates
+    // a fall and is not used.
+    const modes = db.prepare<[string], { kind: 'all' | 'po'; generation: number; before: number | null; segment: number }>(`
+      SELECT r.kind, r.generation, coalesce(o.max_count, s.baseline) AS before,
+        (SELECT coalesce(max(g.id), 0) FROM reminder_baseline_segments g WHERE g.thread_id = r.thread_id AND g.kind = r.kind) AS segment
+      FROM reminder_rules r LEFT JOIN reminder_state s USING(thread_id, kind)
+      LEFT JOIN reminder_count_observations o ON o.thread_id = r.thread_id AND o.mode = r.kind
+      WHERE r.thread_id = ? AND r.enabled = 1 AND r.kind IN ('all', 'po')`).all(threadId)
+    const insert = db.prepare(`INSERT INTO reminder_local_replies
+      (publication_id, thread_id, kind, generation, before_count, after_segment, status) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    for (const mode of modes) {
+      if (mode.kind === 'po' && !po) continue
+      insert.run(publicationId, threadId, mode.kind, mode.generation, mode.before, mode.segment, mode.before === null ? 'unprovable' : 'pending')
     }
-    // An ordinal already in the initialization baseline is not a deduction from any later count.
-    db.prepare(`UPDATE reminder_local_replies AS l SET status = 'baseline'
-      WHERE l.thread_id = ? AND l.status = 'pending' AND EXISTS (
-        SELECT 1 FROM reminder_reply_positions p JOIN reminder_state s USING(thread_id, kind)
-        JOIN reminder_rules r ON r.thread_id = p.thread_id AND r.kind = p.kind AND r.generation = p.generation
-        WHERE p.thread_id = l.thread_id AND p.kind = l.kind AND p.generation = l.generation AND p.post_id = l.post_id
-          AND r.enabled = 1 AND s.own_positions_trusted = 1 AND p.ordinal <= s.baseline
-      )`).run(threadId)
+  }
+
+  /**
+   * Called in the publication result transaction (also for background and startup confirmation):
+   * the smallest reply count of a saved page of that mode already holding the reply is its proof.
+   */
+  confirmedPublication(publicationId: number, threadId: string): void {
+    const db = this.database()
+    const pending = db.prepare<[number], { kind: 'all' | 'po'; post_id: string }>(`SELECT l.kind, p.post_id
+      FROM reminder_local_replies l JOIN publication_attempts p ON p.id = l.publication_id
+      WHERE l.publication_id = ? AND l.status = 'pending' AND p.state = 'confirmed'`).all(publicationId)
+    const seen = db.prepare<[string, string, string], { proof: number | null }>(`SELECT min(t.reply_count) AS proof
+      FROM thread_pages t, json_each(t.reply_ids_json) r WHERE t.thread_id = ? AND t.mode = ? AND r.value = ?`)
+    const prove = db.prepare(`UPDATE reminder_local_replies SET proof_count = min(coalesce(proof_count, @proof), @proof)
+      WHERE publication_id = @publicationId AND kind = @kind AND status = 'pending'`)
+    for (const { kind, post_id: postId } of pending) {
+      const proof = seen.get(threadId, kind, postId)?.proof ?? null
+      if (proof !== null) prove.run({ proof, publicationId, kind })
+    }
+    this.settle(threadId)
+  }
+
+  /**
+   * Called in the transaction that saves a fresh page. Its count joins the mode's observation in
+   * commit order: a count below the largest one since the last fall is a new fall, after which
+   * every pending reply of that mode is unprovable and earlier observations are dropped. A page
+   * holding a confirmed pending reply proves it with its count; a reader's read advances the
+   * baseline; then replies the baseline now covers are settled.
+   */
+  pageSaved(page: ThreadPage, display: boolean): void {
+    const count = page.replyCount
+    if (count === null || !Number.isSafeInteger(count) || count < 0) return
+    const db = this.database()
+    const observed = db.prepare<[string, string], { max_count: number }>('SELECT max_count FROM reminder_count_observations WHERE thread_id = ? AND mode = ?')
+      .get(page.threadId, page.mode)?.max_count ?? null
+    if (observed !== null && count < observed) {
+      db.prepare("UPDATE reminder_local_replies SET status = 'unprovable' WHERE thread_id = ? AND kind = ? AND status = 'pending'").run(page.threadId, page.mode)
+    }
+    if (observed === null || count !== observed) {
+      db.prepare(`INSERT INTO reminder_count_observations (thread_id, mode, max_count) VALUES (?, ?, ?)
+        ON CONFLICT(thread_id, mode) DO UPDATE SET max_count = excluded.max_count`).run(page.threadId, page.mode, count)
+    }
+    if (page.replies.length > 0) {
+      db.prepare(`UPDATE reminder_local_replies SET proof_count = min(coalesce(proof_count, @count), @count)
+        WHERE thread_id = @threadId AND kind = @mode AND status = 'pending' AND publication_id IN (
+          SELECT id FROM publication_attempts WHERE state = 'confirmed' AND thread_id = @threadId
+            AND post_id IN (SELECT value FROM json_each(@ids))
+        )`).run({ count, threadId: page.threadId, mode: page.mode, ids: JSON.stringify(page.replies.map((reply) => reply.id)) })
+    }
+    if (display) this.absorbDisplayed(page.threadId, page.mode, count)
+    this.settle(page.threadId)
+  }
+
+  /**
+   * Decides each confirmed pending reply whose baseline now covers its proof count, once: within
+   * `(before, proof]` only uncleared check growth (one or more segments) deducts 1; no uncleared
+   * check growth (open absorption, cleared growth, the initial baseline) needs none; a mix is
+   * unprovable and keeps the ordinary count.
+   */
+  private settle(threadId: string): void {
+    const db = this.database()
+    const ready = db.prepare<[string], SettleRow>(`SELECT l.publication_id, l.kind, l.generation, l.before_count, l.after_segment, l.proof_count
+      FROM reminder_local_replies l
+      JOIN publication_attempts p ON p.id = l.publication_id AND p.state = 'confirmed'
+      JOIN reminder_rules r ON r.thread_id = l.thread_id AND r.kind = l.kind AND r.generation = l.generation AND r.enabled = 1
+      JOIN reminder_state s ON s.thread_id = l.thread_id AND s.kind = l.kind
+      WHERE l.thread_id = ? AND l.status = 'pending' AND l.proof_count IS NOT NULL AND s.baseline >= l.proof_count
+      ORDER BY l.publication_id, l.kind`).all(threadId)
+    const mark = db.prepare(`UPDATE reminder_local_replies SET status = ?
+      WHERE publication_id = ? AND kind = ? AND generation = ? AND status = 'pending'`)
+    for (const row of ready) mark.run(this.settleOne(threadId, row), row.publication_id, row.kind, row.generation)
+  }
+
+  private settleOne(threadId: string, row: SettleRow): LocalReplyResult {
+    const db = this.database()
+    const before = row.before_count
+    const proof = row.proof_count
+    if (proof <= before) return 'unprovable'
+    // Segments committed after the intent only: earlier ones end at or below the pre-send count.
+    const segments = db.prepare<[string, string, number, number, number, number], SegmentRow>(`SELECT id, source, count_from, count_to, added, excluded, cleared
+      FROM reminder_baseline_segments WHERE thread_id = ? AND kind = ? AND generation = ? AND id > ?
+        AND (count_from IS NULL OR count_to IS NULL OR (count_to > ? AND count_from < ?)) ORDER BY id`)
+      .all(threadId, row.kind, row.generation, row.after_segment, before, proof)
+    if (segments.some((segment) => segment.count_from === null || segment.count_to === null)) return 'unprovable'
+    const counted = segments.filter((segment) => segment.source === 'check' && segment.cleared === 0)
+    if (counted.length === 0) return 'absorbed'
+    // Open absorption, cleared growth or the initial baseline inside the interval leave it uncovered.
+    if (covered(counted, before, proof) < proof - before) return 'unprovable'
+    // The earliest segment with room: a later round's notification keeps any peer reply it holds.
+    const target = counted.find((segment) => segment.added > segment.excluded)
+    if (target === undefined) return 'unprovable'
+    const corrected = db.prepare(`UPDATE reminder_state SET count = count - 1, first_page = CASE WHEN count = 1 THEN NULL ELSE first_page END
+      WHERE thread_id = ? AND kind = ? AND count > 0`).run(threadId, row.kind)
+    if (corrected.changes !== 1) return 'unprovable'
+    db.prepare('UPDATE reminder_baseline_segments SET excluded = excluded + 1 WHERE id = ?').run(target.id)
+    return 'excluded'
+  }
+
+  /**
+   * Confirmed pending replies of the thread without proof whose follow-up read was not sent, in
+   * enabled rules with a baseline. A reply qualifies only while the baseline growth since its
+   * pre-send count, if any, is entirely uncleared check growth: then the check counting up to a page
+   * that holds it settles it with a deduction. Open absorption, cleared or uncounted growth already
+   * in the interval would make it unprovable whatever the page shows, so no page is read for it.
+   */
+  followUps(threadId: string): ReminderFollowUp[] {
+    return this.useful(this.followUpRows('l.thread_id = ? AND l.follow_up_sent = 0', [threadId]))
+      .map((row) => ({ publicationId: row.publication_id, kind: row.kind, generation: row.generation, threadId: row.thread_id,
+        postId: row.post_id, beforeCount: row.before_count }))
+  }
+
+  /**
+   * Right before a follow-up request goes out: of these replies, taken from this check's own
+   * `followUps`, those still qualifying are marked sent in one transaction and returned. Whatever
+   * committed since (a proof, an open, a fall, a new generation) is seen here, so no request goes
+   * out for a reply it can no longer settle.
+   */
+  claimFollowUps(keys: LocalReplyKey[]): LocalReplyKey[] {
+    const db = this.database()
+    const mark = db.prepare('UPDATE reminder_local_replies SET follow_up_sent = 1 WHERE publication_id = ? AND kind = ? AND generation = ?')
+    return db.transaction(() => {
+      const rows = keys.flatMap((key) => this.followUpRows('l.publication_id = ? AND l.kind = ? AND l.generation = ?',
+        [key.publicationId, key.kind, key.generation]))
+      return this.useful(rows).map((row) => {
+        mark.run(row.publication_id, row.kind, row.generation)
+        return { publicationId: row.publication_id, kind: row.kind, generation: row.generation }
+      })
+    }).immediate()
+  }
+
+  /** Claimed, but their request never went out: a later check may still read their page. */
+  releaseFollowUps(keys: LocalReplyKey[]): void {
+    const db = this.database()
+    const mark = db.prepare('UPDATE reminder_local_replies SET follow_up_sent = 0 WHERE publication_id = ? AND kind = ? AND generation = ?')
+    db.transaction(() => { for (const key of keys) mark.run(key.publicationId, key.kind, key.generation) }).immediate()
+  }
+
+  private followUpRows(where: string, args: Array<string | number>): FollowUpRow[] {
+    return this.readable().prepare<Array<string | number>, FollowUpRow>(`
+      SELECT l.publication_id, l.thread_id, l.kind, l.generation, l.before_count, l.after_segment, p.post_id, s.baseline
+      FROM reminder_local_replies l
+      JOIN publication_attempts p ON p.id = l.publication_id AND p.state = 'confirmed'
+      JOIN reminder_rules r ON r.thread_id = l.thread_id AND r.kind = l.kind AND r.generation = l.generation AND r.enabled = 1
+      JOIN reminder_state s ON s.thread_id = l.thread_id AND s.kind = l.kind
+      WHERE l.status = 'pending' AND l.proof_count IS NULL AND s.baseline IS NOT NULL AND ${where}
+      ORDER BY l.kind, l.before_count, l.publication_id`).all(...args)
+  }
+
+  /** Rows whose baseline growth since the pre-send count is still entirely uncleared check growth. */
+  private useful(rows: FollowUpRow[]): FollowUpRow[] {
+    const segments = this.readable().prepare<[string, string, number, number], SegmentRow>(`SELECT id, source, count_from, count_to, added, excluded, cleared
+      FROM reminder_baseline_segments WHERE thread_id = ? AND kind = ? AND generation = ? AND id > ? ORDER BY id`)
+    return rows.filter((row) => {
+      const after = segments.all(row.thread_id, row.kind, row.generation, row.after_segment)
+      if (after.some((segment) => segment.count_from === null || segment.count_to === null)) return false
+      const inside = after.filter((segment) => segment.count_to! > row.before_count && segment.count_from! < row.baseline)
+      if (inside.some((segment) => segment.source !== 'check' || segment.cleared !== 0)) return false
+      return covered(inside, row.before_count, row.baseline) >= row.baseline - row.before_count
+    })
+  }
+
+  missFollowUps(keys: LocalReplyKey[]): void {
+    const db = this.database()
+    const mark = db.prepare(`UPDATE reminder_local_replies SET status = 'unprovable'
+      WHERE publication_id = ? AND kind = ? AND generation = ? AND status = 'pending' AND proof_count IS NULL`)
+    db.transaction(() => { for (const key of keys) mark.run(key.publicationId, key.kind, key.generation) }).immediate()
   }
 
   increasedThreads(roundId: string): string[] {
     return this.readable().prepare<[string], { thread_id: string }>(`SELECT DISTINCT i.thread_id
-      FROM reminder_count_increments i JOIN reminder_rules r USING(thread_id, kind, generation)
+      FROM reminder_baseline_segments i JOIN reminder_rules r USING(thread_id, kind, generation)
       JOIN reminder_state s USING(thread_id, kind)
-      WHERE i.round_id = ? AND r.enabled = 1 AND i.cleared = 0 AND i.added > i.excluded AND s.count > 0
+      WHERE i.round_id = ? AND i.source = 'check' AND r.enabled = 1 AND i.cleared = 0 AND i.added > i.excluded AND s.count > 0
       ORDER BY i.thread_id`).all(roundId).map((row) => row.thread_id)
   }
 
@@ -192,7 +364,17 @@ export class ReminderDatabase {
       if (rule?.enabled !== 1 || rule.generation !== value.generation) return false
       db.prepare('INSERT INTO reminder_state (thread_id, kind) VALUES (?, ?) ON CONFLICT DO NOTHING').run(value.threadId, value.kind)
       const previous = db.prepare<[string, string], StateRow>('SELECT * FROM reminder_state WHERE thread_id = ? AND kind = ?').get(value.threadId, value.kind)!
-      const add = value.add ?? 0
+      let baseline = value.baseline
+      let add = value.add ?? 0
+      let firstPage = value.firstPage
+      if (value.kind !== 'quote' && baseline !== undefined && value.countedFrom !== undefined && value.countedFrom !== null
+        && previous.baseline !== null && previous.baseline > value.countedFrom && baseline >= value.countedFrom) {
+        // A reader's read advanced the baseline after this check loaded it: only growth past the
+        // stored baseline is counted, and an older page 1 never lowers it.
+        add = Math.max(0, baseline - previous.baseline)
+        firstPage = add > 0 ? threadTotalPages(previous.baseline + 1)! : undefined
+        baseline = Math.max(baseline, previous.baseline)
+      }
       db.prepare(`UPDATE reminder_state SET
           baseline = coalesce(@baseline, baseline),
           checked_post_id = coalesce(@checked, checked_post_id),
@@ -204,40 +386,45 @@ export class ReminderDatabase {
           last_error_json = CASE WHEN @issues IS NULL THEN last_error_json ELSE @lastError END,
           checked_at = CASE WHEN @markChecked THEN @at ELSE checked_at END
         WHERE thread_id = @threadId AND kind = @kind`).run({
-        threadId: value.threadId, kind: value.kind, at: value.at, add, firstPage: value.firstPage ?? null,
-        baseline: value.baseline ?? null, checked: value.checkedPostId ?? null, unverified: value.unverified ?? 0,
+        threadId: value.threadId, kind: value.kind, at: value.at, add, firstPage: firstPage ?? null,
+        baseline: baseline ?? null, checked: value.checkedPostId ?? null, unverified: value.unverified ?? 0,
         issues: value.issues === undefined ? null : JSON.stringify([...new Set(value.issues)]),
         lastError: value.lastError ? JSON.stringify(value.lastError) : null, markChecked: value.checked ? 1 : 0
       })
-      if (value.baseline !== undefined && previous.baseline !== null && value.baseline < previous.baseline) {
-        // A counter rebase no longer shares the old ordinal space. Keep ordinary reminders, but
-        // do not reuse any publication position until the user starts a new rule generation.
-        db.prepare('UPDATE reminder_state SET own_positions_trusted = 0 WHERE thread_id = ? AND kind = ?').run(value.threadId, value.kind)
-      }
       if (add > 0) {
-        const counted = value.kind !== 'quote' && previous.baseline !== null && value.baseline === previous.baseline + add
-        db.prepare(`INSERT INTO reminder_count_increments
-          (thread_id, kind, generation, round_id, count_from, count_to, added) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-          .run(value.threadId, value.kind, value.generation, value.roundId ?? '', counted ? previous.baseline : null, counted ? value.baseline! : null, add)
+        const counted = value.kind !== 'quote' && previous.baseline !== null && baseline === previous.baseline + add
+        db.prepare(`INSERT INTO reminder_baseline_segments
+          (thread_id, kind, generation, source, round_id, count_from, count_to, added) VALUES (?, ?, ?, 'check', ?, ?, ?, ?)`)
+          .run(value.threadId, value.kind, value.generation, value.roundId ?? '', counted ? previous.baseline : null, counted ? baseline! : null, add)
       }
-      const ids = value.firstPageReplyIds
-      if (value.kind !== 'quote' && value.baseline !== undefined && Number.isSafeInteger(value.baseline) && ids !== undefined
-        && ids.length === Math.min(19, value.baseline)
-        && ids.every((id, index) => /^[1-9]\d{0,19}$/.test(id) && (index === 0 || comparePostIds(ids[index - 1]!, id) < 0))) {
-        const position = db.prepare(`INSERT INTO reminder_reply_positions (thread_id, kind, generation, post_id, ordinal, observed_count)
-          VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(thread_id, kind, generation, post_id) DO UPDATE SET
-          ordinal = CASE WHEN ordinal = excluded.ordinal THEN ordinal ELSE NULL END`)
-        for (const [index, id] of ids.entries()) position.run(value.threadId, value.kind, value.generation, id, index + 1, value.baseline)
-      }
-      this.consumeConfirmed(value.threadId)
+      this.settle(value.threadId)
       return true
     }).immediate()
   }
 
+  /**
+   * A reader's fresh read of `mode` saw `replyCount`. An enabled 全串／PO rule with a baseline below
+   * it advances to it, recorded as an `open` segment; nothing is counted. A waiting (unset) baseline
+   * is left to the next check, and a smaller count never lowers a baseline.
+   */
+  private absorbDisplayed(threadId: string, mode: ReadingMode, replyCount: number): void {
+    const db = this.database()
+    const kind: ReminderKind = mode
+    const current = db.prepare<[string, string], { generation: number; baseline: number }>(`SELECT r.generation, s.baseline
+      FROM reminder_rules r JOIN reminder_state s USING(thread_id, kind)
+      WHERE r.thread_id = ? AND r.kind = ? AND r.enabled = 1 AND s.baseline IS NOT NULL`).get(threadId, kind)
+    if (current === undefined || replyCount <= current.baseline) return
+    db.prepare('UPDATE reminder_state SET baseline = ? WHERE thread_id = ? AND kind = ?').run(replyCount, threadId, kind)
+    db.prepare(`INSERT INTO reminder_baseline_segments
+      (thread_id, kind, generation, source, round_id, count_from, count_to, added) VALUES (?, ?, ?, 'open', '', ?, ?, 0)`)
+      .run(threadId, kind, current.generation, current.baseline, replyCount)
+  }
+
+  /** Every count of the thread becomes 0; its check segments are marked cleared. */
   clearCounts(threadId: string): boolean {
     const db = this.database()
     return db.transaction(() => {
-      db.prepare('UPDATE reminder_count_increments SET cleared = 1 WHERE thread_id = ?').run(threadId)
+      db.prepare("UPDATE reminder_baseline_segments SET cleared = 1 WHERE thread_id = ? AND source = 'check'").run(threadId)
       return db.prepare('UPDATE reminder_state SET count = 0, first_page = NULL, unverified = 0 WHERE thread_id = ? AND (count > 0 OR unverified > 0)')
         .run(threadId).changes > 0
     }).immediate()

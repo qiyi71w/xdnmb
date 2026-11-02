@@ -102,7 +102,7 @@ export class RetainedContentDatabase {
       const personalTables = ['thread_reading', 'reading_positions', 'thread_visits', 'settings', 'credentials', 'identity_roles', 'drafts', 'thread_post_identities', 'retained_titles', 'post_threads', 'reading_observations', 'offline_copies', 'offline_pages', 'offline_page_posts', 'offline_images', 'image_holders', 'content_readers', 'draft_attachments']
       // Observations and fixed-context write/readback evidence are durable, not ordinary cache.
       personalTables.push('subscription_app_credentials', 'subscription_configuration', 'subscription_observations', 'subscription_operations', 'subscription_baselines', 'subscription_plans')
-      personalTables.push('reminder_rules', 'reminder_state', 'reminder_checker')
+      personalTables.push('reminder_rules', 'reminder_state', 'reminder_checker', 'reminder_baseline_segments', 'reminder_local_replies', 'reminder_count_observations')
       personalTables.push('workspace', 'publication_attempts', 'publication_settings', 'account_session', 'local_blocks', 'cookie_colors', 'cookie_color_auto')
       let personalDataBytes = 0
       for (const table of personalTables) {

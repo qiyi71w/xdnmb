@@ -3,7 +3,7 @@ import { analyticsRecord, type AnalyticsRecord } from '../../shared/analytics'
 import type { LocalBlock } from '../../shared/blocks'
 import { IMPORTED_COOKIE_COLOR, isCookieColorName, type CookieColor, type CookieColorName } from '../../shared/cookieColors'
 import Database from 'better-sqlite3'
-import type { StorageStatus } from '../../shared/api'
+import type { StorageStatus, ThreadReadPurpose } from '../../shared/api'
 import type {
   BoardDirectory,
   ContentNode,
@@ -318,6 +318,10 @@ class SqliteReadingDatabase implements ReadingDatabase {
   reminderCookieIds: ReadingDatabase['reminderCookieIds'] = () => this.reminders.cookieIds()
   reminderQuoteSources: ReadingDatabase['reminderQuoteSources'] = (ids) => this.reminders.quoteSources(ids)
   updateReminderState: ReadingDatabase['updateReminderState'] = (value) => this.reminders.update(value)
+  reminderFollowUps: ReadingDatabase['reminderFollowUps'] = (threadId) => this.reminders.followUps(threadId)
+  claimReminderFollowUps: ReadingDatabase['claimReminderFollowUps'] = (keys) => this.reminders.claimFollowUps(keys)
+  releaseReminderFollowUps: ReadingDatabase['releaseReminderFollowUps'] = (keys) => this.reminders.releaseFollowUps(keys)
+  missReminderFollowUps: ReadingDatabase['missReminderFollowUps'] = (keys) => this.reminders.missFollowUps(keys)
   reminderIncreasedThreads: ReadingDatabase['reminderIncreasedThreads'] = (roundId) => this.reminders.increasedThreads(roundId)
   clearReminderCounts: ReadingDatabase['clearReminderCounts'] = (id) => this.reminders.clearCounts(id)
   finishReminderCheck: ReadingDatabase['finishReminderCheck'] = (at) => this.reminders.finishCheck(at)
@@ -493,7 +497,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     })()
   }
 
-  saveThreadPage(page: ThreadPage, fetchedAt: string): ThreadCoverage {
+  saveThreadPage(page: ThreadPage, fetchedAt: string, purpose?: ThreadReadPurpose): ThreadCoverage {
     const db = this.writable()
     return db.transaction(() => {
       assertReadablePage(page, this.getThreadCoverage(page.threadId, page.mode))
@@ -539,6 +543,9 @@ class SqliteReadingDatabase implements ReadingDatabase {
           WHERE julianday(excluded.fetched_at) >= julianday(thread_reply_counts.fetched_at)
         `).run(page.threadId, page.mode, page.replyCount, fetchedAt)
       }
+      // A reader's fresh read moves a reminder baseline; any fresh page may prove a local reply. Both
+      // commit with the page.
+      this.reminders.pageSaved(page, purpose === 'display')
       return this.getThreadCoverage(page.threadId, page.mode)
     })()
   }
@@ -1112,6 +1119,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
         attachmentId: payload.attachmentId, at: input.at
       })
       if (!row) throw new Error('publication insert returned no row')
+      if (payload.target.kind === 'reply') this.reminders.recordIntent(row.id, payload.target.threadId)
       return publicationAttempt(row)
     }).immediate()
   }
@@ -1188,7 +1196,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
         db.prepare('UPDATE publication_attempts SET attachment_id = NULL, saved_draft_id = ? WHERE id = ?')
           .run(savedDraftId, input.id)
       }
-      if (input.state === 'confirmed' && attempt.payload.target.kind === 'reply') this.reminders.confirmedPublication(input.threadId!)
+      if (input.state === 'confirmed' && attempt.payload.target.kind === 'reply') this.reminders.confirmedPublication(Number(input.id), input.threadId!)
       const finished = this.getPublication(input.id)
       if (!finished) throw new Error('publication result returned no row')
       return finished

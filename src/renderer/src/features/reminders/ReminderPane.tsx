@@ -245,7 +245,7 @@ export function ReminderPane({
     })
   const clearRow = (threadId: ThreadId) => {
     setClearFailure(threadId, null)
-    window.xidao.reminders.clear({ threadId }).then(
+    window.xidao.reminders.clear({ threadId, source: 'manual' }).then(
       (result) => {
         if (alive.current && !result.ok) setClearFailure(threadId, `清除提醒失败：${failureText('storage')}`)
       },

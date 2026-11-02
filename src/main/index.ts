@@ -348,7 +348,6 @@ async function start(): Promise<void> {
     baseUrl: FORUM_API_ORIGIN,
     browseIdentity: () => identities.browseUserhash()
   })
-  const reading = createReadingService({ client, store: openedStore, scheduler })
   const reminders = createReminderService({
     store: openedStore, client, scheduler,
     async afterBatch() {
@@ -364,6 +363,7 @@ async function start(): Promise<void> {
       }
     })
   })
+  const reading = createReadingService({ client, store: openedStore, scheduler, displayReads: reminders.displayReads })
   powerMonitor.on('suspend', () => reminders.suspend())
   powerMonitor.on('resume', () => reminders.resume())
   const subscriptions = createSubscriptionService({

@@ -115,29 +115,33 @@ export function createForumClient(options: {
       if (params.page !== undefined) url.searchParams.set('page', String(params.page))
     }
     const userhash = !anonymous && options.browseIdentity ? await options.browseIdentity() : null
-    const get = (requestSignal: AbortSignal) => options.transport.get(url, requestSignal, userhash === null ? undefined : { userhash })
-    const response = await (requestRunner ? requestRunner(signal, get) : get(signal))
-    if (response.text.trimStart().startsWith('<') || response.mediaType === 'text/html') {
-      throw new ForumReadError({
-        kind: /验证码|captcha|challenge/i.test(response.text) ? 'rate-limited' : 'unknown-structure',
-        detail: 'html'
-      })
+    // Classified inside the runner's work, so a lane slot ends only after its rate limit or captcha
+    // is known.
+    const get = async (requestSignal: AbortSignal): Promise<unknown> => {
+      const response = await options.transport.get(url, requestSignal, userhash === null ? undefined : { userhash })
+      if (response.text.trimStart().startsWith('<') || response.mediaType === 'text/html') {
+        throw new ForumReadError({
+          kind: /验证码|captcha|challenge/i.test(response.text) ? 'rate-limited' : 'unknown-structure',
+          detail: 'html'
+        })
+      }
+      if (response.mediaType !== 'application/json' && response.mediaType !== 'text/json') throw shapeError()
+      let value: unknown
+      try {
+        value = JSON.parse(response.text, (key: string, item: unknown, context?: { source?: string }): unknown => {
+          if (Object.hasOwn(idKeys, key) && typeof item === 'number') return context?.source
+          return item
+        }) as unknown
+      } catch {
+        throw new ForumReadError({ kind: 'unknown-structure', detail: 'json' })
+      }
+      if (typeof value === 'string') throw businessError(value)
+      if (isObject(value) && value.success === false && typeof value.error === 'string') {
+        throw businessError(value.error)
+      }
+      return value
     }
-    if (response.mediaType !== 'application/json' && response.mediaType !== 'text/json') throw shapeError()
-    let value: unknown
-    try {
-      value = JSON.parse(response.text, (key: string, item: unknown, context?: { source?: string }): unknown => {
-        if (Object.hasOwn(idKeys, key) && typeof item === 'number') return context?.source
-        return item
-      }) as unknown
-    } catch {
-      throw new ForumReadError({ kind: 'unknown-structure', detail: 'json' })
-    }
-    if (typeof value === 'string') throw businessError(value)
-    if (isObject(value) && value.success === false && typeof value.error === 'string') {
-      throw businessError(value.error)
-    }
-    return value
+    return requestRunner ? requestRunner(signal, get) : get(signal)
   }
 
   return {
@@ -232,10 +236,8 @@ export function createForumClient(options: {
         const replies: Post[] = []
         const seen = new Set<string>()
         let skippedItems = 0
-        let replyItems = 0
         for (const raw of value.Replies as unknown[]) {
           if (isTips(raw)) continue
-          replyItems++
           const reply = normalizePost(raw)
           if (reply === null) { skippedItems++; continue }
           if (seen.has(reply.id)) continue
@@ -246,7 +248,6 @@ export function createForumClient(options: {
           threadId, mode, page: number, head, replies,
           replyCount: nonNegativeNumber(value.ReplyCount),
           skippedItems,
-          replySequenceIntact: skippedItems === 0 && replyItems === replies.length && replies.length <= 19 && !replies.some((reply) => reply.id === head.id),
           endCandidate: replies.length === 0 && skippedItems === 0
         }
       }

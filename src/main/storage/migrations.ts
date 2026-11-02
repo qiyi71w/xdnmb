@@ -746,6 +746,96 @@ export const MIGRATIONS: readonly Migration[] = [
         DROP TABLE cookie_colors;
         ALTER TABLE cookie_colors_v23 RENAME TO cookie_colors;`)
     }
+  },
+  {
+    // A 全串／PO baseline also advances when a reader reads a larger reply count. Each advance of a
+    // baseline within a rule generation becomes an ordered segment: a check's counted growth
+    // (`check`, may later be cleared) or a reader's absorption (`open`, never counted). The counter
+    // increments become the `check` segments with their clear and exclusion state; the rebuild only
+    // relaxes `added > 0` for `open` rows. Personal records, untouched by cache cleanup.
+    version: 24,
+    up(db) {
+      db.exec(`CREATE TABLE reminder_baseline_segments (
+          id INTEGER PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('all', 'po', 'quote')),
+          generation INTEGER NOT NULL,
+          source TEXT NOT NULL CHECK (source IN ('check', 'open')),
+          round_id TEXT NOT NULL,
+          count_from INTEGER,
+          count_to INTEGER,
+          added INTEGER NOT NULL CHECK ((source = 'check' AND added > 0) OR (source = 'open' AND added = 0)),
+          excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded >= 0 AND excluded <= added),
+          cleared INTEGER NOT NULL DEFAULT 0 CHECK (cleared IN (0, 1) AND (source = 'check' OR cleared = 0)),
+          CHECK (source = 'check' OR (kind IN ('all', 'po') AND count_from >= 0 AND count_to > count_from))
+        );
+        INSERT INTO reminder_baseline_segments
+          (id, thread_id, kind, generation, source, round_id, count_from, count_to, added, excluded, cleared)
+          SELECT id, thread_id, kind, generation, 'check', round_id, count_from, count_to, added, excluded, cleared
+          FROM reminder_count_increments;
+        DROP TABLE reminder_count_increments;
+        CREATE INDEX reminder_segment_round ON reminder_baseline_segments(round_id);
+        CREATE INDEX reminder_segment_range ON reminder_baseline_segments(thread_id, kind, generation, count_from, count_to);`)
+    }
+  },
+  {
+    // A local reply is attributed by reply counts, not by page 1 ordinals: per 全串／PO rule
+    // generation it keeps the largest reply count committed before its send intent, the smallest
+    // count of a page seen holding it, the segment boundary at the intent, and its one-time result.
+    // Per thread and mode, the largest reply count committed since the count last fell (in commit
+    // order, whatever the fetch times) is kept as the observation a send intent reads. Earlier
+    // versions kept no commit order, so it starts from the largest count already persisted: the
+    // baselines and every saved thread page, offline page and latest saved count. The page 1
+    // ordinal table and its trust flag go away. Earlier replies have no pre-send count: a pending
+    // one becomes unprovable; settled ones keep their result; closed ones belonged to generations
+    // that no longer exist.
+    // Personal records, untouched by cache cleanup.
+    version: 25,
+    up(db) {
+      db.exec(`CREATE TABLE reminder_local_replies_v25 (
+          publication_id INTEGER NOT NULL,
+          thread_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('all', 'po')),
+          generation INTEGER NOT NULL,
+          before_count INTEGER CHECK (before_count >= 0),
+          after_segment INTEGER NOT NULL DEFAULT 0,
+          proof_count INTEGER CHECK (proof_count >= 0),
+          status TEXT NOT NULL CHECK (status IN ('pending', 'excluded', 'absorbed', 'unprovable')),
+          CHECK (status <> 'pending' OR before_count IS NOT NULL),
+          PRIMARY KEY (publication_id, kind, generation)
+        );
+        INSERT INTO reminder_local_replies_v25 (publication_id, thread_id, kind, generation, status)
+          SELECT publication_id, thread_id, kind, generation, CASE status
+            WHEN 'excluded' THEN 'excluded' WHEN 'pending' THEN 'unprovable' ELSE 'absorbed' END
+          FROM reminder_local_replies WHERE status <> 'closed';
+        DROP TABLE reminder_local_replies;
+        ALTER TABLE reminder_local_replies_v25 RENAME TO reminder_local_replies;
+        CREATE INDEX reminder_local_reply_thread ON reminder_local_replies(thread_id, status);
+        CREATE TABLE reminder_count_observations (
+          thread_id TEXT NOT NULL,
+          mode TEXT NOT NULL CHECK (mode IN ('all', 'po')),
+          max_count INTEGER NOT NULL CHECK (max_count >= 0),
+          PRIMARY KEY (thread_id, mode)
+        );
+        INSERT INTO reminder_count_observations (thread_id, mode, max_count)
+          SELECT thread_id, mode, max(count) FROM (
+            SELECT thread_id, kind AS mode, baseline AS count FROM reminder_state WHERE kind IN ('all', 'po') AND baseline IS NOT NULL
+            UNION ALL SELECT thread_id, mode, reply_count FROM thread_pages WHERE reply_count IS NOT NULL
+            UNION ALL SELECT thread_id, 'all', reply_count FROM offline_pages WHERE reply_count IS NOT NULL
+            UNION ALL SELECT thread_id, mode, reply_count FROM thread_reply_counts
+          ) GROUP BY thread_id, mode;
+        DROP TABLE reminder_reply_positions;
+        ALTER TABLE reminder_state DROP COLUMN own_positions_trusted;`)
+    }
+  },
+  {
+    // A reminder check may read one extra page per local reply and mode to find it: the page right
+    // after its pre-send count. Whether that read was already sent is kept per reply, mode and
+    // generation, so a reply never gets a second one. Existing replies have not had it.
+    version: 26,
+    up(db) {
+      db.exec('ALTER TABLE reminder_local_replies ADD COLUMN follow_up_sent INTEGER NOT NULL DEFAULT 0 CHECK (follow_up_sent IN (0, 1))')
+    }
   }
 ]
 

@@ -13,11 +13,11 @@ export function failureText(failure: LoadFailure): string {
 
 /**
  * The user opened the thread, switched to a tab showing it, or jumped to a quote inside it: its
- * reminder counts go to 0. Fire and forget: a failure leaves the counts for the next open; reading
- * data is untouched.
+ * reminder counts go to 0, and main may read PO page 1 once to advance an established PO追更
+ * baseline. Fire and forget: a failure leaves the counts for the next open; reading data is untouched.
  */
 export function clearThreadReminders(threadId: ThreadId): void {
-  window.xidao.reminders.clear({ threadId }).catch(() => undefined)
+  window.xidao.reminders.clear({ threadId, source: 'open' }).catch(() => undefined)
 }
 
 /**

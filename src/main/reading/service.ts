@@ -1,4 +1,4 @@
-import type { DirectoryStrategy, LocateHint, QuoteLocation, QuotePreview, ReadError, ReadOutcome, ThreadEndResult, ThreadPageResult } from '../../shared/api'
+import type { DirectoryStrategy, LocateHint, QuoteLocation, QuotePreview, ReadError, ReadOutcome, ThreadEndResult, ThreadPageResult, ThreadReadPurpose } from '../../shared/api'
 import type { BoardDirectory, CoveragePage, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from '../../shared/forum'
 import { threadTotalPages } from '../../shared/threadPages'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
@@ -12,11 +12,21 @@ const MAX_PROBE_STEPS = 2
 export interface ReadingService {
   loadDirectory(strategy: DirectoryStrategy, signal: AbortSignal): Promise<ReadOutcome<BoardDirectory>>
   readFeedPage(feed: FeedRef, page: number, signal: AbortSignal): Promise<ReadOutcome<FeedPage>>
-  readThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal): Promise<ReadOutcome<ThreadPageResult>>
-  locateThreadEnd(threadId: ThreadId, mode: ReadingMode, signal: AbortSignal): Promise<ReadOutcome<ThreadEndResult>>
+  /** `purpose`: only a reader's `display` read advances the mode's reminder baseline (fresh reads only). */
+  readThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal, purpose: ThreadReadPurpose): Promise<ReadOutcome<ThreadPageResult>>
+  locateThreadEnd(threadId: ThreadId, mode: ReadingMode, signal: AbortSignal, purpose: ThreadReadPurpose): Promise<ReadOutcome<ThreadEndResult>>
   previewQuote(postId: PostId, signal: AbortSignal): Promise<ReadOutcome<QuotePreview>>
   /** `hint`: a search result link's thread and page, read once only when local records do not locate the post. */
   locateQuote(postId: PostId, signal: AbortSignal, hint?: LocateHint | null): Promise<QuoteLocation>
+}
+
+/**
+ * Watches a reader's `display` thread reads (fresh network reads only; a cache fallback saves nothing).
+ * `begin` marks one read starting and returns its end; `saved` reports a page of it stored.
+ */
+export interface DisplayReadObserver {
+  begin(threadId: ThreadId, mode: ReadingMode): () => void
+  saved(threadId: ThreadId, mode: ReadingMode): void
 }
 
 interface ReadingServiceDeps {
@@ -24,13 +34,23 @@ interface ReadingServiceDeps {
   store: ReadingStore
   scheduler: RequestScheduler
   now?: () => Date
+  displayReads?: DisplayReadObserver
 }
 
 type Fetched<T> = { ok: true; value: T; fetchedAt: string } | { ok: false; outcome: { status: 'cancelled' } | { status: 'failed'; error: ReadError } }
 
-export function createReadingService({ client, store, scheduler, now = () => new Date() }: ReadingServiceDeps): ReadingService {
-  /** No retries; null lane means the client schedules each HTTP request inside a composite read. */
-  async function fetchOnce<T>(lane: Lane | null, signal: AbortSignal, work: (signal: AbortSignal) => Promise<T>): Promise<Fetched<T>> {
+export function createReadingService({ client, store, scheduler, now = () => new Date(), displayReads }: ReadingServiceDeps): ReadingService {
+  function observed<T>(threadId: ThreadId, mode: ReadingMode, purpose: ThreadReadPurpose, read: () => Promise<T>): Promise<T> {
+    if (purpose !== 'display' || displayReads === undefined) return read()
+    const end = displayReads.begin(threadId, mode)
+    return read().finally(end)
+  }
+
+  /**
+   * No retries; null lane means the client schedules each HTTP request inside a composite read.
+   * `purpose` is that of the thread read whose capped page this may save.
+   */
+  async function fetchOnce<T>(lane: Lane | null, signal: AbortSignal, work: (signal: AbortSignal) => Promise<T>, purpose: ThreadReadPurpose = 'lookup'): Promise<Fetched<T>> {
     try {
       const value = await (lane === null ? work(signal) : scheduler.run(lane, signal, work))
       return { ok: true, value, fetchedAt: now().toISOString() }
@@ -41,7 +61,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
         if (problem.kind === 'page-cap' && error.readablePage !== undefined) {
           const fetchedAt = now().toISOString()
           try {
-            const persisted = await persistThreadPage(error.readablePage, fetchedAt)
+            const persisted = await persistThreadPage(error.readablePage, fetchedAt, purpose)
             problem = { ...problem, readablePage: { data: persisted.result, fetchedAt, saved: persisted.saved } }
           } catch (lowerError) {
             if (lowerError instanceof ForumReadError) problem = lowerError.error
@@ -79,9 +99,10 @@ export function createReadingService({ client, store, scheduler, now = () => new
     signal: AbortSignal,
     fetch: (signal: AbortSignal) => Promise<T>,
     persist: (value: T, fetchedAt: string) => Promise<{ saved: boolean; result: R }>,
-    loadCached: () => Promise<Stored<R> | null>
+    loadCached: () => Promise<Stored<R> | null>,
+    purpose: ThreadReadPurpose = 'lookup'
   ): Promise<ReadOutcome<R>> {
-    const fetched = await fetchOnce(lane, signal, fetch)
+    const fetched = await fetchOnce(lane, signal, fetch, purpose)
     if (fetched.ok) {
       try {
         const { saved, result } = await persist(fetched.value, fetched.fetchedAt)
@@ -106,9 +127,10 @@ export function createReadingService({ client, store, scheduler, now = () => new
   }
 
   /** Saves the page and returns coverage; if storage refuses, coverage still reflects this observation. */
-  async function persistThreadPage(page: ThreadPage, fetchedAt: string): Promise<{ saved: boolean; result: ThreadPageResult }> {
+  async function persistThreadPage(page: ThreadPage, fetchedAt: string, purpose: ThreadReadPurpose): Promise<{ saved: boolean; result: ThreadPageResult }> {
+    let coverage: ThreadCoverage
     try {
-      return { saved: true, result: { page, coverage: await store.saveThreadPage(page, fetchedAt) } }
+      coverage = await store.saveThreadPage(page, fetchedAt, purpose)
     } catch {
       const stored = await store.getThreadCoverage(page.threadId, page.mode).catch(() => null)
       if (stored !== null) assertReadablePage(page, stored)
@@ -123,6 +145,8 @@ export function createReadingService({ client, store, scheduler, now = () => new
       const reported = page.replyCount ?? stored?.reportedReplyCount ?? null
       return { saved: false, result: { page, coverage: computeCoverage(page.threadId, page.mode, pages, reported) } }
     }
+    if (purpose === 'display') displayReads?.saved(page.threadId, page.mode)
+    return { saved: true, result: { page, coverage } }
   }
 
   async function loadStoredThreadPage(threadId: ThreadId, mode: ReadingMode, page: number): Promise<Stored<ThreadPageResult> | null> {
@@ -133,14 +157,15 @@ export function createReadingService({ client, store, scheduler, now = () => new
     return { value: { page: stored.value, coverage }, fetchedAt: stored.fetchedAt }
   }
 
-  function readThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal): Promise<ReadOutcome<ThreadPageResult>> {
-    return readWithFallback(
+  function readThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal, purpose: ThreadReadPurpose): Promise<ReadOutcome<ThreadPageResult>> {
+    return observed(threadId, mode, purpose, () => readWithFallback(
       'foreground',
       signal,
       (s) => fetchThreadPage(threadId, mode, page, s),
-      persistThreadPage,
-      () => loadStoredThreadPage(threadId, mode, page)
-    )
+      (value, fetchedAt) => persistThreadPage(value, fetchedAt, purpose),
+      () => loadStoredThreadPage(threadId, mode, page),
+      purpose
+    ))
   }
 
   /** Owner from local records only; a lookup failure counts as no record. */
@@ -158,7 +183,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
     signal: AbortSignal
   ): Promise<{ kind: 'outcome'; outcome: QuoteLocation } | { kind: 'readable'; head: Post }> {
     const page = hint.page ?? 1
-    const outcome = await readThreadPage(hint.threadId, 'all', page, signal)
+    const outcome = await readThreadPage(hint.threadId, 'all', page, signal, 'lookup')
     if (outcome.status === 'cancelled') return { kind: 'outcome', outcome }
     if (outcome.status === 'failed') return { kind: 'outcome', outcome: { status: 'failed', threadId: hint.threadId, error: outcome.error } }
     const shown = outcome.data.page
@@ -227,7 +252,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
         }
         // Without any local record the only verifiable owner is the post itself as a main post:
         // its own thread's first page must come back with it as the head.
-        const outcome = await readThreadPage(postId, 'all', 1, signal)
+        const outcome = await readThreadPage(postId, 'all', 1, signal, 'lookup')
         if (outcome.status === 'cancelled') return outcome
         if (outcome.status === 'failed') {
           return outcome.error.kind === 'not-found' ? { status: 'unknown-thread' } : { status: 'failed', threadId: null, error: outcome.error }
@@ -255,7 +280,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
       let failure: ReadError | null = null
       let reached: Post | null = null
       for (const { mode, page } of candidates) {
-        const outcome = await readThreadPage(threadId, mode, page, signal)
+        const outcome = await readThreadPage(threadId, mode, page, signal, 'lookup')
         if (outcome.status === 'cancelled') return outcome
         if (outcome.status === 'failed') {
           failure ??= outcome.error
@@ -284,7 +309,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
       if (failure !== null) return { status: 'failed', threadId, error: failure }
       if (reached === null) {
         // Owner known only from a list: 打开原串 is offered only for a thread that can be read now.
-        const outcome = await readThreadPage(threadId, preferredMode, 1, signal)
+        const outcome = await readThreadPage(threadId, preferredMode, 1, signal, 'lookup')
         if (outcome.status === 'cancelled') return outcome
         if (outcome.status === 'failed') return { status: 'failed', threadId, error: outcome.error }
         reached = outcome.data.page.head
@@ -292,7 +317,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
       return { status: 'thread-known', threadId, head: reached }
     },
 
-    async locateThreadEnd(threadId, mode, signal) {
+    locateThreadEnd: (threadId, mode, signal, purpose) => observed(threadId, mode, purpose, async () => {
       const stored = await store.getThreadCoverage(threadId, mode).catch(() => null)
       let coverage = stored ?? computeCoverage(threadId, mode, [], null)
       const probedPages: number[] = []
@@ -312,7 +337,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
       ): Promise<{ ok: true; value: ThreadPageResult } | { ok: false; outcome: ReadOutcome<ThreadEndResult> }> => {
         const known = probed.get(page)
         if (known) return { ok: true, value: known }
-        const fetched = await fetchOnce('foreground', signal, (s) => fetchThreadPage(threadId, mode, page, s))
+        const fetched = await fetchOnce('foreground', signal, (s) => fetchThreadPage(threadId, mode, page, s), purpose)
         if (!fetched.ok) {
           const { outcome } = fetched
           if (outcome.status === 'failed' && outcome.error.kind === 'page-cap') return { ok: false, outcome }
@@ -322,7 +347,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
           return { ok: false, outcome }
         }
         try {
-          const persisted = await persistThreadPage(fetched.value, fetched.fetchedAt)
+          const persisted = await persistThreadPage(fetched.value, fetched.fetchedAt, purpose)
           probed.set(page, persisted.result)
           probedPages.push(page)
           fetchedAt = fetched.fetchedAt
@@ -374,6 +399,6 @@ export function createReadingService({ client, store, scheduler, now = () => new
 
       if (!start.value.page.endCandidate) return insufficient()
       return located(start.value, 1)
-    }
+    })
   }
 }

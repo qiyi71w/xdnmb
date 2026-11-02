@@ -106,6 +106,10 @@ export type CheckRequestResult =
 
 export type RemindersResult<T> = ({ ok: true } & T) | { ok: false; reason: 'storage' }
 
+/** Who asked `RemindersApi.clear`: an open of the thread, or 清除提醒 in the reminders list. */
+export type ReminderClearSource = 'open' | 'manual'
+export const REMINDER_CLEAR_SOURCES: readonly ReminderClearSource[] = ['open', 'manual']
+
 export interface RemindersApi {
   /** Rules of the given threads (at most 500); threads without rows report all kinds disabled. */
   getRules(input: { threadIds: ThreadId[] }): Promise<RemindersResult<{ threads: ThreadReminders[] }>>
@@ -125,10 +129,13 @@ export interface RemindersApi {
    */
   closeForThreads(input: { threadIds: ThreadId[]; reason: 'unsubscribe' | 'sync-delete' }): Promise<RemindersResult<{ closed: ThreadId[] }>>
   /**
-   * The user opened the thread (or switched to a tab showing it), or chose 清除提醒: every count of
-   * the thread becomes 0. Reading position, visits and history are untouched.
+   * Every count of the thread becomes 0. Reading position, visits and history are untouched.
+   * `open`: the user opened the thread, switched to a tab showing it, or jumped to a quote inside it;
+   * with an established PO追更 baseline this also queues one background read of PO page 1 that
+   * advances that baseline (dropped when a reader's PO page read is saved first). `manual`: 清除提醒
+   * in the reminders list; no baseline moves and nothing is read.
    */
-  clear(input: { threadId: ThreadId }): Promise<RemindersResult<object>>
+  clear(input: { threadId: ThreadId; source: ReminderClearSource }): Promise<RemindersResult<object>>
   /** Acknowledge only this episode; a stale dismissal cannot hide a later one. */
   dismissRateLimit(input: { id: string }): Promise<RemindersResult<object>>
   /** Rules, counts or checker state changed. Returns an unsubscribe function. */

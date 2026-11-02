@@ -3,8 +3,8 @@ import { isAnnouncementIdentity } from '../shared/announcements'
 import type { AnnouncementService } from './announcements/service'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import {
-  CLIPBOARD_EDIT_COMMANDS, IpcChannel, MAX_CLIPBOARD_TEXT_LENGTH, type AppStatus, type ClipboardEditCommand, type DirectoryStrategy,
-  type ReadOutcome, type LocateHint
+  CLIPBOARD_EDIT_COMMANDS, IpcChannel, MAX_CLIPBOARD_TEXT_LENGTH, THREAD_READ_PURPOSES, type AppStatus, type ClipboardEditCommand, type DirectoryStrategy,
+  type ReadOutcome, type LocateHint, type ThreadReadPurpose
 } from '../shared/api'
 import type { FeedRef, ReadingMode } from '../shared/forum'
 import type { ImageFormat, ImageKind } from '../shared/images'
@@ -30,7 +30,7 @@ import type { SubscriptionService } from './subscriptions/service'
 import type { PublicationService } from './publication/service'
 import type { Lifecycle } from './lifecycle/controller'
 import type { UpdateService } from './updates/service'
-import { REMINDERS_CHANGED_CHANNEL } from '../shared/reminders'
+import { REMINDER_CLEAR_SOURCES, REMINDERS_CHANGED_CHANNEL, type ReminderClearSource } from '../shared/reminders'
 import type { ReminderService } from './reminders/service'
 import { applyZoom, currentZoom } from './zoom'
 import type { SearchService } from './search/service'
@@ -225,6 +225,16 @@ function feedRef(value: unknown): FeedRef {
 function readingMode(value: unknown): ReadingMode {
   if (value !== 'all' && value !== 'po') throw new InvalidRequestError()
   return value
+}
+
+function readPurpose(value: unknown): ThreadReadPurpose {
+  if (!THREAD_READ_PURPOSES.includes(value as ThreadReadPurpose)) throw new InvalidRequestError()
+  return value as ThreadReadPurpose
+}
+
+function clearSource(value: unknown): ReminderClearSource {
+  if (!REMINDER_CLEAR_SOURCES.includes(value as ReminderClearSource)) throw new InvalidRequestError()
+  return value as ReminderClearSource
 }
 
 function subscriptionSource(value: unknown): SubscriptionSource {
@@ -442,7 +452,10 @@ export function registerIpc({
     if (reason !== 'unsubscribe' && reason !== 'sync-delete') throw new InvalidRequestError()
     return reminders.closeForThreads({ threadIds: threadIds(input.threadIds), reason })
   })
-  handle(IpcChannel.reminderClear, async (_event, raw) => reminders.clear({ threadId: forumId(record(raw).threadId) }))
+  handle(IpcChannel.reminderClear, async (_event, raw) => {
+    const input = record(raw)
+    return reminders.clear({ threadId: forumId(input.threadId), source: clearSource(input.source) })
+  })
   handle(IpcChannel.reminderDismissRateLimit, async (_event, raw) => {
     const id = record(raw).id
     if (typeof id !== 'string' || id.length > 128 || id.length === 0) throw new InvalidRequestError()
@@ -504,11 +517,12 @@ export function registerIpc({
     const threadId = forumId(input.threadId)
     const mode = readingMode(input.mode)
     const pageNumber = page(input.page)
+    const purpose = readPurpose(input.purpose)
     const id = operationId(input)
     return operations.run(event.sender, id, async (signal) => {
       const held = { viewId: `request-${id}`, threadId }
       await content.holdReader(String(event.sender.id), held).catch(() => undefined)
-      try { return await reading.readThreadPage(threadId, mode, pageNumber, signal) }
+      try { return await reading.readThreadPage(threadId, mode, pageNumber, signal, purpose) }
       finally { await content.releaseReader(String(event.sender.id), held).catch(() => undefined) }
     })
   })
@@ -517,11 +531,12 @@ export function registerIpc({
     const input = record(raw)
     const threadId = forumId(input.threadId)
     const mode = readingMode(input.mode)
+    const purpose = readPurpose(input.purpose)
     const id = operationId(input)
     return operations.run(event.sender, id, async (signal) => {
       const held = { viewId: `request-${id}`, threadId }
       await content.holdReader(String(event.sender.id), held).catch(() => undefined)
-      try { return await reading.locateThreadEnd(threadId, mode, signal) }
+      try { return await reading.locateThreadEnd(threadId, mode, signal, purpose) }
       finally { await content.releaseReader(String(event.sender.id), held).catch(() => undefined) }
     })
   })

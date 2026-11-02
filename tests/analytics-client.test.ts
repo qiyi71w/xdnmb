@@ -190,12 +190,6 @@ function harness(origin: string, start = '2026-10-31T12:00:00+08:00') {
   return { clock, lock, create, advance, settle }
 }
 
-/** Event-loop turns (no wall-clock wait) until `condition` holds. */
-async function until(condition: () => boolean): Promise<void> {
-  for (let turn = 0; turn < 1000 && !condition(); turn++) await new Promise((resolve) => setImmediate(resolve))
-  expect(condition()).toBe(true)
-}
-
 function storedJson(path: string): string {
   const raw = new Database(path, { readonly: true })
   const row = raw.prepare<[], { value_json: string }>("SELECT value_json FROM settings WHERE key = 'analytics'").get()
@@ -326,10 +320,12 @@ describe('desktop usage statistics', () => {
     })
     const current = create(db)
     await current.setChoice('on')
-    await until(() => held.length === 1)
+    // Requests cross this machine's loopback network, whose delay is wall time (longer under load),
+    // not a number of event-loop turns: poll with a time limit.
+    await expect.poll(() => held.length).toBe(1)
     expect(await current.setChoice('off')).toMatchObject({ result: 'saved', state: { choice: 'off' } })
     // Aborted by turning off, long before the transport's own timeout.
-    await until(() => aborted === 1)
+    await expect.poll(() => aborted).toBe(1)
     await settle()
     held[0]!()
     for (let i = 0; i < 5; i++) {
@@ -407,7 +403,7 @@ describe('desktop usage statistics', () => {
     })
     const current = create(db)
     await current.setChoice('on')
-    await until(() => held.length === 1)
+    await expect.poll(() => held.length).toBe(1)
     clock.foreground = false
     held[0]!()
     await settle()
@@ -446,7 +442,7 @@ describe('desktop usage statistics', () => {
     const current = create(db)
     await current.start()
     current.poke()
-    await until(() => held.length === 1)
+    await expect.poll(() => held.length).toBe(1)
     // Minimized (or locked) across the next Beijing midnight before the decryption finishes.
     clock.foreground = false
     advance(15 * 60_000)
@@ -501,10 +497,6 @@ describe('desktop usage statistics', () => {
     const hash = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/analytics/main.ts', 'hash-password'], {
       input: password, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8'
     }).stdout.trim()
-    const probe = createServer()
-    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', () => resolve()))
-    const port = (probe.address() as AddressInfo).port
-    await new Promise<void>((resolve) => probe.close(() => resolve()))
     // The service's wall clock starts at Beijing noon of a fixed day (its own clock seam is
     // `Date.now`), so the statistics day never depends on when the suite runs.
     const noon = '2026-10-31T12:00:00+08:00'
@@ -514,15 +506,23 @@ describe('desktop usage statistics', () => {
         ...process.env, ELECTRON_RUN_AS_NODE: '1',
         XIDAO_ANALYTICS_DB: join(folder, 'analytics.sqlite'),
         XIDAO_ANALYTICS_ADMIN_PASSWORD_HASH: hash,
-        XIDAO_ANALYTICS_PORT: String(port)
+        // The service binds a free port itself and reports it, so no other process can take
+        // the port between choosing it and listening.
+        XIDAO_ANALYTICS_PORT: '0'
       },
       stdio: ['ignore', 'pipe', 'inherit']
     })
     processes.push(child)
-    await new Promise<void>((resolve, reject) => {
-      child.stdout!.on('data', (chunk: Buffer) => { if (chunk.toString().includes('"listening"')) resolve() })
-      child.once('exit', () => reject(new Error('service exited')))
+    const listening = Promise.withResolvers<number>()
+    let pending = ''
+    child.stdout!.on('data', (chunk: Buffer) => {
+      const lines = (pending + chunk.toString()).split('\n')
+      pending = lines.pop()!
+      const line = lines.find((entry) => entry.includes('"listening"'))
+      if (line) listening.resolve(JSON.parse(line).port)
     })
+    child.once('exit', () => listening.reject(new Error('service exited')))
+    const port = await listening.promise
     const origin = `http://127.0.0.1:${port}`
     const summary = async () => {
       const response = await fetch(`${origin}/admin/api/summary`, {

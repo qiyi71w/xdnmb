@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
+import { EMPTY_FIELDS } from '../src/shared/drafts'
 import type { Post, ThreadPage } from '../src/shared/forum'
 import type { SubscriptionObservation, SubscriptionOperation, SubscriptionPlan } from '../src/shared/subscriptions'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
+import { StorageWriteRefusedError } from '../src/main/storage/contract'
 import { MIGRATIONS } from '../src/main/storage/migrations'
 import { DEFAULT_SETTINGS } from '../src/shared/settings'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
@@ -917,7 +919,8 @@ describe('schema v23: 饼干颜色 entries may be in 默认', () => {
     expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
     failed.close()
     expect(readFileSync(path)).toEqual(original)
-    const upgraded = open(path)
+    const upgraded = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 23))
+    connections.push(upgraded)
     expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: 23 })
     for (const { table, values } of retained) expect(rows(path, table)).toEqual(values)
     upgraded.setCookieColor('Hand1', null, later)
@@ -940,5 +943,277 @@ describe('schema v23: 饼干颜色 entries may be in 默认', () => {
     expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
     expect(db.listCookieColors()).toEqual(expected)
     expect(db.listCredentials().map((item) => item.cookieId)).toEqual(expect.arrayContaining(['MineA', 'MineB']))
+  })
+})
+
+describe('schema v24: reminder baselines record ordered segments', () => {
+  /**
+   * A v23 database with a counting 全串 rule (generation 3, baseline 12, count 2) whose growth
+   * 10→12 is still uncounted-for, an earlier cleared growth 8→10, one excluded reply, and a PO
+   * rule still waiting for its baseline.
+   */
+  function v23(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 23)).close()
+    const raw = new Database(path)
+    try {
+      raw.prepare("INSERT INTO reminder_rules VALUES ('900', 'all', 1, 3, ?, NULL, ?)").run(at, at)
+      raw.prepare("INSERT INTO reminder_rules VALUES ('900', 'po', 1, 1, ?, NULL, ?)").run(at, at)
+      raw.prepare(`INSERT INTO reminder_state (thread_id, kind, baseline, count, first_page, increased_at, checked_at, issues_json)
+        VALUES ('900', 'all', 12, 2, 1, ?, ?, '[]')`).run(later, later)
+      raw.prepare(`INSERT INTO reminder_count_increments
+        (id, thread_id, kind, generation, round_id, count_from, count_to, added, excluded, cleared) VALUES
+        (1, '900', 'all', 3, 'round-a', 8, 10, 2, 0, 1),
+        (2, '900', 'all', 3, 'round-b', 10, 12, 2, 1, 0)`).run()
+      raw.prepare(`INSERT INTO reminder_reply_positions VALUES ('900', 'all', 3, '90011', 11, 12)`).run()
+      raw.prepare(`INSERT INTO reminder_local_replies VALUES (1, '900', '90011', 'all', 3, 'excluded', 2)`).run()
+    } finally { raw.close() }
+    return path
+  }
+  const rows = (path: string, sql: string) => {
+    const raw = new Database(path, { readonly: true })
+    try { return raw.prepare(sql).all() } finally { raw.close() }
+  }
+  // v25 replaces the local reply tables and drops a reminder_state column (checked below).
+  const kept = ['reminder_rules', 'reminder_checker', 'publication_attempts']
+  const shown = (threadPage: number): ThreadPage => ({ threadId: '900', mode: 'all', page: 1, head: post('900'), replies: [],
+    replyCount: threadPage, skippedItems: 0, endCandidate: false })
+
+  it('keeps rules, generations, counts and growth records; each growth becomes a check segment with its clear state', () => {
+    const path = v23()
+    const before = kept.map((table) => rows(path, `SELECT * FROM ${table} ORDER BY 1, 2`))
+    const growth = rows(path, 'SELECT * FROM reminder_count_increments ORDER BY id')
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(kept.map((table) => rows(path, `SELECT * FROM ${table} ORDER BY 1, 2`))).toEqual(before)
+    expect(rows(path, 'SELECT * FROM reminder_baseline_segments ORDER BY id'))
+      .toEqual(growth.map((row) => ({ ...(row as object), source: 'check' })))
+    expect(db.reminderOverview().threads.find((row) => row.threadId === '900')).toMatchObject({ counts: { all: 2, po: 0, quote: 0 } })
+    expect(db.getReminderRules(['900'])[0]!.rules).toMatchObject({ all: { enabled: true, baseline: 'ready' }, po: { enabled: true, baseline: 'pending' } })
+
+    // A reader's display read appends an open segment after them and raises only the set baseline.
+    db.saveThreadPage({ ...shown(15), mode: 'po' }, later, 'display')
+    db.saveThreadPage(shown(15), later, 'display')
+    expect(rows(path, "SELECT kind, generation, source, count_from, count_to, added, cleared FROM reminder_baseline_segments WHERE id > 2"))
+      .toEqual([{ kind: 'all', generation: 3, source: 'open', count_from: 12, count_to: 15, added: 0, cleared: 0 }])
+    expect(db.getReminderRules(['900'])[0]!.rules.po.baseline).toBe('pending')
+    expect(db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all).toBe(2)
+    // Clearing marks check segments only; the open segment never counted anything.
+    expect(db.clearReminderCounts('900')).toBe(true)
+    expect(rows(path, 'SELECT source, cleared FROM reminder_baseline_segments ORDER BY id')).toEqual([
+      { source: 'check', cleared: 1 }, { source: 'check', cleared: 1 }, { source: 'open', cleared: 0 }
+    ])
+  })
+
+  it('leaves the v23 file byte for byte when the upgrade fails, then upgrades', () => {
+    const path = v23()
+    const original = readFileSync(path)
+    const failed = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 23), {
+      version: 24, up(connection) {
+        MIGRATIONS.find((migration) => migration.version === 24)!.up(connection)
+        throw new Error('injected failure after building the segment table')
+      }
+    }])
+    connections.push(failed)
+    expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failed.close()
+    expect(readFileSync(path)).toEqual(original)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(rows(path, 'SELECT id, source FROM reminder_baseline_segments ORDER BY id')).toEqual([{ id: 1, source: 'check' }, { id: 2, source: 'check' }])
+  })
+
+  it('opens a newer schema read-only: reminders are readable, a display read and rule changes are refused', () => {
+    const path = v23()
+    open(path).close()
+    const raw = new Database(path)
+    try { raw.pragma(`user_version = ${supportedVersion + 1}`) } finally { raw.close() }
+    const original = readFileSync(path)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'read-only', reason: 'newer-schema', schemaVersion: supportedVersion + 1, supportedVersion })
+    expect(db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all).toBe(2)
+    expect(() => db.saveThreadPage(shown(15), later, 'display')).toThrow(StorageWriteRefusedError)
+    expect(() => db.setReminderRule('900', 'all', false, later)).toThrow(StorageWriteRefusedError)
+    db.close()
+    expect(readFileSync(path)).toEqual(original)
+  })
+})
+
+describe('schema v25: local replies are attributed by reply counts, not page 1 ordinals', () => {
+  /**
+   * A v24 database: a counting 全串 rule (generation 3, baseline 11, count 1) with an uncleared
+   * check segment 10→11, and confirmed replies left by v1.1.0 as pending, excluded, cleared,
+   * baseline and (an older generation) closed, plus a page 1 ordinal.
+   */
+  function v24(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 24)).close()
+    const raw = new Database(path)
+    try {
+      raw.prepare("INSERT INTO reminder_rules VALUES ('900', 'all', 1, 3, ?, NULL, ?)").run(at, at)
+      raw.prepare(`INSERT INTO reminder_state (thread_id, kind, baseline, count, first_page, increased_at, checked_at, issues_json)
+        VALUES ('900', 'all', 11, 1, 1, ?, ?, '[]')`).run(later, later)
+      raw.prepare(`INSERT INTO reminder_baseline_segments (id, thread_id, kind, generation, source, round_id, count_from, count_to, added)
+        VALUES (1, '900', 'all', 3, 'check', 'round-a', 10, 11, 1)`).run()
+      raw.prepare("INSERT INTO credentials (id, name, source, imported_at, ciphertext, cookie_id) VALUES (41, 'v24', 'raw', ?, ?, 'Po')").run(at, Buffer.from('v24'))
+      const publication = raw.prepare(`INSERT INTO publication_attempts (id, request_id, editor_id, payload_json, credential_id, forum_id, state, created_at, updated_at, post_id, thread_id, cookie_id)
+        VALUES (?, ?, 'editor', ?, 41, '4', 'confirmed', ?, ?, ?, '900', 'Po')`)
+      const statuses = ['pending', 'excluded', 'cleared', 'baseline', 'closed'] as const
+      for (const [index, status] of statuses.entries()) {
+        const id = 41 + index
+        publication.run(id, `v24-${id}`, JSON.stringify({ target: { kind: 'reply', threadId: '900' } }), at, at, `90${id}`)
+        raw.prepare('INSERT INTO reminder_local_replies VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, '900', `90${id}`, 'all', status === 'closed' ? 2 : 3, status, null)
+      }
+      raw.prepare("INSERT INTO reminder_reply_positions VALUES ('900', 'all', 3, '9041', 11, 11)").run()
+    } finally { raw.close() }
+    return path
+  }
+  const rows = (path: string, sql: string) => {
+    const raw = new Database(path, { readonly: true })
+    try { return raw.prepare(sql).all() } finally { raw.close() }
+  }
+  const kept = ['reminder_rules', 'reminder_baseline_segments', 'reminder_checker', 'publication_attempts', 'credentials']
+  const stateColumns = 'SELECT thread_id, kind, baseline, checked_post_id, count, first_page, increased_at, unverified, issues_json, last_error_json, checked_at FROM reminder_state ORDER BY 1, 2'
+  const holding = (postId: string, count: number): ThreadPage => ({ threadId: '900', mode: 'all', page: 1, head: post('900'),
+    replies: [post(postId)], replyCount: count, skippedItems: 0, endCandidate: false })
+
+  it('keeps rules, generations, counts, growth and sends; a pending v1.1.0 reply becomes unprovable', () => {
+    const path = v24()
+    const before = kept.map((table) => rows(path, `SELECT * FROM ${table} ORDER BY 1, 2`))
+    const state = rows(path, stateColumns)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(kept.map((table) => rows(path, `SELECT * FROM ${table} ORDER BY 1, 2`))).toEqual(before)
+    expect(rows(path, stateColumns)).toEqual(state)
+    expect(rows(path, 'SELECT publication_id, generation, before_count, proof_count, status FROM reminder_local_replies ORDER BY 1')).toEqual([
+      { publication_id: 41, generation: 3, before_count: null, proof_count: null, status: 'unprovable' },
+      { publication_id: 42, generation: 3, before_count: null, proof_count: null, status: 'excluded' },
+      { publication_id: 43, generation: 3, before_count: null, proof_count: null, status: 'absorbed' },
+      { publication_id: 44, generation: 3, before_count: null, proof_count: null, status: 'absorbed' }
+    ])
+    expect(rows(path, "SELECT name FROM sqlite_master WHERE name = 'reminder_reply_positions'")).toEqual([])
+    // The 全串 baseline (no saved page of thread 900 is larger) is the observation a later send starts from.
+    expect(rows(path, "SELECT * FROM reminder_count_observations WHERE thread_id = '900'")).toEqual([{ thread_id: '900', mode: 'all', max_count: 11 }])
+    // A page now showing the pending reply inside the counted growth does not deduct a guess.
+    db.saveThreadPage(holding('9041', 11), later, 'lookup')
+    expect(db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all).toBe(1)
+    expect(rows(path, 'SELECT status FROM reminder_local_replies WHERE publication_id = 41')).toEqual([{ status: 'unprovable' }])
+  })
+
+  it('a send after the upgrade starts from the largest count of pages saved before it, not only the baseline', () => {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 24)).close()
+    const raw = new Database(path)
+    try {
+      // Baseline 200; a lookup of page 11 had already saved 203 replies.
+      raw.prepare("INSERT INTO reminder_rules VALUES ('900', 'all', 1, 1, ?, NULL, ?)").run(at, at)
+      raw.prepare("INSERT INTO reminder_state (thread_id, kind, baseline, count, issues_json) VALUES ('900', 'all', 200, 0, '[]')").run()
+      raw.prepare("INSERT OR IGNORE INTO posts (id, content_json, plain_text, fetched_at) VALUES ('900', '[]', '', ?)").run(at)
+      raw.prepare(`INSERT INTO thread_pages (thread_id, mode, page, head_id, fetched_at, reply_ids_json, reply_count, skipped_items, end_candidate)
+        VALUES ('900', 'all', 11, '900', ?, '[]', 203, 0, 0)`).run(at)
+    } finally { raw.close() }
+    const db = open(path)
+    const credentialId = db.insertCredential({ name: 'v25', cookieId: 'Po', source: 'raw', importedAt: later, ciphertext: Buffer.from('v25') }).id
+    const sent = db.createPublication({ requestId: 'after-upgrade', editorId: 'editor', forumId: '4', at: later,
+      payload: { draftId: null, target: { kind: 'reply', threadId: '900' }, credentialId, fields: { ...EMPTY_FIELDS, content: 'mine' }, attachmentId: null } })
+    const counted = () => db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all
+    // The reader absorbs 200→203 before the reply lands; a check then counts 203→204.
+    db.saveThreadPage({ ...holding('90199', 203), page: 11 }, later, 'display')
+    db.saveThreadPage({ ...holding('90200', 204), page: 11 }, later)
+    db.updateReminderState({ threadId: '900', kind: 'all', generation: 1, at: later, roundId: 'round', baseline: 204, countedFrom: 203, add: 1, firstPage: 11, checked: true })
+    db.finishPublication({ id: sent.id, state: 'confirmed', problem: null, postId: '90204', threadId: '900', at: later })
+    expect(counted()).toBe(1)
+    // (203, 204] is the check's growth alone: the reply leaves the count.
+    db.saveThreadPage({ ...holding('90204', 204), page: 11 }, later, 'lookup')
+    expect(counted()).toBe(0)
+  })
+
+  it('leaves the v24 file byte for byte when the upgrade fails, then upgrades', () => {
+    const path = v24()
+    const original = readFileSync(path)
+    const failed = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 24), {
+      version: 25, up(connection) {
+        MIGRATIONS.find((migration) => migration.version === 25)!.up(connection)
+        throw new Error('injected failure after replacing the local reply table')
+      }
+    }])
+    connections.push(failed)
+    expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failed.close()
+    expect(readFileSync(path)).toEqual(original)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(rows(path, 'SELECT count(*) AS replies FROM reminder_local_replies')).toEqual([{ replies: 4 }])
+  })
+
+  it('opens a newer schema read-only: counts stay readable, a page that could prove a reply is refused', () => {
+    const path = v24()
+    open(path).close()
+    const raw = new Database(path)
+    try { raw.pragma(`user_version = ${supportedVersion + 1}`) } finally { raw.close() }
+    const original = readFileSync(path)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'read-only', reason: 'newer-schema', schemaVersion: supportedVersion + 1, supportedVersion })
+    expect(db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all).toBe(1)
+    expect(() => db.saveThreadPage(holding('9041', 11), later, 'lookup')).toThrow(StorageWriteRefusedError)
+    db.close()
+    expect(readFileSync(path)).toEqual(original)
+  })
+})
+
+describe('schema v26: local replies keep whether their follow-up page was read', () => {
+  /** A v25 database with a confirmed pending local reply and a settled one. */
+  function v25(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 25)).close()
+    const raw = new Database(path)
+    try {
+      raw.prepare("INSERT INTO reminder_rules VALUES ('900', 'all', 1, 2, ?, NULL, ?)").run(at, at)
+      raw.prepare("INSERT INTO reminder_state (thread_id, kind, baseline, count, issues_json) VALUES ('900', 'all', 40, 1, '[]')").run()
+      raw.prepare(`INSERT INTO reminder_baseline_segments (id, thread_id, kind, generation, source, round_id, count_from, count_to, added)
+        VALUES (1, '900', 'all', 2, 'check', 'round-a', 39, 40, 1)`).run()
+      raw.prepare("INSERT INTO credentials (id, name, source, imported_at, ciphertext, cookie_id) VALUES (51, 'v25', 'raw', ?, ?, 'Po')").run(at, Buffer.from('v25'))
+      for (const id of [51, 52]) {
+        raw.prepare(`INSERT INTO publication_attempts (id, request_id, editor_id, payload_json, credential_id, forum_id, state, created_at, updated_at, post_id, thread_id, cookie_id)
+          VALUES (?, ?, 'editor', ?, 51, '4', 'confirmed', ?, ?, ?, '900', 'Po')`).run(id, `v25-${id}`, JSON.stringify({ target: { kind: 'reply', threadId: '900' } }), at, at, `90${id}`)
+      }
+      raw.prepare(`INSERT INTO reminder_local_replies (publication_id, thread_id, kind, generation, before_count, after_segment, proof_count, status)
+        VALUES (51, '900', 'all', 2, 39, 0, NULL, 'pending'), (52, '900', 'all', 2, 30, 0, 31, 'excluded')`).run()
+    } finally { raw.close() }
+    return path
+  }
+  const rows = (path: string, sql: string) => {
+    const raw = new Database(path, { readonly: true })
+    try { return raw.prepare(sql).all() } finally { raw.close() }
+  }
+  const replies = 'SELECT publication_id, thread_id, kind, generation, before_count, after_segment, proof_count, status FROM reminder_local_replies ORDER BY 1'
+
+  it('keeps every local reply as it was; none has had its follow-up page yet', () => {
+    const path = v25()
+    const before = rows(path, replies)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(rows(path, replies)).toEqual(before)
+    expect(rows(path, 'SELECT publication_id, follow_up_sent FROM reminder_local_replies ORDER BY 1')).toEqual([
+      { publication_id: 51, follow_up_sent: 0 }, { publication_id: 52, follow_up_sent: 0 }
+    ])
+    // The pending reply can still have its page: the growth since 39 is uncleared check growth.
+    expect(db.reminderFollowUps('900')).toEqual([{ publicationId: 51, kind: 'all', generation: 2, threadId: '900', postId: '9051', beforeCount: 39 }])
+  })
+
+  it('leaves the v25 file byte for byte when the upgrade fails, then upgrades', () => {
+    const path = v25()
+    const original = readFileSync(path)
+    const failed = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 25), {
+      version: 26, up(connection) {
+        MIGRATIONS.find((migration) => migration.version === 26)!.up(connection)
+        throw new Error('injected failure after adding the follow-up column')
+      }
+    }])
+    connections.push(failed)
+    expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failed.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
   })
 })
