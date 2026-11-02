@@ -190,12 +190,6 @@ function harness(origin: string, start = '2026-10-31T12:00:00+08:00') {
   return { clock, lock, create, advance, settle }
 }
 
-/** Event-loop turns (no wall-clock wait) until `condition` holds. */
-async function until(condition: () => boolean): Promise<void> {
-  for (let turn = 0; turn < 1000 && !condition(); turn++) await new Promise((resolve) => setImmediate(resolve))
-  expect(condition()).toBe(true)
-}
-
 function storedJson(path: string): string {
   const raw = new Database(path, { readonly: true })
   const row = raw.prepare<[], { value_json: string }>("SELECT value_json FROM settings WHERE key = 'analytics'").get()
@@ -326,10 +320,12 @@ describe('desktop usage statistics', () => {
     })
     const current = create(db)
     await current.setChoice('on')
-    await until(() => held.length === 1)
+    // Requests cross this machine's loopback network, whose delay is wall time (longer under load),
+    // not a number of event-loop turns: poll with a time limit.
+    await expect.poll(() => held.length).toBe(1)
     expect(await current.setChoice('off')).toMatchObject({ result: 'saved', state: { choice: 'off' } })
     // Aborted by turning off, long before the transport's own timeout.
-    await until(() => aborted === 1)
+    await expect.poll(() => aborted).toBe(1)
     await settle()
     held[0]!()
     for (let i = 0; i < 5; i++) {
@@ -407,7 +403,7 @@ describe('desktop usage statistics', () => {
     })
     const current = create(db)
     await current.setChoice('on')
-    await until(() => held.length === 1)
+    await expect.poll(() => held.length).toBe(1)
     clock.foreground = false
     held[0]!()
     await settle()
@@ -446,7 +442,7 @@ describe('desktop usage statistics', () => {
     const current = create(db)
     await current.start()
     current.poke()
-    await until(() => held.length === 1)
+    await expect.poll(() => held.length).toBe(1)
     // Minimized (or locked) across the next Beijing midnight before the decryption finishes.
     clock.foreground = false
     advance(15 * 60_000)
