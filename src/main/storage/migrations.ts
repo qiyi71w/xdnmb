@@ -746,6 +746,37 @@ export const MIGRATIONS: readonly Migration[] = [
         DROP TABLE cookie_colors;
         ALTER TABLE cookie_colors_v23 RENAME TO cookie_colors;`)
     }
+  },
+  {
+    // A 全串／PO baseline also advances when a reader reads a larger reply count. Each advance of a
+    // baseline within a rule generation becomes an ordered segment: a check's counted growth
+    // (`check`, may later be cleared) or a reader's absorption (`open`, never counted). The counter
+    // increments become the `check` segments with their clear and exclusion state; the rebuild only
+    // relaxes `added > 0` for `open` rows. Personal records, untouched by cache cleanup.
+    version: 24,
+    up(db) {
+      db.exec(`CREATE TABLE reminder_baseline_segments (
+          id INTEGER PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('all', 'po', 'quote')),
+          generation INTEGER NOT NULL,
+          source TEXT NOT NULL CHECK (source IN ('check', 'open')),
+          round_id TEXT NOT NULL,
+          count_from INTEGER,
+          count_to INTEGER,
+          added INTEGER NOT NULL CHECK ((source = 'check' AND added > 0) OR (source = 'open' AND added = 0)),
+          excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded >= 0 AND excluded <= added),
+          cleared INTEGER NOT NULL DEFAULT 0 CHECK (cleared IN (0, 1) AND (source = 'check' OR cleared = 0)),
+          CHECK (source = 'check' OR (kind IN ('all', 'po') AND count_from >= 0 AND count_to > count_from))
+        );
+        INSERT INTO reminder_baseline_segments
+          (id, thread_id, kind, generation, source, round_id, count_from, count_to, added, excluded, cleared)
+          SELECT id, thread_id, kind, generation, 'check', round_id, count_from, count_to, added, excluded, cleared
+          FROM reminder_count_increments;
+        DROP TABLE reminder_count_increments;
+        CREATE INDEX reminder_segment_round ON reminder_baseline_segments(round_id);
+        CREATE INDEX reminder_segment_range ON reminder_baseline_segments(thread_id, kind, generation, count_from, count_to);`)
+    }
   }
 ]
 

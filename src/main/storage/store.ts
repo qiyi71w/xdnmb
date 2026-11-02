@@ -142,7 +142,7 @@ export async function openReadingStore(options: {
     loadDirectory: () => request('loadDirectory'),
     saveFeedPage: (page, fetchedAt) => request('saveFeedPage', page, fetchedAt),
     loadFeedPage: (feed, page) => request('loadFeedPage', feed, page),
-    saveThreadPage: (page, fetchedAt) => request('saveThreadPage', page, fetchedAt),
+    saveThreadPage: (page, fetchedAt, purpose) => request('saveThreadPage', page, fetchedAt, purpose),
     loadThreadPage: (threadId, mode, page) => request('loadThreadPage', threadId, mode, page),
     getThreadCoverage: (threadId, mode) => request('getThreadCoverage', threadId, mode),
     savePost: (post, fetchedAt) => request('savePost', post, fetchedAt),

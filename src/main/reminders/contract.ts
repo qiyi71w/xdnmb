@@ -34,6 +34,11 @@ export interface ReminderUpdate {
   /** Page 1's reply IDs only when every original slot on that page is present and ordered. */
   firstPageReplyIds?: PostId[]
   baseline?: number
+  /**
+   * 全串／PO: the baseline this check compared page 1 with. When a reader's read has advanced the
+   * stored baseline since, only growth past the stored baseline is counted.
+   */
+  countedFrom?: number | null
   checkedPostId?: PostId
   /** New replies counted by this write. */
   add?: number

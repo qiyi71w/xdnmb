@@ -5,6 +5,7 @@ import {
   REMINDER_KINDS, type CoverageIssue, type ReminderCloseReason, type ReminderKind, type ReminderRule,
   type ReminderThreadRow, type ThreadReminders
 } from '../../shared/reminders'
+import { threadTotalPages } from '../../shared/threadPages'
 import type { QuoteSource, ReminderBackoff, ReminderKindState, ReminderStoredOverview, ReminderUpdate, RuleSnapshot } from '../reminders/contract'
 
 interface RuleRow {
@@ -77,7 +78,7 @@ export class ReminderDatabase {
       db.prepare('DELETE FROM reminder_state WHERE thread_id = ? AND kind = ?').run(threadId, kind)
       db.prepare("UPDATE reminder_local_replies SET status = 'closed' WHERE thread_id = ? AND kind = ? AND status = 'pending'").run(threadId, kind)
       db.prepare('DELETE FROM reminder_reply_positions WHERE thread_id = ? AND kind = ?').run(threadId, kind)
-      db.prepare('DELETE FROM reminder_count_increments WHERE thread_id = ? AND kind = ?').run(threadId, kind)
+      db.prepare('DELETE FROM reminder_baseline_segments WHERE thread_id = ? AND kind = ?').run(threadId, kind)
       if (enabled) this.registerConfirmed(threadId)
       return this.getRules([threadId])[0]!
     }).immediate()
@@ -93,7 +94,7 @@ export class ReminderDatabase {
         drop.run(threadId)
         db.prepare("UPDATE reminder_local_replies SET status = 'closed' WHERE thread_id = ? AND status = 'pending'").run(threadId)
         db.prepare('DELETE FROM reminder_reply_positions WHERE thread_id = ?').run(threadId)
-        db.prepare('DELETE FROM reminder_count_increments WHERE thread_id = ?').run(threadId)
+        db.prepare('DELETE FROM reminder_baseline_segments WHERE thread_id = ?').run(threadId)
         return true
       })
     }).immediate()
@@ -151,14 +152,14 @@ export class ReminderDatabase {
       JOIN reminder_rules r ON r.thread_id = l.thread_id AND r.kind = l.kind AND r.generation = l.generation AND r.enabled = 1
       JOIN reminder_state s ON s.thread_id = r.thread_id AND s.kind = r.kind AND s.own_positions_trusted = 1
       JOIN reminder_reply_positions p ON p.thread_id = l.thread_id AND p.kind = l.kind AND p.generation = l.generation AND p.post_id = l.post_id
-      JOIN reminder_count_increments i ON i.thread_id = l.thread_id AND i.kind = l.kind AND i.generation = l.generation
-        AND p.ordinal > i.count_from AND p.ordinal <= i.count_to
+      JOIN reminder_baseline_segments i ON i.thread_id = l.thread_id AND i.kind = l.kind AND i.generation = l.generation
+        AND i.source = 'check' AND p.ordinal > i.count_from AND p.ordinal <= i.count_to
       WHERE l.thread_id = ? AND l.status = 'pending' ORDER BY i.id`).all(threadId)
     const mark = db.prepare(`UPDATE reminder_local_replies SET status = ?, increment_id = ?
       WHERE publication_id = ? AND kind = ? AND generation = ? AND status = 'pending'`)
     for (const match of matches) {
       if (mark.run(match.cleared ? 'cleared' : 'excluded', match.increment_id, match.publication_id, match.kind, match.generation).changes === 0) continue
-      db.prepare('UPDATE reminder_count_increments SET excluded = excluded + 1 WHERE id = ?').run(match.increment_id)
+      db.prepare('UPDATE reminder_baseline_segments SET excluded = excluded + 1 WHERE id = ?').run(match.increment_id)
       if (!match.cleared) {
         const corrected = db.prepare(`UPDATE reminder_state SET count = count - 1,
           first_page = CASE WHEN count = 1 THEN NULL ELSE first_page END
@@ -178,9 +179,9 @@ export class ReminderDatabase {
 
   increasedThreads(roundId: string): string[] {
     return this.readable().prepare<[string], { thread_id: string }>(`SELECT DISTINCT i.thread_id
-      FROM reminder_count_increments i JOIN reminder_rules r USING(thread_id, kind, generation)
+      FROM reminder_baseline_segments i JOIN reminder_rules r USING(thread_id, kind, generation)
       JOIN reminder_state s USING(thread_id, kind)
-      WHERE i.round_id = ? AND r.enabled = 1 AND i.cleared = 0 AND i.added > i.excluded AND s.count > 0
+      WHERE i.round_id = ? AND i.source = 'check' AND r.enabled = 1 AND i.cleared = 0 AND i.added > i.excluded AND s.count > 0
       ORDER BY i.thread_id`).all(roundId).map((row) => row.thread_id)
   }
 
@@ -192,7 +193,17 @@ export class ReminderDatabase {
       if (rule?.enabled !== 1 || rule.generation !== value.generation) return false
       db.prepare('INSERT INTO reminder_state (thread_id, kind) VALUES (?, ?) ON CONFLICT DO NOTHING').run(value.threadId, value.kind)
       const previous = db.prepare<[string, string], StateRow>('SELECT * FROM reminder_state WHERE thread_id = ? AND kind = ?').get(value.threadId, value.kind)!
-      const add = value.add ?? 0
+      let baseline = value.baseline
+      let add = value.add ?? 0
+      let firstPage = value.firstPage
+      if (value.kind !== 'quote' && baseline !== undefined && value.countedFrom !== undefined && value.countedFrom !== null
+        && previous.baseline !== null && previous.baseline > value.countedFrom && baseline >= value.countedFrom) {
+        // A reader's read advanced the baseline after this check loaded it: only growth past the
+        // stored baseline is counted, and an older page 1 never lowers it.
+        add = Math.max(0, baseline - previous.baseline)
+        firstPage = add > 0 ? threadTotalPages(previous.baseline + 1)! : undefined
+        baseline = Math.max(baseline, previous.baseline)
+      }
       db.prepare(`UPDATE reminder_state SET
           baseline = coalesce(@baseline, baseline),
           checked_post_id = coalesce(@checked, checked_post_id),
@@ -204,21 +215,21 @@ export class ReminderDatabase {
           last_error_json = CASE WHEN @issues IS NULL THEN last_error_json ELSE @lastError END,
           checked_at = CASE WHEN @markChecked THEN @at ELSE checked_at END
         WHERE thread_id = @threadId AND kind = @kind`).run({
-        threadId: value.threadId, kind: value.kind, at: value.at, add, firstPage: value.firstPage ?? null,
-        baseline: value.baseline ?? null, checked: value.checkedPostId ?? null, unverified: value.unverified ?? 0,
+        threadId: value.threadId, kind: value.kind, at: value.at, add, firstPage: firstPage ?? null,
+        baseline: baseline ?? null, checked: value.checkedPostId ?? null, unverified: value.unverified ?? 0,
         issues: value.issues === undefined ? null : JSON.stringify([...new Set(value.issues)]),
         lastError: value.lastError ? JSON.stringify(value.lastError) : null, markChecked: value.checked ? 1 : 0
       })
-      if (value.baseline !== undefined && previous.baseline !== null && value.baseline < previous.baseline) {
+      if (baseline !== undefined && previous.baseline !== null && baseline < previous.baseline) {
         // A counter rebase no longer shares the old ordinal space. Keep ordinary reminders, but
         // do not reuse any publication position until the user starts a new rule generation.
         db.prepare('UPDATE reminder_state SET own_positions_trusted = 0 WHERE thread_id = ? AND kind = ?').run(value.threadId, value.kind)
       }
       if (add > 0) {
-        const counted = value.kind !== 'quote' && previous.baseline !== null && value.baseline === previous.baseline + add
-        db.prepare(`INSERT INTO reminder_count_increments
-          (thread_id, kind, generation, round_id, count_from, count_to, added) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-          .run(value.threadId, value.kind, value.generation, value.roundId ?? '', counted ? previous.baseline : null, counted ? value.baseline! : null, add)
+        const counted = value.kind !== 'quote' && previous.baseline !== null && baseline === previous.baseline + add
+        db.prepare(`INSERT INTO reminder_baseline_segments
+          (thread_id, kind, generation, source, round_id, count_from, count_to, added) VALUES (?, ?, ?, 'check', ?, ?, ?, ?)`)
+          .run(value.threadId, value.kind, value.generation, value.roundId ?? '', counted ? previous.baseline : null, counted ? baseline! : null, add)
       }
       const ids = value.firstPageReplyIds
       if (value.kind !== 'quote' && value.baseline !== undefined && Number.isSafeInteger(value.baseline) && ids !== undefined
@@ -234,10 +245,31 @@ export class ReminderDatabase {
     }).immediate()
   }
 
+  /**
+   * A reader's fresh read of `mode` saw `replyCount`: called inside the transaction that saves the
+   * page. An enabled 全串／PO rule with a baseline below it advances to it, recorded as an `open`
+   * segment; nothing is counted. A waiting (unset) baseline is left to the next check, and a smaller
+   * count never lowers a baseline.
+   */
+  absorbDisplayed(threadId: string, mode: ReadingMode, replyCount: number): void {
+    if (!Number.isSafeInteger(replyCount) || replyCount < 0) return
+    const db = this.database()
+    const kind: ReminderKind = mode
+    const current = db.prepare<[string, string], { generation: number; baseline: number }>(`SELECT r.generation, s.baseline
+      FROM reminder_rules r JOIN reminder_state s USING(thread_id, kind)
+      WHERE r.thread_id = ? AND r.kind = ? AND r.enabled = 1 AND s.baseline IS NOT NULL`).get(threadId, kind)
+    if (current === undefined || replyCount <= current.baseline) return
+    db.prepare('UPDATE reminder_state SET baseline = ? WHERE thread_id = ? AND kind = ?').run(replyCount, threadId, kind)
+    db.prepare(`INSERT INTO reminder_baseline_segments
+      (thread_id, kind, generation, source, round_id, count_from, count_to, added) VALUES (?, ?, ?, 'open', '', ?, ?, 0)`)
+      .run(threadId, kind, current.generation, current.baseline, replyCount)
+  }
+
+  /** Every count of the thread becomes 0; its check segments are marked cleared. */
   clearCounts(threadId: string): boolean {
     const db = this.database()
     return db.transaction(() => {
-      db.prepare('UPDATE reminder_count_increments SET cleared = 1 WHERE thread_id = ?').run(threadId)
+      db.prepare("UPDATE reminder_baseline_segments SET cleared = 1 WHERE thread_id = ? AND source = 'check'").run(threadId)
       return db.prepare('UPDATE reminder_state SET count = 0, first_page = NULL, unverified = 0 WHERE thread_id = ? AND (count > 0 OR unverified > 0)')
         .run(threadId).changes > 0
     }).immediate()

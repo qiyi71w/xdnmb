@@ -43,7 +43,8 @@ export function savedStart(state: ThreadReadingState | null, mode: ReadingMode):
 /**
  * 打开原串 (from a quote card or a search result): reads the page the thread resumes at — its saved
  * mode preference and that mode's saved position — so the navigation is committed only once that
- * page was obtained. `current` is checked before the page read; `null` = no longer wanted.
+ * page was obtained. `current` is checked before the page read; `null` = no longer wanted. A lookup
+ * read: the reader opened afterwards does its own display read.
  */
 export async function readResumePage(
   threadId: ThreadId,
@@ -53,7 +54,7 @@ export async function readResumePage(
   const reading = await window.xidao.readingState.get({ threadId }).catch(() => null)
   if (!current()) return null
   const start = savedStart(reading, reading?.mode ?? 'all')
-  return window.xidao.reading.readThreadPage({ operationId, threadId, mode: start.mode, page: startPage(start.position) })
+  return window.xidao.reading.readThreadPage({ operationId, threadId, mode: start.mode, page: startPage(start.position), purpose: 'lookup' })
 }
 
 /**

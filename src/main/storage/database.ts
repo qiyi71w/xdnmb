@@ -3,7 +3,7 @@ import { analyticsRecord, type AnalyticsRecord } from '../../shared/analytics'
 import type { LocalBlock } from '../../shared/blocks'
 import { IMPORTED_COOKIE_COLOR, isCookieColorName, type CookieColor, type CookieColorName } from '../../shared/cookieColors'
 import Database from 'better-sqlite3'
-import type { StorageStatus } from '../../shared/api'
+import type { StorageStatus, ThreadReadPurpose } from '../../shared/api'
 import type {
   BoardDirectory,
   ContentNode,
@@ -493,7 +493,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
     })()
   }
 
-  saveThreadPage(page: ThreadPage, fetchedAt: string): ThreadCoverage {
+  saveThreadPage(page: ThreadPage, fetchedAt: string, purpose?: ThreadReadPurpose): ThreadCoverage {
     const db = this.writable()
     return db.transaction(() => {
       assertReadablePage(page, this.getThreadCoverage(page.threadId, page.mode))
@@ -539,6 +539,8 @@ class SqliteReadingDatabase implements ReadingDatabase {
           WHERE julianday(excluded.fetched_at) >= julianday(thread_reply_counts.fetched_at)
         `).run(page.threadId, page.mode, page.replyCount, fetchedAt)
       }
+      // Only a reader's fresh read moves a reminder baseline, in the same transaction as its page.
+      if (purpose === 'display' && page.replyCount !== null) this.reminders.absorbDisplayed(page.threadId, page.mode, page.replyCount)
       return this.getThreadCoverage(page.threadId, page.mode)
     })()
   }

@@ -182,10 +182,10 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
         ? page.replies.map((reply) => reply.id) : undefined
       if (replyCount === null) value.issues.add('count-invalid')
       else if (baseline !== null && replyCount > baseline) {
-        await write(run, kind, { baseline: replyCount, add: replyCount - baseline, firstPage: pageOf(baseline + 1), firstPageReplyIds })
+        await write(run, kind, { baseline: replyCount, countedFrom: baseline, add: replyCount - baseline, firstPage: pageOf(baseline + 1), firstPageReplyIds })
       } else {
         if (baseline !== null && replyCount < baseline) value.issues.add('count-decreased')
-        await write(run, kind, { baseline: replyCount, firstPageReplyIds })
+        await write(run, kind, { baseline: replyCount, countedFrom: baseline, firstPageReplyIds })
       }
       await finish(run, kind)
     }

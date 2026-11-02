@@ -716,8 +716,9 @@ export function App() {
           }
         },
         locate: (postId) => window.xidao.quotes.locate({ operationId: operationId(), postId }),
+        // Reads the thread's end for the reader that will show the new reply: a display read.
         readThreadEnd: async (threadId) => {
-          await window.xidao.reading.locateThreadEnd({ operationId: operationId(), threadId, mode: 'all' })
+          await window.xidao.reading.locateThreadEnd({ operationId: operationId(), threadId, mode: 'all', purpose: 'display' })
         },
         // Like a located quote: a new step of the tab; back returns to where the send started.
         openLocated: (step, location) => {
