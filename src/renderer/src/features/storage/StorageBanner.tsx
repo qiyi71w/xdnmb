@@ -6,7 +6,7 @@ import { formatRecordTime } from '../../lib/time'
 import { useStayOpen } from '../lifecycle/QuitDialogs'
 import {
   DOWNGRADE_DOCS_URL, RESTORE_ABANDONED_TEXT, restartOutcome, restoreSecretsText, storageBanner, type UpgradeRestart
-} from './storageBanner'
+} from './storageBannerModel'
 import './storage.css'
 
 type Restorable = Extract<RestoreInfo, { restorable: true }>

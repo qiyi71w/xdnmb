@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { DOWNGRADE_DOCS_URL, restartOutcome, restoreSecretsText, storageBanner } from '../../src/renderer/src/features/storage/storageBanner'
+import { DOWNGRADE_DOCS_URL, restartOutcome, restoreSecretsText, storageBanner } from '../../src/renderer/src/features/storage/storageBannerModel'
 
 it('offers the upgrade restarts after a failed pre-upgrade backup and the restore entry for newer data', () => {
   expect(storageBanner(null)).toBeNull()
