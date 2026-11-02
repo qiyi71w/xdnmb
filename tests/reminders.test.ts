@@ -433,7 +433,7 @@ describe('counts, clearing and rule generations', () => {
     Object.assign(thread, { count: 3, po: [1, 3] })
     await h.check()
     expect((await h.row('100')).counts).toEqual({ all: 2, po: 1, quote: 0 })
-    expect((await h.service.clear({ threadId: '100' })).ok).toBe(true)
+    expect((await h.service.clear({ threadId: '100', source: 'manual' })).ok).toBe(true)
     expect(await h.row('100')).toMatchObject({ counts: { all: 0, po: 0, quote: 0 }, firstNew: null, lastIncreasedAt: null })
     expect((await h.overview()).badge).toBe(0)
 
@@ -486,7 +486,7 @@ describe('counts, clearing and rule generations', () => {
     let overview = await h.overview()
     expect(overview.threads.map((row) => row.threadId)).toEqual(['100', '200', '400', '300'])
     expect(overview.badge).toBe(2)
-    await h.service.clear({ threadId: '100' })
+    await h.service.clear({ threadId: '100', source: 'manual' })
     overview = await h.overview()
     expect(overview.threads.map((row) => row.threadId)).toEqual(['200', '400', '100', '300'])
     expect(overview.badge).toBe(1)

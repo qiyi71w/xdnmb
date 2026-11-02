@@ -30,7 +30,7 @@ import type { SubscriptionService } from './subscriptions/service'
 import type { PublicationService } from './publication/service'
 import type { Lifecycle } from './lifecycle/controller'
 import type { UpdateService } from './updates/service'
-import { REMINDERS_CHANGED_CHANNEL } from '../shared/reminders'
+import { REMINDER_CLEAR_SOURCES, REMINDERS_CHANGED_CHANNEL, type ReminderClearSource } from '../shared/reminders'
 import type { ReminderService } from './reminders/service'
 import { applyZoom, currentZoom } from './zoom'
 import type { SearchService } from './search/service'
@@ -230,6 +230,11 @@ function readingMode(value: unknown): ReadingMode {
 function readPurpose(value: unknown): ThreadReadPurpose {
   if (!THREAD_READ_PURPOSES.includes(value as ThreadReadPurpose)) throw new InvalidRequestError()
   return value as ThreadReadPurpose
+}
+
+function clearSource(value: unknown): ReminderClearSource {
+  if (!REMINDER_CLEAR_SOURCES.includes(value as ReminderClearSource)) throw new InvalidRequestError()
+  return value as ReminderClearSource
 }
 
 function subscriptionSource(value: unknown): SubscriptionSource {
@@ -447,7 +452,10 @@ export function registerIpc({
     if (reason !== 'unsubscribe' && reason !== 'sync-delete') throw new InvalidRequestError()
     return reminders.closeForThreads({ threadIds: threadIds(input.threadIds), reason })
   })
-  handle(IpcChannel.reminderClear, async (_event, raw) => reminders.clear({ threadId: forumId(record(raw).threadId) }))
+  handle(IpcChannel.reminderClear, async (_event, raw) => {
+    const input = record(raw)
+    return reminders.clear({ threadId: forumId(input.threadId), source: clearSource(input.source) })
+  })
   handle(IpcChannel.reminderDismissRateLimit, async (_event, raw) => {
     const id = record(raw).id
     if (typeof id !== 'string' || id.length > 128 || id.length === 0) throw new InvalidRequestError()

@@ -222,7 +222,7 @@ it('marks late evidence from a cleared interval without deducting later peers', 
   h.holdConfirmation()
   const id = await h.send('clear before confirmation', false)
   await h.check()
-  await h.reminders.clear({ threadId: '100' })
+  await h.reminders.clear({ threadId: '100', source: 'manual' })
   h.peer()
   await h.check()
   h.releaseConfirmation()

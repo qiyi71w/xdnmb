@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { ReadError } from '../../shared/api'
-import { comparePostIds, type ContentNode, type Post, type PostId, type ReadingMode, type ThreadPage } from '../../shared/forum'
+import { comparePostIds, type ContentNode, type Post, type PostId, type ReadingMode, type ThreadId, type ThreadPage } from '../../shared/forum'
 import { REMINDER_KINDS, type CoverageIssue, type ReminderKind } from '../../shared/reminders'
 import { ForumReadError, ReadCancelledError, type ForumClient, type ForumRequestRunner } from '../forum/contract'
 import type { RequestScheduler } from '../reading/scheduler'
@@ -347,4 +347,30 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     deps.changed()
   }
   return { rateLimited: rateLimit !== null, complete: complete && !input.signal.aborted && runs.every((run) => run.steps.length === 0) }
+}
+
+/**
+ * The PO page 1 read queued by opening a thread with an established PO追更 baseline. Its reply count
+ * advances that baseline exactly as a reader's display read does: an open segment in the page's
+ * save transaction, never initializing a baseline. It shares the background lane (serialized,
+ * spaced) but no round budget or cooldown. Anonymous first; a refusal is read once more with the
+ * browse cookie. `proceed` is asked right before each request goes out; `false` cancels it.
+ * A failure (rate limit and captcha included) propagates; nothing is saved then.
+ */
+export async function readOpenedPoPage(deps: Pick<RoundEngineDeps, 'store' | 'client' | 'scheduler' | 'now'>, threadId: ThreadId,
+  signal: AbortSignal, proceed: () => boolean): Promise<void> {
+  const requestRunner: ForumRequestRunner = (requestSignal, work) => deps.scheduler.run('background', requestSignal, async (started) => {
+    if (started.aborted || !proceed()) throw new ReadCancelledError()
+    return work(started)
+  })
+  const read = (anonymous: boolean) => deps.client.getThreadPage(threadId, 'po', 1, signal, { anonymous, requestRunner })
+  let page: ThreadPage
+  try {
+    page = await read(true)
+  } catch (error) {
+    if (!(error instanceof ForumReadError) || error.error.kind !== 'permission' || (await deps.store.listCredentials()).length === 0) throw error
+    page = await read(false)
+  }
+  assertReadablePage(page, await deps.store.getThreadCoverage(threadId, 'po'))
+  await deps.store.saveThreadPage(page, deps.now(), 'display')
 }

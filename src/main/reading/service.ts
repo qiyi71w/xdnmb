@@ -20,16 +20,32 @@ export interface ReadingService {
   locateQuote(postId: PostId, signal: AbortSignal, hint?: LocateHint | null): Promise<QuoteLocation>
 }
 
+/**
+ * Watches a reader's `display` thread reads (fresh network reads only; a cache fallback saves nothing).
+ * `begin` marks one read starting and returns its end; `saved` reports a page of it stored.
+ */
+export interface DisplayReadObserver {
+  begin(threadId: ThreadId, mode: ReadingMode): () => void
+  saved(threadId: ThreadId, mode: ReadingMode): void
+}
+
 interface ReadingServiceDeps {
   client: ForumClient
   store: ReadingStore
   scheduler: RequestScheduler
   now?: () => Date
+  displayReads?: DisplayReadObserver
 }
 
 type Fetched<T> = { ok: true; value: T; fetchedAt: string } | { ok: false; outcome: { status: 'cancelled' } | { status: 'failed'; error: ReadError } }
 
-export function createReadingService({ client, store, scheduler, now = () => new Date() }: ReadingServiceDeps): ReadingService {
+export function createReadingService({ client, store, scheduler, now = () => new Date(), displayReads }: ReadingServiceDeps): ReadingService {
+  function observed<T>(threadId: ThreadId, mode: ReadingMode, purpose: ThreadReadPurpose, read: () => Promise<T>): Promise<T> {
+    if (purpose !== 'display' || displayReads === undefined) return read()
+    const end = displayReads.begin(threadId, mode)
+    return read().finally(end)
+  }
+
   /**
    * No retries; null lane means the client schedules each HTTP request inside a composite read.
    * `purpose` is that of the thread read whose capped page this may save.
@@ -112,8 +128,9 @@ export function createReadingService({ client, store, scheduler, now = () => new
 
   /** Saves the page and returns coverage; if storage refuses, coverage still reflects this observation. */
   async function persistThreadPage(page: ThreadPage, fetchedAt: string, purpose: ThreadReadPurpose): Promise<{ saved: boolean; result: ThreadPageResult }> {
+    let coverage: ThreadCoverage
     try {
-      return { saved: true, result: { page, coverage: await store.saveThreadPage(page, fetchedAt, purpose) } }
+      coverage = await store.saveThreadPage(page, fetchedAt, purpose)
     } catch {
       const stored = await store.getThreadCoverage(page.threadId, page.mode).catch(() => null)
       if (stored !== null) assertReadablePage(page, stored)
@@ -128,6 +145,8 @@ export function createReadingService({ client, store, scheduler, now = () => new
       const reported = page.replyCount ?? stored?.reportedReplyCount ?? null
       return { saved: false, result: { page, coverage: computeCoverage(page.threadId, page.mode, pages, reported) } }
     }
+    if (purpose === 'display') displayReads?.saved(page.threadId, page.mode)
+    return { saved: true, result: { page, coverage } }
   }
 
   async function loadStoredThreadPage(threadId: ThreadId, mode: ReadingMode, page: number): Promise<Stored<ThreadPageResult> | null> {
@@ -139,14 +158,14 @@ export function createReadingService({ client, store, scheduler, now = () => new
   }
 
   function readThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal, purpose: ThreadReadPurpose): Promise<ReadOutcome<ThreadPageResult>> {
-    return readWithFallback(
+    return observed(threadId, mode, purpose, () => readWithFallback(
       'foreground',
       signal,
       (s) => fetchThreadPage(threadId, mode, page, s),
       (value, fetchedAt) => persistThreadPage(value, fetchedAt, purpose),
       () => loadStoredThreadPage(threadId, mode, page),
       purpose
-    )
+    ))
   }
 
   /** Owner from local records only; a lookup failure counts as no record. */
@@ -298,7 +317,7 @@ export function createReadingService({ client, store, scheduler, now = () => new
       return { status: 'thread-known', threadId, head: reached }
     },
 
-    async locateThreadEnd(threadId, mode, signal, purpose) {
+    locateThreadEnd: (threadId, mode, signal, purpose) => observed(threadId, mode, purpose, async () => {
       const stored = await store.getThreadCoverage(threadId, mode).catch(() => null)
       let coverage = stored ?? computeCoverage(threadId, mode, [], null)
       const probedPages: number[] = []
@@ -380,6 +399,6 @@ export function createReadingService({ client, store, scheduler, now = () => new
 
       if (!start.value.page.endCandidate) return insufficient()
       return located(start.value, 1)
-    }
+    })
   }
 }
