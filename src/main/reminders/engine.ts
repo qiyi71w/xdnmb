@@ -433,15 +433,24 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
  * save transaction, never initializing a baseline. It shares the background lane (serialized,
  * spaced) but no round budget or cooldown. Anonymous first; a refusal is read once more with the
  * browse cookie. `proceed` is asked right before each request goes out; `false` cancels it.
- * A failure (rate limit and captcha included) propagates; nothing is saved then.
+ * Each attempt holds its lane slot until the response is classified, so `limited` (a rate limit or
+ * captcha) runs before the lane admits the next background request. Page 1 never needs the page-100
+ * probe. A failure (rate limit and captcha included) propagates; nothing is saved then.
  */
 export async function readOpenedPoPage(deps: Pick<RoundEngineDeps, 'store' | 'client' | 'scheduler' | 'now'>, threadId: ThreadId,
-  signal: AbortSignal, proceed: () => boolean): Promise<void> {
-  const requestRunner: ForumRequestRunner = (requestSignal, work) => deps.scheduler.run('background', requestSignal, async (started) => {
-    if (started.aborted || !proceed()) throw new ReadCancelledError()
-    return work(started)
+  signal: AbortSignal, proceed: () => boolean, limited: () => void): Promise<void> {
+  const requestRunner: ForumRequestRunner = async (requestSignal, work) => {
+    if (requestSignal.aborted || !proceed()) throw new ReadCancelledError()
+    return work(requestSignal)
+  }
+  const read = (anonymous: boolean) => deps.scheduler.run('background', signal, async (started) => {
+    try {
+      return await deps.client.getThreadPage(threadId, 'po', 1, started, { anonymous, requestRunner })
+    } catch (error) {
+      if (error instanceof ForumReadError && error.error.kind === 'rate-limited') limited()
+      throw error
+    }
   })
-  const read = (anonymous: boolean) => deps.client.getThreadPage(threadId, 'po', 1, signal, { anonymous, requestRunner })
   let page: ThreadPage
   try {
     page = await read(true)

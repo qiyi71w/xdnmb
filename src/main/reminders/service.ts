@@ -274,8 +274,9 @@ export function createReminderService(deps: {
   }
 
   // ---- PO page 1 read after an open ----
-  interface OpenRead { readerSaved: boolean; abort: AbortController }
-  /** At most one queued (not yet sent) read per thread. */
+  /** `opens` counts opens still clearing or qualifying a read not yet started. */
+  interface OpenRead { readerSaved: boolean; abort: AbortController; started: boolean; opens: number }
+  /** At most one registered (qualifying or queued, not yet sent) read per thread. */
   const openReads = new Map<ThreadId, OpenRead>()
   /** Every open read not settled yet, sent or not; quitting aborts them. */
   const openAborts = new Set<AbortController>()
@@ -314,25 +315,55 @@ export function createReminderService(deps: {
     signal.addEventListener('abort', abort, { once: true })
     return promise
   }
+  function dropOpenRead(threadId: ThreadId, read: OpenRead): void {
+    if (openReads.get(threadId) === read) openReads.delete(threadId)
+    openAborts.delete(read.abort)
+  }
   /**
-   * An open of a thread whose PO追更 baseline is established queues one PO page 1 read. Not during a
-   * rate-limit backoff or quit. A thread already queued keeps its one read; the newest open decides
-   * whether it is still needed.
+   * An open registers its thread's PO page 1 read synchronously, before clearing and qualifying
+   * await anything, so a reader PO page saved meanwhile still makes it redundant; a save before the
+   * open does not. A thread already registered keeps its one read; the newest open decides whether
+   * it is still needed. `qualify` starts the read only for an established PO追更 baseline, outside a
+   * rate-limit backoff and quit; `cancel` withdraws an open whose clear failed.
    */
-  async function queueOpenRead(threadId: ThreadId): Promise<void> {
-    const renew = () => {
-      const queued = openReads.get(threadId)
-      if (queued !== undefined) queued.readerSaved = false
-      return queued !== undefined
+  function registerOpen(threadId: ThreadId): { cancel(): void; qualify(): Promise<void> } | null {
+    if (quitting) return null
+    const existing = openReads.get(threadId)
+    const savedBefore = existing?.readerSaved === true
+    const read = existing ?? { readerSaved: false, abort: new AbortController(), started: false, opens: 0 }
+    if (existing === undefined) {
+      openReads.set(threadId, read)
+      openAborts.add(read.abort)
     }
-    if (renew()) return
-    await loaded()
-    const po = (await deps.store.getReminderRules([threadId]))[0]?.rules.po
-    if (po?.baseline !== 'ready' || quitting || backoff.episodeId !== null || renew()) return
-    const read: OpenRead = { readerSaved: false, abort: new AbortController() }
-    openReads.set(threadId, read)
-    openAborts.add(read.abort)
-    void runOpenRead(threadId, read)
+    read.readerSaved = false
+    read.opens++
+    const settle = (send: boolean) => {
+      read.opens--
+      if (read.started) return
+      if (send) {
+        read.started = true
+        void runOpenRead(threadId, read)
+      } else if (read.opens === 0) dropOpenRead(threadId, read)
+    }
+    return {
+      cancel() {
+        // Not an open: a save it would have reset still counts for the earlier open.
+        if (savedBefore) read.readerSaved = true
+        settle(false)
+      },
+      async qualify() {
+        let ready = false
+        try {
+          if (!read.started) {
+            await loaded()
+            ready = (await deps.store.getReminderRules([threadId]))[0]?.rules.po?.baseline === 'ready'
+          }
+        } catch {
+          // A failed rule lookup only skips the read.
+        }
+        settle(ready && !quitting && !read.abort.signal.aborted && backoff.episodeId === null)
+      }
+    }
   }
   async function runOpenRead(threadId: ThreadId, read: OpenRead): Promise<void> {
     const { signal } = read.abort
@@ -355,16 +386,19 @@ export function createReminderService(deps: {
     } catch {
       // Cancelled while waiting.
     } finally {
-      if (openReads.get(threadId) === read) openReads.delete(threadId)
-      openAborts.delete(read.abort)
+      dropOpenRead(threadId, read)
     }
   }
   async function sendOpenRead(threadId: ThreadId, read: OpenRead, proceed: () => boolean): Promise<void> {
     try {
       await readOpenedPoPage({ ...deps, now }, threadId, read.abort.signal, () => {
-        // Leaving the queue: a later open queues a read of its own.
+        // Leaving the queue: a later open registers a read of its own.
         if (openReads.get(threadId) === read) openReads.delete(threadId)
         return proceed()
+      }, () => {
+        // Still inside this read's lane slot, so no check request is in flight: a check accepted
+        // meanwhile sends nothing more and, interrupted, cannot clear the backoff this limit starts.
+        active?.abort.abort()
       })
       // Its saved PO page may have proven a confirmed local reply and corrected the PO count.
       changed()
@@ -435,9 +469,14 @@ export function createReminderService(deps: {
       return { closed }
     })),
     clear: ({ threadId, source }) => storage(async () => {
-      if (await deps.store.clearReminderCounts(threadId)) changed()
-      // The counts are cleared either way; a failed rule lookup only skips the open read.
-      if (source === 'open') await queueOpenRead(threadId).catch(() => undefined)
+      const open = source === 'open' ? registerOpen(threadId) : null
+      try {
+        if (await deps.store.clearReminderCounts(threadId)) changed()
+      } catch (error) {
+        open?.cancel()
+        throw error
+      }
+      await open?.qualify()
       return {}
     }),
     dismissRateLimit: ({ id }) => storage(async () => {

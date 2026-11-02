@@ -75,8 +75,11 @@ async function harness() {
   const address = server.address()
   if (address === null || typeof address === 'string') throw new Error('no server address')
   const origin = `http://127.0.0.1:${address.port}`
+  const transport = createForumTransport({ allowedOrigins: [origin], credentialOrigins: [origin] })
+  /** Requests handed to the transport, including ones aborted before reaching the server. */
+  const attempts: string[] = []
   const client = createForumClient({ baseUrl: origin,
-    transport: createForumTransport({ allowedOrigins: [origin], credentialOrigins: [origin] }),
+    transport: { ...transport, get: (url, signal, options) => { attempts.push(url.pathname); return transport.get(url, signal, options) } },
     browseIdentity: async () => db.listCredentials().length > 0 ? 'browse-secret' : null })
   const timers = { setTimeout: (run: () => void, delay: number) => clock.setTimer(run, delay), clearTimeout: (cancel: () => void) => cancel() }
   const scheduler = createRequestScheduler({ backgroundSpacingMs: 1000, monotonicNow: clock.now,
@@ -96,7 +99,7 @@ async function harness() {
   })
   const requests = () => seen.map((entry) => `${entry.mode}:${entry.id}:${entry.page}${entry.cookie ? '+cookie' : ''}`)
   return {
-    db, clock, seen, remote, notices, service, reading, requests,
+    db, store, clock, seen, attempts, remote, notices, service, reading, requests,
     /** A thread whose PO追更 baseline is established at `po` (and 全串 at `all` when given). */
     thread(threadId: string, value: { all: number; po: number }, rules: { all?: boolean; poReady?: boolean } = {}) {
       counts.set(threadId, { ...value })
@@ -223,6 +226,63 @@ it('drops the queued read when a reader PO page is saved after the open, also wh
   await h.quiet()
   expect(h.requests()).toEqual(['po:100:1'])
   expect(h.poBaseline('100')).toBe(14)
+})
+
+it('counts a reader PO save made while the open is still clearing or qualifying; a failed clear or rule lookup reads nothing', async () => {
+  const h = await harness()
+  const thread = h.thread('100', { all: 0, po: 10 })
+  const signal = new AbortController().signal
+  const store = h.store as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+  for (const method of ['clearReminderCounts', 'getReminderRules']) {
+    thread.po += 2
+    h.seen.length = 0
+    const original = store[method]!
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    store[method] = async (...args) => {
+      const result = await original(...args)
+      entered.resolve()
+      await release.promise
+      return result
+    }
+    const opening = h.open('100')
+    await entered.promise
+    // Opened in PO mode: the reader's display read is saved before the open's storage work ends.
+    expect((await h.reading.readThreadPage('100', 'po', 1, signal, 'display')).status).toBe('fresh')
+    release.resolve()
+    await opening
+    store[method] = original
+    h.clock.advance(1_000)
+    await h.quiet()
+    expect(h.requests()).toEqual(['po:100:1'])
+    expect(h.poBaseline('100')).toBe(thread.po)
+  }
+
+  const fail = (method: string) => {
+    const original = store[method]!
+    store[method] = async () => { throw new Error('storage unavailable') }
+    return () => { store[method] = original }
+  }
+  h.seen.length = 0
+  let restore = fail('clearReminderCounts')
+  expect((await h.service.clear({ threadId: '100', source: 'open' })).ok).toBe(false)
+  restore()
+  restore = fail('getReminderRules')
+  await h.open('100')
+  restore()
+  h.clock.advance(1_000)
+  await h.quiet()
+  expect(h.requests()).toEqual([])
+
+  // A failed clear is no open: the reader save after the earlier open still drops its read.
+  await h.open('100')
+  expect((await h.reading.readThreadPage('100', 'po', 1, signal, 'display')).status).toBe('fresh')
+  restore = fail('clearReminderCounts')
+  expect((await h.service.clear({ threadId: '100', source: 'open' })).ok).toBe(false)
+  restore()
+  h.clock.advance(1_000)
+  await h.quiet()
+  expect(h.requests()).toEqual(['po:100:1'])
 })
 
 it('still reads when the reader only saved 全串 pages, a lookup page, a PO page before the open, or a failed PO read', async () => {
@@ -355,6 +415,54 @@ it.each([
   await h.check()
   expect(h.db.loadReminderBackoff()).toMatchObject({ minutes: 60, notified: true })
   expect(h.notices).toHaveLength(1)
+})
+
+it.each([
+  ['429', { status: 429, body: '{}' }, false],
+  ['captcha', { html: true, body: '<html>captcha</html>' }, false],
+  ['slow 429', { status: 429, body: '{}' }, true],
+  ['slow captcha', { html: true, body: '<html>captcha</html>' }, true]
+])('an open read %s stops the check accepted meanwhile and keeps its backoff until a later manual check succeeds', async (_name, refusal, slow) => {
+  const h = await harness()
+  h.thread('100', { all: 0, po: 10 }).po = 12
+  const release = Promise.withResolvers<void>()
+  h.remote.hold = release.promise
+  let refused = false
+  h.remote.override = () => {
+    if (refused) return undefined
+    refused = true
+    return refusal
+  }
+  await h.open('100')
+  h.clock.advance(1_000)
+  await vi.waitFor(() => expect(h.seen).toHaveLength(1))
+  // Accepted while the open read is in flight: its PO read waits behind it in the lane.
+  expect((await h.service.check()).accepted).toBe(true)
+  await sleep(40)
+  // A response slower than the lane spacing: the lane would admit the check's read immediately.
+  if (slow) h.clock.advance(1_000)
+  h.remote.hold = null
+  release.resolve()
+  await sleep(40)
+  for (let n = 0; n < 5; n++) {
+    h.clock.advance(1_000)
+    await sleep(20)
+  }
+  await h.service.whenIdle()
+  // Not even handed to the transport: the check stopped before the lane admitted its read.
+  expect(h.attempts).toEqual(['/api/po'])
+  expect(h.requests()).toEqual(['po:100:1'])
+  expect(h.db.loadReminderBackoff()).toMatchObject({ minutes: 30, notified: true, episodeId: expect.any(String) })
+  expect((await h.service.overview())).toMatchObject({ ok: true, overview: { checker: { running: false, rateLimit: { dismissed: false } } } })
+  expect(h.notices).toHaveLength(1)
+  expect(h.poBaseline('100')).toBe(10)
+
+  // An explicit later check still runs; its success ends the episode.
+  await h.check()
+  expect(h.requests()).toEqual(['po:100:1', 'po:100:1'])
+  expect(h.db.loadReminderBackoff().episodeId).toBeNull()
+  expect((await h.service.overview())).toMatchObject({ ok: true, overview: { checker: { rateLimit: null } } })
+  expect((await h.row('100')).counts.po).toBe(2)
 })
 
 it('cancels queued and in-flight open reads on quit', async () => {
