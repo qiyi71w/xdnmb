@@ -1091,6 +1091,8 @@ describe('schema v25: local replies are attributed by reply counts, not page 1 o
       { publication_id: 44, generation: 3, before_count: null, proof_count: null, status: 'absorbed' }
     ])
     expect(rows(path, "SELECT name FROM sqlite_master WHERE name = 'reminder_reply_positions'")).toEqual([])
+    // Each existing 全串／PO baseline is the observation a later send starts from.
+    expect(rows(path, 'SELECT * FROM reminder_count_observations')).toEqual([{ thread_id: '900', mode: 'all', max_count: 11 }])
     // A page now showing the pending reply inside the counted growth does not deduct a guess.
     db.saveThreadPage(holding('9041', 11), later, 'lookup')
     expect(db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all).toBe(1)

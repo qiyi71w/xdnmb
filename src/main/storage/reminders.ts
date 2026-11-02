@@ -152,28 +152,27 @@ export class ReminderDatabase {
   /**
    * Called in the transaction that persists a reply's send intent. For each enabled 全串 rule, and
    * the PO rule when the sending 饼干 ID is known and equals the head's public one, the reply gets
-   * the largest reply count already committed for that mode (its baseline or saved pages): a count
-   * the reply cannot be within. Without one, or when the saved count is below the baseline (the
-   * count fell), the reply is unprovable in that mode.
+   * the largest reply count committed for that mode since the count last fell (saved pages and the
+   * baseline they set): a count the reply cannot be within. Without one it is unprovable there.
    */
   recordIntent(publicationId: number, threadId: string): void {
     const db = this.database()
     const po = db.prepare(`SELECT 1 FROM publication_attempts p JOIN posts h ON h.id = ?
       WHERE p.id = ? AND p.cookie_id IS NOT NULL AND p.cookie_id = h.user_hash`).get(threadId, publicationId) !== undefined
-    const modes = db.prepare<[string], { kind: 'all' | 'po'; generation: number; baseline: number | null; saved: number | null; segment: number }>(`
-      SELECT r.kind, r.generation, s.baseline, c.reply_count AS saved,
+    // Every baseline comes from a saved page, so it is part of the observation; it stands in alone
+    // only where no page was saved since the observation began. One above the observation predates
+    // a fall and is not used.
+    const modes = db.prepare<[string], { kind: 'all' | 'po'; generation: number; before: number | null; segment: number }>(`
+      SELECT r.kind, r.generation, coalesce(o.max_count, s.baseline) AS before,
         (SELECT coalesce(max(g.id), 0) FROM reminder_baseline_segments g WHERE g.thread_id = r.thread_id AND g.kind = r.kind) AS segment
       FROM reminder_rules r LEFT JOIN reminder_state s USING(thread_id, kind)
-      LEFT JOIN thread_reply_counts c ON c.thread_id = r.thread_id AND c.mode = r.kind
+      LEFT JOIN reminder_count_observations o ON o.thread_id = r.thread_id AND o.mode = r.kind
       WHERE r.thread_id = ? AND r.enabled = 1 AND r.kind IN ('all', 'po')`).all(threadId)
     const insert = db.prepare(`INSERT INTO reminder_local_replies
       (publication_id, thread_id, kind, generation, before_count, after_segment, status) VALUES (?, ?, ?, ?, ?, ?, ?)`)
     for (const mode of modes) {
       if (mode.kind === 'po' && !po) continue
-      const observed = [mode.baseline, mode.saved].filter((count): count is number => count !== null)
-      const before = observed.length === 0 || (mode.saved !== null && mode.baseline !== null && mode.saved < mode.baseline)
-        ? null : Math.max(...observed)
-      insert.run(publicationId, threadId, mode.kind, mode.generation, before, mode.segment, before === null ? 'unprovable' : 'pending')
+      insert.run(publicationId, threadId, mode.kind, mode.generation, mode.before, mode.segment, mode.before === null ? 'unprovable' : 'pending')
     }
   }
 
@@ -198,8 +197,9 @@ export class ReminderDatabase {
   }
 
   /**
-   * Called in the transaction that saves a fresh page. A count below the baseline makes every
-   * pending reply of that mode unprovable (earlier counts no longer share its ordering); a page
+   * Called in the transaction that saves a fresh page. Its count joins the mode's observation in
+   * commit order: a count below the largest one since the last fall is a new fall, after which
+   * every pending reply of that mode is unprovable and earlier observations are dropped. A page
    * holding a confirmed pending reply proves it with its count; a reader's read advances the
    * baseline; then replies the baseline now covers are settled.
    */
@@ -207,9 +207,15 @@ export class ReminderDatabase {
     const count = page.replyCount
     if (count === null || !Number.isSafeInteger(count) || count < 0) return
     const db = this.database()
-    const baseline = db.prepare<[string, string], { baseline: number }>(`SELECT s.baseline FROM reminder_rules r JOIN reminder_state s USING(thread_id, kind)
-      WHERE r.thread_id = ? AND r.kind = ? AND r.enabled = 1 AND s.baseline IS NOT NULL`).get(page.threadId, page.mode)?.baseline ?? null
-    if (baseline !== null && count < baseline) this.countDecreased(page.threadId, page.mode)
+    const observed = db.prepare<[string, string], { max_count: number }>('SELECT max_count FROM reminder_count_observations WHERE thread_id = ? AND mode = ?')
+      .get(page.threadId, page.mode)?.max_count ?? null
+    if (observed !== null && count < observed) {
+      db.prepare("UPDATE reminder_local_replies SET status = 'unprovable' WHERE thread_id = ? AND kind = ? AND status = 'pending'").run(page.threadId, page.mode)
+    }
+    if (observed === null || count !== observed) {
+      db.prepare(`INSERT INTO reminder_count_observations (thread_id, mode, max_count) VALUES (?, ?, ?)
+        ON CONFLICT(thread_id, mode) DO UPDATE SET max_count = excluded.max_count`).run(page.threadId, page.mode, count)
+    }
     if (page.replies.length > 0) {
       db.prepare(`UPDATE reminder_local_replies SET proof_count = min(coalesce(proof_count, @count), @count)
         WHERE thread_id = @threadId AND kind = @mode AND status = 'pending' AND publication_id IN (
@@ -219,10 +225,6 @@ export class ReminderDatabase {
     }
     if (display) this.absorbDisplayed(page.threadId, page.mode, count)
     this.settle(page.threadId)
-  }
-
-  private countDecreased(threadId: string, kind: ReminderKind): void {
-    this.database().prepare("UPDATE reminder_local_replies SET status = 'unprovable' WHERE thread_id = ? AND kind = ? AND status = 'pending'").run(threadId, kind)
   }
 
   /**
@@ -313,7 +315,6 @@ export class ReminderDatabase {
         issues: value.issues === undefined ? null : JSON.stringify([...new Set(value.issues)]),
         lastError: value.lastError ? JSON.stringify(value.lastError) : null, markChecked: value.checked ? 1 : 0
       })
-      if (baseline !== undefined && previous.baseline !== null && baseline < previous.baseline) this.countDecreased(value.threadId, value.kind)
       if (add > 0) {
         const counted = value.kind !== 'quote' && previous.baseline !== null && baseline === previous.baseline + add
         db.prepare(`INSERT INTO reminder_baseline_segments

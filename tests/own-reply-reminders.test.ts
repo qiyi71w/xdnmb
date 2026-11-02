@@ -169,6 +169,10 @@ async function harness(options: { own?: 'Po' | 'Other'; initialCount?: number; a
     counts: async () => (await row()).counts,
     peer(by = 'Peer') { const value = post(String(++next), by, 'peer reply'); replies.push(value); return value.id },
     setDrop(value: number) { drop = value },
+    /** The forum loses its `n` oldest replies: every later count is `n` lower. */
+    remove(n: number) { replies.splice(0, n) },
+    /** Moves the shared clock: later reads carry fetch times out of their commit order. */
+    shiftClock(ms: number) { wall += ms },
     holdConfirmation() { holdLookup = true },
     releaseConfirmation() { holdLookup = false; lookupRelease?.() },
     holdPost() { holdPost = true },
@@ -354,6 +358,76 @@ it('a falling reply count voids pending evidence, including a page saved before 
   await h.check()
   // 全串: 1 before the fall, then 29→31 not taken from; the PO count never fell and drops my reply.
   expect(await h.counts()).toEqual({ all: 3, po: 0, quote: 0 })
+})
+
+it('a fall still above the baseline voids pending evidence; an older, larger page cannot prove across it', async () => {
+  const h = await harness({ initialCount: 30 })
+  h.peer(); h.peer(); h.peer()
+  await h.read('all', 2, 'lookup')
+  h.holdConfirmation()
+  const id = await h.send('before the fall', 'lookup-held')
+  // Page 2 (34 replies) holds the reply while it is unconfirmed; then page 1 reads 32, above the baseline 30.
+  await h.read('all', 2, 'lookup')
+  h.remove(2)
+  await h.read('all', 1, 'lookup')
+  h.releaseConfirmation()
+  await h.confirmed(id)
+  h.peer(); h.peer()
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 4, po: 0, quote: 0 })
+  await h.restart()
+  await h.read('all', 2, 'lookup')
+  expect(await h.counts()).toEqual({ all: 4, po: 0, quote: 0 })
+})
+
+it('a lower count committed later is a fall even when it was fetched earlier', async () => {
+  const h = await harness({ initialCount: 30 })
+  h.holdConfirmation()
+  const id = await h.send('fetched out of order', 'lookup-held')
+  await h.read('all', 2, 'lookup')
+  h.remove(1)
+  h.shiftClock(-3_600_000)
+  await h.read('all', 1, 'lookup')
+  h.shiftClock(7_200_000)
+  h.releaseConfirmation()
+  await h.confirmed(id)
+  h.peer()
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
+})
+
+it('the pre-send count follows commit order: a later-fetched larger page committed before a fall is not used', async () => {
+  const h = await harness({ initialCount: 30 })
+  h.peer(); h.peer(); h.peer(); h.peer()
+  h.shiftClock(3_600_000)
+  await h.read('all', 2, 'lookup')
+  // Fetched earlier, committed later: 32 is a fall from 34, and the observation the next send reads.
+  h.shiftClock(-7_200_000)
+  h.remove(2)
+  await h.read('all', 1, 'lookup')
+  h.shiftClock(7_200_000)
+  await h.send()
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 3, po: 0, quote: 0 })
+  // (32, 33] is counted growth alone: the reply leaves the count.
+  await h.read('all', 2, 'lookup')
+  expect(await h.counts()).toEqual({ all: 2, po: 0, quote: 0 })
+})
+
+it('after a fall a new send is provable again, also across reopening the database', async () => {
+  const h = await harness({ initialCount: 30 })
+  h.peer(); h.peer(); h.peer()
+  await h.read('all', 2, 'lookup')
+  h.remove(2)
+  await h.read('all', 1, 'lookup')
+  await h.restart()
+  await h.send()
+  await h.check()
+  // 30→32: the peer seen in the lookups and my reply.
+  expect(await h.counts()).toEqual({ all: 2, po: 0, quote: 0 })
+  await h.restart()
+  await h.read('all', 2, 'lookup')
+  expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
 })
 
 it.each(['marker', 'count', 'segment'] as const)('a failed %s write rolls back the whole deduction and is applied once after reopening', async (failure) => {
