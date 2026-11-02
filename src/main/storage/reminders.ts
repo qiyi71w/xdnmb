@@ -6,7 +6,9 @@ import {
   type ReminderThreadRow, type ThreadReminders
 } from '../../shared/reminders'
 import { threadTotalPages } from '../../shared/threadPages'
-import type { QuoteSource, ReminderBackoff, ReminderKindState, ReminderStoredOverview, ReminderUpdate, RuleSnapshot } from '../reminders/contract'
+import type {
+  LocalReplyKey, QuoteSource, ReminderBackoff, ReminderFollowUp, ReminderKindState, ReminderStoredOverview, ReminderUpdate, RuleSnapshot
+} from '../reminders/contract'
 
 interface RuleRow {
   thread_id: string; kind: ReminderKind; enabled: number; generation: number; enabled_at: string
@@ -270,6 +272,49 @@ export class ReminderDatabase {
     if (corrected.changes !== 1) return 'unprovable'
     db.prepare('UPDATE reminder_baseline_segments SET excluded = excluded + 1 WHERE id = ?').run(target.id)
     return 'excluded'
+  }
+
+  /**
+   * Confirmed pending replies without proof whose follow-up read was not sent, in enabled rules
+   * with a baseline. A reply qualifies only while the baseline growth since its pre-send count, if
+   * any, is entirely uncleared check growth: then the check counting up to a page that holds it
+   * settles it with a deduction. Open absorption, cleared or uncounted growth already in
+   * the interval would make it unprovable whatever the page shows, so no page is read for it.
+   */
+  followUps(): ReminderFollowUp[] {
+    const db = this.readable()
+    const rows = db.prepare<[], { publication_id: number; thread_id: string; kind: 'all' | 'po'; generation: number
+      before_count: number; after_segment: number; post_id: string; baseline: number }>(`
+      SELECT l.publication_id, l.thread_id, l.kind, l.generation, l.before_count, l.after_segment, p.post_id, s.baseline
+      FROM reminder_local_replies l
+      JOIN publication_attempts p ON p.id = l.publication_id AND p.state = 'confirmed'
+      JOIN reminder_rules r ON r.thread_id = l.thread_id AND r.kind = l.kind AND r.generation = l.generation AND r.enabled = 1
+      JOIN reminder_state s ON s.thread_id = l.thread_id AND s.kind = l.kind
+      WHERE l.status = 'pending' AND l.proof_count IS NULL AND l.follow_up_sent = 0 AND s.baseline IS NOT NULL
+      ORDER BY l.thread_id, l.kind, l.before_count, l.publication_id`).all()
+    const segments = db.prepare<[string, string, number, number], SegmentRow>(`SELECT id, source, count_from, count_to, added, excluded, cleared
+      FROM reminder_baseline_segments WHERE thread_id = ? AND kind = ? AND generation = ? AND id > ? ORDER BY id`)
+    return rows.filter((row) => {
+      const after = segments.all(row.thread_id, row.kind, row.generation, row.after_segment)
+      if (after.some((segment) => segment.count_from === null || segment.count_to === null)) return false
+      const inside = after.filter((segment) => segment.count_to! > row.before_count && segment.count_from! < row.baseline)
+      if (inside.some((segment) => segment.source !== 'check' || segment.cleared !== 0)) return false
+      return covered(inside, row.before_count, row.baseline) >= row.baseline - row.before_count
+    }).map((row) => ({ publicationId: row.publication_id, kind: row.kind, generation: row.generation, threadId: row.thread_id,
+      postId: row.post_id, beforeCount: row.before_count }))
+  }
+
+  sendFollowUps(keys: LocalReplyKey[]): void {
+    const db = this.database()
+    const mark = db.prepare('UPDATE reminder_local_replies SET follow_up_sent = 1 WHERE publication_id = ? AND kind = ? AND generation = ?')
+    db.transaction(() => { for (const key of keys) mark.run(key.publicationId, key.kind, key.generation) }).immediate()
+  }
+
+  missFollowUps(keys: LocalReplyKey[]): void {
+    const db = this.database()
+    const mark = db.prepare(`UPDATE reminder_local_replies SET status = 'unprovable'
+      WHERE publication_id = ? AND kind = ? AND generation = ? AND status = 'pending' AND proof_count IS NULL`)
+    db.transaction(() => { for (const key of keys) mark.run(key.publicationId, key.kind, key.generation) }).immediate()
   }
 
   increasedThreads(roundId: string): string[] {

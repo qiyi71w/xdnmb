@@ -1160,3 +1160,60 @@ describe('schema v25: local replies are attributed by reply counts, not page 1 o
     expect(readFileSync(path)).toEqual(original)
   })
 })
+
+describe('schema v26: local replies keep whether their follow-up page was read', () => {
+  /** A v25 database with a confirmed pending local reply and a settled one. */
+  function v25(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 25)).close()
+    const raw = new Database(path)
+    try {
+      raw.prepare("INSERT INTO reminder_rules VALUES ('900', 'all', 1, 2, ?, NULL, ?)").run(at, at)
+      raw.prepare("INSERT INTO reminder_state (thread_id, kind, baseline, count, issues_json) VALUES ('900', 'all', 40, 1, '[]')").run()
+      raw.prepare(`INSERT INTO reminder_baseline_segments (id, thread_id, kind, generation, source, round_id, count_from, count_to, added)
+        VALUES (1, '900', 'all', 2, 'check', 'round-a', 39, 40, 1)`).run()
+      raw.prepare("INSERT INTO credentials (id, name, source, imported_at, ciphertext, cookie_id) VALUES (51, 'v25', 'raw', ?, ?, 'Po')").run(at, Buffer.from('v25'))
+      for (const id of [51, 52]) {
+        raw.prepare(`INSERT INTO publication_attempts (id, request_id, editor_id, payload_json, credential_id, forum_id, state, created_at, updated_at, post_id, thread_id, cookie_id)
+          VALUES (?, ?, 'editor', ?, 51, '4', 'confirmed', ?, ?, ?, '900', 'Po')`).run(id, `v25-${id}`, JSON.stringify({ target: { kind: 'reply', threadId: '900' } }), at, at, `90${id}`)
+      }
+      raw.prepare(`INSERT INTO reminder_local_replies (publication_id, thread_id, kind, generation, before_count, after_segment, proof_count, status)
+        VALUES (51, '900', 'all', 2, 39, 0, NULL, 'pending'), (52, '900', 'all', 2, 30, 0, 31, 'excluded')`).run()
+    } finally { raw.close() }
+    return path
+  }
+  const rows = (path: string, sql: string) => {
+    const raw = new Database(path, { readonly: true })
+    try { return raw.prepare(sql).all() } finally { raw.close() }
+  }
+  const replies = 'SELECT publication_id, thread_id, kind, generation, before_count, after_segment, proof_count, status FROM reminder_local_replies ORDER BY 1'
+
+  it('keeps every local reply as it was; none has had its follow-up page yet', () => {
+    const path = v25()
+    const before = rows(path, replies)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(rows(path, replies)).toEqual(before)
+    expect(rows(path, 'SELECT publication_id, follow_up_sent FROM reminder_local_replies ORDER BY 1')).toEqual([
+      { publication_id: 51, follow_up_sent: 0 }, { publication_id: 52, follow_up_sent: 0 }
+    ])
+    // The pending reply can still have its page: the growth since 39 is uncleared check growth.
+    expect(db.reminderFollowUps()).toEqual([{ publicationId: 51, kind: 'all', generation: 2, threadId: '900', postId: '9051', beforeCount: 39 }])
+  })
+
+  it('leaves the v25 file byte for byte when the upgrade fails, then upgrades', () => {
+    const path = v25()
+    const original = readFileSync(path)
+    const failed = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 25), {
+      version: 26, up(connection) {
+        MIGRATIONS.find((migration) => migration.version === 26)!.up(connection)
+        throw new Error('injected failure after adding the follow-up column')
+      }
+    }])
+    connections.push(failed)
+    expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failed.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+  })
+})

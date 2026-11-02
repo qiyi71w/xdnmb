@@ -6,7 +6,7 @@ import { ForumReadError, ReadCancelledError, type ForumClient, type ForumRequest
 import type { RequestScheduler } from '../reading/scheduler'
 import type { AppStore } from '../storage/contract'
 import { assertReadablePage } from '../storage/coverage'
-import type { QuoteSource, ReminderKindState, ReminderUpdate, RuleSnapshot } from './contract'
+import type { LocalReplyKey, QuoteSource, ReminderFollowUp, ReminderKindState, ReminderUpdate, RuleSnapshot } from './contract'
 
 /** Replies per thread page: the forum splits `ReplyCount` into pages of 19. */
 const PAGE_SIZE = 19
@@ -50,6 +50,13 @@ interface QuoteRun {
   sources: Map<PostId, QuoteSource> | null
   refs: PostId[]
 }
+/** The one extra page a check reads for a mode: local replies whose pre-send count it follows. */
+interface FollowUpRun {
+  page: number
+  replies: ReminderFollowUp[]
+  /** Refused without a cookie; read again with the browse cookie. */
+  withCookie: boolean
+}
 type Step = 'all' | 'po' | 'quote'
 interface ThreadRun {
   threadId: string
@@ -61,6 +68,7 @@ interface ThreadRun {
   first: Partial<Record<ReadingMode, ThreadPage>>
   /** Modes whose reply-count read was refused without a cookie; read again with the browse cookie. */
   withCookie: Set<ReadingMode>
+  followUps: Partial<Record<ReadingMode, FollowUpRun>>
   quote: QuoteRun | null
 }
 
@@ -76,7 +84,8 @@ export interface RoundEngineDeps {
 
 /**
  * One check of every enabled kind (ADR 0001): 全串 and PO compare page 1's reply count of their mode
- * with the baseline; 引用 reads only the pages after its checked position. A batch holds at most five
+ * with the baseline, plus at most one follow-up page per local reply and mode to find it (ADR 0002);
+ * 引用 reads only the pages after its checked position. A batch holds at most five
  * network reads of one thread, then the next thread follows; a thread resumes in later batches.
  * A rate limit or captcha stops the whole round at once. Threads whose counts grew are added to
  * `increased`.
@@ -92,6 +101,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   const states = new Map((await store.reminderStates()).map((state) => [`${state.threadId}:${state.kind}`, state]))
   const cookieIds = new Set(await store.reminderCookieIds())
   const hasCookie = (await store.listCredentials()).length > 0
+  const followUps = await store.reminderFollowUps()
   const runs: ThreadRun[] = []
   let remaining = ROUND_READS
   let complete = true
@@ -104,7 +114,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     if (kinds.all || kinds.quote) steps.push('all')
     if (kinds.po) steps.push('po')
     if (kinds.quote) steps.push('quote')
-    runs.push({ threadId, attempted: false, kinds, steps, first: {}, withCookie: new Set(), quote: null })
+    runs.push({ threadId, attempted: false, kinds, steps, first: {}, withCookie: new Set(), followUps: {}, quote: null })
   }
 
   async function write(run: ThreadRun, kind: ReminderKind, update: Omit<ReminderUpdate, 'threadId' | 'kind' | 'generation' | 'at'>): Promise<void> {
@@ -137,41 +147,107 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     run.steps = run.steps.filter((item) => item !== step)
   }
 
-  /** Each transport request consumes one slot, including a separately scheduled page-100 probe. */
-  function requestRunner(run: ThreadRun, budget: { remaining: number }): ForumRequestRunner {
+  /**
+   * Each transport request consumes one slot, including a separately scheduled page-100 probe.
+   * `sending` runs once the lane admits the request, right before it goes out.
+   */
+  function requestRunner(run: ThreadRun, budget: { remaining: number }, sending?: () => Promise<void>): ForumRequestRunner {
     return (signal, work) => deps.scheduler.run('background', signal, async (requestSignal) => {
       if (requestSignal.aborted) throw new ReadCancelledError()
+      await sending?.()
       run.attempted = true
       budget.remaining--
       remaining--
       return work(requestSignal)
     })
   }
-  async function readPage(budget: { remaining: number }, run: ThreadRun, mode: ReadingMode, number: number, anonymous: boolean): Promise<ThreadPage | null> {
+  async function readPage(budget: { remaining: number }, run: ThreadRun, mode: ReadingMode, number: number, anonymous: boolean,
+    sending?: () => Promise<void>): Promise<ThreadPage | null> {
     if (input.signal.aborted) throw new ReadCancelledError()
     // Reserve room for a possible probe without charging for an HTTP request that never happens.
     const reserve = number > 100 ? 2 : 1
     if (Math.min(budget.remaining, remaining) < reserve) return null
-    const value = await deps.client.getThreadPage(run.threadId, mode, number, input.signal, { anonymous, requestRunner: requestRunner(run, budget) })
+    const value = await deps.client.getThreadPage(run.threadId, mode, number, input.signal, { anonymous, requestRunner: requestRunner(run, budget, sending) })
     assertReadablePage(value, await store.getThreadCoverage(value.threadId, value.mode))
     await store.saveThreadPage(value, now())
     return value
   }
+  /** Reply counts need no identity; a refusal is read once more with the browse cookie. */
+  function refusedAnonymous(error: unknown, retried: boolean): boolean {
+    return error instanceof ForumReadError && error.error.kind === 'permission' && hasCookie && !retried
+  }
+  const key = (reply: ReminderFollowUp): LocalReplyKey => ({ publicationId: reply.publicationId, kind: reply.kind, generation: reply.generation })
+  const holds = (page: ThreadPage, reply: ReminderFollowUp) => page.replies.some((item) => item.id === reply.postId)
 
-  /** Page 1 of `mode`: its reply count against the 全串 or PO baseline; 全部 also sets up the quote pages. */
+  /**
+   * After page 1 of `mode`: local replies of the kind that page 1's count has passed get one page,
+   * the one right after their pre-send count. Where that is page 1, page 1 decides at no cost; the
+   * rest wait for the first such page, shared by every reply on it. Replies not reached stay for a
+   * later check.
+   */
+  async function planFollowUp(run: ThreadRun, mode: ReadingMode, first: ThreadPage): Promise<void> {
+    const value = run.kinds[mode]
+    const count = first.replyCount
+    if (!value || count === null) return
+    const replies = followUps.filter((reply) => reply.threadId === run.threadId && reply.kind === mode
+      && reply.generation === value.rule.generation && reply.beforeCount < count)
+    const missed = replies.filter((reply) => pageOf(reply.beforeCount + 1) === 1 && !holds(first, reply))
+    if (missed.length > 0) await store.missReminderFollowUps(missed.map(key))
+    const later = replies.filter((reply) => pageOf(reply.beforeCount + 1) > 1)
+    if (later.length === 0) return
+    const page = pageOf(later[0]!.beforeCount + 1)
+    run.followUps[mode] = { page, replies: later.filter((reply) => pageOf(reply.beforeCount + 1) === page), withCookie: false }
+  }
+
+  /**
+   * Page 1 of `mode`, and any follow-up page: the reply count against the 全串 or PO baseline;
+   * 全部 also sets up the quote pages. A follow-up page holding a reply proves it and its count is
+   * this check's count, so the counted growth covers the reply's whole interval. A page without
+   * them leaves them unprovable; a failed one counts page 1. Its chance is used once the request
+   * goes out; one not sent (budget, abort) is tried by a later check.
+   */
   async function countStep(run: ThreadRun, mode: ReadingMode, budget: { remaining: number }): Promise<boolean> {
-    let page: ThreadPage | null
-    try {
-      // Reply counts need no identity; a refusal is read once more with the browse cookie.
-      page = await readPage(budget, run, mode, 1, !run.withCookie.has(mode))
-    } catch (error) {
-      if (!(error instanceof ForumReadError) || error.error.kind !== 'permission' || !hasCookie || run.withCookie.has(mode)) throw error
-      run.withCookie.add(mode)
-      return true
+    let first = run.first[mode]
+    if (first === undefined) {
+      let page: ThreadPage | null
+      try {
+        page = await readPage(budget, run, mode, 1, !run.withCookie.has(mode))
+      } catch (error) {
+        if (!refusedAnonymous(error, run.withCookie.has(mode))) throw error
+        run.withCookie.add(mode)
+        return true
+      }
+      if (page === null) return false
+      first = page
+      run.first[mode] = page
+      await planFollowUp(run, mode, page)
     }
-    if (page === null) return false
-    run.first[mode] = page
-    const replyCount = page.replyCount
+    let counted = first
+    let stop: ForumReadError | null = null
+    const plan = run.followUps[mode]
+    if (plan !== undefined) {
+      let page: ThreadPage | null = null
+      try {
+        page = await readPage(budget, run, mode, plan.page, !plan.withCookie, () => store.sendReminderFollowUps(plan.replies.map(key)))
+        if (page === null) return false
+      } catch (error) {
+        if (refusedAnonymous(error, plan.withCookie)) {
+          plan.withCookie = true
+          return true
+        }
+        if (!(error instanceof ForumReadError)) throw error
+        // A rate limit or captcha still stops the round once page 1 is counted.
+        if (error.error.kind === 'rate-limited') stop = error
+      }
+      delete run.followUps[mode]
+      const found = page
+      if (found !== null) {
+        const missed = plan.replies.filter((reply) => !holds(found, reply))
+        if (missed.length > 0) await store.missReminderFollowUps(missed.map(key))
+        if (missed.length < plan.replies.length && found.replyCount !== null) counted = found
+      }
+    }
+    const replyCount = counted.replyCount
     const kind: ReminderKind = mode === 'all' ? 'all' : 'po'
     const value = run.kinds[kind]
     if (value) {
@@ -186,7 +262,8 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       await finish(run, kind)
     }
     drop(run, mode)
-    if (mode === 'all' && run.kinds.quote) await startQuote(run, page)
+    if (mode === 'all' && run.kinds.quote) await startQuote(run, first)
+    if (stop !== null) throw stop
     return true
   }
 
@@ -296,9 +373,14 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     return last ? stop() : true
   }
 
-  /** A read of the current step failed: its kinds keep their counts and rules, and get the issue. */
+  /**
+   * A read of the current step failed: its kinds keep their counts and rules, and get the issue.
+   * A failed follow-up read has already counted page 1 and ended its step; a rate limit from it
+   * stops the step after it, if any.
+   */
   async function failStep(run: ThreadRun, error: ReadError): Promise<void> {
-    const step = run.steps[0]!
+    const step = run.steps[0]
+    if (step === undefined) return
     const affected: ReminderKind[] = step === 'po' ? ['po'] : step === 'all' ? ['all', 'quote'] : ['quote']
     for (const kind of affected) await interrupt(run, kind, error)
     run.quote = null

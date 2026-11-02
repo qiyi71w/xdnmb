@@ -827,6 +827,15 @@ export const MIGRATIONS: readonly Migration[] = [
         DROP TABLE reminder_reply_positions;
         ALTER TABLE reminder_state DROP COLUMN own_positions_trusted;`)
     }
+  },
+  {
+    // A reminder check may read one extra page per local reply and mode to find it: the page right
+    // after its pre-send count. Whether that read was already sent is kept per reply, mode and
+    // generation, so a reply never gets a second one. Existing replies have not had it.
+    version: 26,
+    up(db) {
+      db.exec('ALTER TABLE reminder_local_replies ADD COLUMN follow_up_sent INTEGER NOT NULL DEFAULT 0 CHECK (follow_up_sent IN (0, 1))')
+    }
   }
 ]
 

@@ -57,6 +57,24 @@ export interface QuoteSource {
   cookieId: string | null
 }
 
+/** One local reply in one 全串／PO rule generation. */
+export interface LocalReplyKey {
+  publicationId: number
+  kind: 'all' | 'po'
+  generation: number
+}
+
+/**
+ * A confirmed local reply a check may still read one page for: pending, with a pre-send count and
+ * no proof yet, its follow-up read not sent, and the growth since its pre-send count so far only
+ * uncleared check growth, so that finding it can still lead to a deduction.
+ */
+export interface ReminderFollowUp extends LocalReplyKey {
+  threadId: ThreadId
+  postId: PostId
+  beforeCount: number
+}
+
 export interface ReminderBackoff {
   minutes: number
   episodeId: string | null
@@ -79,6 +97,12 @@ export interface ReminderStore {
   reminderQuoteSources(postIds: PostId[]): Promise<QuoteSource[]>
   /** `false` when the rule was disabled or re-enabled since the snapshot: nothing was written. */
   updateReminderState(update: ReminderUpdate): Promise<boolean>
+  /** Local replies a check may read one more page for. */
+  reminderFollowUps(): Promise<ReminderFollowUp[]>
+  /** Their follow-up read is going out now: no later check reads one for them. */
+  sendReminderFollowUps(keys: LocalReplyKey[]): Promise<void>
+  /** Their follow-up page did not hold them: still pending without proof, they become unprovable. */
+  missReminderFollowUps(keys: LocalReplyKey[]): Promise<void>
   /** Threads with an uncleared, unexcluded increment from this check, in current generations. */
   reminderIncreasedThreads(roundId: string): Promise<ThreadId[]>
   /** Every count of the thread becomes 0; `false` when there was nothing to clear. */

@@ -7,6 +7,7 @@ import { createForumClient } from '../src/main/forum/client'
 import { createForumTransport } from '../src/main/forum/transport'
 import { runReminderRound } from '../src/main/reminders/engine'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
+import { EMPTY_FIELDS } from '../src/shared/drafts'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { asStore } from './helpers/store'
 
@@ -31,7 +32,7 @@ function post(id: string, content = '', userHash = 'Someone') {
 async function harness() {
   const folder = mkdtempSync(join(tmpdir(), 'xidao-reminder-budget-'))
   const db = openReadingDatabase(join(folder, 'app.sqlite'))
-  db.insertCredential({ name: 'Mine', cookieId: 'Mine', source: 'raw', importedAt: at, ciphertext: Uint8Array.of(1) })
+  const credentialId = db.insertCredential({ name: 'Mine', cookieId: 'Mine', source: 'raw', importedAt: at, ciphertext: Uint8Array.of(1) }).id
   const store = asStore(db)
   const threads = new Map<string, { count: number; refsPerReply: number }>()
   const seen: Array<{ id: string; path: string; page: number }> = []
@@ -72,7 +73,7 @@ async function harness() {
   const scheduler = createRequestScheduler({ backgroundSpacingMs: 0 })
   let round = 0
   return {
-    store, threads, seen, remote,
+    db, credentialId, store, threads, seen, remote,
     async enable(id: string, ...kinds: Array<'all' | 'quote' | 'po'>) {
       for (const kind of kinds) await store.setReminderRule(id, kind, true, at)
     },
@@ -206,5 +207,32 @@ describe('reminder HTTP budgets', () => {
     await h.round()
     expect(h.seen[0]?.id).toBe('120')
     expect(h.seen.length).toBeLessThanOrEqual(100)
+  })
+
+  it('a follow-up page the round budget cannot send waits for the next round, which sends it first', async () => {
+    const h = await harness()
+    const thread = { count: 200, refsPerReply: 0 }
+    h.threads.set('100', thread)
+    await h.enable('100', 'all')
+    await h.round()
+    // A confirmed local reply, number 201 of thread 100, then a peer: page 1 reads 202.
+    const sent = h.db.createPublication({ requestId: 'own', editorId: 'editor', forumId: '4', at,
+      payload: { draftId: null, target: { kind: 'reply', threadId: '100' }, credentialId: h.credentialId, fields: { ...EMPTY_FIELDS, content: 'mine' }, attachmentId: null } })
+    h.db.finishPublication({ id: sent.id, state: 'confirmed', problem: null, postId: '1000201', threadId: '100', at })
+    thread.count = 202
+    // 99 threads never checked come first: thread 100's page 1 is the round's 100th request.
+    for (let n = 101; n < 200; n++) {
+      h.threads.set(String(n), { count: 0, refsPerReply: 0 })
+      await h.enable(String(n), 'all')
+    }
+    expect((await h.round()).complete).toBe(false)
+    expect(h.seen).toHaveLength(100)
+    expect(h.seen.filter((read) => read.id === '100').map((read) => read.page)).toEqual([1])
+    expect((await h.store.reminderOverview()).threads.find((row) => row.threadId === '100')?.counts.all).toBe(0)
+    await h.round()
+    expect(h.seen.slice(0, 2).map((read) => `${read.id}:${read.page}`)).toEqual(['100:1', '100:11'])
+    expect((await h.store.reminderOverview()).threads.find((row) => row.threadId === '100')?.counts.all).toBe(1)
+    await h.round()
+    expect(h.seen.filter((read) => read.id === '100').map((read) => read.page)).toEqual([1])
   })
 })

@@ -66,6 +66,10 @@ async function harness(options: { own?: 'Po' | 'Other'; initialCount?: number; a
   let holdSnapshot = false
   let snapshotRelease: (() => void) | null = null
   let snapshotCaptured = Promise.withResolvers<void>()
+  /** Replies the forum leaves off its pages; the reply count still includes them. */
+  const hidden = new Set<string>()
+  /** The next read of this page fails with an HTTP error. */
+  let failing: string | null = null
   const hooks: { afterBatch?: () => Promise<void> } = {}
   const requests: string[] = []
   const server = createServer(async (request, response) => {
@@ -78,8 +82,14 @@ async function harness(options: { own?: 'Po' | 'Other'; initialCount?: number; a
       const po = url.pathname === '/api/po'
       const items = po ? replies.filter((reply) => reply.user_hash === 'Po') : replies
       const page = Number(url.searchParams.get('page'))
+      if (failing === `${url.pathname}?page=${page}`) {
+        failing = null
+        response.statusCode = 500
+        response.end()
+        return
+      }
       const value = { ...post('100', 'Po', 'head'), resto: '0', ReplyCount: items.length - (po ? 0 : drop),
-        Replies: items.slice((page - 1) * 19, page * 19) }
+        Replies: items.slice((page - 1) * 19, page * 19).filter((reply) => !hidden.has(reply.id)) }
       if (holdSnapshot && !po) {
         holdSnapshot = false
         snapshotRelease = () => send(value)
@@ -171,6 +181,12 @@ async function harness(options: { own?: 'Po' | 'Other'; initialCount?: number; a
     setDrop(value: number) { drop = value },
     /** The forum loses its `n` oldest replies: every later count is `n` lower. */
     remove(n: number) { replies.splice(0, n) },
+    /** The forum's pages stop (`hide`) or resume (`show`) showing this reply. */
+    hide(id: string) { hidden.add(id) },
+    show(id: string) { hidden.delete(id) },
+    /** The next read of `/api/thread` or `/api/po` page `page` fails. */
+    failNext(path: '/api/thread' | '/api/po', page: number) { failing = `${path}?page=${page}` },
+    postId(id: string) { return db.getPublication(id)!.postId! },
     /** Moves the shared clock: later reads carry fetch times out of their commit order. */
     shiftClock(ms: number) { wall += ms },
     holdConfirmation() { holdLookup = true },
@@ -215,7 +231,22 @@ it('long thread, only my reply: the post-send read proves it and the next check 
   expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
 })
 
-it('long thread with peers alongside: a later read of 203 holding my reply leaves exactly the peers', async () => {
+it('sent and left at once while peers replied: one follow-up page finds the reply, the peers still count and notify', async () => {
+  const h = await harness({ initialCount: 200 })
+  await h.send()
+  h.peer(); h.peer()
+  await h.check()
+  // Page 1 reads 203; the page holding reply 201 shows mine, so this check counts to its 203.
+  expect(await h.counts()).toEqual({ all: 2, po: 0, quote: 0 })
+  expect(h.notifications).toEqual([NOTICE])
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/thread?id=100&page=11', '/api/po?id=100&page=1'])
+  h.peer()
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 3, po: 0, quote: 0 })
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
+})
+
+it('peers on both sides of my reply after an open: the follow-up page leaves exactly the peers', async () => {
   const h = await harness({ initialCount: 199 })
   h.peer()
   // The reader's read absorbs 199→200; the check growth after it holds two peers and my reply.
@@ -224,12 +255,86 @@ it('long thread with peers alongside: a later read of 203 holding my reply leave
   await h.send()
   h.peer()
   await h.check()
-  // PO page 1 already shows my PO-cookie reply: its PO growth is mine alone.
-  expect(await h.counts()).toEqual({ all: 3, po: 0, quote: 0 })
-  expect(h.notifications).toEqual([NOTICE])
-  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
-  await h.read('all', 11, 'display')
+  // PO page 1 already shows my PO-cookie reply: its PO growth is mine alone, with no extra PO read.
   expect(await h.counts()).toEqual({ all: 2, po: 0, quote: 0 })
+  expect(h.notifications).toEqual([NOTICE])
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/thread?id=100&page=11', '/api/po?id=100&page=1'])
+})
+
+it('a follow-up page without my reply counts it as usual, once: no later check reads for it, no later page deducts it', async () => {
+  const h = await harness({ initialCount: 200 })
+  const id = await h.send()
+  h.hide(h.postId(id))
+  h.peer()
+  await h.check()
+  // PO page 1 is the follow-up page of the PO count and does not show it either.
+  expect(await h.counts()).toEqual({ all: 2, po: 1, quote: 0 })
+  expect(h.notifications).toEqual([NOTICE])
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/thread?id=100&page=11', '/api/po?id=100&page=1'])
+  await h.check()
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
+  h.show(h.postId(id))
+  await h.read('all', 11, 'lookup')
+  expect(await h.counts()).toEqual({ all: 2, po: 1, quote: 0 })
+})
+
+it('a failed follow-up read uses the reply’s chance: page 1 still counts, and only other evidence can settle it', async () => {
+  const h = await harness({ initialCount: 200 })
+  await h.send()
+  h.peer()
+  h.failNext('/api/thread', 11)
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 2, po: 0, quote: 0 })
+  expect(h.notifications).toEqual([NOTICE])
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/thread?id=100&page=11', '/api/po?id=100&page=1'])
+  await h.check()
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
+  // Still pending: a later page showing it inside the counted growth (200, 202] deducts it.
+  await h.read('all', 11, 'lookup')
+  expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
+})
+
+it('a PO-cookie reply gets a follow-up PO page too; a non-PO reply never causes a PO page read', async () => {
+  for (const own of ['Po', 'Other'] as const) {
+    const h = await harness({ own, initialCount: 200 })
+    for (let n = 0; n < 20; n++) h.peer('Po')
+    await h.check()
+    await h.reminders.clear({ threadId: '100', source: 'manual' })
+    await h.send()
+    h.peer()
+    h.peer('Po')
+    await h.check()
+    if (own === 'Po') {
+      // 全串 220→223 and PO 20→22 each hold my reply once: the follow-up pages are 12 and PO page 2.
+      expect(await h.counts()).toEqual({ all: 2, po: 1, quote: 0 })
+      expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/thread?id=100&page=12', '/api/po?id=100&page=1', '/api/po?id=100&page=2'])
+    } else {
+      expect(await h.counts()).toEqual({ all: 2, po: 1, quote: 0 })
+      expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/thread?id=100&page=12', '/api/po?id=100&page=1'])
+    }
+  }
+})
+
+it('without pending local replies a check reads page 1 of each mode only', async () => {
+  const h = await harness({ initialCount: 200 })
+  h.peer(); h.peer('Po')
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 2, po: 1, quote: 0 })
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
+})
+
+it('no follow-up page when an open already absorbed part of the interval: finding the reply could not deduct it', async () => {
+  const h = await harness({ initialCount: 200 })
+  const id = await h.send()
+  h.hide(h.postId(id))
+  h.peer()
+  // The reader absorbs 200→202 without seeing my reply.
+  await h.read('all', 1, 'display')
+  h.show(h.postId(id))
+  h.peer()
+  await h.check()
+  expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/po?id=100&page=1'])
 })
 
 it('a reply with a non-PO cookie never touches the PO count; a peer PO reply still counts', async () => {
@@ -315,6 +420,8 @@ it('spanning two check rounds deducts once and keeps the earlier peer in the cou
 it('a pending reply survives a restart, a duplicate confirmation deducts nothing more', async () => {
   const h = await harness({ initialCount: 30 })
   const id = await h.send()
+  // The check's follow-up read of page 2 fails: the reply stays pending, its chance used.
+  h.failNext('/api/thread', 2)
   await h.check()
   expect(await h.counts()).toEqual({ all: 1, po: 0, quote: 0 })
   await h.restart()
@@ -408,10 +515,9 @@ it('the pre-send count follows commit order: a later-fetched larger page committ
   h.shiftClock(7_200_000)
   await h.send()
   await h.check()
-  expect(await h.counts()).toEqual({ all: 3, po: 0, quote: 0 })
-  // (32, 33] is counted growth alone: the reply leaves the count.
-  await h.read('all', 2, 'lookup')
+  // (32, 33] is counted growth alone: the follow-up page 2 shows the reply and it leaves the count.
   expect(await h.counts()).toEqual({ all: 2, po: 0, quote: 0 })
+  expect(h.requests).toEqual(['/api/thread?id=100&page=1', '/api/thread?id=100&page=2', '/api/po?id=100&page=1'])
 })
 
 it('after a fall a new send is provable again, also across reopening the database', async () => {
@@ -422,6 +528,8 @@ it('after a fall a new send is provable again, also across reopening the databas
   await h.read('all', 1, 'lookup')
   await h.restart()
   await h.send()
+  // The check's follow-up read fails; a lookup after reopening proves the reply instead.
+  h.failNext('/api/thread', 2)
   await h.check()
   // 30→32: the peer seen in the lookups and my reply.
   expect(await h.counts()).toEqual({ all: 2, po: 0, quote: 0 })
