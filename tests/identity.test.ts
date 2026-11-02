@@ -365,7 +365,7 @@ describe('identity service with real SQLite', () => {
 
   it('treats unreadable storage as an unknown browse identity instead of reading without one', async () => {
     const store = await openReadingStore({
-      databasePath: databasePath(),
+      databasePath: databasePath(), appVersion: '0.0.0-test',
       createWorker() { throw new Error('worker startup failed') }
     })
     const service = createIdentityService({

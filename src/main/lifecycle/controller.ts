@@ -33,10 +33,12 @@ export interface MainWindowHost {
 }
 
 /**
- * Why a real quit started: `quit` from any quit entry, or `install` from 「安装并重启」. Cancelling the
- * quit, a save failure, or reopening while finishing drops the purpose with the quit.
+ * Why a real quit started: `quit` from any quit entry, `install` from 「安装并重启」, or `restart` from
+ * an operation that needs a fresh start (重新启动重试, 不备份升级): the app starts again once this
+ * process has ended, and never installs an update on the way. Cancelling the quit, a save failure,
+ * or reopening while finishing drops the purpose with the quit.
  */
-export type QuitPurpose = 'quit' | 'install'
+export type QuitPurpose = 'quit' | 'install' | 'restart'
 
 /**
  * Why the process ends: the quit's purpose; `unsaved` when the user quit although drafts or the
@@ -60,8 +62,12 @@ export interface LifecycleDeps {
   stopBackgroundWork(): void | Promise<void>
   /** Best-effort system notification; may be unavailable or throw. Launch notices are already stored. */
   notify(summary: FinishingSummary): void
-  /** Ends the process (storage is closed on the way out); `reason` decides whether an update installs. */
-  exit(reason: ExitReason): void
+  /**
+   * Ends the process (storage is closed on the way out); `reason` decides whether an update installs.
+   * `relaunch`: start the app again after this process has ended (a `restart` quit, unless the
+   * session is ending).
+   */
+  exit(reason: ExitReason, relaunch: boolean): void
   /** Wall clock (epoch ms): send deadlines are recorded wall-clock times. */
   now(): number
   sleep(ms: number): Promise<void>
@@ -78,7 +84,11 @@ export interface Lifecycle {
   closeRequested(): Promise<void>
   /** 后台驻留 chosen in the renderer. */
   reside(): void
-  /** Real quit from any entry (close choice, remembered choice, tray, app menu) or for installing an update. */
+  /**
+   * Real quit from any entry (close choice, remembered choice, tray, app menu), for installing an
+   * update, or for restarting the app. The quit itself is the same: storage that refuses writes
+   * exits at once without saving the workspace.
+   */
   requestQuit(purpose?: QuitPurpose): void
   presentQuit(): void
   cancelQuit(): void
@@ -168,12 +178,12 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       }
     }
     phase = 'exiting'
-    deps.exit(sessionEnding ? 'session-end' : unsaved ? 'unsaved' : purpose)
+    deps.exit(sessionEnding ? 'session-end' : unsaved ? 'unsaved' : purpose, purpose === 'restart' && !sessionEnding)
   }
 
   function requestQuit(requested: QuitPurpose = 'quit'): void {
     if (phase === 'quitting') {
-      if (requested === 'install') purpose = 'install'
+      if (requested !== 'quit') purpose = requested
       window.send({ kind: 'quit' })
       return
     }

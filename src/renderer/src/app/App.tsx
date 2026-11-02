@@ -90,18 +90,8 @@ import { isEditableTarget, matchShortcut, shortcutLabel, type ShortcutAction } f
 import { composeTargetsOf, TabView } from './TabView'
 import { TopBar } from './TopBar'
 import { useSettingsWriter } from './useSettingsWriter'
+import { StorageBanner } from '../features/storage/StorageBanner'
 import './layout.css'
-
-function StorageBanner({ storage }: { storage: StorageStatus | null }) {
-  if (storage === null || storage.state === 'ready') return null
-  const text = storage.state === 'read-only' ? '数据库只读，新内容不会保存' : '本地存储不可用，内容不会保存'
-  return (
-    <div className="storage-banner" role="status">
-      <Icon name="alert" />
-      <span>{text}</span>
-    </div>
-  )
-}
 
 /**
  * Tabs exist only once the global split default is known (the first tab takes it), or the

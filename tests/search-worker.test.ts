@@ -28,7 +28,7 @@ it('runs the production database worker with real trigram search, batched rebuil
       }
     })
     const databasePath = join(folder, 'app.sqlite')
-    store = await openReadingStore({ databasePath, createWorker(options) {
+    store = await openReadingStore({ databasePath, appVersion: '0.0.0-test', createWorker(options) {
       worker = new Worker(pathToFileURL(join(folder, 'worker/database.mjs')), options)
       return worker
     } })

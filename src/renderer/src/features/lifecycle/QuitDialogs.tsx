@@ -12,7 +12,7 @@ import './lifecycle.css'
  * dialog (a repeated Esc closes it regardless of `cancel` handling). `reopenIfClosed` then remounts
  * it through `key`, opened again. `ref` goes on any element inside the dialog.
  */
-function useStayOpen() {
+export function useStayOpen() {
   const ref = useRef<HTMLDivElement>(null)
   const [key, setKey] = useState(0)
   const reopenIfClosed = () => {

@@ -2,6 +2,8 @@ import { announcementRecord, type AnnouncementRecord } from '../../shared/announ
 import { analyticsRecord, type AnalyticsRecord } from '../../shared/analytics'
 import type { LocalBlock } from '../../shared/blocks'
 import { IMPORTED_COOKIE_COLOR, isCookieColorName, type CookieColor, type CookieColorName } from '../../shared/cookieColors'
+import { existsSync } from 'node:fs'
+import { dirname } from 'node:path'
 import Database from 'better-sqlite3'
 import type { StorageStatus, ThreadReadPurpose } from '../../shared/api'
 import type {
@@ -37,6 +39,7 @@ import { assertReadablePage, computeCoverage } from './coverage'
 import { emptyReadingState } from './reading-state'
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
+import { takeUpgradeWithoutBackup, writePreUpgradeBackup } from './backup'
 import { RetainedContentDatabase, contentTick, touchThread } from './retained'
 import { ReminderDatabase } from './reminders'
 import { SearchDatabase, projectSearchPost } from './search'
@@ -1521,13 +1524,59 @@ function closeQuietly(db: Database.Database | null): void {
   }
 }
 
+/** Taking the pre-upgrade backup when opening (see `./backup`). */
+export interface PreUpgradeOptions {
+  /** Version of this app, recorded in the backup's manifest. */
+  appVersion: string
+  now?: () => Date
+}
+
+/**
+ * Before any migration or other write, an existing database (schema 1 or later) that is about to be
+ * migrated is backed up, unless 不备份升级 was chosen for exactly its schema version. Returns the
+ * status to open with when it must not be opened (nothing read or written this run), else null.
+ * The check and the snapshot use a read-only connection, so a failure leaves the database file byte
+ * for byte as it was: closing a read-only connection never checkpoints the WAL into it.
+ */
+function backUpBeforeUpgrade(databasePath: string, supportedVersion: number, options: PreUpgradeOptions): StorageStatus | null {
+  const userDataDirectory = dirname(databasePath)
+  // Consumed by this start whatever happens next, so the choice never reaches a later upgrade.
+  const withoutBackup = takeUpgradeWithoutBackup(userDataDirectory)
+  if (!existsSync(databasePath)) return null
+  let source: Database.Database | null = null
+  try {
+    source = new Database(databasePath, { readonly: true, fileMustExist: true, timeout: 5000 })
+    const schemaVersion = Number(source.pragma('user_version', { simple: true }))
+    if (schemaVersion < 1 || schemaVersion >= supportedVersion || schemaVersion === withoutBackup) return null
+    try {
+      writePreUpgradeBackup({ source, userDataDirectory, schemaVersion, appVersion: options.appVersion, now: options.now ?? (() => new Date()) })
+      return null
+    } catch {
+      return { state: 'unavailable', reason: 'backup-failed', schemaVersion, supportedVersion }
+    }
+  } catch {
+    return { state: 'unavailable', reason: 'open-failed' }
+  } finally {
+    closeQuietly(source)
+  }
+}
+
+/**
+ * Opens the database, migrating it to the newest of `migrations` in one transaction. With
+ * `preUpgrade` (the app's own database), an existing database is backed up before it is migrated.
+ */
 export function openReadingDatabase(
   databasePath: string,
-  migrations: readonly Migration[] = MIGRATIONS
+  migrations: readonly Migration[] = MIGRATIONS,
+  preUpgrade: PreUpgradeOptions | null = null
 ): ReadingDatabase {
   let db: Database.Database | null = null
   let schemaVersion: number
   const supportedVersion = migrations.reduce((highest, migration) => Math.max(highest, migration.version), 0)
+  if (preUpgrade !== null) {
+    const refused = backUpBeforeUpgrade(databasePath, supportedVersion, preUpgrade)
+    if (refused !== null) return new SqliteReadingDatabase(null, refused)
+  }
   try {
     db = new Database(databasePath, { timeout: 5000 })
     schemaVersion = Number(db.pragma('user_version', { simple: true }))

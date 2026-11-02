@@ -1,0 +1,32 @@
+/* The storage banner (layout.css) with actions: the text takes the room, the actions keep to the
+   end and move under the text when the window is narrow. */
+.storage-banner:has(.storage-banner-actions) {
+  flex-wrap: wrap;
+  row-gap: 6px;
+  padding-block: 5px;
+}
+
+.storage-banner-text {
+  flex: 1 1 16em;
+  min-width: 0;
+}
+
+.storage-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-inline-start: auto;
+  font-weight: 400;
+}
+
+.storage-upgrade-dialog {
+  width: min(440px, calc(100vw - 32px));
+}
+
+.storage-upgrade-dialog .storage-upgrade-failure {
+  align-items: flex-start;
+}
+
+.storage-upgrade-failure .icon {
+  margin-top: 3px;
+}

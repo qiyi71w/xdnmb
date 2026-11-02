@@ -11,6 +11,8 @@ import type { StorageMethod, StorageResponse } from './worker'
 
 export async function openReadingStore(options: {
   databasePath: string
+  /** Recorded in the pre-upgrade backup's manifest. */
+  appVersion: string
   createWorker: (options: WorkerOptions) => Worker
 }): Promise<AppStore> {
   let status: StorageStatus = { state: 'unavailable', reason: 'open-failed' }
@@ -122,7 +124,7 @@ export async function openReadingStore(options: {
   }
 
   try {
-    worker = options.createWorker({ workerData: { databasePath: options.databasePath } })
+    worker = options.createWorker({ workerData: { databasePath: options.databasePath, appVersion: options.appVersion } })
     worker.on('message', receive)
     worker.on('error', stop)
     worker.on('exit', stop)

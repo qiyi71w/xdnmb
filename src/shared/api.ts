@@ -173,6 +173,18 @@ export type StorageStatus =
   | { state: 'read-only'; reason: 'newer-schema'; schemaVersion: number; supportedVersion: number }
   /** Database could not be opened or migrated; the original file is left untouched. */
   | { state: 'unavailable'; reason: 'open-failed' | 'migration-failed' }
+  /**
+   * The database needs upgrading, but the backup taken before every upgrade could not be saved:
+   * nothing was migrated and the database is neither read nor written this run.
+   */
+  | { state: 'unavailable'; reason: 'backup-failed'; schemaVersion: number; supportedVersion: number }
+
+/**
+ * Result of 重新启动重试 / 不备份升级. `restarting`: the app is quitting through the ordinary quit
+ * and starts again. `not-applicable`: storage is not waiting on a failed pre-upgrade backup.
+ * `failed`: the choice to upgrade without a backup could not be recorded; nothing changed.
+ */
+export type UpgradeRestartResult = { status: 'restarting' } | { status: 'not-applicable' } | { status: 'failed' }
 
 /** Desktop platform of the running app; decides which modifier keys the shortcuts use. */
 export type AppPlatform = 'darwin' | 'win32' | 'linux'
@@ -398,6 +410,13 @@ export interface XidaoApi {
   updates: UpdatesApi
   app: {
     getStatus(): Promise<AppStatus>
+    /** After a failed pre-upgrade backup: restart and try the backup and upgrade again. */
+    restartToRetryUpgrade(): Promise<UpgradeRestartResult>
+    /**
+     * After a failed pre-upgrade backup: the next start upgrades the same database without a backup
+     * (once), then the app restarts. Refused unless storage is in that state.
+     */
+    restartToUpgradeWithoutBackup(): Promise<UpgradeRestartResult>
   }
 }
 
@@ -529,6 +548,8 @@ export const IpcChannel = {
   reminderClear: 'reminders:clear',
   reminderDismissRateLimit: 'reminders:dismiss-rate-limit',
   getStatus: 'app:get-status',
+  restartToRetryUpgrade: 'app:restart-to-retry-upgrade',
+  restartToUpgradeWithoutBackup: 'app:restart-to-upgrade-without-backup',
   updateGetState: 'updates:get-state',
   updateCheck: 'updates:check',
   updateDownload: 'updates:download',

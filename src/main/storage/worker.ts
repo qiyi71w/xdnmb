@@ -3,6 +3,7 @@ import type { StorageStatus } from '../../shared/api'
 import { StorageWriteRefusedError } from './contract'
 import { openReadingDatabase } from './database'
 import type { ReadingDatabase } from './database'
+import { MIGRATIONS } from './migrations'
 
 export type StorageMethod = Exclude<keyof ReadingDatabase, 'status'>
 export type StorageRequest = {
@@ -20,8 +21,9 @@ export type StorageResponse =
 
 const port = parentPort
 if (!port) throw new Error('reading database requires a worker parent')
-const data = workerData as { databasePath: string }
-const db = openReadingDatabase(data.databasePath)
+const data = workerData as { databasePath: string; appVersion: string }
+// The app's own database: an upgrade is preceded by the pre-upgrade backup.
+const db = openReadingDatabase(data.databasePath, MIGRATIONS, { appVersion: data.appVersion })
 port.postMessage({ type: 'ready', status: db.status } satisfies StorageResponse)
 
 port.on('message', (request: StorageRequest) => {
