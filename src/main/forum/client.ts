@@ -115,29 +115,33 @@ export function createForumClient(options: {
       if (params.page !== undefined) url.searchParams.set('page', String(params.page))
     }
     const userhash = !anonymous && options.browseIdentity ? await options.browseIdentity() : null
-    const get = (requestSignal: AbortSignal) => options.transport.get(url, requestSignal, userhash === null ? undefined : { userhash })
-    const response = await (requestRunner ? requestRunner(signal, get) : get(signal))
-    if (response.text.trimStart().startsWith('<') || response.mediaType === 'text/html') {
-      throw new ForumReadError({
-        kind: /验证码|captcha|challenge/i.test(response.text) ? 'rate-limited' : 'unknown-structure',
-        detail: 'html'
-      })
+    // Classified inside the runner's work, so a lane slot ends only after its rate limit or captcha
+    // is known.
+    const get = async (requestSignal: AbortSignal): Promise<unknown> => {
+      const response = await options.transport.get(url, requestSignal, userhash === null ? undefined : { userhash })
+      if (response.text.trimStart().startsWith('<') || response.mediaType === 'text/html') {
+        throw new ForumReadError({
+          kind: /验证码|captcha|challenge/i.test(response.text) ? 'rate-limited' : 'unknown-structure',
+          detail: 'html'
+        })
+      }
+      if (response.mediaType !== 'application/json' && response.mediaType !== 'text/json') throw shapeError()
+      let value: unknown
+      try {
+        value = JSON.parse(response.text, (key: string, item: unknown, context?: { source?: string }): unknown => {
+          if (Object.hasOwn(idKeys, key) && typeof item === 'number') return context?.source
+          return item
+        }) as unknown
+      } catch {
+        throw new ForumReadError({ kind: 'unknown-structure', detail: 'json' })
+      }
+      if (typeof value === 'string') throw businessError(value)
+      if (isObject(value) && value.success === false && typeof value.error === 'string') {
+        throw businessError(value.error)
+      }
+      return value
     }
-    if (response.mediaType !== 'application/json' && response.mediaType !== 'text/json') throw shapeError()
-    let value: unknown
-    try {
-      value = JSON.parse(response.text, (key: string, item: unknown, context?: { source?: string }): unknown => {
-        if (Object.hasOwn(idKeys, key) && typeof item === 'number') return context?.source
-        return item
-      }) as unknown
-    } catch {
-      throw new ForumReadError({ kind: 'unknown-structure', detail: 'json' })
-    }
-    if (typeof value === 'string') throw businessError(value)
-    if (isObject(value) && value.success === false && typeof value.error === 'string') {
-      throw businessError(value.error)
-    }
-    return value
+    return requestRunner ? requestRunner(signal, get) : get(signal)
   }
 
   return {

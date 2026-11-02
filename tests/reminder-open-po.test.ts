@@ -465,6 +465,46 @@ it.each([
   expect((await h.row('100')).counts.po).toBe(2)
 })
 
+it.each([
+  ['429', { status: 429, body: '{}' }, false],
+  ['captcha', { html: true, body: '<html>captcha</html>' }, false],
+  ['slow 429', { status: 429, body: '{}' }, true],
+  ['slow captcha', { html: true, body: '<html>captcha</html>' }, true]
+])('a check %s drops the open read queued behind it before the lane admits it', async (_name, refusal, slow) => {
+  const h = await harness()
+  h.thread('100', { all: 0, po: 10 }).po = 12
+  h.thread('200', { all: 0, po: 10 }).po = 12
+  const release = Promise.withResolvers<void>()
+  h.remote.hold = release.promise
+  let refused = false
+  h.remote.override = () => {
+    if (refused) return undefined
+    refused = true
+    return refusal
+  }
+  h.clock.advance(60_000)
+  expect((await h.service.check()).accepted).toBe(true)
+  await vi.waitFor(() => expect(h.seen).toHaveLength(1))
+  // Opened while the check's read is in flight: its read waits behind it in the lane.
+  await h.open('200')
+  h.clock.advance(1_000)
+  // A response slower than the lane spacing: the lane would admit the open read immediately.
+  if (slow) h.clock.advance(1_000)
+  await sleep(20)
+  h.remote.hold = null
+  release.resolve()
+  for (let n = 0; n < 5; n++) {
+    await sleep(20)
+    h.clock.advance(1_000)
+  }
+  await h.service.whenIdle()
+  expect(h.attempts).toEqual(['/api/po'])
+  expect(h.requests()).toEqual(['po:100:1'])
+  expect(h.db.loadReminderBackoff()).toMatchObject({ minutes: 30, notified: true, episodeId: expect.any(String) })
+  expect(h.notices).toHaveLength(1)
+  expect(h.poBaseline('200')).toBe(10)
+})
+
 it('cancels queued and in-flight open reads on quit', async () => {
   const h = await harness()
   h.thread('100', { all: 0, po: 10 }).po = 12

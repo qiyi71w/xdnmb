@@ -87,7 +87,8 @@ export interface RoundEngineDeps {
  * with the baseline, plus at most one follow-up page per local reply and mode to find it (ADR 0002);
  * 引用 reads only the pages after its checked position. A batch holds at most five
  * network reads of one thread, then the next thread follows; a thread resumes in later batches.
- * A rate limit or captcha stops the whole round at once. Threads whose counts grew are added to
+ * A rate limit or captcha stops the whole round at once; `limited` runs inside that request's lane
+ * slot, before the lane admits the next background request. Threads whose counts grew are added to
  * `increased`.
  */
 export async function runReminderRound(deps: RoundEngineDeps, input: {
@@ -95,6 +96,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   signal: AbortSignal
   increased: Set<string>
   roundId?: string
+  limited?: () => void
 }): Promise<{ rateLimited: boolean; complete: boolean }> {
   const { store, now } = deps
   const roundId = input.roundId ?? randomUUID()
@@ -158,7 +160,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       run.attempted = true
       budget.remaining--
       remaining--
-      return work(requestSignal)
+      return limitedWork(work, requestSignal, input.limited)
     })
   }
   async function readPage(budget: { remaining: number }, run: ThreadRun, mode: ReadingMode, number: number, anonymous: boolean,
@@ -427,30 +429,32 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   return { rateLimited: rateLimit !== null, complete: complete && !input.signal.aborted && runs.every((run) => run.steps.length === 0) }
 }
 
+/** Runs a request runner's `work` (send and classify), reporting a rate limit or captcha while still in its slot. */
+async function limitedWork<T>(work: (signal: AbortSignal) => Promise<T>, signal: AbortSignal, limited?: () => void): Promise<T> {
+  try {
+    return await work(signal)
+  } catch (error) {
+    if (error instanceof ForumReadError && error.error.kind === 'rate-limited') limited?.()
+    throw error
+  }
+}
+
 /**
  * The PO page 1 read queued by opening a thread with an established PO追更 baseline. Its reply count
  * advances that baseline exactly as a reader's display read does: an open segment in the page's
  * save transaction, never initializing a baseline. It shares the background lane (serialized,
  * spaced) but no round budget or cooldown. Anonymous first; a refusal is read once more with the
  * browse cookie. `proceed` is asked right before each request goes out; `false` cancels it.
- * Each attempt holds its lane slot until the response is classified, so `limited` (a rate limit or
- * captcha) runs before the lane admits the next background request. Page 1 never needs the page-100
- * probe. A failure (rate limit and captcha included) propagates; nothing is saved then.
+ * `limited` runs inside a rate-limited request's lane slot, before the lane admits the next
+ * background request. A failure (rate limit and captcha included) propagates; nothing is saved then.
  */
 export async function readOpenedPoPage(deps: Pick<RoundEngineDeps, 'store' | 'client' | 'scheduler' | 'now'>, threadId: ThreadId,
   signal: AbortSignal, proceed: () => boolean, limited: () => void): Promise<void> {
-  const requestRunner: ForumRequestRunner = async (requestSignal, work) => {
-    if (requestSignal.aborted || !proceed()) throw new ReadCancelledError()
-    return work(requestSignal)
-  }
-  const read = (anonymous: boolean) => deps.scheduler.run('background', signal, async (started) => {
-    try {
-      return await deps.client.getThreadPage(threadId, 'po', 1, started, { anonymous, requestRunner })
-    } catch (error) {
-      if (error instanceof ForumReadError && error.error.kind === 'rate-limited') limited()
-      throw error
-    }
+  const requestRunner: ForumRequestRunner = (requestSignal, work) => deps.scheduler.run('background', requestSignal, async (started) => {
+    if (started.aborted || !proceed()) throw new ReadCancelledError()
+    return limitedWork(work, started, limited)
   })
+  const read = (anonymous: boolean) => deps.client.getThreadPage(threadId, 'po', 1, signal, { anonymous, requestRunner })
   let page: ThreadPage
   try {
     page = await read(true)

@@ -224,8 +224,10 @@ export function createReminderService(deps: {
       const increased = new Set<string>()
       const roundId = randomUUID()
       try {
-        const result = await runReminderRound({ ...deps, now, changed }, { rules, signal: current.abort.signal, increased, roundId })
-        if (result.rateLimited) await rateLimited()
+        let limit: Promise<void> | null = null
+        const result = await runReminderRound({ ...deps, now, changed },
+          { rules, signal: current.abort.signal, increased, roundId, limited: () => { limit ??= limited() } })
+        if (result.rateLimited) await (limit ?? limited())
         else if (!initialization && result.complete && !current.abort.signal.aborted && backoff.episodeId !== null) {
           await saveBackoff(() => ({ minutes: 0, episodeId: null, notified: false, dismissed: false }))
           schedule()
@@ -271,6 +273,18 @@ export function createReminderService(deps: {
       const time = retry === null ? null : new Date(retry).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
       notifySystem(`论坛限流，提醒检查已暂停，${time === null ? '自动检查已关闭' : `${time} 后重试`}`)
     }
+  }
+  /** Backoffs being saved for rate limits seen inside a lane slot; while any is pending, no open read goes out. */
+  const limits = new Set<Promise<void>>()
+  /**
+   * Called synchronously in the rate-limited request's lane slot, so the lane cannot admit a queued
+   * open read before the backoff applies. A failed save still slows this process down (`saveBackoff`).
+   */
+  function limited(): Promise<void> {
+    const saving = rateLimited().catch(() => undefined)
+    limits.add(saving)
+    void saving.finally(() => limits.delete(saving))
+    return saving
   }
 
   // ---- PO page 1 read after an open ----
@@ -361,14 +375,14 @@ export function createReminderService(deps: {
         } catch {
           // A failed rule lookup only skips the read.
         }
-        settle(ready && !quitting && !read.abort.signal.aborted && backoff.episodeId === null)
+        settle(ready && !quitting && !read.abort.signal.aborted && backoff.episodeId === null && limits.size === 0)
       }
     }
   }
   async function runOpenRead(threadId: ThreadId, read: OpenRead): Promise<void> {
     const { signal } = read.abort
     // Sent only while still useful: no reader PO page saved since the open, no backoff, no quit.
-    const proceed = () => !signal.aborted && !quitting && backoff.episodeId === null && !read.readerSaved
+    const proceed = () => !signal.aborted && !quitting && backoff.episodeId === null && limits.size === 0 && !read.readerSaved
     try {
       // The reader's own PO read for this open starts just after the clear; let it go first.
       await cancellable(signal, (done) => setTimer(done, OPEN_READ_SETTLE_MS))
@@ -390,6 +404,7 @@ export function createReminderService(deps: {
     }
   }
   async function sendOpenRead(threadId: ThreadId, read: OpenRead, proceed: () => boolean): Promise<void> {
+    let limit: Promise<void> | null = null
     try {
       await readOpenedPoPage({ ...deps, now }, threadId, read.abort.signal, () => {
         // Leaving the queue: a later open registers a read of its own.
@@ -399,12 +414,13 @@ export function createReminderService(deps: {
         // Still inside this read's lane slot, so no check request is in flight: a check accepted
         // meanwhile sends nothing more and, interrupted, cannot clear the backoff this limit starts.
         active?.abort.abort()
+        limit ??= limited()
       })
       // Its saved PO page may have proven a confirmed local reply and corrected the PO count.
       changed()
     } catch (error) {
       // A failed read leaves the PO baseline as it was. Rate limits and captchas back off like a check.
-      if (error instanceof ForumReadError && error.error.kind === 'rate-limited') await rateLimited().catch(() => undefined)
+      if (error instanceof ForumReadError && error.error.kind === 'rate-limited') await (limit ?? limited())
     }
   }
 
