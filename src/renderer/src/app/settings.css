@@ -235,8 +235,10 @@
   color: var(--accent-ink);
 }
 
-/* Reading preview on a solid surface, in the chosen reading font and size. */
-.reading-preview {
+/* Reading and 图片遮罩 previews on a solid surface: the reading one in the chosen reading font and
+   size, the mask one with the frost of the reading thumbnails at the chosen strength. */
+.reading-preview,
+.image-mask-preview {
   margin: 0;
   display: grid;
   gap: 4px;
@@ -251,6 +253,29 @@
   font-size: var(--text-body);
   line-height: 1.8;
   overflow-wrap: anywhere;
+}
+
+/* The whole square sample, at about a reading thumbnail's size; it narrows with the row. A size
+   container, so the frost's blur follows the frame's actual width (image.css). */
+.image-mask-preview-frame {
+  container-type: inline-size;
+  --image-mask-size: 100cqi;
+  position: relative;
+  display: block;
+  width: min(168px, 100%);
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  background: var(--pane);
+}
+
+.image-mask-preview-frame img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .zoom-controls {

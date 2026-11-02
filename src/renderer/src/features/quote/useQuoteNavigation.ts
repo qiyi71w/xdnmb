@@ -73,6 +73,11 @@ export interface QuoteCardProps {
   onBlur: () => void
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
   onRetry: () => void
+  /**
+   * The card's image viewer opens: the card is pinned, so neither the hover grace nor focus moving
+   * into the viewer closes it (stable across renders).
+   */
+  onPin: () => void
   onOpenThread: () => void
   /** 向 XDS 查询所属串 (explicit, disclosed on the card). */
   onLookUp: () => void
@@ -362,6 +367,14 @@ export function useQuoteNavigation(options: Options) {
     [apply, focusTrigger]
   )
 
+  /** Pins the open card, as its quote's context menu does: a deliberate use of the card keeps it. */
+  const pinCard = useCallback(() => {
+    const card = stateRef.current.card
+    if (card === null) return
+    window.clearTimeout(leaveTimer.current)
+    apply({ type: 'open', source: card.source, trigger: 'activate' })
+  }, [apply])
+
   /** Moves focus to the element that follows the card's quote in tab order (a selected number: back to its post). */
   const focusAfterTrigger = useCallback((source: QuoteSource) => {
     const trigger = triggerOf(source)
@@ -632,6 +645,7 @@ export function useQuoteNavigation(options: Options) {
               markInternal(cardId, { locate: 'open-thread' })
             })
           },
+          onPin: pinCard,
           onLookUp: () => {
             const before = stateRef.current.card
             if (before === null || before.id !== card.id) return

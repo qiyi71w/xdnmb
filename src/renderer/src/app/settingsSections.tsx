@@ -25,8 +25,10 @@ import {
   type SchemeBase,
   type ThemeColors
 } from '../../../shared/theme'
+import imageMaskSample from '../../../../resources/image-mask-preview.png'
 import { Icon } from '../components/Icon'
 import { KaomojiDecor } from '../components/KaomojiDecor'
+import { ImageMaskCover } from '../features/image/imageMask'
 import { previewTheme, systemPrefersDark, systemReducesMotion } from '../lib/useAppearance'
 import { useClearOnLeave } from '../lib/useClearOnLeave'
 import { describeIssues, invalidFields } from './appearanceIssues'
@@ -734,6 +736,36 @@ export function ReadingSection({ settings, write }: { settings: AppSettings; wri
         <figcaption className="setting-help">预览</figcaption>
         <p className="reading-preview-text">潮水退去，纸页留下。</p>
       </figure>
+      <SettingRow labelId="setting-image-mask" label="图片遮罩">
+        <Switch
+          labelledBy="setting-image-mask"
+          checked={settings.imageMaskEnabled}
+          onToggle={() => write({ imageMaskEnabled: !settings.imageMaskEnabled })}
+        />
+      </SettingRow>
+      {settings.imageMaskEnabled && (
+        <>
+          <SettingRow labelId="setting-image-mask-strength" label="模糊强度">
+            <Slider
+              labelledBy="setting-image-mask-strength"
+              min={0}
+              max={100}
+              step={1}
+              value={settings.imageMaskStrength}
+              valueText={`${settings.imageMaskStrength}%`}
+              onChange={(imageMaskStrength) => write({ imageMaskStrength }, INPUT_DELAY)}
+            />
+          </SettingRow>
+          {/* `write` shows the new strength in this render; only saving waits for the input to pause. */}
+          <figure className="image-mask-preview">
+            <figcaption className="setting-help">预览</figcaption>
+            <span className="image-mask-preview-frame" aria-hidden="true">
+              <img src={imageMaskSample} alt="" draggable={false} />
+              {settings.imageMaskStrength > 0 && <ImageMaskCover strength={settings.imageMaskStrength} />}
+            </span>
+          </figure>
+        </>
+      )}
     </Section>
   )
 }

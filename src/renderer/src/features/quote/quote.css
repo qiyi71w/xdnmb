@@ -17,6 +17,12 @@
   grid-template-rows: minmax(0, 1fr) auto auto;
 }
 
+/* While the quoted image's viewer covers the reader or list, the card waits under it, unseen and
+   inert, keeping its place; it comes back as it was when the viewer closes. */
+.quote-card.is-covered {
+  visibility: hidden;
+}
+
 /* 关闭 ends the card's first line (meta line, first notice or loading skeleton), same size in each;
    the line's own text wraps beside it, never under it. It sits inside the card's scroller, which
    clips: its focus ring is drawn inward. */
@@ -82,6 +88,16 @@
 .quote-card-content .content-body {
   font-size: var(--text-md);
   line-height: 1.7;
+}
+
+/* The quoted post's thumbnail leads its text on the paper, as in a post; a card narrower than the
+   thumbnail shrinks the slot instead of clipping it. */
+.quote-card-content .post-image {
+  margin-top: 0;
+}
+
+.quote-card-content .post-image-open {
+  max-width: 100%;
 }
 
 /* A body whose selected numbers have a menu (quote card post, 版规／说明): it takes focus from a

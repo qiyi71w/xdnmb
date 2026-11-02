@@ -6,6 +6,7 @@ import { Icon } from '../../components/Icon'
 import { Loading } from '../../components/Notices'
 import { useCover } from '../../lib/appCovered'
 import { openLayer } from '../../lib/layers'
+import { useImageMask } from './imageMask'
 import { COPY_TEXT, describeCopyOutcome, describeImageError, formatBytes, SAVE_TEXT, UNDECODABLE_TEXT } from './imageView'
 import { useImageZoom, ZoomControls, type Size } from './imageZoom'
 import { useImageLoad } from './useImageLoad'
@@ -19,7 +20,9 @@ const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), [tabinde
  * reason and a manual 重试. Zoom and pan by toolbar, wheel, drag and keys. Saving and copying are
  * possible only once the original is shown, and always use the stored original, never the
  * thumbnail. Copying is reachable from the toolbar, Ctrl/Cmd+C and the image's context menu (right
- * click, ContextMenu key, Shift+F10 on the image). Unmounting cancels the load.
+ * click, ContextMenu key, Shift+F10 on the image). Unmounting cancels the load. The original itself
+ * is never masked; under the 图片遮罩 the viewer closes when the page visit it was opened in ends
+ * (another page or tab, or masking turned on again), so returning never shows it over a re-masked page.
  */
 export function ImageViewer({
   viewId,
@@ -74,6 +77,15 @@ export function ImageViewer({
   // One closable layer above the quote card that may still be pinned beside the covered reader:
   // Esc closes the viewer first, the card with the next Esc.
   useEffect(() => openLayer().release, [])
+
+  // Through the opener's own close path, so its usual focus return applies (none while hidden).
+  const mask = useImageMask()
+  const openedVisit = useRef(mask.visit)
+  useLayoutEffect(() => {
+    if (mask.visit === openedVisit.current) return
+    openedVisit.current = mask.visit
+    if (mask.active) onClose()
+  }, [mask.visit, mask.active, onClose])
 
   const thumb =
     initialThumb ?? (thumbLoad.state.status === 'ready' && thumbLoad.state.decoded ? thumbLoad.state.image : null)

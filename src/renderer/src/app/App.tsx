@@ -47,6 +47,8 @@ import { UpdateNotice } from '../features/updates/UpdateNotice'
 import { hasNewVersion, UpdatesContext, useUpdatesSource } from '../features/updates/updatesState'
 import { BottomNoticeStack } from '../components/BottomNotice'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
+import { ImageMaskScope } from '../features/image/imageMask'
+import { imageRevealsReducer, INITIAL_IMAGE_REVEALS, revealView, type RevealView } from '../features/image/imageMaskState'
 import { QuoteCard } from '../features/quote/QuoteCard'
 import { QuoteActiveContext, QuoteControllerContext } from '../features/quote/QuoteContext'
 import { useQuoteNavigation } from '../features/quote/useQuoteNavigation'
@@ -178,6 +180,8 @@ export function App() {
     [settings, latestSettings, writeSettings]
   )
   const [tabs, dispatch] = useReducer(shellReducer, null)
+  // 图片遮罩 reveals of each tab's page visit (renderer memory only).
+  const [reveals, dispatchReveals] = useReducer(imageRevealsReducer, INITIAL_IMAGE_REVEALS)
   const registry = useMemo(createContentRegistry, [])
   const directory = useDirectory()
   const { start: startDirectory } = directory
@@ -322,6 +326,18 @@ export function App() {
     gap: LAYOUT_DEFAULTS.gap + scrollbarWidth
   })
   const navOverlay = layout.nav === 'overlay'
+  // Before paint: a tab showing another page or losing a side, or shown again after another tab,
+  // starts a new visit. Only the active tab has a view, laid out by `layout`.
+  useLayoutEffect(() => {
+    if (tabs === null) return
+    const views = new Map(tabs.tabs.map((tab): [number, RevealView | null] => [tab.id, revealView(tab, tab.id === tabs.activeId, layout.singlePane)]))
+    dispatchReveals({ type: 'sync', views })
+  }, [tabs, layout.singlePane])
+  // Masking turned on (enabled, or raised from 0%) covers every image again.
+  const imageMasking = settings.imageMaskEnabled && settings.imageMaskStrength > 0
+  useLayoutEffect(() => {
+    if (imageMasking) dispatchReveals({ type: 'reset' })
+  }, [imageMasking])
 
   // ---------- Reminders: opening a thread clears its counts ----------
   // Every user step that shows a thread changes what the active tab shows (tab, entry, thread):
@@ -1437,6 +1453,11 @@ export function App() {
     return <RailNavigation {...props} />
   }
 
+  /** The tab of the quote card's source: the card's image reveals are those of that tab's page. */
+  const cardTabId = quote.cardProps?.card.source.tabId ?? null
+  const cardTab = cardTabId === null ? undefined : tabs?.tabs.find((tab) => tab.id === cardTabId)
+  const cardView = cardTab === undefined || tabs === null ? null : revealView(cardTab, cardTab.id === tabs.activeId, layout.singlePane)
+
   return (
     <AppCoveredContext value={coverage}>
     <SettingsContext value={settingsAccess}>
@@ -1506,22 +1527,29 @@ export function App() {
                     />
                     <div className="tab-host">
                       {tabs.tabs.map((tab) => (
-                        <TabView
+                        <ImageMaskScope
                           key={tab.id}
-                          tab={tab}
-                          active={tab.id === tabs.activeId}
-                          onResizeList={resizeList}
-                          layout={layout}
-                          directory={directory.state}
-                          onRetryDirectory={directory.retry}
-                          feedInfo={feedInfo}
-                          forumNames={names}
-                          forumName={forumName}
-                          onSelectThread={selectThread}
-                          onShowPane={showPane}
-                          onOpenTarget={openListTarget}
-                          onOpenFromOnlineSearch={openFromOnlineSearch}
-                        />
+                          tabId={tab.id}
+                          view={revealView(tab, tab.id === tabs.activeId, layout.singlePane)}
+                          reveals={reveals.tabs.get(tab.id)}
+                          dispatch={dispatchReveals}
+                        >
+                          <TabView
+                            tab={tab}
+                            active={tab.id === tabs.activeId}
+                            onResizeList={resizeList}
+                            layout={layout}
+                            directory={directory.state}
+                            onRetryDirectory={directory.retry}
+                            feedInfo={feedInfo}
+                            forumNames={names}
+                            forumName={forumName}
+                            onSelectThread={selectThread}
+                            onShowPane={showPane}
+                            onOpenTarget={openListTarget}
+                            onOpenFromOnlineSearch={openFromOnlineSearch}
+                          />
+                        </ImageMaskScope>
                       ))}
                       {settingsTab !== null && (
                         <SettingsPage
@@ -1573,11 +1601,15 @@ export function App() {
             </QuoteControllerContext.Provider>
           </ContentRegistryContext.Provider>
           {/* Outside every reader's content: a quote card is not part of any thread view. Its nested
-              quotes still go through the quote controller (click, Enter, menu, new tab). */}
+              quotes still go through the quote controller (click, Enter, menu, new tab). One mount
+              per card: another quote's card starts with its own image scope and no viewer. Its image
+              reveals are those of the source tab's page, so they outlast the card. */}
           {quote.cardProps !== null && (
             <QuoteControllerContext.Provider value={quote.controller}>
               <QuoteActiveContext.Provider value={quote.activeKey}>
-                <QuoteCard {...quote.cardProps} />
+                <ImageMaskScope tabId={quote.cardProps.card.source.tabId} view={cardView} reveals={reveals.tabs.get(quote.cardProps.card.source.tabId)} dispatch={dispatchReveals}>
+                  <QuoteCard key={quote.cardProps.card.id} {...quote.cardProps} />
+                </ImageMaskScope>
               </QuoteActiveContext.Provider>
             </QuoteControllerContext.Provider>
           )}

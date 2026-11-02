@@ -1,4 +1,5 @@
-import { useLayoutEffect, useRef, type ReactNode } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { ReadError } from '../../../../shared/api'
 import { SEARCH_SITE_URLS } from '../../../../shared/online-search'
 import { Content } from '../../components/Content'
@@ -7,6 +8,10 @@ import { Icon } from '../../components/Icon'
 import { Loading, SourceNotice } from '../../components/Notices'
 import { describeReadError, meaningfulName } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
+import type { ImageView, ViewerRequest } from '../image/imageView'
+import { ImageViewer } from '../image/ImageViewer'
+import { PostThumbnail } from '../image/PostThumbnail'
+import { useImageScope } from '../image/useImageLoad'
 import { QuoteEntryContext } from './QuoteContext'
 import { QuoteRef } from './QuoteRef'
 import { useNumberSelectionMenu } from './NumberSelectionMenu'
@@ -17,6 +22,19 @@ import { searchErrorLines } from '../search/onlineSearchText'
 const XDS_HOST = new URL(SEARCH_SITE_URLS.xds).host
 const EDGE = 8
 const GAP = 6
+
+/**
+ * Where the quoted post's image viewer goes: the reader or thread list showing the quote or the
+ * selected number (the panes their own viewers cover), never the small card itself.
+ */
+const VIEWER_HOST = '.reader, .list-pane'
+
+/** The pane around the card's anchor: a quote reference, or a selected number's range. */
+function viewerHost(anchor: Element | Range | null): HTMLElement | null {
+  const node = anchor instanceof Range ? anchor.commonAncestorContainer : anchor
+  const element = node instanceof Element ? node : (node?.parentElement ?? null)
+  return element?.closest<HTMLElement>(VIEWER_HOST) ?? null
+}
 
 /** Server said the post (or what was needed) is missing, or this identity may not see it. */
 function unavailableText(error: ReadError): string | null {
@@ -49,6 +67,13 @@ function Status({ tone, trailing, children }: { tone: 'info' | 'error'; trailing
  * Floating card of one quote. Lives outside every reader's content (no post IDs on its nodes), so
  * it never takes part in a reader's position. Its >>No. sits right above it, so the card repeats no
  * number; 关闭 ends its first line in every state (the meta line, else the first notice).
+ *
+ * Mounted once per card (keyed by its id): the quoted post's thumbnail loads in the card's own image
+ * scope, so switching to another quote or closing the card cancels its image loads, releases its
+ * images and drops its viewer; no late result can reach the next card. 查看原图 opens the existing
+ * viewer over the reader or list of the quote (or selected number) and pins the card; meanwhile the
+ * card stays, hidden and inert under the viewer, which takes Esc first. Closing the viewer brings
+ * the card back with focus on the thumbnail, and the next Esc closes the card.
  */
 export function QuoteCard({
   card,
@@ -61,6 +86,7 @@ export function QuoteCard({
   onKeyDown,
   onRetry,
   onOpenThread,
+  onPin,
   onLookUp,
   onClose
 }: QuoteCardProps) {
@@ -70,6 +96,36 @@ export function QuoteCard({
   const lookupFocused = useRef(false)
   // The card's post has no post menu: a selected whole number in it gets 预览／打开 (replacing this card).
   const bodyNumbers = useNumberSelectionMenu(card.source.entryKey, `${card.id}:${postId}`)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const scope = useImageScope(scrollRef)
+  const [viewer, setViewer] = useState<{ request: ViewerRequest; host: HTMLElement } | null>(null)
+  const images = useMemo<ImageView>(
+    () => ({
+      ...scope,
+      openViewer: (request) => {
+        const host = viewerHost(anchor())
+        if (host === null) return
+        onPin()
+        setViewer({ request, host })
+      }
+    }),
+    [scope, anchor, onPin]
+  )
+  const closeViewer = useCallback(() => setViewer(null), [])
+
+  // After the commit that makes the card operable again: focus goes back to the thumbnail, without
+  // scrolling the card or the reader.
+  const viewerTrigger = useRef<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    if (viewer !== null) {
+      viewerTrigger.current = viewer.request.trigger
+      return
+    }
+    const trigger = viewerTrigger.current
+    if (trigger === null) return
+    viewerTrigger.current = null
+    if (trigger.isConnected) trigger.focus({ preventScroll: true })
+  }, [viewer])
 
   // Placed below the quote (above when there is no room), kept inside the window, following the
   // quote while the reader scrolls. Fixed positioning: the reading content never moves for it.
@@ -176,6 +232,7 @@ export function QuoteCard({
           {close}
         </div>
         <div className="quote-card-content number-selection-area" {...bodyNumbers.areaProps}>
+          {post.image !== null && <PostThumbnail postId={post.id} images={images} />}
           <QuoteEntryContext.Provider value={card.source.entryKey}>
             <Content
               nodes={post.content}
@@ -297,60 +354,78 @@ export function QuoteCard({
       (outcome?.status === 'failed' && unavailableText(outcome.error) === null) ||
       (result?.status === 'failed' && (openingThread || unavailableText(result.error) === null)))
 
+  // The viewer is the card's sibling, not its child: its events never reach the card's pointer,
+  // focus and Tab handling, and it is laid out by its host pane instead of the card.
+  const covered = viewer !== null
   return (
-    <div
-      ref={cardRef}
-      className="quote-card"
-      role="dialog"
-      aria-label={card.source.selection !== undefined ? `No.${postId}` : `引用 No.${postId}`}
-      onPointerEnter={onPointerEnter}
-      onPointerLeave={onPointerLeave}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onBlur()
-      }}
-      onKeyDown={onKeyDown}
-    >
-      <div className="quote-card-scroll" aria-busy={previewLoading || undefined}>
-        {preview}
-      </div>
-      {(located !== null || internalLocate !== null) && (
-        <div className="quote-card-result">
-          {internalLocate}
-          {located}
+    <>
+      <div
+        ref={cardRef}
+        className={covered ? 'quote-card is-covered' : 'quote-card'}
+        role="dialog"
+        aria-label={card.source.selection !== undefined ? `No.${postId}` : `引用 No.${postId}`}
+        inert={covered}
+        onPointerEnter={onPointerEnter}
+        onPointerLeave={onPointerLeave}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onBlur()
+        }}
+        onKeyDown={onKeyDown}
+      >
+        <div className="quote-card-scroll" ref={scrollRef} aria-busy={previewLoading || undefined}>
+          {preview}
         </div>
-      )}
-      {(result?.status === 'thread-known' || canRetry || canLookUp || lookingUp) && (
-        <footer className="quote-card-actions">
-          {result?.status === 'thread-known' && (
-            <button type="button" className="btn btn-small" onClick={onOpenThread}>
-              打开原串
-            </button>
-          )}
-          {(canLookUp || lookingUp) && (
-            <button
-              ref={lookupRef}
-              type="button"
-              className="btn btn-small"
-              aria-disabled={lookingUp || undefined}
-              aria-busy={lookingUp || undefined}
-              onFocus={() => (lookupFocused.current = true)}
-              onBlur={() => (lookupFocused.current = false)}
-              onClick={() => {
-                if (!lookingUp) onLookUp()
-              }}
-            >
-              <Icon name="search" size={14} />
-              {note === null && internal.lookup !== true ? '向 XDS 查询所属串' : '重新向 XDS 查询'}
-            </button>
-          )}
-          {canRetry && (
-            <button type="button" className="btn btn-small" onClick={onRetry}>
-              <Icon name="refresh" size={14} />
-              重试
-            </button>
-          )}
-        </footer>
-      )}
-    </div>
+        {(located !== null || internalLocate !== null) && (
+          <div className="quote-card-result">
+            {internalLocate}
+            {located}
+          </div>
+        )}
+        {(result?.status === 'thread-known' || canRetry || canLookUp || lookingUp) && (
+          <footer className="quote-card-actions">
+            {result?.status === 'thread-known' && (
+              <button type="button" className="btn btn-small" onClick={onOpenThread}>
+                打开原串
+              </button>
+            )}
+            {(canLookUp || lookingUp) && (
+              <button
+                ref={lookupRef}
+                type="button"
+                className="btn btn-small"
+                aria-disabled={lookingUp || undefined}
+                aria-busy={lookingUp || undefined}
+                onFocus={() => (lookupFocused.current = true)}
+                onBlur={() => (lookupFocused.current = false)}
+                onClick={() => {
+                  if (!lookingUp) onLookUp()
+                }}
+              >
+                <Icon name="search" size={14} />
+                {note === null && internal.lookup !== true ? '向 XDS 查询所属串' : '重新向 XDS 查询'}
+              </button>
+            )}
+            {canRetry && (
+              <button type="button" className="btn btn-small" onClick={onRetry}>
+                <Icon name="refresh" size={14} />
+                重试
+              </button>
+            )}
+          </footer>
+        )}
+      </div>
+      {viewer !== null &&
+        createPortal(
+          <ImageViewer
+            key={viewer.request.postId}
+            viewId={scope.viewId}
+            postId={viewer.request.postId}
+            initialThumb={viewer.request.thumb}
+            displayed
+            onClose={closeViewer}
+          />,
+          viewer.host
+        )}
+    </>
   )
 }

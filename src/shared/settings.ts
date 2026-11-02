@@ -100,6 +100,10 @@ export interface AppSettings {
   customTheme: CustomTheme | null
   /** Post text font, size and preferred width; apply under every scheme. */
   reading: ReadingParams
+  /** Cover reading thumbnails until explicitly revealed during the current page visit. */
+  imageMaskEnabled: boolean
+  /** Integer blur strength: 100 applies the strongest frost; 0 leaves normal image activation unchanged. */
+  imageMaskStrength: number
   density: Density
   motion: MotionPreference
   rail: RailSettings
@@ -136,6 +140,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   customThemeEnabled: false,
   customTheme: null,
   reading: DEFAULT_READING,
+  imageMaskEnabled: false,
+  imageMaskStrength: 100,
   density: 'comfortable',
   motion: 'system',
   rail: { order: [], hidden: [] },
@@ -160,6 +166,8 @@ export const SETTING_KEYS = [
   'customThemeEnabled',
   'customTheme',
   'reading',
+  'imageMaskEnabled',
+  'imageMaskStrength',
   'density',
   'motion',
   'rail',
@@ -337,12 +345,20 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
           : { ok: false, issues: [{ kind: 'field', field: key, problem: 'range' }] }
       break
     case 'reminderSystemNotifications':
+    case 'imageMaskEnabled':
     case 'newTabSplitDefault':
     case 'customThemeEnabled':
     case 'updateAutoCheck':
     case 'updateAutoInstall':
     case 'updateAutoDownload':
       parsed = typeof value === 'boolean' ? { ok: true, value } : { ok: false, issues: [{ kind: 'field', field: key, problem: 'type' }] }
+      break
+    case 'imageMaskStrength':
+      parsed = typeof value !== 'number' || !Number.isInteger(value)
+        ? { ok: false, issues: [{ kind: 'field', field: key, problem: 'type' }] }
+        : value < 0 || value > 100
+          ? { ok: false, issues: [{ kind: 'field', field: key, problem: 'range' }] }
+          : { ok: true, value }
       break
     case 'closeAction':
       parsed = choice(value, CLOSE_ACTIONS, key)

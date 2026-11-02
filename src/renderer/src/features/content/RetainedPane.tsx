@@ -13,6 +13,7 @@ import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { formatRecordTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
+import { useImageMaskSubpage } from '../image/imageMask'
 import { useImageScope } from '../image/useImageLoad'
 import { useListImageViewer } from '../image/useListImageViewer'
 import { SentPage, useSentAttempts } from '../publication/SentPage'
@@ -105,6 +106,8 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
   useLayoutEffect(() => {
     if (registry !== null) rememberHistory(registry.listMemory, props.entryKey, { view })
   }, [registry, props.entryKey, view])
+  // 浏览／新串／回复 are separate pages for the 图片遮罩: switching masks their images again.
+  useImageMaskSubpage(view)
 
   return (
     <section className="list-pane history-page" aria-labelledby={headingId}>
