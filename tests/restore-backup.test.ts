@@ -464,6 +464,7 @@ describe('restore journal', () => {
     expect(completeIn(newer, [folder])).toBe(true)
   })
 
+  // Every interruption point runs a full restore with durable writes; fsync makes this slow on macOS.
   it('abandons from any interrupted step of carrying out or abandoning, never taking an earlier 降级前数据 for the current data', () => {
     const PREVIOUS_DATABASE = Buffer.from('an earlier restore’s 降级前数据')
     const PREVIOUS_IMAGE = Buffer.from('an earlier restore’s draft image')
@@ -502,7 +503,7 @@ describe('restore journal', () => {
       }
     }
     expect(chains).toBeGreaterThan(20)
-  })
+  }, 30_000)
 
   it('finds no restore when backups is not a directory, so the pre-upgrade backup failure shows', () => {
     const folder = crashedNewer(oldInstall())
@@ -518,7 +519,8 @@ describe('restore journal', () => {
     expect(sha(`${databaseOf(folder)}-wal`)).toBe(wal)
   })
 
-  it('does not open when it cannot tell whether a journal exists', () => {
+  // Windows: chmod cannot take away a directory's read access, so this input cannot be made there.
+  it.skipIf(process.platform === 'win32')('does not open when it cannot tell whether a journal exists', () => {
     const { folder, newer } = prepared()
     chmodSync(join(folder, 'backups'), 0o000)
     try {
