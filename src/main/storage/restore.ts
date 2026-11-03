@@ -1,10 +1,11 @@
 import Database from 'better-sqlite3'
-import { closeSync, constants, copyFileSync, fsyncSync, lstatSync, mkdirSync, openSync, rmSync } from 'node:fs'
+import { constants, copyFileSync, lstatSync, mkdirSync, rmSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type { RestoreInfo } from '../../shared/api'
 import { BACKUP_DATABASE, BACKUP_DRAFT_IMAGES, preUpgradeBackupDirectory, readPreUpgradeBackup, type PreUpgradeManifest } from './backup'
 import type { RestorePreparation } from './contract'
 import { discardRestoreJournal, restoreStagingDirectory, writeRestoreJournal } from './restore-journal'
+import { syncFile } from './durable'
 
 /*
  * 恢复升级前备份, the part in the run that shows a newer version's data read-only: whether the
@@ -67,15 +68,6 @@ export function restoreInfo(source: RestoreSource | null): RestoreInfo {
     backupCompletedAt: manifest.completedAt,
     sourceVersion: manifest.appVersion,
     secretsReadable: readSecretKeys(source.current) !== null
-  }
-}
-
-function syncFile(path: string): void {
-  const fd = openSync(path, 'r')
-  try {
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
   }
 }
 

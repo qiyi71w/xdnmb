@@ -1,12 +1,12 @@
 import Database from 'better-sqlite3'
 import {
-  closeSync, constants, copyFileSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync,
-  unlinkSync, writeFileSync
+  constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync
 } from 'node:fs'
 import { rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isRecord } from '../../shared/theme'
 import { isManagedName } from '../images/files'
+import { syncDirectory, syncFile } from './durable'
 
 /*
  * Pre-upgrade backup. Before a migration changes an existing database, the database as it is (a
@@ -136,24 +136,6 @@ function settleInterruptedSwap(backups: string): void {
   const current = join(backups, PRE_UPGRADE)
   const replaced = join(backups, REPLACED)
   if (!existsSync(current) && existsSync(replaced)) renameSync(replaced, current)
-}
-
-function syncFile(path: string): void {
-  const fd = openSync(path, 'r')
-  try {
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
-  }
-}
-
-/** Best effort: not every platform can open a directory to flush its entries. */
-function syncDirectory(path: string): void {
-  try {
-    syncFile(path)
-  } catch {
-    // The files themselves were flushed.
-  }
 }
 
 function removeQuietly(path: string): void {

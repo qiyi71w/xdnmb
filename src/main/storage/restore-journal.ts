@@ -1,7 +1,8 @@
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { isRecord } from '../../shared/theme'
 import { isManagedName } from '../images/files'
+import { syncDirectory, syncFile } from './durable'
 
 /*
  * 恢复升级前备份, carried out by the next start. The run that showed the newer data read-only stages
@@ -72,24 +73,6 @@ export function beforeRestoreDirectory(userDataDirectory: string): string {
 
 function journalPath(userDataDirectory: string): string {
   return join(userDataDirectory, BACKUPS, JOURNAL)
-}
-
-function syncFile(path: string): void {
-  const fd = openSync(path, 'r')
-  try {
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
-  }
-}
-
-/** Best effort: not every platform can open a directory to flush its entries. */
-function syncDirectory(path: string): void {
-  try {
-    syncFile(path)
-  } catch {
-    // The renames themselves are atomic.
-  }
 }
 
 function present(path: string): boolean {
