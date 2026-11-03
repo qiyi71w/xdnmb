@@ -5,7 +5,7 @@ import type { RestoreInfo } from '../../shared/api'
 import { BACKUP_DATABASE, BACKUP_DRAFT_IMAGES, preUpgradeBackupDirectory, readPreUpgradeBackup, type PreUpgradeManifest } from './backup'
 import type { RestorePreparation } from './contract'
 import { discardRestoreJournal, restoreStagingDirectory, writeRestoreJournal } from './restore-journal'
-import { syncFile } from './durable'
+import { copyFileDurably, syncFile } from './durable'
 
 /*
  * 恢复升级前备份, the part in the run that shows a newer version's data read-only: whether the
@@ -122,8 +122,7 @@ export function prepareRestore(source: RestoreSource | null): RestorePreparation
     mkdirSync(join(staging, BACKUP_DRAFT_IMAGES), { recursive: true })
     for (const image of manifest.draftImages) {
       const copy = join(staging, BACKUP_DRAFT_IMAGES, image.name)
-      copyFileSync(join(backup, BACKUP_DRAFT_IMAGES, image.name), copy, constants.COPYFILE_EXCL)
-      syncFile(copy)
+      copyFileDurably(join(backup, BACKUP_DRAFT_IMAGES, image.name), copy)
       if (lstatSync(copy).size !== image.size) throw new Error('staged draft image incomplete')
     }
     const database = join(staging, basename(source.databasePath))

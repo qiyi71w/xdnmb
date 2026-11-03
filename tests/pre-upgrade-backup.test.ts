@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -147,6 +147,26 @@ describe('pre-upgrade backup content', () => {
     close(db)
     expect(columns(join(folder, 'xidao.sqlite'))).toContain('extra')
     expect(notes(join(folder, 'xidao.sqlite'))).toEqual(['first', 'only in the WAL'])
+  })
+
+  it('backs up a read-only draft attachment copy, leaving the original as it was', () => {
+    // Its own setup (no symbolic link, so it also runs where links cannot be made).
+    const folder = userData()
+    close(open(folder, OLD, '1.0.0-test'))
+    mkdirSync(join(folder, 'draft-images'))
+    const original = join(folder, 'draft-images', IMAGE_A)
+    writeFileSync(original, PNG)
+    chmodSync(original, 0o444)
+    const mode = statSync(original).mode & 0o777
+    try {
+      expect(open(folder, NEW).status).toEqual({ state: 'ready', schemaVersion: 2 })
+      expect(readFileSync(join(preUpgradeBackupDirectory(folder), 'draft-images', IMAGE_A))).toEqual(PNG)
+      expect(statSync(original).mode & 0o777).toBe(mode)
+      expect(readFileSync(original)).toEqual(PNG)
+    } finally {
+      // Windows does not delete a read-only file.
+      chmodSync(original, 0o644)
+    }
   })
 
   it('takes no backup on a new install or when nothing needs migrating', () => {

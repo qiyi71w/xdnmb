@@ -1,12 +1,12 @@
 import Database from 'better-sqlite3'
 import {
-  constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync
+  existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync
 } from 'node:fs'
 import { rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isRecord } from '../../shared/theme'
 import { isManagedName } from '../images/files'
-import { syncDirectory, syncFile } from './durable'
+import { copyFileDurably, syncDirectory, syncFile } from './durable'
 
 /*
  * Pre-upgrade backup. Before a migration changes an existing database, the database as it is (a
@@ -162,8 +162,7 @@ function copyDraftImages(source: string, target: string): PreUpgradeManifest['dr
     const stat = lstatSync(from)
     if (!stat.isFile()) continue
     const to = join(target, name)
-    copyFileSync(from, to, constants.COPYFILE_EXCL)
-    syncFile(to)
+    copyFileDurably(from, to)
     copied.push({ name, size: stat.size })
   }
   return copied

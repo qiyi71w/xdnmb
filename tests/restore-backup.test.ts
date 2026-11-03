@@ -383,6 +383,24 @@ describe('restore journal', () => {
     expect(settleRestore(databaseOf(folder))).toBe('none')
   })
 
+  it('restores from a backup whose draft attachment copy is read-only', () => {
+    const folder = oldInstall()
+    upgrade(folder)
+    const backupImage = join(preUpgradeBackupDirectory(folder), 'draft-images', OLD_IMAGE)
+    chmodSync(backupImage, 0o444)
+    try {
+      prepare(folder)
+      expect(settleRestore(databaseOf(folder))).toBe('restored')
+      expect(readFileSync(join(folder, 'draft-images', OLD_IMAGE))).toEqual(OLD_PNG)
+      expect(readFileSync(backupImage)).toEqual(OLD_PNG)
+      const db = open(folder, OLD)
+      expect(db.listDrafts().map((draft) => draft.attachment?.fileName)).toEqual([OLD_IMAGE])
+    } finally {
+      // Windows does not delete a read-only file.
+      chmodSync(backupImage, 0o644)
+    }
+  })
+
   it('after an interruption at any step, the next start completes it; both copies stay whole meanwhile', () => {
     let stop = 1
     for (;;) {
