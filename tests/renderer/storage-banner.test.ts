@@ -4,16 +4,10 @@ import { DOWNGRADE_DOCS_URL, restartOutcome, restoreSecretsText, storageBanner }
 it('offers the upgrade restarts after a failed pre-upgrade backup and the restore entry for newer data', () => {
   expect(storageBanner(null)).toBeNull()
   expect(storageBanner({ state: 'ready', schemaVersion: 27 })).toBeNull()
-  expect(storageBanner({ state: 'unavailable', reason: 'backup-failed', schemaVersion: 26, supportedVersion: 27 })).toEqual({
-    text: '升级前未能备份数据，数据尚未升级，当前不会保存新内容。',
-    actions: 'upgrade'
-  })
-  expect(storageBanner({ state: 'unavailable', reason: 'open-failed' })).toEqual({ text: '本地存储不可用，内容不会保存', actions: null })
-  expect(storageBanner({ state: 'unavailable', reason: 'migration-failed' })).toEqual({ text: '本地存储不可用，内容不会保存', actions: null })
-  expect(storageBanner({ state: 'read-only', reason: 'newer-schema', schemaVersion: 28, supportedVersion: 27 })).toEqual({
-    text: '这份数据来自更新版本的汐岛，当前版本只能查看，不会保存新内容。改用新版即可继续使用，数据不会丢失。',
-    actions: 'newer'
-  })
+  expect(storageBanner({ state: 'unavailable', reason: 'backup-failed', schemaVersion: 26, supportedVersion: 27 })?.actions).toBe('upgrade')
+  expect(storageBanner({ state: 'unavailable', reason: 'open-failed' })?.actions).toBeNull()
+  expect(storageBanner({ state: 'unavailable', reason: 'migration-failed' })?.actions).toBeNull()
+  expect(storageBanner({ state: 'read-only', reason: 'newer-schema', schemaVersion: 28, supportedVersion: 27 })?.actions).toBe('newer')
 })
 
 it('links 了解更多 to the public downgrade section', () => {

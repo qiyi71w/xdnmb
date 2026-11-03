@@ -91,13 +91,14 @@
 }
 
 /* macOS: one title band across the window. Its row is as tall as the top bar actually is (at least
-   the band, also when wrapped or absent); the rail and the tab content both start under it. */
+   the band, also when wrapped or absent); the storage notices (when any) take the next row, and the
+   rail and the tab content both start under the band. */
 .app.is-macos .workspace {
-  grid-template-rows: minmax(var(--mac-band), auto) minmax(0, 1fr);
+  grid-template-rows: minmax(var(--mac-band), auto) auto minmax(0, 1fr);
 }
 
 .app.is-macos .nav-column {
-  grid-area: 2 / 1;
+  grid-area: 2 / 1 / -1 / 2;
 }
 
 .app.is-macos .main-column {
@@ -107,8 +108,12 @@
   grid-template-rows: subgrid;
 }
 
-.app.is-macos .tab-host {
+.app.is-macos .storage-notices {
   grid-row: 2;
+}
+
+.app.is-macos .tab-host {
+  grid-row: 3;
 }
 
 /* ---------- Top bar ---------- */
@@ -416,16 +421,27 @@
   border-inline: 1px solid var(--line-soft);
 }
 
+/* Storage that takes no writes this run: a solid warning strip between the tab bar and the paper,
+   as wide as the paper. It stays out of the title band, so the window controls never cover it. */
+.storage-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 8px 8px;
+}
+
 .storage-banner {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 16px;
+  min-height: 40px;
+  padding: 6px 8px 6px 14px;
+  border-radius: var(--radius-l);
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--warn-ink);
   background: var(--warn-bg);
-  border-bottom: 1px solid color-mix(in oklch, var(--warn-ink) 22%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--warn-ink) 18%, transparent);
 }
 
 .storage-banner .icon {

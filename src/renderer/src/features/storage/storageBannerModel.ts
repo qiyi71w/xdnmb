@@ -2,7 +2,7 @@ import type { RestoreInfo, RestoreResult, StorageStatus, UpgradeRestartResult } 
 import { UPDATE_REPOSITORY_URL } from '../../../../shared/updates'
 
 /**
- * The window-top strip for storage that takes no writes this run. `upgrade`: the pre-upgrade backup
+ * The strip under the tab bar for storage that takes no writes this run. `upgrade`: the pre-upgrade backup
  * failed, so 重新启动重试 and 不备份升级… are offered. `newer`: the data is a newer version's, so
  * 了解更多 is offered, and 恢复升级前备份… when a backup can be restored.
  */
@@ -14,9 +14,9 @@ export interface StorageBannerView {
 export function storageBanner(storage: StorageStatus | null): StorageBannerView | null {
   if (storage === null || storage.state === 'ready') return null
   if (storage.state === 'read-only') {
-    return { text: '这份数据来自更新版本的汐岛，当前版本只能查看，不会保存新内容。改用新版即可继续使用，数据不会丢失。', actions: 'newer' }
+    return { text: '数据来自更新版本的汐岛，这里只能查看、改动不会保存。', actions: 'newer' }
   }
-  if (storage.reason === 'backup-failed') return { text: '升级前未能备份数据，数据尚未升级，当前不会保存新内容。', actions: 'upgrade' }
+  if (storage.reason === 'backup-failed') return { text: '升级前的备份没有成功，数据还未升级，暂时不会保存改动。', actions: 'upgrade' }
   return { text: '本地存储不可用，内容不会保存', actions: null }
 }
 

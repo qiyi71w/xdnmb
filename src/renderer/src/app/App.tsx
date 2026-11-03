@@ -1468,7 +1468,6 @@ export function App() {
           style={platform === 'darwin' ? ({ '--page-zoom': String(pageZoom) } as CSSProperties) : undefined}
           ref={appRef}
         >
-          <StorageBanner storage={storage} restoreAbandoned={restoreAbandoned} />
           <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
           <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
           <ContentRegistryContext.Provider value={registry}>
@@ -1518,6 +1517,7 @@ export function App() {
                       onNewTab={newTab}
                       settingsTrigger={navOverlay ? { ref: settingsButtonRef, onOpen: openSettingsButton } : null}
                     />
+                    <StorageBanner storage={storage} restoreAbandoned={restoreAbandoned} />
                     <div className="tab-host">
                       {tabs.tabs.map((tab) => (
                         <ImageMaskScope

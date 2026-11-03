@@ -20,8 +20,10 @@ type Restorable = Extract<RestoreInfo, { restorable: true }>
  */
 export function StorageBanner({ storage, restoreAbandoned }: { storage: StorageStatus | null; restoreAbandoned: boolean }) {
   const view = storageBanner(storage)
+  if (!restoreAbandoned && view === null) return null
+  // Under the tab bar, above the paper: the title band and its window controls stay as they are.
   return (
-    <>
+    <div className="storage-notices">
       {restoreAbandoned && (
         <div className="storage-banner">
           <Icon name="alert" />
@@ -33,7 +35,7 @@ export function StorageBanner({ storage, restoreAbandoned }: { storage: StorageS
       {view?.actions === 'upgrade' && <UpgradeBanner text={view.text} />}
       {view?.actions === 'newer' && <NewerDataBanner text={view.text} />}
       {view?.actions === null && <Banner text={view.text} />}
-    </>
+    </div>
   )
 }
 
