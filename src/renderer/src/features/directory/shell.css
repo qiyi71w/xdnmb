@@ -29,7 +29,8 @@
 }
 
 /* macOS: the rail (inline or overlay) starts in the workspace's second row, under the title band
-   with the traffic lights and the top bar's controls (layout.css), level with the tab content. */
+   with the traffic lights and the top bar's controls (layout.css), level with the storage notices
+   when there are any and otherwise with the tab content. */
 .app.is-macos .nav-column > .nav {
   margin-top: 0;
 }
