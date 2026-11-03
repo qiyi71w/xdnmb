@@ -90,18 +90,8 @@ import { isEditableTarget, matchShortcut, shortcutLabel, type ShortcutAction } f
 import { composeTargetsOf, TabView } from './TabView'
 import { TopBar } from './TopBar'
 import { useSettingsWriter } from './useSettingsWriter'
+import { StorageBanner } from '../features/storage/StorageBanner'
 import './layout.css'
-
-function StorageBanner({ storage }: { storage: StorageStatus | null }) {
-  if (storage === null || storage.state === 'ready') return null
-  const text = storage.state === 'read-only' ? '数据库只读，新内容不会保存' : '本地存储不可用，内容不会保存'
-  return (
-    <div className="storage-banner" role="status">
-      <Icon name="alert" />
-      <span>{text}</span>
-    </div>
-  )
-}
 
 /**
  * Tabs exist only once the global split default is known (the first tab takes it), or the
@@ -170,6 +160,7 @@ const NAV_FULL = 8 + RAIL_WIDTH
 
 export function App() {
   const [storage, setStorage] = useState<StorageStatus | null>(null)
+  const [restoreAbandoned, setRestoreAbandoned] = useState(false)
   const [platform, setPlatform] = useState<AppPlatform | null>(null)
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
   useAppearance(settings)
@@ -222,6 +213,7 @@ export function App() {
       .then((status) => {
         if (!alive) return
         setStorage(status.storage)
+        setRestoreAbandoned(status.restoreAbandoned)
         setPlatform(status.platform)
       })
       .catch(() => undefined)
@@ -1476,7 +1468,6 @@ export function App() {
           style={platform === 'darwin' ? ({ '--page-zoom': String(pageZoom) } as CSSProperties) : undefined}
           ref={appRef}
         >
-          <StorageBanner storage={storage} />
           <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
           <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
           <ContentRegistryContext.Provider value={registry}>
@@ -1526,6 +1517,7 @@ export function App() {
                       onNewTab={newTab}
                       settingsTrigger={navOverlay ? { ref: settingsButtonRef, onOpen: openSettingsButton } : null}
                     />
+                    <StorageBanner storage={storage} restoreAbandoned={restoreAbandoned} />
                     <div className="tab-host">
                       {tabs.tabs.map((tab) => (
                         <ImageMaskScope

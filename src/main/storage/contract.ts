@@ -2,7 +2,7 @@ import type { AnnouncementRecord } from '../../shared/announcements'
 import type { AnalyticsRecord } from '../../shared/analytics'
 import type { BlockKind, LocalBlock } from '../../shared/blocks'
 import type { CookieColor, CookieColorName } from '../../shared/cookieColors'
-import type { StorageStatus, ThreadReadPurpose } from '../../shared/api'
+import type { RestoreInfo, StorageStatus, ThreadReadPurpose } from '../../shared/api'
 import type {
   BoardDirectory,
   FeedPage,
@@ -275,4 +275,14 @@ export interface WorkspaceStore {
   saveWorkspace(state: string, at: string): Promise<void>
 }
 
-export type AppStore = ReadingStore & IdentityStore & AccountSessionStore & DraftStore & ContentStore & SubscriptionStore & PublicationStore & WorkspaceStore & ReminderStore & SearchStore
+/** See `./restore`: `prepared` (restart now), `not-applicable`, or `failed` (nothing changed). */
+export type RestorePreparation = 'prepared' | 'not-applicable' | 'failed'
+
+/** 恢复升级前备份 while a newer version's database is open read-only (the app's own database only). */
+export interface RestoreStore {
+  restoreInfo(): Promise<RestoreInfo>
+  /** Stages the backup for the next start and writes its journal; the current database is only read. */
+  prepareRestore(): Promise<RestorePreparation>
+}
+
+export type AppStore = ReadingStore & IdentityStore & AccountSessionStore & DraftStore & ContentStore & SubscriptionStore & PublicationStore & WorkspaceStore & ReminderStore & SearchStore & RestoreStore

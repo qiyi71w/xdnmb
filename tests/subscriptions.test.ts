@@ -382,7 +382,7 @@ describe('protected subscription configuration and observations', () => {
     expect(db.status).toEqual({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((migration) => migration.version)) })
     expect(db.loadSubscriptionConfiguration().context).toEqual({ generation: 0, appCredentialId: null, webCredentialId: cookie.id })
     expect(db.loadRoleSelections()['web-sync']).toEqual({ state: 'selected', credentialId: cookie.id })
-    const unavailable = await openReadingStore({ databasePath: file, createWorker() { throw new Error('unavailable') } })
+    const unavailable = await openReadingStore({ databasePath: file, appVersion: '0.0.0-test', createWorker() { throw new Error('unavailable') } })
     expect(await unavailable.loadSubscriptionOperations()).toEqual([])
     expect(await unavailable.loadSubscriptionConfiguration()).toMatchObject({ context: { appCredentialId: null } })
     expect(await unavailable.loadSubscriptionPlans()).toEqual([])

@@ -5,9 +5,14 @@ import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Post, ThreadPage } from '../src/shared/forum'
 import { StorageWriteRefusedError } from '../src/main/storage/contract'
-import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
-import { MIGRATIONS } from '../src/main/storage/migrations'
+import { openReadingDatabase as openDatabase, type ReadingDatabase } from '../src/main/storage/database'
+import { MIGRATIONS, type Migration } from '../src/main/storage/migrations'
 import { DEFAULT_SETTINGS } from '../src/shared/settings'
+
+/** Opens as the app does: an existing database is backed up before it is migrated. */
+function openReadingDatabase(path: string, migrations?: readonly Migration[]): ReadingDatabase {
+  return openDatabase(path, migrations, { appVersion: '0.0.0-test' })
+}
 
 const t0 = '2026-10-24T00:00:00.000Z'
 const t1 = '2026-10-24T00:01:00.000Z'

@@ -173,6 +173,37 @@ export type StorageStatus =
   | { state: 'read-only'; reason: 'newer-schema'; schemaVersion: number; supportedVersion: number }
   /** Database could not be opened or migrated; the original file is left untouched. */
   | { state: 'unavailable'; reason: 'open-failed' | 'migration-failed' }
+  /**
+   * The database needs upgrading, but the backup taken before every upgrade could not be saved:
+   * nothing was migrated and the database is neither read nor written this run.
+   */
+  | { state: 'unavailable'; reason: 'backup-failed'; schemaVersion: number; supportedVersion: number }
+
+/**
+ * Result of 重新启动重试 / 不备份升级. `restarting`: the app is quitting through the ordinary quit
+ * and starts again. `not-applicable`: storage is not waiting on a failed pre-upgrade backup.
+ * `failed`: the choice to upgrade without a backup could not be recorded; nothing changed.
+ */
+export type UpgradeRestartResult = { status: 'restarting' } | { status: 'not-applicable' } | { status: 'failed' }
+
+/**
+ * 读取恢复信息, while a newer version's data is open read-only. `restorable`: the pre-upgrade backup
+ * is valid and this version can open it. `backupCompletedAt` (ISO 8601) and `sourceVersion` (the
+ * version that took it before upgrading) are what the confirmation shows; `secretsReadable`: the
+ * current data's 饼干凭据, App UUID and 官网账号会话 tables are understood, so only secrets removed
+ * since stay out of the restore (otherwise all of them are left out). Never a path or a secret.
+ */
+export type RestoreInfo =
+  | { restorable: false }
+  | { restorable: true; backupCompletedAt: string; sourceVersion: string; secretsReadable: boolean }
+
+/**
+ * Result of 恢复并重新启动. `restarting`: the restore is prepared and the app is quitting through the
+ * ordinary quit; the next start replaces the data. `not-applicable`: the data is not a newer
+ * version's or there is no restorable backup. `failed`: the restore could not be prepared; the data
+ * and files are unchanged.
+ */
+export type RestoreResult = { status: 'restarting' } | { status: 'not-applicable' } | { status: 'failed' }
 
 /** Desktop platform of the running app; decides which modifier keys the shortcuts use. */
 export type AppPlatform = 'darwin' | 'win32' | 'linux'
@@ -180,6 +211,8 @@ export type AppPlatform = 'darwin' | 'win32' | 'linux'
 export interface AppStatus {
   storage: StorageStatus
   platform: AppPlatform
+  /** This start found a prepared restore it could not carry out and opened the data as it was. */
+  restoreAbandoned: boolean
 }
 
 /**
@@ -398,6 +431,17 @@ export interface XidaoApi {
   updates: UpdatesApi
   app: {
     getStatus(): Promise<AppStatus>
+    /** After a failed pre-upgrade backup: restart and try the backup and upgrade again. */
+    restartToRetryUpgrade(): Promise<UpgradeRestartResult>
+    /**
+     * After a failed pre-upgrade backup: the next start upgrades the same database without a backup
+     * (once), then the app restarts. Refused unless storage is in that state.
+     */
+    restartToUpgradeWithoutBackup(): Promise<UpgradeRestartResult>
+    /** Only while a newer version's data is open read-only; otherwise `restorable: false`. */
+    getRestoreInfo(): Promise<RestoreInfo>
+    /** 恢复并重新启动: stages the pre-upgrade backup for the next start, then restarts. */
+    restoreBackupAndRestart(): Promise<RestoreResult>
   }
 }
 
@@ -529,6 +573,10 @@ export const IpcChannel = {
   reminderClear: 'reminders:clear',
   reminderDismissRateLimit: 'reminders:dismiss-rate-limit',
   getStatus: 'app:get-status',
+  restartToRetryUpgrade: 'app:restart-to-retry-upgrade',
+  restartToUpgradeWithoutBackup: 'app:restart-to-upgrade-without-backup',
+  getRestoreInfo: 'app:get-restore-info',
+  restoreBackupAndRestart: 'app:restore-backup-and-restart',
   updateGetState: 'updates:get-state',
   updateCheck: 'updates:check',
   updateDownload: 'updates:download',

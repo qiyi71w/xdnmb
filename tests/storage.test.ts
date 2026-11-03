@@ -9,12 +9,17 @@ import type { StorageStatus } from '../src/shared/api'
 import type { BoardDirectory, CoveragePage, FeedPage, Post, ThreadPage } from '../src/shared/forum'
 import { StorageWriteRefusedError } from '../src/main/storage/contract'
 import { computeCoverage } from '../src/main/storage/coverage'
-import { openReadingDatabase } from '../src/main/storage/database'
+import { openReadingDatabase as openDatabase } from '../src/main/storage/database'
 import type { ReadingDatabase } from '../src/main/storage/database'
-import { MIGRATIONS } from '../src/main/storage/migrations'
+import { MIGRATIONS, type Migration } from '../src/main/storage/migrations'
 import { openReadingStore } from '../src/main/storage/store'
 import { DEFAULT_SETTINGS } from '../src/shared/settings'
 import { MIGRATIONS as PUBLICATION_MIGRATIONS } from './fixtures/lifecycle-v7'
+
+/** Opens as the app does: an existing database is backed up before it is migrated. */
+function openReadingDatabase(path: string, migrations?: readonly Migration[]): ReadingDatabase {
+  return openDatabase(path, migrations, { appVersion: '0.0.0-test' })
+}
 
 const fetchedAt = '2026-10-23T08:00:00.000Z'
 const later = '2026-10-23T08:01:00.000Z'
@@ -493,7 +498,7 @@ class ControlledWorker extends EventEmitter {
 
 function controlledStore(worker: ControlledWorker) {
   return openReadingStore({
-    databasePath: '/unused/controlled.sqlite',
+    databasePath: '/unused/controlled.sqlite', appVersion: '0.0.0-test',
     createWorker(_options: WorkerOptions) {
       queueMicrotask(() => worker.ready())
       return worker as unknown as Worker
@@ -556,7 +561,7 @@ describe('reading store worker lifecycle', () => {
 
   it('returns an unavailable store if the worker cannot start', async () => {
     const store = await openReadingStore({
-      databasePath: '/unused/controlled.sqlite',
+      databasePath: '/unused/controlled.sqlite', appVersion: '0.0.0-test',
       createWorker() { throw new Error('worker startup failed') }
     })
     expect(store.status).toEqual({ state: 'unavailable', reason: 'open-failed' })

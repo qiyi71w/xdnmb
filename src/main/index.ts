@@ -10,6 +10,7 @@ import { createReadStream } from 'node:fs'
 import { lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
+import { setTimeout as delay } from 'node:timers/promises'
 import { LIFECYCLE_REQUEST_CHANNEL, type AppPlatform } from '../shared/api'
 import { IMAGE_FORMAT_EXTENSION, IMAGE_SCHEME } from '../shared/images'
 import { createContentService, type ContentService } from './content/service'
@@ -27,10 +28,15 @@ import { createIdentityService } from './identity/service'
 import { createAppDocumentMatcher } from './app-document'
 import { registerIpc, type IpcRegistration } from './ipc'
 import { createLifecycle, type FinishingSummary, type Lifecycle, type MainWindowHost } from './lifecycle/controller'
+import { isProcessRunning, relaunchArguments, relaunchedAfter, takeSingleInstanceLock } from './lifecycle/relaunch'
 import { createReadingService } from './reading/service'
 import { createRequestScheduler } from './reading/scheduler'
 import type { AppStore } from './storage/contract'
 import { openReadingStore } from './storage/store'
+import { markUpgradeWithoutBackup } from './storage/backup'
+import { settleRestore, type RestoreOutcome } from './storage/restore-journal'
+import { createRestoreService } from './storage/restore-service'
+import { createUpgradeService } from './storage/upgrade'
 import createStorageWorker from './storage/worker?nodeWorker'
 import { createSubscriptionService } from './subscriptions/service'
 import { createPublicationAdapter } from './publication/adapter'
@@ -88,8 +94,19 @@ let sessionSentinel: BaseWindow | null = null
 // Every renderer runs sandboxed; one main process owns the database worker.
 app.enableSandbox()
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
-const primaryInstance = app.requestSingleInstanceLock()
-if (!primaryInstance) app.quit()
+// A relaunched app first waits for the process that relaunched it to end (see `lifecycle/relaunch`).
+const relaunchedFrom = relaunchedAfter(process.argv)
+const primaryInstance = takeSingleInstanceLock({
+  args: process.argv,
+  requestLock: () => app.requestSingleInstanceLock(),
+  isRunning: isProcessRunning,
+  sleep: (ms) => delay(ms),
+  now: () => Date.now()
+})
+void primaryInstance.then((primary) => {
+  if (primary && relaunchedFrom !== null) console.info('[app] relaunched after process', relaunchedFrom, 'ended')
+  if (!primary) app.quit()
+})
 // Managed image files are shown through the app's own scheme, never by file path or remote URL.
 protocol.registerSchemesAsPrivileged([{ scheme: IMAGE_SCHEME, privileges: { standard: true, secure: true } }])
 
@@ -246,7 +263,7 @@ function serveManagedImages(directories: Record<'file' | 'draft', ManagedImageFi
 }
 
 async function start(): Promise<void> {
-  if (!primaryInstance) return
+  if (!(await primaryInstance)) return
   let sessionEnding = false
   if (platform === 'win32') {
     // Native event receiver only, not an application window; also protects startup verification.
@@ -283,9 +300,23 @@ async function start(): Promise<void> {
   denyAll.setPermissionCheckHandler((contents, permission, _origin, details) =>
     permission === 'local-fonts' && contents === mainWindow?.webContents && details.isMainFrame && typeof details.requestingUrl === 'string' && isAppDocument(details.requestingUrl))
 
+  // A restore the previous run prepared is carried out (or abandoned) here: the lock is held, the
+  // previous process has ended, and the database is not open yet. One that cannot be settled
+  // leaves the database unopened this run; the next start continues it.
+  const databasePath = join(app.getPath('userData'), 'xidao.sqlite')
+  let restore: RestoreOutcome | null
+  try {
+    restore = settleRestore(databasePath)
+  } catch {
+    console.error('[storage] restore not settled')
+    restore = null
+  }
+  if (restore === 'abandoned') console.error('[storage] restore abandoned')
   const openedStore = await openReadingStore({
-    databasePath: join(app.getPath('userData'), 'xidao.sqlite'),
-    createWorker: createStorageWorker
+    databasePath,
+    appVersion: app.getVersion(),
+    createWorker: createStorageWorker,
+    skipOpen: restore === null
   })
   store = openedStore
   if (openedStore.status.state !== 'ready') console.error('[storage] status', openedStore.status.state)
@@ -561,13 +592,17 @@ async function start(): Promise<void> {
       await backgroundStopped
     },
     notify: notifyUnfinished,
-    exit: (reason) => {
+    exit: (reason, relaunch) => {
       // Storage closes and the installer decision runs before `app.quit()` closes every window,
       // so the session sentinel still sees a Windows shutdown that starts meanwhile.
       void updateService.prepareExit(reason)
         .catch(() => console.error('[updates] package not confirmed'))
         .then(finishStorage)
-        .finally(() => app.quit())
+        .finally(() => {
+          // The new process waits for this one to end before it takes the lock and opens storage.
+          if (relaunch) app.relaunch({ args: relaunchArguments(process.argv.slice(1), process.pid) })
+          app.quit()
+        })
     },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -600,7 +635,13 @@ async function start(): Promise<void> {
       reminders.configure(saved)
       updateService.configure(saved)
     }),
-    getStatus: () => ({ storage: openedStore.status, platform }),
+    getStatus: () => ({ storage: openedStore.status, platform, restoreAbandoned: restore === 'abandoned' }),
+    upgrade: createUpgradeService({
+      status: () => openedStore.status,
+      markWithoutBackup: (schemaVersion) => markUpgradeWithoutBackup(app.getPath('userData'), schemaVersion),
+      restart: () => controller.requestQuit('restart')
+    }),
+    restore: createRestoreService({ store: openedStore, restart: () => controller.requestQuit('restart') }),
     async chooseSavePath(sender, suggestedName, format) {
       const window = BrowserWindow.fromWebContents(sender)
       const extension = IMAGE_FORMAT_EXTENSION[format]

@@ -37,6 +37,8 @@ function setup(options: { closeAction?: CloseAction | 'unreadable'; notify?: (su
   let storageUp = true
   let opens = 0
   const exitReasons: ExitReason[] = []
+  /** Whether each exit relaunches the app. */
+  const relaunches: boolean[] = []
   let stops = 0
   let clock = Date.parse('2026-10-24T08:00:00.000Z')
   const runs: InFlightPublication[] = []
@@ -86,14 +88,17 @@ function setup(options: { closeAction?: CloseAction | 'unreadable'; notify?: (su
       notified.push(summary)
       options.notify?.(summary)
     },
-    exit: (reason) => exitReasons.push(reason),
+    exit: (reason, relaunch) => {
+      exitReasons.push(reason)
+      relaunches.push(relaunch)
+    },
     now: () => clock,
     sleep: (ms) => new Promise<void>((resolve) => sleeps.push({ ms, resolve })),
     onTrigger: (trigger) => triggers.push(trigger)
   })
 
   return {
-    lifecycle, sent, triggers, sleeps, notified, unattended, abandoned, runs, unstored, exitReasons,
+    lifecycle, sent, triggers, sleeps, notified, unattended, abandoned, runs, unstored, exitReasons, relaunches,
     setStorageUp(up: boolean) { storageUp = up },
     get windowState() { return windowState },
     get opens() { return opens },
@@ -349,5 +354,46 @@ describe('window lifecycle', () => {
     s.lifecycle.completeQuit(true)
     await flush()
     expect(s.exitReasons).toEqual(['session-end'])
+  })
+
+  it('relaunches only after a restart quit; storage that refuses writes still exits as unsaved, never installing', async () => {
+    // Restart from a failed pre-upgrade backup: the workspace cannot be saved, the quit still ends.
+    const s = setup()
+    await s.started()
+    s.lifecycle.requestQuit('restart')
+    expect(s.sent).toEqual([{ kind: 'quit' }])
+    s.lifecycle.completeQuit(false)
+    await flush()
+    expect(s.exitReasons).toEqual(['unsaved'])
+    expect(s.relaunches).toEqual([true])
+
+    const saved = setup()
+    await saved.started()
+    saved.lifecycle.requestQuit('restart')
+    saved.lifecycle.completeQuit(true)
+    await flush()
+    expect(saved.exitReasons).toEqual(['restart'])
+    expect(saved.relaunches).toEqual([true])
+
+    // Cancelled: the next quit is an ordinary one and does not relaunch.
+    const cancelled = setup()
+    await cancelled.started()
+    cancelled.lifecycle.requestQuit('restart')
+    cancelled.lifecycle.cancelQuit()
+    cancelled.lifecycle.requestQuit()
+    cancelled.lifecycle.completeQuit(true)
+    await flush()
+    expect(cancelled.exitReasons).toEqual(['quit'])
+    expect(cancelled.relaunches).toEqual([false])
+
+    // The system ending the session wins: no relaunch.
+    const ending = setup()
+    await ending.started()
+    ending.lifecycle.requestQuit('restart')
+    ending.lifecycle.endSession()
+    ending.lifecycle.completeQuit(true)
+    await flush()
+    expect(ending.exitReasons).toEqual(['session-end'])
+    expect(ending.relaunches).toEqual([false])
   })
 })

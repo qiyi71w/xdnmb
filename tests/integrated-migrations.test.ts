@@ -6,9 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { EMPTY_FIELDS } from '../src/shared/drafts'
 import type { Post, ThreadPage } from '../src/shared/forum'
 import type { SubscriptionObservation, SubscriptionOperation, SubscriptionPlan } from '../src/shared/subscriptions'
-import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
+import { openReadingDatabase as openDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { StorageWriteRefusedError } from '../src/main/storage/contract'
-import { MIGRATIONS } from '../src/main/storage/migrations'
+import { MIGRATIONS, type Migration } from '../src/main/storage/migrations'
 import { DEFAULT_SETTINGS } from '../src/shared/settings'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 import { createReminderService } from '../src/main/reminders/service'
@@ -19,6 +19,11 @@ import { MIGRATIONS as RECONCILIATION_V6 } from './fixtures/reconciliation-v6'
 import { MIGRATIONS as LIFECYCLE_V7 } from './fixtures/lifecycle-v7'
 import { MIGRATIONS as REMINDERS_V9 } from './fixtures/reminders-v9'
 import { MIGRATIONS as SEARCH_V8 } from './fixtures/local-search-v8'
+
+/** Opens as the app does: an existing database is backed up before it is migrated. */
+function openReadingDatabase(path: string, migrations?: readonly Migration[]): ReadingDatabase {
+  return openDatabase(path, migrations, { appVersion: '0.0.0-test' })
+}
 
 const at = '2026-10-24T00:00:00.000Z'
 const later = '2026-10-24T00:01:00.000Z'

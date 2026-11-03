@@ -2,6 +2,8 @@ import { announcementRecord, type AnnouncementRecord } from '../../shared/announ
 import { analyticsRecord, type AnalyticsRecord } from '../../shared/analytics'
 import type { LocalBlock } from '../../shared/blocks'
 import { IMPORTED_COOKIE_COLOR, isCookieColorName, type CookieColor, type CookieColorName } from '../../shared/cookieColors'
+import { existsSync } from 'node:fs'
+import { dirname } from 'node:path'
 import Database from 'better-sqlite3'
 import type { StorageStatus, ThreadReadPurpose } from '../../shared/api'
 import type {
@@ -37,6 +39,8 @@ import { assertReadablePage, computeCoverage } from './coverage'
 import { emptyReadingState } from './reading-state'
 import { MIGRATIONS } from './migrations'
 import type { Migration } from './migrations'
+import { takeUpgradeWithoutBackup, writePreUpgradeBackup } from './backup'
+import { prepareRestore, restoreInfo, type RestoreSource } from './restore'
 import { RetainedContentDatabase, contentTick, touchThread } from './retained'
 import { ReminderDatabase } from './reminders'
 import { SearchDatabase, projectSearchPost } from './search'
@@ -273,7 +277,9 @@ const UPSERT_POST = `
 class SqliteReadingDatabase implements ReadingDatabase {
   constructor(
     private db: Database.Database | null,
-    private currentStatus: StorageStatus
+    private currentStatus: StorageStatus,
+    /** The app's own database (opened with the pre-upgrade backup), which alone can be restored. */
+    private readonly restorablePath: string | null = null
   ) {}
 
   private readonly content = new RetainedContentDatabase(
@@ -347,6 +353,16 @@ class SqliteReadingDatabase implements ReadingDatabase {
 
   get status(): StorageStatus {
     return this.currentStatus
+  }
+
+  restoreInfo: ReadingDatabase['restoreInfo'] = () => restoreInfo(this.restoreSource())
+  prepareRestore: ReadingDatabase['prepareRestore'] = () => prepareRestore(this.restoreSource())
+
+  /** Only a newer version's database, open read-only, is restored from its pre-upgrade backup. */
+  private restoreSource(): RestoreSource | null {
+    const status = this.currentStatus
+    if (status.state !== 'read-only' || this.db === null || this.restorablePath === null) return null
+    return { current: this.db, databasePath: this.restorablePath, supportedVersion: status.supportedVersion }
   }
 
   private writable(): Database.Database {
@@ -1521,23 +1537,74 @@ function closeQuietly(db: Database.Database | null): void {
   }
 }
 
+/** Taking the pre-upgrade backup when opening (see `./backup`). */
+export interface PreUpgradeOptions {
+  /** Version of this app, recorded in the backup's manifest. */
+  appVersion: string
+  now?: () => Date
+}
+
+/**
+ * Before any migration or other write, an existing database (schema 1 or later) that is about to be
+ * migrated is backed up, unless 不备份升级 was chosen for exactly its schema version. Returns the
+ * status to open with when it must not be opened (nothing read or written this run), else null.
+ * The check and the snapshot use a read-only connection, so a failure leaves the database file byte
+ * for byte as it was: closing a read-only connection never checkpoints the WAL into it.
+ */
+function backUpBeforeUpgrade(databasePath: string, supportedVersion: number, options: PreUpgradeOptions): StorageStatus | null {
+  const userDataDirectory = dirname(databasePath)
+  // Consumed by this start whatever happens next, so the choice never reaches a later upgrade.
+  const withoutBackup = takeUpgradeWithoutBackup(userDataDirectory)
+  if (!existsSync(databasePath)) return null
+  let source: Database.Database | null = null
+  try {
+    source = new Database(databasePath, { readonly: true, fileMustExist: true, timeout: 5000 })
+    const schemaVersion = Number(source.pragma('user_version', { simple: true }))
+    if (schemaVersion < 1 || schemaVersion >= supportedVersion || schemaVersion === withoutBackup) return null
+    try {
+      writePreUpgradeBackup({ source, userDataDirectory, schemaVersion, appVersion: options.appVersion, now: options.now ?? (() => new Date()) })
+      return null
+    } catch {
+      return { state: 'unavailable', reason: 'backup-failed', schemaVersion, supportedVersion }
+    }
+  } catch {
+    return { state: 'unavailable', reason: 'open-failed' }
+  } finally {
+    closeQuietly(source)
+  }
+}
+
+/**
+ * Opens the database, migrating it to the newest of `migrations` in one transaction. With
+ * `preUpgrade` (the app's own database), an existing database is backed up before it is migrated.
+ */
 export function openReadingDatabase(
   databasePath: string,
-  migrations: readonly Migration[] = MIGRATIONS
+  migrations: readonly Migration[] = MIGRATIONS,
+  preUpgrade: PreUpgradeOptions | null = null
 ): ReadingDatabase {
   let db: Database.Database | null = null
   let schemaVersion: number
   const supportedVersion = migrations.reduce((highest, migration) => Math.max(highest, migration.version), 0)
+  if (preUpgrade !== null) {
+    const refused = backUpBeforeUpgrade(databasePath, supportedVersion, preUpgrade)
+    if (refused !== null) return new SqliteReadingDatabase(null, refused)
+  }
   try {
+    // A newer version's database is only ever opened read-only: closing a writable connection
+    // would checkpoint its WAL into the file, and that version then finds it changed.
+    if (existsSync(databasePath)) {
+      db = new Database(databasePath, { readonly: true, fileMustExist: true, timeout: 5000 })
+      schemaVersion = Number(db.pragma('user_version', { simple: true }))
+      if (schemaVersion > supportedVersion) {
+        return new SqliteReadingDatabase(db, {
+          state: 'read-only', reason: 'newer-schema', schemaVersion, supportedVersion
+        }, preUpgrade === null ? null : databasePath)
+      }
+      db.close()
+    }
     db = new Database(databasePath, { timeout: 5000 })
     schemaVersion = Number(db.pragma('user_version', { simple: true }))
-    if (schemaVersion > supportedVersion) {
-      db.close()
-      db = new Database(databasePath, { readonly: true, fileMustExist: true, timeout: 5000 })
-      return new SqliteReadingDatabase(db, {
-        state: 'read-only', reason: 'newer-schema', schemaVersion, supportedVersion
-      })
-    }
     db.pragma('foreign_keys = ON')
     db.pragma('busy_timeout = 5000')
   } catch {

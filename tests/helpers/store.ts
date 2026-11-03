@@ -129,6 +129,8 @@ export function asStore(db: ReadingDatabase): AppStore {
     reminderOverview: async () => db.reminderOverview(),
     listBlocks: async () => db.listBlocks(),
     setBlock: async (...args) => db.setBlock(...args),
+    restoreInfo: async () => db.restoreInfo(),
+    prepareRestore: async () => db.prepareRestore(),
     close: async () => db.close()
   }
 }

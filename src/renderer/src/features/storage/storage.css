@@ -1,0 +1,35 @@
+/* The storage banner (layout.css) with actions: the text keeps one line beside the actions while it
+   fits; when it does not, the actions move under the text instead of squeezing it. */
+.storage-banner:has(.storage-banner-actions) {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.storage-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.storage-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-inline-start: auto;
+  font-weight: 400;
+}
+
+.storage-banner-note {
+  align-self: center;
+}
+
+.storage-upgrade-dialog {
+  width: min(440px, calc(100vw - 32px));
+}
+
+.storage-upgrade-dialog .storage-upgrade-failure {
+  align-items: flex-start;
+}
+
+.storage-upgrade-failure .icon {
+  margin-top: 3px;
+}

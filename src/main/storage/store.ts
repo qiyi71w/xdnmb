@@ -11,7 +11,11 @@ import type { StorageMethod, StorageResponse } from './worker'
 
 export async function openReadingStore(options: {
   databasePath: string
+  /** Recorded in the pre-upgrade backup's manifest. */
+  appVersion: string
   createWorker: (options: WorkerOptions) => Worker
+  /** The database must not be opened this run (a restore could not be settled): storage is unavailable. */
+  skipOpen?: boolean
 }): Promise<AppStore> {
   let status: StorageStatus = { state: 'unavailable', reason: 'open-failed' }
   let worker: Worker | null = null
@@ -73,6 +77,8 @@ export async function openReadingStore(options: {
       case 'loadSubscriptionObservation':
       case 'loadSubscriptionObservationById':
       case 'loadSubscriptionAppCiphertext': value = null; break
+      case 'restoreInfo': value = { restorable: false }; break
+      case 'prepareRestore': value = 'not-applicable'; break
       case 'loadSubscriptionBaseline': value = null; break
       case 'loadSubscriptionPlans':
       case 'listSubscriptionAppCredentials': value = []; break
@@ -121,13 +127,16 @@ export async function openReadingStore(options: {
     return promise
   }
 
-  try {
-    worker = options.createWorker({ workerData: { databasePath: options.databasePath } })
-    worker.on('message', receive)
-    worker.on('error', stop)
-    worker.on('exit', stop)
-  } catch {
-    stop()
+  if (options.skipOpen === true) stop()
+  else {
+    try {
+      worker = options.createWorker({ workerData: { databasePath: options.databasePath, appVersion: options.appVersion } })
+      worker.on('message', receive)
+      worker.on('error', stop)
+      worker.on('exit', stop)
+    } catch {
+      stop()
+    }
   }
   await ready
 
@@ -255,6 +264,8 @@ export async function openReadingStore(options: {
     loadReminderBackoff: () => request('loadReminderBackoff'),
     saveReminderBackoff: (value) => request('saveReminderBackoff', value),
     reminderOverview: () => request('reminderOverview'),
+    restoreInfo: () => request('restoreInfo'),
+    prepareRestore: () => request('prepareRestore'),
     close() {
       if (!closePromise) {
         closing = true
