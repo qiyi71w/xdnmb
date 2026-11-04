@@ -659,9 +659,9 @@ describe('retained content storage', () => {
     db.saveThreadPage({ ...page('100', [post('101', true)]), head, replyCount: 21 }, t0)
     db.saveThreadPage({ ...page('100', [post('121')], 2), head, replyCount: 21 }, t0)
     db.saveThreadPage({ ...page('100', [post('101', true)]), head, mode: 'po', replyCount: 2 }, t0)
-    const thumbnail = image(db, folder, 'visited.jpg', 'thumb')
+    const images = [image(db, folder, 'visited-thumb.jpg', 'thumb'), image(db, folder, 'visited-original.jpg')]
     db.recordVisit('100', t1)
-    expect(clear(db)).toEqual([thumbnail.fileName])
+    expect(clear(db).sort()).toEqual(images.map((resource) => resource.fileName).sort())
     expect(db.loadThreadPage('100', 'all', 1)).toBeNull()
     expect(db.loadThreadPage('100', 'all', 2)).toBeNull()
     expect(db.loadPost('101')).toBeNull()
@@ -675,8 +675,11 @@ describe('retained content storage', () => {
     db.saveThreadPage({ ...page('200', [post('201')]), replyCount: 3 }, t2)
     db.recordVisit('200', t2)
     db.saveThreadPage({ ...page('300', [post('301')]), replyCount: 4 }, t2)
+    const quotaImages = [image(db, folder, 'quota-thumb.jpg', 'thumb'), image(db, folder, 'quota-original.jpg')]
     db.setCacheLimit(0)
-    expect(db.evictContentBatch(false).more).toBe(false)
+    const evicted = db.evictContentBatch(false)
+    expect(evicted.more).toBe(false)
+    expect(evicted.fileNames.sort()).toEqual(quotaImages.map((resource) => resource.fileName).sort())
     expect(db.loadPost('201')).toBeNull()
     expect(db.loadPost('300')).toBeNull()
     expect(db.getThreadCoverage('300', 'all').reportedReplyCount).toBeNull()
@@ -685,6 +688,22 @@ describe('retained content storage', () => {
     const reopened = openReadingDatabase(path)
     connections.push(reopened)
     expect(reopened.listHistory()).toMatchObject([{ threadId: '200', head: post('200'), replyCount: 3 }, { threadId: '100', head, replyCount: 21 }])
+  })
+
+  it('accounts the all-reply count itself as protected while visited and as ordinary cache once released', () => {
+    const { db } = fixture()
+    db.saveThreadPage(page('100', []), t0)
+    db.recordVisit('100', t0)
+    clear(db)
+    const headOnly = db.getContentUsage().protectedTextBytes
+    db.saveThreadPage({ ...page('100', []), replyCount: 21 }, t0)
+    clear(db)
+    const held = db.getContentUsage()
+    // The logical count record: thread, mode, count and fetch time.
+    expect(held.protectedTextBytes - headOnly).toBe(Buffer.byteLength(JSON.stringify(['100', 'all', 21, t0])))
+    expect(held.cacheTextBytes).toBe(0)
+    db.clearHistory('100', false)
+    expect(db.getContentUsage()).toMatchObject({ protectedTextBytes: 0, cacheTextBytes: held.protectedTextBytes })
   })
 
   it('moves released head text and reply counts into ordinary cache so eviction removes them without orphans', () => {

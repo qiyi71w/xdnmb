@@ -19,6 +19,7 @@ import { MIGRATIONS as RECONCILIATION_V6 } from './fixtures/reconciliation-v6'
 import { MIGRATIONS as LIFECYCLE_V7 } from './fixtures/lifecycle-v7'
 import { MIGRATIONS as REMINDERS_V9 } from './fixtures/reminders-v9'
 import { MIGRATIONS as SEARCH_V8 } from './fixtures/local-search-v8'
+import { v26Post, writeVisitsV26 } from './fixtures/visits-v26'
 
 /** Opens as the app does: an existing database is backed up before it is migrated. */
 function openReadingDatabase(path: string, migrations?: readonly Migration[]): ReadingDatabase {
@@ -1225,27 +1226,11 @@ describe('schema v26: local replies keep whether their follow-up page was read',
 
 describe('schema v27: visit records protect their head text and reply count', () => {
   const tables = ['posts', 'post_threads', 'thread_pages', 'thread_reply_counts', 'thread_visits', 'retained_titles', 'offline_copies', 'offline_pages', 'offline_page_posts', 'search_documents']
-  /**
-   * A v26 database: visited 100 with its head held, visited 200 whose head and pages the v26
-   * eviction already removed, visited 300 also saved offline, and unvisited ordinary cache 400.
-   */
   function v26(): string {
     const folder = mkdtempSync(join(tmpdir(), 'xidao-v26-visits-'))
     folders.push(folder)
     const path = join(folder, 'app.sqlite')
-    const old = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 26))
-    for (const id of ['100', '200', '300', '400']) {
-      old.saveThreadPage({ ...page(), threadId: id, head: post(id), replies: [post(`${id}1`)], replyCount: Number(id) / 100 }, at)
-      if (id !== '400') old.recordVisit(id, later)
-    }
-    old.beginOfflineCopy('300', false, at)
-    old.saveOfflinePage({ ...page(), threadId: '300', head: post('300'), replies: [post('3001')], replyCount: 3 }, at)
-    old.close()
-    const raw = new Database(path)
-    try {
-      raw.exec(`DELETE FROM thread_pages WHERE thread_id = '200'; DELETE FROM thread_reply_counts WHERE thread_id = '200';
-        DELETE FROM posts WHERE id IN ('200', '2001');`)
-    } finally { raw.close() }
+    writeVisitsV26(path)
     return path
   }
   const snapshot = (path: string) => {
@@ -1265,11 +1250,11 @@ describe('schema v27: visit records protect their head text and reply count', ()
     expect(snapshot(path)).toEqual(before)
     evict(db)
     expect(db.listHistory()).toMatchObject([
-      { threadId: '100', title: '标题100', head: post('100'), replyCount: 1 },
+      { threadId: '100', title: '标题100', head: v26Post('100'), replyCount: 1 },
       { threadId: '200', title: '标题200', head: null, replyCount: null },
-      { threadId: '300', title: '标题300', head: post('300') }
+      { threadId: '300', title: '标题300', head: v26Post('300') }
     ])
-    expect(db.listOffline()).toMatchObject([{ threadId: '300', head: post('300'), replyCount: 3 }])
+    expect(db.listOffline()).toMatchObject([{ threadId: '300', head: v26Post('300'), replyCount: 3 }])
     expect(db.loadThreadPage('100', 'all', 1)).toBeNull()
     expect(db.loadPost('1001')).toBeNull()
     expect(db.loadPost('400')).toBeNull()

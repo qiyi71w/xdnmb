@@ -312,13 +312,16 @@ describe('retained content operations', () => {
     db.setCacheLimit(0)
     await service.enforceQuota()
     checks = 0
-    expect(await service.clearHistory({ threadId: '100', clearReading: false })).toEqual({ ok: false, reason: 'storage' })
+    for (const threadId of ['100', null]) {
+      expect(await service.clearHistory({ threadId, clearReading: false })).toEqual({ ok: false, reason: 'storage' })
+    }
     expect(checks).toBe(0)
     expect(db.listHistory()).toHaveLength(3)
 
+    // This data fits one bounded batch, so each quota check is exactly one batch here.
     deleteFails = false
     expect(await service.clearHistory({ threadId: '100', clearReading: false })).toEqual({ ok: true, value: [] })
-    expect(checks).toBeGreaterThan(0)
+    expect(checks).toBe(1)
     expect(db.loadPost('100')).toBeNull()
     expect(db.loadPost('200')).not.toBeNull()
 
@@ -328,7 +331,7 @@ describe('retained content operations', () => {
     quotaFails = false
     checks = 0
     expect(await service.clearHistory({ threadId: null, clearReading: false })).toEqual({ ok: true, value: [] })
-    expect(checks).toBeGreaterThan(0)
+    expect(checks).toBe(1)
     expect(db.loadPost('200')).toBeNull()
     expect(db.loadPost('300')).toBeNull()
   })

@@ -79,7 +79,7 @@ macOS 上用 Cmd 代替 Ctrl。
 - Windows：`%APPDATA%\汐岛`
 - macOS：`~/Library/Application Support/汐岛`
 
-饼干和 App UUID 用系统凭据保护加密（Windows DPAPI，macOS 钥匙串）。联网搜索会把搜索词（反查所属串时为串号）发给所选的 XDS 或 nmb-search，不携带饼干、官网登录状态或 App UUID；第三方收录可能不完整或过时。浏览缓存默认上限 2 GB，可在“设置 › 存储与缓存”调整或清理；清理不会删掉浏览历史里各串的主帖和回复数，删除历史后才释放。
+饼干和 App UUID 用系统凭据保护加密（Windows DPAPI，macOS 钥匙串）。联网搜索会把搜索词（反查所属串时为串号）发给所选的 XDS 或 nmb-search，不携带饼干、官网登录状态或 App UUID；第三方收录可能不完整或过时。浏览缓存默认 2 GB，在“设置 › 存储与缓存”调整或清理，历史里的主帖与回复数不算在内。
 
 公告在每次启动时从 `nmb.ovear.info` 匿名读取，不携带论坛身份。
 
