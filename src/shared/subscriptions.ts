@@ -76,6 +76,35 @@ export interface SubscriptionOperation {
 export type SubscriptionFailure = 'storage' | 'result-storage' | 'locked' | 'unconfigured' | 'missing' | 'invalid-uuid' | 'stale' | 'busy' | 'not-found' | 'invalid-selection' | 'cancelled'
 export type SubscriptionResult<T> = { ok: true; value: T } | { ok: false; reason: SubscriptionFailure }
 
+/** Most threads one 批量取消订阅 may name. */
+export const MAX_BULK_REMOVAL = 1000
+
+/** One thread of a bulk removal, in the order it was submitted. */
+export interface SubscriptionRemovalItem {
+  threadId: ThreadId
+  /**
+   * confirmed: the shared readback proved it gone; unknown: the request may have taken effect and its
+   * journal entry awaits 核对; failed: refused, or still listed after a reported success; skipped:
+   * never sent and never recorded.
+   */
+  outcome: 'confirmed' | 'unknown' | 'failed' | 'skipped'
+  /** The journal entry of a sent item; null when skipped. */
+  operationId: string | null
+}
+
+/**
+ * Why a bulk removal ended early, null when every item was sent. item-*: the last sent item was not an
+ * explicit success; rate-limited: its request was rate-limited, so nothing was read back; cancelled: the
+ * user stopped it; stale: the subscription identity changed; storage / result-storage: a local save failed
+ * before / after a request.
+ */
+export type SubscriptionRemovalStop = 'item-failed' | 'item-unknown' | 'rate-limited' | 'cancelled' | 'stale' | 'storage' | 'result-storage'
+
+export interface SubscriptionRemoval {
+  items: SubscriptionRemovalItem[]
+  stopReason: SubscriptionRemovalStop | null
+}
+
 export interface SubscriptionsApi {
   getOverview(): Promise<SubscriptionOverview>
   /** null generates a UUID; otherwise use the supplied UUID. No secret is returned. */
@@ -94,6 +123,15 @@ export interface SubscriptionsApi {
   read(input: { source: SubscriptionSource; observationId: string | null; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionObservation>>
   /** Explicit write, intent durable before request. Signal cancellation affects readback only. */
   change(input: { source: SubscriptionSource; threadId: ThreadId; action: SubscriptionAction; expectedGeneration: number; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionOperation>>
+  /**
+   * 批量取消订阅 from one source: each thread is its own journal entry, never a plan, sent one after
+   * another in the submitted order, each intent durable before its request. Ends at the first request
+   * that is not an explicit success, a stop (signal cancellation) or an identity change; later items
+   * are not recorded. Unless it ended rate-limited, one complete readback afterwards (not cancelled by
+   * the stop) is every sent item's `after`. Refused as a whole, nothing sent, while any thread has an
+   * unresolved write (`busy`) or the generation differs (`stale`).
+   */
+  removeMany(input: { source: SubscriptionSource; threadIds: ThreadId[]; expectedGeneration: number; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionRemoval>>
   /** Local journal including previous objects; startup never replays any write. */
   getOperations(): Promise<SubscriptionOperation[]>
   /** Read-only check using the attempt's fixed references, never the currently selected ones. */

@@ -45,7 +45,8 @@ export function ThreadRow({
   onOpen,
   itemProps,
   tabMenu = false,
-  metaEnd
+  metaEnd,
+  check
 }: {
   thread: Pick<ThreadSummary, 'head' | 'replyCount'> | HeadlessThread
   /** Shown for timeline rows, which mix forums. */
@@ -63,6 +64,11 @@ export function ThreadRow({
   tabMenu?: boolean
   /** What the list adds at the end of the meta line (non-interactive: it is inside the row button). */
   metaEnd?: ReactNode
+  /**
+   * The list's 选择多个: the row button is the row's checkbox (`onOpen` ticks it) with a box before
+   * its text; `disabled` rows stay focusable but do not tick.
+   */
+  check?: { checked: boolean; disabled: boolean }
 }) {
   const head = thread.head
   const id = thread.head === null ? thread.id : thread.head.id
@@ -82,7 +88,21 @@ export function ThreadRow({
         }}
         {...inTab.rowProps(tabThread, head)}
       >
-        <button type="button" className="row-open" aria-current={selected ? 'true' : undefined} onClick={onOpen} {...itemProps}>
+        <button
+          type="button"
+          className={check === undefined ? 'row-open' : 'row-open has-check'}
+          role={check === undefined ? undefined : 'checkbox'}
+          aria-checked={check?.checked}
+          aria-disabled={check?.disabled === true ? true : undefined}
+          aria-current={selected ? 'true' : undefined}
+          onClick={onOpen}
+          {...itemProps}
+        >
+          {check !== undefined && (
+            <span className={check.checked ? 'row-check is-checked' : 'row-check'} aria-hidden="true">
+              {check.checked && <Icon name="check" size={12} />}
+            </span>
+          )}
           <span className="row-text">
             {head !== null && (
               <span className="row-byline">

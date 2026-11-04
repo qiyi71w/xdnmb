@@ -273,6 +273,65 @@ export function blocksNewWrite(
   )
 }
 
+/** Threads of one collection with an unresolved write (the same rule as `blocksNewWrite`): nothing new may be sent for them. */
+export function unresolvedThreads(
+  operations: readonly SubscriptionOperation[] | null,
+  target: { source: SubscriptionSource; objectRef: string | null }
+): ReadonlySet<ThreadId> {
+  const ids = new Set<ThreadId>()
+  for (const operation of operations ?? []) if (blocksNewWrite(operation, { ...target, threadId: operation.threadId })) ids.add(operation.threadId)
+  return ids
+}
+
+/**
+ * 选择多个 on the list of one collection (`key`). The ticked threads belong to that collection, not
+ * to what is shown: a filter hides some without unticking them. A thread with an unresolved write
+ * cannot be ticked, and one that gains it, or leaves the list, is unticked.
+ */
+export interface ListSelection {
+  key: string
+  ids: ReadonlySet<ThreadId>
+}
+
+export type SelectionEvent =
+  | { type: 'enter'; key: string }
+  | { type: 'exit' }
+  | { type: 'toggle'; id: ThreadId; blocked: ReadonlySet<ThreadId> }
+  /** 全选 / Ctrl/Cmd+A: every row shown now (filtered, read so far) that can be ticked. */
+  | { type: 'select-all'; shown: readonly ThreadId[]; blocked: ReadonlySet<ThreadId> }
+  /** The list or the collection changed: another collection ends the mode; otherwise ticks stay where they can. */
+  | { type: 'list'; key: string | null; listed: readonly ThreadId[]; blocked: ReadonlySet<ThreadId> }
+  /** After a 批量取消订阅 on collection `key`: only these (the items never sent) stay ticked. */
+  | { type: 'keep'; key: string; ids: readonly ThreadId[] }
+
+export function selectionReducer(state: ListSelection | null, event: SelectionEvent): ListSelection | null {
+  if (event.type === 'enter') return state?.key === event.key ? state : { key: event.key, ids: new Set() }
+  if (state === null) return null
+  switch (event.type) {
+    case 'exit':
+      return null
+    case 'toggle': {
+      if (event.blocked.has(event.id) && !state.ids.has(event.id)) return state
+      const ids = new Set(state.ids)
+      if (!ids.delete(event.id)) ids.add(event.id)
+      return { ...state, ids }
+    }
+    case 'select-all': {
+      const ids = new Set(state.ids)
+      for (const id of event.shown) if (!event.blocked.has(id)) ids.add(id)
+      return ids.size === state.ids.size ? state : { ...state, ids }
+    }
+    case 'list': {
+      if (event.key !== state.key) return null
+      const listed = new Set(event.listed)
+      const ids = new Set([...state.ids].filter((id) => listed.has(id) && !event.blocked.has(id)))
+      return ids.size === state.ids.size ? state : { ...state, ids }
+    }
+    case 'keep':
+      return event.key !== state.key ? state : { ...state, ids: new Set(event.ids.filter((id) => state.ids.has(id))) }
+  }
+}
+
 type ActiveChange = Pick<ActiveWrite, 'kind' | 'source' | 'threadId' | 'action' | 'generation'> | null
 
 /**

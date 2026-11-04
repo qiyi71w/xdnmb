@@ -126,6 +126,7 @@ const api: XidaoApi = {
     getSnapshot: (input) => ipcRenderer.invoke(IpcChannel.subscriptionSnapshot, input),
     read: (input) => ipcRenderer.invoke(IpcChannel.subscriptionRead, input),
     change: (input) => ipcRenderer.invoke(IpcChannel.subscriptionChange, input),
+    removeMany: (input) => ipcRenderer.invoke(IpcChannel.subscriptionRemoveMany, input),
     getOperations: () => ipcRenderer.invoke(IpcChannel.subscriptionOperations),
     reconcile: (input) => ipcRenderer.invoke(IpcChannel.subscriptionReconcile, input),
     dismiss: (input) => ipcRenderer.invoke(IpcChannel.subscriptionDismiss, input),

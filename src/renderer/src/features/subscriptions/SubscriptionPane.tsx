@@ -5,8 +5,10 @@ import {
   useId,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
+  type RefObject,
   type FormEvent,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent
@@ -22,6 +24,7 @@ import type {
   SubscriptionSource
 } from '../../../../shared/subscriptions'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
+import { Modal, ModalHeader } from '../../components/Modal'
 import { selectionCopyItem } from '../../components/copyMenuItems'
 import { Icon, Spinner } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
@@ -46,9 +49,28 @@ import { previewBlocker, plansNeedingAttention, ReconcileHistoryDialog, Reconcil
 import { taskMode, type ReconcileMode } from './reconcileState'
 import { SubscriptionRowMenu } from './SubscriptionRowMenu'
 import { useSubscriptionOffline } from './SubscriptionOffline'
-import { arrangeThreads, collectionDisplay, decideChange, isReconcilable, listedThreads, sourceObjectRef } from './subscriptionListState'
-import { ARRANGEMENT_NAME, SOURCE_NAME, SOURCE_SHORT, arrangementNoteText, failureText, sourceBlocker, threadLabel } from './subscriptionText'
-import { useCollection, useSubscriptionsContext, type WriteNotice } from './useSubscriptions'
+import {
+  arrangeThreads,
+  collectionDisplay,
+  decideChange,
+  isReconcilable,
+  listedThreads,
+  selectionReducer,
+  sourceObjectRef,
+  unresolvedThreads
+} from './subscriptionListState'
+import {
+  ARRANGEMENT_NAME,
+  SOURCE_NAME,
+  SOURCE_SHORT,
+  arrangementNoteText,
+  failureText,
+  removalConfirmTitle,
+  removalSummary,
+  sourceBlocker,
+  threadLabel
+} from './subscriptionText'
+import { useCollection, useSubscriptionsContext, type RemovalTask, type WriteNotice } from './useSubscriptions'
 import { useThreadRules } from '../reminders/useReminders'
 import '../feed/feed.css'
 import '../identity/identity.css'
@@ -109,7 +131,11 @@ export function SubscriptionPane({
     claimReveal,
     loadCollection,
     refreshCollection,
-    stopCollection
+    stopCollection,
+    removal,
+    removeMany,
+    stopRemoval,
+    dismissRemoval
   } = subscriptions
   const openSettings = useSettingsOpener()
   const openInTab = useOpenThreadInTab()
@@ -362,6 +388,57 @@ export function SubscriptionPane({
   const taskHint = task?.phase === 'previewing' ? '预览读取中' : task?.phase === 'executing' ? '同步执行中' : null
   const attention = plansNeedingAttention(plans)
 
+  // ---------- 选择多个 ----------
+  /** Ticked threads of the collection shown; another collection's selection is never shown. */
+  const [selection, dispatchSelection] = useReducer(selectionReducer, null)
+  const selected = selection !== null && selection.key === collection ? selection : null
+  const removing = removal?.phase === 'running'
+  const unresolved = useMemo(
+    () => (overview === null ? NO_THREADS : unresolvedThreads(operations, { source: overview.source, objectRef })),
+    [operations, overview?.source, objectRef]
+  )
+  const listedIds = useMemo(() => threads.map((thread) => thread.head.id), [threads])
+  // A refresh keeps the ticks still listed; another source, UUID or binding ends the mode.
+  useEffect(() => {
+    dispatchSelection({ type: 'list', key: collection, listed: listedIds, blocked: unresolved })
+  }, [collection, listedIds, unresolved])
+  // After a 批量取消订阅 only the threads never sent stay ticked: removed ones leave the list, unknown ones await 核对.
+  const keptRemoval = useRef<RemovalTask | null>(null)
+  useEffect(() => {
+    if (removal?.phase !== 'finished' || keptRemoval.current === removal) return
+    keptRemoval.current = removal
+    if (removal.outcome.type !== 'done') return
+    const skipped = removal.outcome.removal.items.filter((item) => item.outcome === 'skipped').map((item) => item.threadId)
+    dispatchSelection({ type: 'keep', key: removal.key, ids: skipped })
+  }, [removal])
+  const selectBarRef = useRef<HTMLDivElement>(null)
+  const [confirming, setConfirming] = useState(false)
+  const toggleRow = (threadId: ThreadId) => {
+    if (!removing) dispatchSelection({ type: 'toggle', id: threadId, blocked: unresolved })
+  }
+  /** 全选 and Ctrl/Cmd+A: the rows shown now, filtered and read so far. */
+  const selectShown = () => {
+    if (!removing) dispatchSelection({ type: 'select-all', shown: ids, blocked: unresolved })
+  }
+  /** 完成 and Esc; focus in the bar that goes away returns to 更多, where the mode started. */
+  const finishSelecting = () => {
+    if (removing) return
+    const fromBar = selectBarRef.current?.contains(document.activeElement) === true
+    dispatchSelection({ type: 'exit' })
+    if (fromBar) moreRef.current?.focus()
+  }
+  const onSelectingKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (selected === null || event.defaultPrevented) return
+    if (event.target instanceof Element && event.target.closest('input, textarea, select, [role="menu"]') !== null) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      finishSelecting()
+    } else if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'a') {
+      event.preventDefault()
+      selectShown()
+    }
+  }
+
   const labelOf = (threadId: ThreadId) => {
     const thread = threads.find((item) => item.head.id === threadId)
     return thread === undefined ? `No.${threadId}` : threadLabel(thread)
@@ -441,6 +518,7 @@ export function SubscriptionPane({
         data-pane-focus={view === 'list' ? '' : undefined}
         hidden={view !== 'list'}
         inert={viewerOpen}
+        onKeyDown={onSelectingKeyDown}
       >
         <header className="list-header">
           <div className="list-title-row">
@@ -547,6 +625,13 @@ export function SubscriptionPane({
           )}
 
           <ReconcileResult displayed={pageDisplayed && view === 'list'} onView={(planId) => setHistory({ planId })} />
+          <RemovalResult
+            removal={removal?.phase === 'finished' && removal.key === collection ? removal : null}
+            onDismiss={() => {
+              dismissRemoval()
+              scrollRef.current?.focus()
+            }}
+          />
           <WriteStatus displayed={pageDisplayed && view === 'list'} placed={placed} focusAfter={() => scrollRef.current} />
 
           <AddForm
@@ -675,10 +760,15 @@ export function SubscriptionPane({
                   key={thread.head.id}
                   className={rowMenu?.threadId === thread.head.id ? 'sub-row is-menu-open' : 'sub-row'}
                   onContextMenu={(event) => {
-                    if (!fromInline(event)) openRowMenu(thread.head.id, event)
+                    if (fromInline(event)) return
+                    // Choosing several has no row menu.
+                    if (selected !== null) event.preventDefault()
+                    else openRowMenu(thread.head.id, event)
                   }}
                   onKeyDown={(event) => {
-                    if (isContextMenuKey(event) && !fromInline(event)) openRowMenu(thread.head.id, event)
+                    if (!isContextMenuKey(event) || fromInline(event)) return
+                    if (selected !== null) event.preventDefault()
+                    else openRowMenu(thread.head.id, event)
                   }}
                   onClickCapture={(event) => {
                     if (openInTab === null || (!event.ctrlKey && !event.metaKey) || fromInline(event)) return
@@ -702,8 +792,14 @@ export function SubscriptionPane({
                     selected={thread.head.id === selectedThreadId}
                     uncertain={uncertainById.get(thread.head.id) === true}
                     images={images}
-                    onOpen={() => onOpenThread(thread)}
+                    onOpen={() => (selected === null ? onOpenThread(thread) : toggleRow(thread.head.id))}
                     itemProps={itemProps}
+                    check={
+                      selected === null
+                        ? undefined
+                        : { checked: selected.ids.has(thread.head.id), disabled: removing || unresolved.has(thread.head.id) }
+                    }
+                    metaEnd={selected !== null && unresolved.has(thread.head.id) ? <span>先核对这次订阅操作</span> : undefined}
                   />
                   {entry !== undefined && <UnsettledLine operation={entry} tabIndex={itemProps.tabIndex} focusAfter={focusRowAfter} />}
                 </li>
@@ -725,6 +821,18 @@ export function SubscriptionPane({
             </button>
           )}
         </div>
+        {selected !== null && (
+          <SelectionBar
+            barRef={selectBarRef}
+            count={selected.ids.size}
+            removal={removing ? removal : null}
+            blockedHint={writeBlocked && !removing ? writeHint : null}
+            onSelectAll={selectShown}
+            onRemove={() => setConfirming(true)}
+            onStop={stopRemoval}
+            onDone={finishSelecting}
+          />
+        )}
       </div>
       {viewer}
       {view === 'reconcile' && (
@@ -743,6 +851,21 @@ export function SubscriptionPane({
           point={moreAt}
           label="更多"
           items={[
+            // Ticks threads of the side shown; offered unavailable (with why) while that side cannot be written.
+            ...(threads.length > 0
+              ? [
+                  {
+                    type: 'action',
+                    key: 'select',
+                    label: '选择多个',
+                    disabled: writeBlocked,
+                    title: writeBlocked ? (writeHint ?? undefined) : undefined,
+                    onSelect: () => {
+                      if (collection !== null) dispatchSelection({ type: 'enter', key: collection })
+                    }
+                  } satisfies ContextMenuItem
+                ]
+              : []),
             {
               type: 'action',
               key: 'history',
@@ -779,6 +902,23 @@ export function SubscriptionPane({
       {history !== null && (
         <ReconcileHistoryDialog focusPlanId={history.planId} onClose={() => setHistory(null)} fallbackFocus={() => moreRef.current} />
       )}
+      {confirming && selected !== null && (
+        <RemovalConfirm
+          title={removalConfirmTitle(source, overview.webName, selected.ids.size)}
+          onClose={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false)
+            if (collection === null || selected.ids.size === 0) return
+            void removeMany({
+              source,
+              // In the order shown, filtered-out ticks included.
+              threadIds: listedIds.filter((id) => selected.ids.has(id)),
+              expectedGeneration: overview.context.generation,
+              key: collection
+            })
+          }}
+        />
+      )}
       {rowMenu !== null && menuThread !== undefined && (
         <SubscriptionRowMenu
           key={rowMenu.threadId}
@@ -809,6 +949,107 @@ export function SubscriptionPane({
       )}
       {offline.dialogs}
     </section>
+  )
+}
+
+const NO_THREADS: ReadonlySet<ThreadId> = new Set()
+
+/**
+ * 选择多个's bar at the foot of the list: 全选, 取消订阅（N） and 完成. While the removals run, 取消订阅
+ * stays in place (it keeps the focus, so a held key does nothing more) and 停止后续取消 joins it.
+ */
+function SelectionBar({
+  barRef,
+  count,
+  removal,
+  blockedHint,
+  onSelectAll,
+  onRemove,
+  onStop,
+  onDone
+}: {
+  barRef: RefObject<HTMLDivElement | null>
+  count: number
+  /** The running removal, if any. */
+  removal: Extract<RemovalTask, { phase: 'running' }> | null
+  /** Why nothing can be removed now (another operation runs, the source is not usable…). */
+  blockedHint: string | null
+  onSelectAll: () => void
+  onRemove: () => void
+  onStop: () => void
+  onDone: () => void
+}) {
+  const hintId = useId()
+  const running = removal !== null
+  const unavailable = running || count === 0 || blockedHint !== null
+  return (
+    <div className="sub-recon-bar sub-select-bar" ref={barRef} role="group" aria-label="选择多个">
+      <div className="sub-recon-actions">
+        <button type="button" className="btn btn-page" aria-disabled={running || undefined} onClick={() => !running && onSelectAll()}>
+          全选
+        </button>
+        <button
+          type="button"
+          className="btn btn-page btn-danger"
+          // aria-disabled, not disabled: focus stays on it while the removals run.
+          aria-disabled={unavailable || undefined}
+          aria-busy={running || undefined}
+          aria-describedby={blockedHint === null ? undefined : hintId}
+          onClick={() => !unavailable && onRemove()}
+        >
+          {running && <Spinner />}
+          {running ? `正在取消 ${removal.total} 个串…` : `取消订阅（${count}）`}
+        </button>
+        {running && (
+          <button type="button" className="btn btn-page" aria-disabled={removal.stopRequested || undefined} onClick={() => !removal.stopRequested && onStop()}>
+            {removal.stopRequested ? '正在停止…' : '停止后续取消'}
+          </button>
+        )}
+        <button type="button" className="btn btn-page" aria-disabled={running || undefined} onClick={() => !running && onDone()}>
+          完成
+        </button>
+      </div>
+      {blockedHint !== null && (
+        <p className="field-hint" id={hintId}>
+          {blockedHint}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** Asked once before a 批量取消订阅: the collection and the count; Esc and × change nothing. */
+function RemovalConfirm({ title, onConfirm, onClose }: { title: string; onConfirm: () => void; onClose: () => void }) {
+  const titleId = useId()
+  return (
+    <Modal className="sub-remove-dialog" labelledBy={titleId} onClose={onClose}>
+      <ModalHeader title={title} titleId={titleId} closeLabel="关闭，不取消订阅" onClose={onClose} />
+      <div className="modal-actions">
+        <button type="button" className="btn btn-danger" onClick={onConfirm}>
+          取消订阅
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+/** The finished 批量取消订阅 of the collection shown, as one line above the list. A polite live region. */
+function RemovalResult({ removal, onDismiss }: { removal: Extract<RemovalTask, { phase: 'finished' }> | null; onDismiss: () => void }) {
+  const line = removal === null ? null : removalSummary(removal.outcome)
+  return (
+    <div className="sub-write-region" role="status">
+      {line !== null && (
+        <div className={`sub-write is-${line.tone}`}>
+          <Icon name={line.tone === 'done' ? 'check' : 'alert'} className="sub-write-icon" />
+          <div className="sub-write-text">
+            <p className="sub-write-title">{line.text}</p>
+          </div>
+          <button type="button" className="icon-btn" onClick={onDismiss} aria-label="关闭这条结果">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 

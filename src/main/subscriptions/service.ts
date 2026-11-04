@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { ReadError } from '../../shared/api'
-import type { SubscriptionCandidate, SubscriptionChoice, SubscriptionContext, SubscriptionDifference, SubscriptionFailure, SubscriptionObservation, SubscriptionOperation, SubscriptionOverview, SubscriptionPlan, SubscriptionPreview, SubscriptionProvenance, SubscriptionResult, SubscriptionSource, SubscriptionsApi } from '../../shared/subscriptions'
+import type { ThreadId } from '../../shared/forum'
+import type { SubscriptionCandidate, SubscriptionChoice, SubscriptionContext, SubscriptionDifference, SubscriptionFailure, SubscriptionObservation, SubscriptionOperation, SubscriptionOverview, SubscriptionPlan, SubscriptionPreview, SubscriptionProvenance, SubscriptionRemoval, SubscriptionRemovalItem, SubscriptionRemovalStop, SubscriptionResult, SubscriptionSource, SubscriptionsApi } from '../../shared/subscriptions'
 import { completeSubscriptionObservation } from '../../shared/subscriptions'
 import type { SecretProtector } from '../identity/protection'
 import type { RequestScheduler } from '../reading/scheduler'
@@ -9,9 +10,11 @@ import { ForumReadError, ReadCancelledError } from '../forum/contract'
 import type { ForumTransport } from '../forum/contract'
 import { parseAppList, parseWebList, parseWriteReport } from './protocol'
 
-export interface SubscriptionService extends Omit<SubscriptionsApi, 'cancel' | 'read' | 'change' | 'reconcile' | 'previewSync' | 'previewMerge' | 'executePlan'> {
+export interface SubscriptionService extends Omit<SubscriptionsApi, 'cancel' | 'read' | 'change' | 'removeMany' | 'reconcile' | 'previewSync' | 'previewMerge' | 'executePlan'> {
   read(input: Parameters<SubscriptionsApi['read']>[0], signal: AbortSignal): Promise<SubscriptionResult<SubscriptionObservation>>
   change(input: Parameters<SubscriptionsApi['change']>[0], signal: AbortSignal): Promise<SubscriptionResult<SubscriptionOperation>>
+  /** `signal` is the stop: it keeps later items from being sent, never the sent request or the readback. */
+  removeMany(input: Parameters<SubscriptionsApi['removeMany']>[0], signal: AbortSignal): Promise<SubscriptionResult<SubscriptionRemoval>>
   reconcile(input: Parameters<SubscriptionsApi['reconcile']>[0], signal: AbortSignal): Promise<SubscriptionResult<SubscriptionOperation>>
   previewSync(input: Parameters<SubscriptionsApi['previewSync']>[0], signal: AbortSignal): Promise<SubscriptionResult<SubscriptionPreview>>
   previewMerge(input: Parameters<SubscriptionsApi['previewMerge']>[0], signal: AbortSignal): Promise<SubscriptionResult<SubscriptionPreview>>
@@ -107,30 +110,32 @@ export function createSubscriptionService(deps: {
     }
   }
 
-  async function readback(operation: SubscriptionOperation, signal: AbortSignal): Promise<SubscriptionObservation> {
-    const result = observation(operation.source, operation.context)
+  /**
+   * A read-only list read from page 1 for a write's fixed object, under one 20-second deadline for its
+   * queue time and every page. With `until` it ends once that thread shows (presence is directly
+   * observable); absence always needs the whole contiguous read.
+   */
+  async function readList(source: SubscriptionSource, context: SubscriptionContext, signal: AbortSignal, until: ThreadId | null): Promise<SubscriptionObservation> {
+    const result = observation(source, context)
     let secret: string
-    try { secret = await identity(operation.source, operation.context) }
+    try { secret = await identity(source, context) }
     catch (error) {
       const reason = error instanceof UnavailableIdentity ? error.reason : 'storage'
       result.error = { page: 1, detail: { kind: 'identity', detail: reason === 'missing' ? 'identity-missing' : reason === 'locked' ? 'identity-locked' : 'identity-unknown' } }
       return result
     }
-    // One deadline includes queue time and all pages of this read-only verification task.
     const bounded = AbortSignal.any([signal, AbortSignal.timeout(20_000)])
     while (result.nextPage !== null && !result.error && !result.cancelled) {
       await fetchPage(result, secret, bounded)
       await store.saveSubscriptionObservation(result)
-      // Presence is directly observable; absence requires the entire contiguous readback.
-      if (result.ids.includes(operation.threadId)) break
+      if (until !== null && result.ids.includes(until)) break
     }
     return result
   }
 
-  async function finish(operation: SubscriptionOperation, signal: AbortSignal, explicitReconciliation: boolean,
-    persist: (operation: SubscriptionOperation) => Promise<void> = (value) => store.saveSubscriptionOperation(value)): Promise<SubscriptionOperation> {
-    operation.after = await readback(operation, signal)
-    const after = operation.after
+  /** Settles a write's verification and state from its readback `after`; does not save it. */
+  function judge(operation: SubscriptionOperation, after: SubscriptionObservation, explicitReconciliation: boolean): void {
+    operation.after = after
     if (after.ids.includes(operation.threadId)) operation.verification = operation.action === 'add' ? 'present' : 'mismatch'
     else if (sufficient(after)) {
       const before = operation.before
@@ -143,8 +148,53 @@ export function createSubscriptionService(deps: {
     const confirmed = operation.verification === 'present' || operation.verification === 'absent-supported'
     operation.state = confirmed && (operation.report === 'success' || explicitReconciliation) ? 'settled' : 'needs-reconciliation'
     if (operation.report === 'rejected' && operation.verification !== 'unknown') operation.state = 'settled'
+  }
+
+  async function finish(operation: SubscriptionOperation, signal: AbortSignal, explicitReconciliation: boolean,
+    persist: (operation: SubscriptionOperation) => Promise<void> = (value) => store.saveSubscriptionOperation(value)): Promise<SubscriptionOperation> {
+    judge(operation, await readList(operation.source, operation.context, signal, operation.threadId), explicitReconciliation)
     await persist(operation)
     return operation
+  }
+
+  /**
+   * Whether an unresolved earlier write of this thread to the same remote collection blocks a new one.
+   * App entries under another local reference count when they hold the same UUID.
+   */
+  async function unresolved(outstanding: readonly SubscriptionOperation[], source: SubscriptionSource, threadId: ThreadId,
+    context: SubscriptionContext, secret: string): Promise<boolean> {
+    for (const entry of outstanding) {
+      if (entry.dismissedAt !== undefined || entry.state === 'settled' || entry.source !== source || entry.threadId !== threadId) continue
+      if (source === 'web') {
+        if (entry.context.webCredentialId === context.webCredentialId) return true
+      } else if (entry.context.appCredentialId === context.appCredentialId ||
+        (await identity('app', entry.context)).toLowerCase() === secret.toLowerCase()) return true
+    }
+    return false
+  }
+
+  async function intent(input: Pick<SubscriptionOperation, 'source' | 'threadId' | 'action'>, context: SubscriptionContext,
+    before: SubscriptionObservation | null): Promise<SubscriptionOperation> {
+    const webName = input.source === 'web' ? (await store.listCredentials()).find((entry) => entry.id === context.webCredentialId)?.name : null
+    return { id: randomUUID(), source: input.source, threadId: input.threadId, action: input.action, context,
+      createdAt: now().toISOString(), objectLabel: input.source === 'app' ? 'App 订阅' : webName ?? '网页订阅',
+      state: 'pending', report: 'pending', reportError: null, before, after: null, verification: 'unknown' }
+  }
+
+  /** The one explicit request of a durable intent, never retried and never cancelled by the caller; records its report. */
+  async function send(operation: SubscriptionOperation, secret: string): Promise<void> {
+    const { source, action, threadId } = operation
+    const url = new URL(source === 'app' ? `/Api/${action === 'add' ? 'addFeed' : 'delFeed'}`
+      : `/Home/Forum/${action === 'add' ? 'addFeed' : 'delFeed'}/tid/${threadId}.html`, source === 'app' ? appOrigin : webOrigin)
+    if (source === 'app') { url.searchParams.set('uuid', secret); url.searchParams.set('tid', threadId) }
+    try {
+      const response = await transport.get(url, AbortSignal.timeout(20_000), source === 'web' ? { userhash: secret } : undefined)
+      operation.report = parseWriteReport(source, action, response)
+    } catch (error) {
+      operation.reportError = safeError(error)
+      operation.report = error instanceof ForumReadError && error.error.detail === 'business' && error.error.kind !== 'unknown-structure' ? 'rejected' : 'unknown'
+    }
+    if (operation.report !== 'success') operation.state = 'needs-reconciliation'
   }
 
   async function mutate(input: Pick<SubscriptionOperation, 'source' | 'threadId' | 'action'>, context: SubscriptionContext, signal: AbortSignal,
@@ -156,34 +206,15 @@ export function createSubscriptionService(deps: {
       if (!sameContext(context, (await store.loadSubscriptionConfiguration()).context)) return { ok: false, reason: 'stale' }
       const outstanding = await store.loadSubscriptionOperations()
       const secret = await identity(input.source, context)
-      for (const entry of outstanding) {
-        if (entry.dismissedAt !== undefined || entry.state === 'settled' || entry.source !== input.source || entry.threadId !== input.threadId) continue
-        if (input.source === 'web') {
-          if (entry.context.webCredentialId === context.webCredentialId) return { ok: false, reason: 'busy' }
-        } else if (entry.context.appCredentialId === context.appCredentialId ||
-          (await identity('app', entry.context)).toLowerCase() === secret.toLowerCase()) return { ok: false, reason: 'busy' }
-      }
-      const webName = input.source === 'web' ? (await store.listCredentials()).find((entry) => entry.id === context.webCredentialId)?.name : null
-      const operation: SubscriptionOperation = { id: randomUUID(), source: input.source, threadId: input.threadId, action: input.action, context,
-        createdAt: now().toISOString(), objectLabel: input.source === 'app' ? 'App 订阅' : webName ?? '网页订阅',
-        state: 'pending', report: 'pending', reportError: null, before: await store.loadSubscriptionObservation(input.source, context, true), after: null, verification: 'unknown' }
+      if (await unresolved(outstanding, input.source, input.threadId, context, secret)) return { ok: false, reason: 'busy' }
+      const operation = await intent(input, context, await store.loadSubscriptionObservation(input.source, context, true))
       // Plan correlation and intent are durable together before dispatch.
       if (hooks) await hooks.intent(operation)
       else await store.saveSubscriptionOperation(operation)
       if (hooks && signal.aborted) return { ok: false, reason: 'cancelled' }
       if (!sameContext(context, (await store.loadSubscriptionConfiguration()).context)) return { ok: false, reason: 'stale' }
-      const url = new URL(input.source === 'app' ? `/Api/${input.action === 'add' ? 'addFeed' : 'delFeed'}`
-        : `/Home/Forum/${input.action === 'add' ? 'addFeed' : 'delFeed'}/tid/${input.threadId}.html`, input.source === 'app' ? appOrigin : webOrigin)
-      if (input.source === 'app') { url.searchParams.set('uuid', secret); url.searchParams.set('tid', input.threadId) }
-      try {
-        dispatched = true
-        const response = await transport.get(url, AbortSignal.timeout(20_000), input.source === 'web' ? { userhash: secret } : undefined)
-        operation.report = parseWriteReport(input.source, input.action, response)
-      } catch (error) {
-        operation.reportError = safeError(error)
-        operation.report = error instanceof ForumReadError && error.error.detail === 'business' && error.error.kind !== 'unknown-structure' ? 'rejected' : 'unknown'
-      }
-      if (operation.report !== 'success') operation.state = 'needs-reconciliation'
+      dispatched = true
+      await send(operation, secret)
       await store.saveSubscriptionOperation(operation)
       if (operation.reportError?.kind === 'rate-limited') {
         if (hooks) await hooks.finish(operation)
@@ -191,6 +222,72 @@ export function createSubscriptionService(deps: {
       }
       return { ok: true, value: await finish(operation, signal, false, hooks?.finish) }
     } catch (error) { return { ok: false, reason: dispatched ? 'result-storage' : error instanceof UnavailableIdentity ? error.reason : 'storage' } }
+  }
+
+  /** Outcome of one sent bulk item, by the same rules as a plan item. */
+  function removalOutcome(operation: SubscriptionOperation): SubscriptionRemovalItem['outcome'] {
+    if (operation.report === 'success' && operation.verification === 'absent-supported') return 'confirmed'
+    return operation.report === 'rejected' || (operation.report === 'success' && operation.verification === 'mismatch') ? 'failed' : 'unknown'
+  }
+
+  async function removeThreads(input: Parameters<SubscriptionsApi['removeMany']>[0], signal: AbortSignal): Promise<SubscriptionResult<SubscriptionRemoval>> {
+    if (store.status.state !== 'ready') return { ok: false, reason: 'storage' }
+    const { context } = await store.loadSubscriptionConfiguration()
+    if (context.generation !== input.expectedGeneration) return { ok: false, reason: 'stale' }
+    if (signal.aborted) return { ok: false, reason: 'cancelled' }
+    const { source } = input
+    let secret: string
+    try {
+      secret = await identity(source, context)
+      // The whole batch is refused, nothing sent, when any thread still awaits 核对.
+      const outstanding = await store.loadSubscriptionOperations()
+      for (const threadId of input.threadIds) if (await unresolved(outstanding, source, threadId, context, secret)) return { ok: false, reason: 'busy' }
+    } catch (error) { return { ok: false, reason: error instanceof UnavailableIdentity ? error.reason : 'storage' } }
+    // Nothing is read back between items, so each item's original evidence is the same observation.
+    const before = await store.loadSubscriptionObservation(source, context, true)
+    const items: SubscriptionRemovalItem[] = input.threadIds.map((threadId) => ({ threadId, outcome: 'skipped', operationId: null }))
+    const sent: { item: SubscriptionRemovalItem; operation: SubscriptionOperation }[] = []
+    let stopReason: SubscriptionRemovalStop | null = null
+    for (const item of items) {
+      // The stop only keeps later items from being sent; a request already out is never withdrawn.
+      if (signal.aborted) { stopReason = 'cancelled'; break }
+      let operation: SubscriptionOperation
+      try {
+        if (!sameContext(context, (await store.loadSubscriptionConfiguration()).context)) { stopReason = 'stale'; break }
+        operation = await intent({ source, threadId: item.threadId, action: 'remove' }, context, before)
+        await store.saveSubscriptionOperation(operation)
+      } catch { stopReason = 'storage'; break }
+      item.operationId = operation.id
+      item.outcome = 'unknown'
+      sent.push({ item, operation })
+      await send(operation, secret)
+      // An unsaved report leaves the durable intent, which restart turns into an entry to 核对.
+      try { await store.saveSubscriptionOperation(operation) } catch { stopReason = 'result-storage'; break }
+      if (operation.report !== 'success') {
+        stopReason = operation.reportError?.kind === 'rate-limited' ? 'rate-limited' : operation.report === 'rejected' ? 'item-failed' : 'item-unknown'
+        break
+      }
+    }
+    if (sent.length === 0) {
+      if (stopReason === 'stale' || stopReason === 'cancelled') return { ok: false, reason: stopReason }
+      if (stopReason !== null) return { ok: false, reason: 'storage' }
+    }
+    // One complete read from page 1 after the last request is every sent item's readback. The stop does
+    // not cancel it. Rate-limited, nothing is read: reading would prolong the limit.
+    let after: SubscriptionObservation | null = null
+    if (stopReason !== 'rate-limited' && sent.length > 0) {
+      try { after = await readList(source, context, new AbortController().signal, null) } catch { stopReason ??= 'result-storage' }
+    }
+    for (const { item, operation } of sent) {
+      if (after !== null) judge(operation, after, false)
+      // Without a readback every sent item awaits 核对, as a single rate-limited write does.
+      else if (operation.state === 'pending') operation.state = 'needs-reconciliation'
+      try {
+        await store.saveSubscriptionOperation(operation)
+        item.outcome = after !== null ? removalOutcome(operation) : operation.report === 'rejected' ? 'failed' : 'unknown'
+      } catch { stopReason ??= 'result-storage' }
+    }
+    return { ok: true, value: { items, stopReason } }
   }
 
   async function collect(source: SubscriptionSource, context: SubscriptionContext, signal: AbortSignal,
@@ -459,6 +556,13 @@ export function createSubscriptionService(deps: {
     previewSync: (_input, signal) => preview('sync', null, signal),
     previewMerge: (input, signal) => preview('merge', input.sourceAppCredentialId, signal),
     executePlan: execute,
+    async removeMany(input, signal): Promise<SubscriptionResult<SubscriptionRemoval>> {
+      if (changing) return { ok: false, reason: 'busy' }
+      changing = true
+      try { return await removeThreads(input, signal) }
+      catch { return { ok: false, reason: 'storage' } }
+      finally { changing = false }
+    },
     async change(input, signal): Promise<SubscriptionResult<SubscriptionOperation>> {
       if (changing) return { ok: false, reason: 'busy' }
       changing = true

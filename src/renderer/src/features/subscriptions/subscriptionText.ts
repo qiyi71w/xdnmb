@@ -7,6 +7,8 @@ import type {
   SubscriptionOverview,
   SubscriptionPlan,
   SubscriptionPlanItem,
+  SubscriptionRemovalItem,
+  SubscriptionRemovalStop,
   SubscriptionSource,
   SubscriptionArrangement
 } from '../../../../shared/subscriptions'
@@ -14,6 +16,7 @@ import { completeSubscriptionObservation } from '../../../../shared/subscription
 import { describeReadError, meaningfulTitle } from '../../lib/format'
 import { formatClockTime } from '../../lib/time'
 import type { ArrangementNote } from './subscriptionListState'
+import type { RemovalOutcome } from './useSubscriptions'
 
 // Fixed copy only. Nothing here ever includes a UUID, a userhash or any other secret: the
 // renderer only knows local references, names and generations.
@@ -207,6 +210,53 @@ export function stopReasonText(plan: SubscriptionPlan): string | null {
     default:
       return failureText(plan.stopReason)
   }
+}
+
+/** The 批量取消订阅 confirmation: which collection loses how many threads; the web one by its object's name. */
+export function removalConfirmTitle(source: SubscriptionSource, webName: string | null, count: number): string {
+  if (source === 'app') return `从 App 订阅取消 ${count} 个串？`
+  return `从${webName === null ? '网页订阅' : `网页订阅（${webName}）`}取消 ${count} 个串？`
+}
+
+/** Why a 批量取消订阅 stopped, said after the item it stopped at when there is one. */
+const REMOVAL_STOP: Record<SubscriptionRemovalStop, string> = {
+  'item-failed': '没有取消成功，已停止',
+  'item-unknown': '结果不明，已停止',
+  'rate-limited': '被限流，已停止',
+  cancelled: '已停止',
+  stale: '订阅配置已变化，已停止',
+  storage: '本地存储不可用，已停止',
+  'result-storage': '本地未能保存结果，已停止'
+}
+
+/**
+ * The one line above the list after a 批量取消订阅: how many were removed, where and why it stopped,
+ * what is left unknown or failed, and how many were never sent (those stay ticked).
+ */
+export function removalSummary(outcome: RemovalOutcome): { tone: 'done' | 'warn' | 'error'; text: string } {
+  if (outcome.type === 'failed') return { tone: 'warn', text: '取消订阅的结果不明' }
+  if (outcome.type === 'refused') {
+    return { tone: 'error', text: outcome.reason === 'cancelled' ? '没有取消：已在发出前停止' : `没有取消：${failureText(outcome.reason)}` }
+  }
+  const { items, stopReason } = outcome.removal
+  const count = (kind: SubscriptionRemovalItem['outcome']) => items.filter((item) => item.outcome === kind).length
+  // The item it stopped at is the last one sent, named on its own instead of in the counts.
+  const at = stopReason === 'item-failed' || stopReason === 'item-unknown' || stopReason === 'rate-limited'
+    ? items.findLastIndex((item) => item.outcome !== 'skipped')
+    : -1
+  const stopped = at === -1 ? null : items[at]!.outcome
+  const confirmed = count('confirmed')
+  const unknown = count('unknown') - (stopped === 'unknown' ? 1 : 0)
+  const failed = count('failed') - (stopped === 'failed' ? 1 : 0)
+  const skipped = count('skipped')
+  const rest = [
+    stopReason === null ? null : at === -1 ? REMOVAL_STOP[stopReason] : `第 ${at + 1} 个${REMOVAL_STOP[stopReason]}`,
+    unknown > 0 ? `${unknown} 个结果不明` : null,
+    failed > 0 ? `${failed} 个没有取消成功` : null,
+    skipped > 0 ? `其余 ${skipped} 个未执行` : null
+  ].filter((part) => part !== null)
+  const text = `${confirmed > 0 ? `已取消 ${confirmed} 个。` : ''}${rest.length > 0 ? `${rest.join('；')}。` : ''}`
+  return { tone: confirmed === items.length ? 'done' : count('failed') > 0 ? 'error' : 'warn', text }
 }
 
 /** State of one plan item; `current` marks the item a running plan is working on. */

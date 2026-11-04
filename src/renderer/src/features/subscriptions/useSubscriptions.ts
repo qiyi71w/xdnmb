@@ -11,6 +11,7 @@ import type {
   SubscriptionOperation,
   SubscriptionOverview,
   SubscriptionPlan,
+  SubscriptionRemoval,
   SubscriptionResult,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
@@ -77,6 +78,27 @@ export interface ChangeRequest {
   label: string
 }
 
+/** What a 批量取消订阅 came back with. */
+export type RemovalOutcome =
+  | { type: 'done'; removal: SubscriptionRemoval }
+  /** Refused as a whole: nothing was sent. */
+  | { type: 'refused'; reason: SubscriptionFailure }
+  /** The IPC call itself rejected: what was sent is unknown; the journal tells. */
+  | { type: 'failed' }
+
+/** The one 批量取消订阅 of this window, with the collection (`collectionKey`) its threads were ticked in. */
+export type RemovalTask =
+  | { phase: 'running'; operationId: OperationId; key: string; total: number; stopRequested: boolean }
+  | { phase: 'finished'; key: string; threadIds: readonly ThreadId[]; outcome: RemovalOutcome }
+
+export interface RemovalRequest {
+  source: SubscriptionSource
+  /** In the order shown. */
+  threadIds: ThreadId[]
+  expectedGeneration: number
+  key: string
+}
+
 /** Why the last 关闭 (×) of a journal entry did not happen; the entry and its protection stay. */
 export interface DismissFailure {
   id: string
@@ -111,6 +133,13 @@ export interface SubscriptionsState {
   /** The entry whose 关闭 is being saved. */
   dismissing: string | null
   dismissFailure: DismissFailure | null
+  /** The running or last 批量取消订阅; a finished one stays until dismissed or replaced. */
+  removal: RemovalTask | null
+  /** Sends the removals once (never retried); refused while anything else runs. */
+  removeMany: (request: RemovalRequest) => Promise<void>
+  /** 停止后续取消: no further item is sent; a sent one is not withdrawn and the readback still runs. */
+  stopRemoval: () => void
+  dismissRemoval: () => void
 
   /** Remote collections by `collectionKey`: snapshot, latest evidence and read round, shared by all views. */
   collections: ReadonlyMap<string, CollectionState>
@@ -194,6 +223,14 @@ export function useSubscriptions(): SubscriptionsState {
   const [dismissFailure, setDismissFailure] = useState<DismissFailure | null>(null)
   // Synchronous guard, as for writes: a second × in the same frame does nothing.
   const dismissingRef = useRef<string | null>(null)
+  const [removal, setRemovalState] = useState<RemovalTask | null>(null)
+  // Synchronous guard shared with the other writes: a second press in the same frame does nothing.
+  const removalRef = useRef<RemovalTask | null>(null)
+  const setRemoval = useCallback((next: RemovalTask | null) => {
+    removalRef.current = next
+    setRemovalState(next)
+  }, [])
+  const removing = () => removalRef.current?.phase === 'running'
   const [collections, setCollections] = useState<ReadonlyMap<string, CollectionState>>(() => new Map())
   const collectionsRef = useRef<Map<string, CollectionState>>(new Map())
   /** The read round of each collection in flight, with the operation of the page it is reading. */
@@ -433,7 +470,7 @@ export function useSubscriptions(): SubscriptionsState {
 
   const change = useCallback(
     async (request: ChangeRequest) => {
-      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current)) return
+      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current) || removing()) return
       const operationId = crypto.randomUUID()
       const write: ActiveWrite = {
         kind: 'change',
@@ -460,7 +497,7 @@ export function useSubscriptions(): SubscriptionsState {
 
   const reconcile = useCallback(
     async (operation: SubscriptionOperation) => {
-      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current)) return
+      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current) || removing()) return
       const operationId = crypto.randomUUID()
       const write: ActiveWrite = {
         kind: 'reconcile',
@@ -487,11 +524,48 @@ export function useSubscriptions(): SubscriptionsState {
     window.xidao.subscriptions.cancel({ operationId: write.operationId }).catch(() => undefined)
   }, [])
 
+  const removeMany = useCallback(
+    async (request: RemovalRequest) => {
+      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current) || removing()) return
+      if (request.threadIds.length === 0) return
+      const operationId = crypto.randomUUID()
+      setRemoval({ phase: 'running', operationId, key: request.key, total: request.threadIds.length, stopRequested: false })
+      let outcome: RemovalOutcome
+      try {
+        const result = await window.xidao.subscriptions.removeMany({
+          source: request.source,
+          threadIds: request.threadIds,
+          expectedGeneration: request.expectedGeneration,
+          operationId
+        })
+        outcome = result.ok ? { type: 'done', removal: result.value } : { type: 'refused', reason: result.reason }
+      } catch {
+        outcome = { type: 'failed' }
+      }
+      if (!alive.current) return
+      setRemoval({ phase: 'finished', key: request.key, threadIds: request.threadIds, outcome })
+      // The journal holds every sent item and the shared readback, which updates the list.
+      void refreshOperations()
+    },
+    [setRemoval, refreshOperations]
+  )
+
+  const stopRemoval = useCallback(() => {
+    const current = removalRef.current
+    if (current?.phase !== 'running' || current.stopRequested) return
+    setRemoval({ ...current, stopRequested: true })
+    window.xidao.subscriptions.cancel({ operationId: current.operationId }).catch(() => undefined)
+  }, [setRemoval])
+
+  const dismissRemoval = useCallback(() => {
+    if (removalRef.current?.phase === 'finished') setRemoval(null)
+  }, [setRemoval])
+
   const dismissLastWrite = useCallback(() => setLastWrite(null), [])
 
   const dismiss = useCallback(
     async (operation: SubscriptionOperation): Promise<boolean> => {
-      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current)) return false
+      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current) || removing()) return false
       dismissingRef.current = operation.id
       setDismissing(operation.id)
       setDismissFailure(null)
@@ -546,7 +620,7 @@ export function useSubscriptions(): SubscriptionsState {
 
   const startPreview = useCallback(
     async (mode: ReconcileMode, mergeSource: SubscriptionMergeSource | null) => {
-      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current)) return
+      if (activeRef.current !== null || dismissingRef.current !== null || busyTask(taskRef.current) || removing()) return
       if (mode === 'merge' && mergeSource === null) return
       await runPreview(mode, mergeSource, null)
     },
@@ -564,7 +638,7 @@ export function useSubscriptions(): SubscriptionsState {
 
   const execute = useCallback(async () => {
     const current = taskRef.current
-    if (current?.phase !== 'preview' || activeRef.current !== null) return
+    if (current?.phase !== 'preview' || activeRef.current !== null || removing()) return
     // A preview made for another UUID / binding is never sent; the backend would refuse it as stale too.
     if (!previewCurrent(current.preview, overviewRef.current?.context ?? null)) return
     const { preview, mergeSource, choices } = current
@@ -639,12 +713,16 @@ export function useSubscriptions(): SubscriptionsState {
     dismiss,
     dismissing,
     dismissFailure,
+    removal,
+    removeMany,
+    stopRemoval,
+    dismissRemoval,
     collections,
     loadCollection,
     refreshCollection,
     stopCollection,
     task,
-    busy: active !== null || dismissing !== null || busyTask(task),
+    busy: active !== null || dismissing !== null || busyTask(task) || removal?.phase === 'running',
     startPreview,
     setChoice,
     execute,
