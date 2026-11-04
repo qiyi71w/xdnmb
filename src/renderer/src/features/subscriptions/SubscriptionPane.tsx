@@ -185,7 +185,7 @@ export function SubscriptionPane({
   /** This view's filters; kept across source switches, never resetting the thread being read. */
   const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtersRef = useRef(filters)
-  const filter = useListFilter(filters, setFilters)
+  const filter = useListFilter({ value: filters, onChange: setFilters })
 
   // ---------- Reads ----------
   const { key: collection, state: collected } = useCollection(overview?.source ?? 'app')

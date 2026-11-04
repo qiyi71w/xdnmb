@@ -2,6 +2,7 @@ import type { PostTarget } from '../../../../shared/drafts'
 import type { ForumId, PostId, ThreadId } from '../../../../shared/forum'
 import type { CredentialId, IdentityOverview } from '../../../../shared/identity'
 import type { PublicationAttempt } from '../../../../shared/publication'
+import type { KeywordFields } from '../search/listFilters'
 
 /** What a send went to: a new thread (新串) or a reply (回复); names the 历史 page it is listed on. */
 export type SentKind = PostTarget['kind']
@@ -26,6 +27,20 @@ export function recordPlace(attempt: Pick<PublicationAttempt, 'payload' | 'postI
   }
   const threadId = attempt.threadId ?? attempt.postId
   return threadId === null ? { kind: 'forum', forumId: target.forumId } : { kind: 'thread', threadId }
+}
+
+/**
+ * What a record's 关键词 is matched against: the title, name and text it sent (never the sent post
+ * as held here, nor its thread's main post). Numbers: the post it created once confirmed (a new
+ * thread's own), and a reply's thread.
+ */
+export function sentKeywordFields(attempt: Pick<PublicationAttempt, 'payload' | 'postId' | 'threadId'>): KeywordFields {
+  const { fields, target } = attempt.payload
+  return {
+    texts: [fields.title, fields.name, fields.content],
+    numbers: target.kind === 'reply' ? [attempt.postId, attempt.threadId ?? target.threadId] : [attempt.postId],
+    partial: false
+  }
 }
 
 /**

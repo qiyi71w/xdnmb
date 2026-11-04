@@ -102,7 +102,8 @@ export type ListMemory =
  * side and 本机 scroll of 搜索 pages. Memory lives only while the app runs; the shell drops it when
  * its entry leaves every tab's history.
  * `readingResets` tells open readers that their thread's reading data was cleared;
- * `retainedFilters` keeps the filters of each 历史／离线 list while the app runs.
+ * `retainedFilters` keeps the filters of each 历史／离线 list while the app runs, and
+ * `historyKeywords` the 关键词 of each 历史 page (浏览, 新串, 回复); neither outlives a quit.
  * `savedLists` is list context restored from the last quit for lists not shown again yet: a list
  * consumes its own once it has read its pages again and placed its position, or was refreshed.
  */
@@ -116,6 +117,7 @@ export interface ContentRegistry {
   readingResets: ReadingResets
   savedLists: Map<number, WorkspaceList>
   retainedFilters: Map<RetainedPage, ContentFilters>
+  historyKeywords: Map<HistoryView, string>
   onlineSearches: OnlineSearchSessions
 }
 
@@ -130,6 +132,7 @@ export function createContentRegistry(): ContentRegistry {
     readingResets: createReadingResets(),
     savedLists: new Map(),
     retainedFilters: new Map(),
+    historyKeywords: new Map(),
     onlineSearches: new OnlineSearchSessions()
   }
 }
