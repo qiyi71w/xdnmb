@@ -626,8 +626,19 @@
   opacity: 0.45;
 }
 
-.sub-select-bar .btn[aria-busy='true'] {
+/* The spinner of 停止后续取消. */
+.sub-select-bar .btn {
   gap: 6px;
+}
+
+/* A list shorter than the pane still has the bar at its foot; a longer one keeps it stuck there. */
+.list-scroll.is-selecting:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+}
+
+.list-scroll.is-selecting > .sub-select-bar {
+  margin-top: auto;
 }
 
 .sub-remove-dialog {

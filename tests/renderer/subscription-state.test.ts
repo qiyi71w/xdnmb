@@ -582,7 +582,10 @@ describe('bulk unsubscribe result line', () => {
   })
 
   it('says a rate limit or a stop, and leaves every sent item it could not confirm counted as unknown', () => {
-    expect(done(['unknown', 'unknown', 'unknown', 'skipped'], 'rate-limited')).toEqual({ tone: 'warn', text: '第 3 个被限流，已停止；2 个结果不明；其余 1 个未执行。' })
+    // The rate-limited item counts with the others: every sent item it could not confirm.
+    expect(done(['unknown', 'unknown', 'unknown', 'skipped'], 'rate-limited')).toEqual({ tone: 'warn', text: '第 3 个被限流，已停止；3 个结果不明；其余 1 个未执行。' })
+    expect(done(['unknown', 'skipped'], 'rate-limited').text).toBe('第 1 个被限流，已停止；1 个结果不明；其余 1 个未执行。')
+    expect(done(['unknown', 'failed'], 'rate-limited')).toEqual({ tone: 'error', text: '第 2 个被限流，已停止；1 个结果不明；1 个没有取消成功。' })
     expect(done(['confirmed', 'skipped', 'skipped'], 'cancelled')).toEqual({ tone: 'warn', text: '已取消 1 个。已停止；其余 2 个未执行。' })
     expect(done(['confirmed', 'unknown'], null).text).toBe('已取消 1 个。1 个结果不明。')
   })

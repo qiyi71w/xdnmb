@@ -511,7 +511,7 @@ export function SubscriptionPane({
   return (
     <section ref={paneRef} className="list-pane sub-pane" aria-label={`订阅：${SOURCE_NAME[source]}`}>
       <div
-        className="list-scroll"
+        className={selected === null ? 'list-scroll' : 'list-scroll is-selecting'}
         ref={scrollRef}
         onScroll={onScroll}
         tabIndex={-1}
@@ -955,8 +955,10 @@ export function SubscriptionPane({
 const NO_THREADS: ReadonlySet<ThreadId> = new Set()
 
 /**
- * 选择多个's bar at the foot of the list: 全选, 取消订阅（N） and 完成. While the removals run, 取消订阅
- * stays in place (it keeps the focus, so a held key does nothing more) and 停止后续取消 joins it.
+ * 选择多个's bar at the foot of the list: 全选, 取消订阅（N） and 完成. While the removals run the same
+ * button is 停止后续取消, keeping the focus it had (the confirmation returns focus to it), and the
+ * others are unavailable. A held Enter or Space repeats into whatever has the focus: only a fresh
+ * press acts, so the press that confirmed never also stops.
  */
 function SelectionBar({
   barRef,
@@ -983,28 +985,34 @@ function SelectionBar({
   const running = removal !== null
   const unavailable = running || count === 0 || blockedHint !== null
   return (
-    <div className="sub-recon-bar sub-select-bar" ref={barRef} role="group" aria-label="选择多个">
+    <div
+      className="sub-recon-bar sub-select-bar"
+      ref={barRef}
+      role="group"
+      aria-label="选择多个"
+      onKeyDown={(event) => {
+        if (event.repeat && (event.key === 'Enter' || event.key === ' ')) event.preventDefault()
+      }}
+    >
       <div className="sub-recon-actions">
         <button type="button" className="btn btn-page" aria-disabled={running || undefined} onClick={() => !running && onSelectAll()}>
           全选
         </button>
         <button
           type="button"
-          className="btn btn-page btn-danger"
-          // aria-disabled, not disabled: focus stays on it while the removals run.
-          aria-disabled={unavailable || undefined}
-          aria-busy={running || undefined}
-          aria-describedby={blockedHint === null ? undefined : hintId}
-          onClick={() => !unavailable && onRemove()}
+          className={running ? 'btn btn-page' : 'btn btn-page btn-danger'}
+          // aria-disabled, not disabled: focus stays on it while the removals start and run.
+          aria-disabled={(running ? removal.stopRequested : unavailable) || undefined}
+          aria-describedby={blockedHint === null || running ? undefined : hintId}
+          onClick={() => {
+            if (running) {
+              if (!removal.stopRequested) onStop()
+            } else if (!unavailable) onRemove()
+          }}
         >
           {running && <Spinner />}
-          {running ? `正在取消 ${removal.total} 个串…` : `取消订阅（${count}）`}
+          {running ? (removal.stopRequested ? '正在停止…' : '停止后续取消') : `取消订阅（${count}）`}
         </button>
-        {running && (
-          <button type="button" className="btn btn-page" aria-disabled={removal.stopRequested || undefined} onClick={() => !removal.stopRequested && onStop()}>
-            {removal.stopRequested ? '正在停止…' : '停止后续取消'}
-          </button>
-        )}
         <button type="button" className="btn btn-page" aria-disabled={running || undefined} onClick={() => !running && onDone()}>
           完成
         </button>

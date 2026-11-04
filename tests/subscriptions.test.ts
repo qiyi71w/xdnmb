@@ -1276,6 +1276,25 @@ describe('bulk subscription removal', () => {
     expect(await removeMany(service, 'app', ['1001'])).toEqual({ ok: false, reason: 'busy' })
   })
 
+  it('still reads nothing back when the rate-limited report itself cannot be saved', async () => {
+    const { service, store, create, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    remote.app.set(UUID_A, new Set(['1001', '1002', '1003']))
+    await scan(service, 'app')
+    remote.requests.length = 0
+    remote.behavior.onWrite = async () => { remote.behavior.writeFailure = 'rate-limit' }
+    let saves = 0
+    // Intent 1, report 1, intent 2 save; the rate-limited report 2 does not.
+    const interrupted: AppStore = { ...store, async saveSubscriptionOperation(operation) {
+      if (++saves === 4) throw new Error('report disk failure')
+      await store.saveSubscriptionOperation(operation)
+    } }
+    const result = unwrap(await removeMany(create(interrupted), 'app', ['1001', '1002', '1003']))
+    expect(result).toMatchObject({ stopReason: 'rate-limited', items: [{ outcome: 'unknown' }, { outcome: 'unknown' }, { outcome: 'skipped' }] })
+    expect(remote.requests.map((request) => request.tid)).toEqual(['1001', '1002'])
+    expect(reads(remote.requests)).toEqual([])
+  })
+
   it('sends nothing after a stop and confirms what was already sent from the shared readback', async () => {
     const { service, remote } = await setup()
     unwrap(await service.configureApp({ uuid: UUID_A }))

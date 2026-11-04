@@ -261,10 +261,12 @@ export function createSubscriptionService(deps: {
       item.outcome = 'unknown'
       sent.push({ item, operation })
       await send(operation, secret)
-      // An unsaved report leaves the durable intent, which restart turns into an entry to 核对.
-      try { await store.saveSubscriptionOperation(operation) } catch { stopReason = 'result-storage'; break }
+      const limited = operation.reportError?.kind === 'rate-limited'
+      // An unsaved report leaves the durable intent, which restart turns into an entry to 核对. A rate
+      // limit still forbids the readback then.
+      try { await store.saveSubscriptionOperation(operation) } catch { stopReason = limited ? 'rate-limited' : 'result-storage'; break }
       if (operation.report !== 'success') {
-        stopReason = operation.reportError?.kind === 'rate-limited' ? 'rate-limited' : operation.report === 'rejected' ? 'item-failed' : 'item-unknown'
+        stopReason = limited ? 'rate-limited' : operation.report === 'rejected' ? 'item-failed' : 'item-unknown'
         break
       }
     }

@@ -240,11 +240,12 @@ export function removalSummary(outcome: RemovalOutcome): { tone: 'done' | 'warn'
   }
   const { items, stopReason } = outcome.removal
   const count = (kind: SubscriptionRemovalItem['outcome']) => items.filter((item) => item.outcome === kind).length
-  // The item it stopped at is the last one sent, named on its own instead of in the counts.
+  // The item it stopped at is the last one sent. Its result is said with it (第 5 个结果不明) instead of
+  // in the counts, except after a rate limit, which says why it stopped but not what came of the item.
   const at = stopReason === 'item-failed' || stopReason === 'item-unknown' || stopReason === 'rate-limited'
     ? items.findLastIndex((item) => item.outcome !== 'skipped')
     : -1
-  const stopped = at === -1 ? null : items[at]!.outcome
+  const stopped = at === -1 || stopReason === 'rate-limited' ? null : items[at]!.outcome
   const confirmed = count('confirmed')
   const unknown = count('unknown') - (stopped === 'unknown' ? 1 : 0)
   const failed = count('failed') - (stopped === 'failed' ? 1 : 0)
