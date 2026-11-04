@@ -7,11 +7,13 @@ import type {
   SubscriptionOverview,
   SubscriptionPlan,
   SubscriptionPlanItem,
-  SubscriptionSource
+  SubscriptionSource,
+  SubscriptionArrangement
 } from '../../../../shared/subscriptions'
 import { completeSubscriptionObservation } from '../../../../shared/subscriptions'
 import { describeReadError, meaningfulTitle } from '../../lib/format'
 import { formatClockTime } from '../../lib/time'
+import type { ArrangementNote } from './subscriptionListState'
 
 // Fixed copy only. Nothing here ever includes a UUID, a userhash or any other secret: the
 // renderer only knows local references, names and generations.
@@ -24,6 +26,23 @@ export const SOURCE_NAME: Record<SubscriptionSource, string> = {
 export const SOURCE_SHORT: Record<SubscriptionSource, string> = {
   app: 'App',
   web: '网页'
+}
+
+/** The 更多 menu's order choices, in menu order. */
+export const ARRANGEMENT_NAME: Record<SubscriptionArrangement, string> = {
+  remote: '按订阅顺序排列',
+  app: '按 App 顺序排列',
+  web: '按网页顺序排列'
+}
+
+const ARRANGEMENT_WAITING: Record<SubscriptionSource, string> = {
+  app: '读完 App 订阅后按 App 顺序排列',
+  web: '读完网页订阅后按网页顺序排列'
+}
+
+/** The line above a list shown in another side's order, or waiting for that side to be read to the end. */
+export function arrangementNoteText(note: ArrangementNote): string {
+  return note.kind === 'arranged' ? ARRANGEMENT_NAME[note.base] : ARRANGEMENT_WAITING[note.base]
 }
 
 export const ACTION_NAME: Record<SubscriptionAction, string> = {

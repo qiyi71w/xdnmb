@@ -73,18 +73,21 @@ function unwrap<T>(result: SubscriptionResult<T>): T {
   return result.value
 }
 
-interface RequestRecord { path: string; cookie: string | undefined; uuid: string | null; page: number }
+interface RequestRecord { path: string; cookie: string | undefined; uuid: string | null; page: number; tid: string | null }
 async function fixture() {
   const app = new Map<string, Set<string>>([[UUID_A, new Set(['1001', '1002'])], [UUID_B, new Set(['2001'])]])
   const web = new Map<string, Set<string>>([[COOKIE_A, new Set(['3001'])], [COOKIE_B, new Set(['4001'])]])
   const requests: RequestRecord[] = []
   const behavior = { dropNextWrite: false, failPage: 0, failSource: null as SubscriptionSource | null, ignoreWrites: false, writeFailure: null as 'rate-limit' | 'captcha' | null,
-    onWrite: null as null | (() => Promise<void>), onRead: null as null | ((source: SubscriptionSource, page: number) => Promise<void>) }
+    onWrite: null as null | (() => Promise<void>), onRead: null as null | ((source: SubscriptionSource, page: number) => Promise<void>),
+    /** Lists like the forum: the latest subscription (the last one added to the set) first. */
+    newestFirst: false }
   const server = createServer(async (request, response) => {
     const url = new URL(request.url!, 'http://localhost')
     const isWeb = url.pathname.startsWith('/Forum/') || url.pathname.startsWith('/Home/')
     const page = isWeb ? Number(/\/page\/(\d+)/.exec(url.pathname)?.[1] ?? 0) : Number(url.searchParams.get('page') ?? 0)
-    requests.push({ path: url.pathname, cookie: request.headers.cookie, uuid: url.searchParams.get('uuid'), page })
+    const tid = isWeb ? /\/tid\/(\d+)/.exec(url.pathname)?.[1] ?? null : url.searchParams.get('tid')
+    requests.push({ path: url.pathname, cookie: request.headers.cookie, uuid: url.searchParams.get('uuid'), page, tid })
     const secret = isWeb ? (request.headers.cookie ?? '').replace(/^userhash=/, '') : url.searchParams.get('uuid') ?? ''
     const collection = (isWeb ? web : app).get(secret)
     const write = /(?:addFeed|delFeed)/.test(url.pathname)
@@ -96,7 +99,6 @@ async function fixture() {
         response.end(isWeb ? '<p class="error">需要验证码</p>' : JSON.stringify('需要验证码'))
         return
       }
-      const tid = isWeb ? /\/tid\/(\d+)/.exec(url.pathname)?.[1] : url.searchParams.get('tid')
       if (tid && !behavior.ignoreWrites) { if (url.pathname.includes('addFeed')) collection.add(tid); else collection.delete(tid) }
       if (behavior.onWrite) await behavior.onWrite()
       if (behavior.dropNextWrite) { behavior.dropNextWrite = false; request.socket.destroy(); return }
@@ -107,7 +109,7 @@ async function fixture() {
     if (behavior.onRead) await behavior.onRead(isWeb ? 'web' : 'app', page)
     if (page === behavior.failPage && (behavior.failSource === null || behavior.failSource === (isWeb ? 'web' : 'app'))) { response.statusCode = 503; response.end('temporary'); return }
     // Deliberately tiny non-final pages prove that short pages cannot end the read.
-    const ids = [...collection].slice(page - 1, page)
+    const ids = (behavior.newestFirst ? [...collection].reverse() : [...collection]).slice(page - 1, page)
     response.end(isWeb ? `<html><head><title>网页订阅</title></head><body><div class="h-threads-list">${ids.map((id) => `<div class="h-threads-item-main" data-threads-id="${id}"><a class="h-threads-info-id" href="/t/${id}">No.${id}</a><div class="h-threads-content">正文 验证码 饼干 请登录</div></div>`).join('')}</div></body></html>`
       : JSON.stringify(ids.map((id) => ({ id, fid: '4', content: '正文', title: `串${id}` }))))
   })
@@ -766,7 +768,7 @@ describe('previewed subscription reconciliation', () => {
     expect(plan.items.map((item) => item.state)).toEqual(['confirmed', 'confirmed', 'confirmed'])
     expect(plan.items.every((item) => item.operationId !== null)).toBe(true)
     expect([...remote.app.get(UUID_A)!]).toEqual(['1001', '1002', '3001'])
-    expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1001', '1002'])
+    expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1002', '1001'])
     expect(await service.executePlan({ previewId: preview.id, choices: [], operationId: 'again' }, signal())).toEqual({ ok: false, reason: 'stale' })
     expect((await service.getPlans())[0]).toEqual(plan)
   })
@@ -861,8 +863,8 @@ describe('previewed subscription reconciliation', () => {
     expect(preview).toMatchObject({ firstSync: true, context: { webCredentialId: b.id } })
     expect(preview.items.every((item) => item.defaultChoice === 'both' && !item.choices.includes('none'))).toBe(true)
     await executePreview(service, preview)
-    expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1001', '1002'])
-    expect([...remote.web.get(COOKIE_B)!]).toEqual(['4001', '1001', '1002', '3001'])
+    expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1002', '1001'])
+    expect([...remote.web.get(COOKIE_B)!]).toEqual(['4001', '3001', '1002', '1001'])
     expect(db.loadRoleSelections()).toEqual({ 'default-post': { state: 'selected', credentialId: b.id }, 'web-sync': { state: 'selected', credentialId: b.id } })
   })
 
@@ -881,17 +883,17 @@ describe('previewed subscription reconciliation', () => {
     expect(plan.state).toBe('stopped')
     expect(plan.items.map((item) => item.state)).toEqual(['confirmed', failure === 'lost-response' ? 'unknown' : 'failed', 'skipped'])
     expect(writes(remote.requests)).toHaveLength(2)
-    expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(true)
-    expect(remote.app.get(UUID_A)!.has('3001')).toBe(false)
+    expect(remote.app.get(UUID_A)!.has('3001')).toBe(true)
+    expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(false)
     const operation = (await service.getOperations()).find((entry) => entry.id === plan.items[1]!.operationId)!
     if (failure === 'lost-response') expect(operation).toMatchObject({ report: 'unknown', verification: 'present' })
     remote.behavior.onWrite = null
     remote.behavior.writeFailure = null
     remote.behavior.ignoreWrites = false
-    remote.web.get(COOKIE_A)!.delete('1001')
+    remote.app.get(UUID_A)!.delete('3001')
     if (failure !== 'mismatch') remote.web.get(COOKIE_A)!.delete('1002')
     const next = await syncPreview(service)
-    expect(next.items.find((item) => item.threadId === '1001')).toMatchObject({ presentOn: 'app', baseline: true, defaultChoice: 'skip', provenance: { kind: 'gone' } })
+    expect(next.items.find((item) => item.threadId === '3001')).toMatchObject({ presentOn: 'web', baseline: true, defaultChoice: 'skip', provenance: { kind: 'gone' } })
     expect(next.items.find((item) => item.threadId === '1002')).toMatchObject({ presentOn: 'app', ...NEW })
   })
 
@@ -926,7 +928,7 @@ describe('previewed subscription reconciliation', () => {
     expect(plan).toMatchObject({ state: 'stopped', stopReason: 'item-unknown' })
     expect(plan.items.map((item) => item.state)).toEqual(['unknown', 'skipped', 'skipped'])
     expect(writes(remote.requests)).toHaveLength(1)
-    expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(true)
+    expect(remote.app.get(UUID_A)!.has('3001')).toBe(true)
   })
 
   it.each(['report', 'atomic-facts'] as const)('retains linked intent and unchanged item baseline after %s save interruption', async (failure) => {
@@ -949,7 +951,7 @@ describe('previewed subscription reconciliation', () => {
     expect(plan).toMatchObject({ state: 'stopped', stopReason: 'result-storage' })
     expect(plan.items[0]).toMatchObject({ state: 'unknown', operationId: expect.any(String), failure: 'result-storage' })
     expect(writes(remote.requests)).toHaveLength(1)
-    expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(true)
+    expect(remote.app.get(UUID_A)!.has('3001')).toBe(true)
     db.close(); databases.delete(db)
     const restarted = create(asStore(open(file)))
     const before = remote.requests.length
@@ -963,8 +965,8 @@ describe('previewed subscription reconciliation', () => {
     const checked = unwrap(await restarted.reconcile({ id: journal.id, operationId: 'check' }, signal()))
     expect(checked.verification).toBe('present')
     expect(writes(remote.requests)).toHaveLength(1)
-    remote.web.get(COOKIE_A)!.delete('1001')
-    expect((await syncPreview(restarted)).items.find((item) => item.threadId === '1001')).toMatchObject({ presentOn: 'app', ...NEW })
+    remote.app.get(UUID_A)!.delete('3001')
+    expect((await syncPreview(restarted)).items.find((item) => item.threadId === '3001')).toMatchObject({ presentOn: 'web', ...NEW })
   })
 
   it('marks a durable running plan interrupted after storage loss and never resumes it on restart', async () => {
@@ -1021,6 +1023,61 @@ describe('previewed subscription reconciliation', () => {
   })
 })
 
+describe('subscription order of sync and merge writes', () => {
+  // Sets hold the oldest subscription first; with `newestFirst` the remote lists them newest first, as the forum does.
+  it('writes each target from the bottom of its source, so added threads keep the source order on top', async () => {
+    const { service, remote } = await setup()
+    remote.behavior.newestFirst = true
+    remote.app.set(UUID_A, new Set(['9001', '1003', '1002', '1001']))
+    remote.web.set(COOKIE_A, new Set(['9001', '3002', '3001']))
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    const preview = await syncPreview(service)
+    expect(preview.items.map((item) => item.threadId)).toEqual(['1001', '1002', '1003', '3001', '3002'])
+    const plan = await executePreview(service, preview)
+    expect(plan.state).toBe('completed')
+    expect(plan.items.map(({ candidate }) => `${candidate.target}:${candidate.threadId}`)).toEqual(['app:3002', 'app:3001', 'web:1003', 'web:1002', 'web:1001'])
+    expect(writes(remote.requests).map((request) => `${request.path.includes('Feed/tid') ? 'web' : 'app'}:${request.tid}`))
+      .toEqual(['app:3002', 'app:3001', 'web:1003', 'web:1002', 'web:1001'])
+    expect((await service.getPlans())[0]!.items.map((item) => item.candidate.threadId)).toEqual(['3002', '3001', '1003', '1002', '1001'])
+    expect((await scan(service, 'app')).ids).toEqual(['3001', '3002', '1001', '1002', '1003', '9001'])
+    expect((await scan(service, 'web')).ids).toEqual(['1001', '1002', '1003', '3001', '3002', '9001'])
+  })
+
+  it('ends in the source order after a sync that stopped at an unconfirmed item is run again', async () => {
+    const { service, remote } = await setup()
+    remote.behavior.newestFirst = true
+    remote.app.set(UUID_A, new Set(['1003', '1002', '1001']))
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    let count = 0
+    remote.behavior.onWrite = async () => { if (++count === 2) remote.behavior.writeFailure = 'captcha' }
+    const stopped = await executePreview(service, await syncPreview(service))
+    expect(stopped.items.map((item) => [item.candidate.threadId, item.state])).toEqual([['3001', 'confirmed'], ['1003', 'confirmed'], ['1002', 'failed'], ['1001', 'skipped']])
+    remote.behavior.onWrite = null
+    remote.behavior.writeFailure = null
+    // The unconfirmed write blocks its thread until the read-only 核对 settles it; nothing is resent.
+    unwrap(await service.reconcile({ id: stopped.items[2]!.operationId!, operationId: 'check' }, signal()))
+    const again = await syncPreview(service)
+    expect(again.items.map((item) => item.threadId)).toEqual(['1001', '1002'])
+    expect((await executePreview(service, again)).state).toBe('completed')
+    expect((await scan(service, 'app')).ids).toEqual(['3001', '1001', '1002', '1003'])
+    expect((await scan(service, 'web')).ids).toEqual(['1001', '1002', '1003', '3001'])
+  })
+
+  it('merges the old UUID threads into the current one in the old UUID order', async () => {
+    const { service, remote } = await setup()
+    remote.behavior.newestFirst = true
+    remote.app.set(UUID_A, new Set(['1003', '1002', '1001']))
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    unwrap(await service.configureApp({ uuid: UUID_B }))
+    const [source] = await service.getMergeSources()
+    const preview = unwrap(await service.previewMerge({ sourceAppCredentialId: source!.appCredentialId, operationId: 'merge' }, signal()))
+    expect(preview.items.map((item) => item.threadId)).toEqual(['1001', '1002', '1003'])
+    expect((await executePreview(service, preview)).state).toBe('completed')
+    expect(writes(remote.requests).map((request) => request.tid)).toEqual(['1003', '1002', '1001'])
+    expect((await scan(service, 'app')).ids).toEqual(['1001', '1002', '1003', '2001'])
+  })
+})
+
 describe('subscription plan restart boundaries', () => {
   it('retains confirmed facts across restart after a later server commit loses its response', async () => {
     const { service, remote, db, file, create } = await setup()
@@ -1041,10 +1098,10 @@ describe('subscription plan restart boundaries', () => {
     const journal = (await restarted.getOperations()).find((entry) => entry.id === result.items[1]!.operationId)!
     expect(unwrap(await restarted.reconcile({ id: journal.id, operationId: 'read-only' }, signal()))).toMatchObject({ report: 'unknown', verification: 'present' })
     expect(writes(remote.requests)).toHaveLength(2)
-    remote.web.get(COOKIE_A)!.delete('1001')
+    remote.app.get(UUID_A)!.delete('3001')
     remote.web.get(COOKIE_A)!.delete('1002')
     const next = await syncPreview(restarted)
-    expect(next.items.find((item) => item.threadId === '1001')).toMatchObject({ presentOn: 'app', baseline: true, defaultChoice: 'skip' })
+    expect(next.items.find((item) => item.threadId === '3001')).toMatchObject({ presentOn: 'web', baseline: true, defaultChoice: 'skip' })
     expect(next.items.find((item) => item.threadId === '1002')).toMatchObject({ presentOn: 'app', ...NEW })
   })
 

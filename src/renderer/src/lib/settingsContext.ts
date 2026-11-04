@@ -10,6 +10,8 @@ export interface SettingsAccess {
   settings: AppSettings
   latest: () => AppSettings
   write: (patch: Partial<AppSettings>, delay?: number) => void
+  /** Local storage refused the last write: `settings` are what stays in effect. */
+  notSaved: boolean
 }
 
 export const SettingsContext = createContext<SettingsAccess | null>(null)

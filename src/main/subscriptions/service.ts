@@ -315,8 +315,11 @@ export function createSubscriptionService(deps: {
       const rightIds = new Set(right.ids)
       const baseline: SubscriptionBaseline | undefined = value.mode === 'sync' ? { context: value.context,
         ids: [...new Set([...(previous?.ids ?? []), ...left.ids.filter((id) => rightIds.has(id))])] } : undefined
+      // Both sides list the newest subscription first, and every write lands on top. Going up from the
+      // bottom of the preview leaves the added threads on each target in their source's order; removals
+      // follow the same order, as they never affect it. The plan keeps its items in this execution order.
       const writes: SubscriptionCandidate[] = []
-      for (const item of value.items) {
+      for (const item of value.items.toReversed()) {
         const choice = chosen.get(item.id) ?? 'skip'
         if (choice === 'skip') continue
         // Merge adds the old UUID's thread to the current App; sync adds to the side that lacks it or removes from the one that has it.

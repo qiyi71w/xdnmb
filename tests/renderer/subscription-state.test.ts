@@ -1,7 +1,11 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { ContextMenuEntry } from '../../src/renderer/src/components/ContextMenu'
 import type { ThreadSummary } from '../../src/shared/forum'
 import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionOverview } from '../../src/shared/subscriptions'
 import {
+  arrangeThreads,
   blocksNewWrite,
   clearSuccessfulWriteOnLeave,
   collectionDisplay,
@@ -464,5 +468,49 @@ describe('the last result line after a dismissal', () => {
     expect(noticeAfterDismiss(otherGeneration, closed)).toBe(otherGeneration)
     const refused: WriteNotice = { write, outcome: { type: 'refused', reason: 'busy' } }
     expect(noticeAfterDismiss(refused, closed)).toBe(refused)
+  })
+})
+
+describe('subscription arrangement', () => {
+  const rows = (...ids: string[]) => ids.map((id) => ({ head: { id } }))
+  const order = (result: { threads: readonly { head: { id: string } }[] }) => result.threads.map((thread) => thread.head.id)
+
+  it('orders shared threads by the base and keeps each one-sided thread after its nearest shared predecessor', () => {
+    // Web list: 5 and 6 only on the web; 5 follows 2, 6 follows 3 here.
+    const result = arrangeThreads(rows('2', '5', '3', '6', '1'), 'web', 'app', ['1', '2', '9', '3'])
+    expect(order(result)).toEqual(['1', '2', '5', '3', '6'])
+    expect(result.note).toEqual({ kind: 'arranged', base: 'app' })
+  })
+
+  it('puts one-sided threads with no shared one before them first, and keeps threads of one anchor in their order', () => {
+    expect(order(arrangeThreads(rows('8', '7', '2', '6', '5', '1'), 'app', 'web', ['1', '2']))).toEqual(['8', '7', '1', '2', '6', '5'])
+    expect(order(arrangeThreads(rows('8', '7'), 'app', 'web', ['1']))).toEqual(['8', '7'])
+  })
+
+  it('arranges a partly read list as far as it goes, so later pages never move earlier rows', () => {
+    const base = ['3', '1', '2', '4']
+    expect(order(arrangeThreads(rows('1', '2', '3'), 'web', 'app', base))).toEqual(['3', '1', '2'])
+    expect(order(arrangeThreads(rows('1', '2', '3', '4'), 'web', 'app', base))).toEqual(['3', '1', '2', '4'])
+  })
+
+  it('keeps the forum order on the base side, under remote, and while the base has no complete snapshot', () => {
+    const threads = rows('2', '1')
+    expect(arrangeThreads(threads, 'app', 'app', ['1', '2'])).toEqual({ threads, note: null })
+    expect(arrangeThreads(threads, 'web', 'remote', ['1', '2'])).toEqual({ threads, note: null })
+    expect(arrangeThreads(threads, 'app', 'web', null)).toEqual({ threads, note: { kind: 'waiting', base: 'web' } })
+  })
+})
+
+describe('context menu radio items', () => {
+  it('mark the chosen one with menuitemradio and aria-checked', () => {
+    const markup = (checked: boolean) => renderToStaticMarkup(createElement(ContextMenuEntry, {
+      item: { type: 'radio', key: 'app', label: '按 App 顺序排列', checked, onSelect: () => undefined },
+      checkColumn: true,
+      onChoose: () => undefined
+    }))
+    expect(markup(true)).toMatch(/role="menuitemradio"[^>]*aria-checked="true"/)
+    expect(markup(true)).toContain('<svg')
+    expect(markup(false)).toMatch(/role="menuitemradio"[^>]*aria-checked="false"/)
+    expect(markup(false)).not.toContain('<svg')
   })
 })

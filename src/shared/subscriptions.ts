@@ -4,6 +4,8 @@ import type { CredentialId, ProtectionState, RoleSelection } from './identity'
 
 export type SubscriptionSource = 'app' | 'web'
 export type SubscriptionAction = 'add' | 'remove'
+/** Which side's order the subscription list shows; `remote`: each side as the forum lists it. */
+export type SubscriptionArrangement = 'remote' | SubscriptionSource
 
 /** References only. A generation changes when UUID or fixed web binding changes, not on view switches. */
 export interface SubscriptionContext {
@@ -104,7 +106,8 @@ export interface SubscriptionsApi {
   previewSync(input: { operationId: OperationId }): Promise<SubscriptionResult<SubscriptionPreview>>
   previewMerge(input: { sourceAppCredentialId: string; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionPreview>>
   /**
-   * Consumes the preview once. Revalidates both observed ranges before any write, then executes serially.
+   * Consumes the preview once. Revalidates both observed ranges before any write, then executes serially
+   * in the reverse of the preview's order, so each target gets its additions in the source's order.
    * Items without an entry are `skip`; unknown, duplicate or unavailable choices are `invalid-selection`.
    */
   executePlan(input: { previewId: string; choices: SubscriptionItemChoice[]; operationId: OperationId }): Promise<SubscriptionResult<SubscriptionPlan>>
@@ -170,7 +173,7 @@ export interface SubscriptionPreview {
   leftLabel: string
   rightLabel: string
   firstSync: boolean
-  /** In preview order, which is also the execution order. */
+  /** Each side's differences in its own list order, top to bottom. Execution runs in the reverse order. */
   items: SubscriptionDifference[]
 }
 

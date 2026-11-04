@@ -93,7 +93,7 @@ export function choiceOf(item: SubscriptionDifference, choices: ChoiceMap): Subs
   return choices.get(item.id) ?? item.defaultChoice
 }
 
-/** What execution sends: every difference that writes, in the preview's order (the execution order). */
+/** What execution sends: every difference that writes, by item ID. Main runs them in the reverse of the preview's order. */
 export function planChoices(preview: SubscriptionPreview, choices: ChoiceMap): SubscriptionItemChoice[] {
   return preview.items.flatMap((item) => {
     const choice = choiceOf(item, choices)

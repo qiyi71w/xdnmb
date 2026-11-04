@@ -5,7 +5,8 @@ import type {
   SubscriptionObservation,
   SubscriptionOperation,
   SubscriptionOverview,
-  SubscriptionSource
+  SubscriptionSource,
+  SubscriptionArrangement
 } from '../../../../shared/subscriptions'
 import { completeSubscriptionObservation } from '../../../../shared/subscriptions'
 import type { ThreadId, ThreadSummary } from '../../../../shared/forum'
@@ -207,6 +208,49 @@ export function listedThreads(
     if (thread !== undefined) added.push(thread)
   }
   return [...added, ...seen.values()]
+}
+
+/**
+ * Why the list order is not the forum's own, shown as one line above the list: `arranged` follows the
+ * base side's last complete snapshot; `waiting` keeps the forum's order until the base side has one.
+ */
+export type ArrangementNote = { kind: 'arranged' | 'waiting'; base: SubscriptionSource }
+
+/**
+ * The order a list shows. The base side (`arrangement`) and `remote` keep the forum's order. The other
+ * side orders threads both sides have by the base snapshot; a thread only this side has follows the
+ * nearest thread before it (in this list) that both have, or leads the list when there is none, and
+ * threads following the same one keep their order. A partly read list is arranged as far as it goes:
+ * positions come from the base, so later pages never move earlier rows. Display only.
+ * `base`: the base side's last complete snapshot under the same identity, null when there is none.
+ */
+export function arrangeThreads<T extends { head: { id: ThreadId } }>(
+  threads: readonly T[],
+  shown: SubscriptionSource,
+  arrangement: SubscriptionArrangement,
+  base: readonly ThreadId[] | null
+): { threads: readonly T[]; note: ArrangementNote | null } {
+  if (arrangement === 'remote' || arrangement === shown) return { threads, note: null }
+  if (base === null) return { threads, note: { kind: 'waiting', base: arrangement } }
+  const rank = new Map<ThreadId, number>()
+  for (const [index, id] of base.entries()) if (!rank.has(id)) rank.set(id, index)
+  const leading: T[] = []
+  const anchors: { thread: T; rank: number; followers: T[] }[] = []
+  let followers = leading
+  for (const thread of threads) {
+    const at = rank.get(thread.head.id)
+    if (at === undefined) {
+      followers.push(thread)
+      continue
+    }
+    followers = []
+    anchors.push({ thread, rank: at, followers })
+  }
+  anchors.sort((left, right) => left.rank - right.rank)
+  return {
+    threads: [...leading, ...anchors.flatMap((anchor) => [anchor.thread, ...anchor.followers])],
+    note: { kind: 'arranged', base: arrangement }
+  }
 }
 
 /**

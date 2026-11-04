@@ -323,6 +323,14 @@
   flex: none;
 }
 
+/* The list is shown in the other side's order (or waits for it): quiet text, not a control. */
+.sub-arrangement {
+  margin: 0;
+  padding: 2px 0;
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
 .list-status .notice-inline {
   margin: 6px 4px;
 }

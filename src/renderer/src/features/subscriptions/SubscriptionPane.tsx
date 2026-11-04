@@ -15,6 +15,7 @@ import type { ForumId, ThreadId, ThreadSummary } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import type {
   SubscriptionAction,
+  SubscriptionArrangement,
   SubscriptionMergeSource,
   SubscriptionOperation,
   SubscriptionOverview,
@@ -28,6 +29,7 @@ import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { FailureNotice } from '../../components/Notices'
 import { describeReadError, meaningfulTitle } from '../../lib/format'
 import { formatRecordTime } from '../../lib/time'
+import { useSettings } from '../../lib/settingsContext'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
@@ -44,14 +46,15 @@ import { previewBlocker, plansNeedingAttention, ReconcileHistoryDialog, Reconcil
 import { taskMode, type ReconcileMode } from './reconcileState'
 import { SubscriptionRowMenu } from './SubscriptionRowMenu'
 import { useSubscriptionOffline } from './SubscriptionOffline'
-import { collectionDisplay, decideChange, isReconcilable, listedThreads, sourceObjectRef } from './subscriptionListState'
-import { SOURCE_NAME, SOURCE_SHORT, failureText, sourceBlocker, threadLabel } from './subscriptionText'
+import { arrangeThreads, collectionDisplay, decideChange, isReconcilable, listedThreads, sourceObjectRef } from './subscriptionListState'
+import { ARRANGEMENT_NAME, SOURCE_NAME, SOURCE_SHORT, arrangementNoteText, failureText, sourceBlocker, threadLabel } from './subscriptionText'
 import { useCollection, useSubscriptionsContext, type WriteNotice } from './useSubscriptions'
 import { useThreadRules } from '../reminders/useReminders'
 import '../feed/feed.css'
 import '../identity/identity.css'
 import './subscriptions.css'
 
+const ARRANGEMENTS: readonly SubscriptionArrangement[] = ['remote', 'app', 'web']
 const THREAD_ID = /^\d{1,20}$/
 
 /** An unsettled write shown under 加入: the thread, and the collection when it is not the one shown. */
@@ -181,7 +184,11 @@ export function SubscriptionPane({
   /** 同步记录 (更多 menu, or 查看 on a result): the plan to open in it, or null for the list only. */
   const [history, setHistory] = useState<{ planId: string | null } | null>(null)
   const [moreAt, setMoreAt] = useState<ContextMenuPoint | null>(null)
+  /** An order was chosen in the 更多 menu open now: a refused save shows under its items. */
+  const [arrangedInMenu, setArrangedInMenu] = useState(false)
   const moreRef = useRef<HTMLButtonElement>(null)
+  const settingsAccess = useSettings()
+  const arrangement = settingsAccess.settings.subscriptionArrangement
   /** This view's filters; kept across source switches, never resetting the thread being read. */
   const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtersRef = useRef(filters)
@@ -296,10 +303,19 @@ export function SubscriptionPane({
   // ---------- Displayed list ----------
   const display = collected === null ? null : collectionDisplay(collected)
   const displayed = display?.observation ?? null
-  const threads = useMemo(
+  const listed = useMemo(
     () => (collection === null ? [] : listedThreads(displayed, operations ?? [], collection)),
     [displayed, operations, collection]
   )
+  // The base side's stored snapshot only: arranging never starts a read of it.
+  const shownSource = overview?.source ?? 'app'
+  const { state: based } = useCollection(arrangement === 'remote' ? shownSource : arrangement)
+  const baseIds = based?.snapshot?.ids ?? null
+  const baseLoading = based === null || based.local === 'idle' || based.local === 'loading'
+  const arranged = useMemo(() => arrangeThreads(listed, shownSource, arrangement, baseIds), [listed, shownSource, arrangement, baseIds])
+  const threads = arranged.threads
+  // Until the stored base snapshot is known, the list keeps its order without a line.
+  const arrangementNote = arranged.note === null || (arranged.note.kind === 'waiting' && baseLoading) ? null : arranged.note
   const filtered = useMemo(() => filterList(threads, (thread) => headMeta(thread.head), filters), [threads, filters])
   const filtering = contentFilterCount(filters) > 0
   const uncertainById = useMemo(() => new Map(filtered.shown.map(({ item, uncertain }) => [item.head.id, uncertain])), [filtered])
@@ -489,6 +505,7 @@ export function SubscriptionPane({
                 onClick={(event) => {
                   // A press outside the open menu (this one included) has already closed it.
                   const box = event.currentTarget.getBoundingClientRect()
+                  setArrangedInMenu(false)
                   setMoreAt({ x: box.right, y: box.bottom + 4, end: true })
                 }}
               >
@@ -621,6 +638,7 @@ export function SubscriptionPane({
               </span>
             </p>
           )}
+          {arrangementNote !== null && threads.length > 0 && <p className="sub-arrangement">{arrangementNoteText(arrangementNote)}</p>}
         </div>
 
         {displayed === null && !readInFlight && !localLoading && blocker === null && (
@@ -730,8 +748,28 @@ export function SubscriptionPane({
               key: 'history',
               label: attention > 0 ? `同步记录（${attention} 份需要查看）` : '同步记录',
               onSelect: () => setHistory({ planId: null })
-            }
+            },
+            { type: 'separator', key: 'arrangement' },
+            // Shared by both lists; takes effect at once and is saved like any setting.
+            ...ARRANGEMENTS.map((value): ContextMenuItem => ({
+              type: 'radio',
+              key: `arrangement-${value}`,
+              label: ARRANGEMENT_NAME[value],
+              checked: arrangement === value,
+              onSelect: () => {
+                setArrangedInMenu(true)
+                if (settingsAccess.latest().subscriptionArrangement !== value) settingsAccess.write({ subscriptionArrangement: value })
+              }
+            }))
           ]}
+          footer={
+            arrangedInMenu && settingsAccess.notSaved ? (
+              <p className="form-message is-error" role="status">
+                <Icon name="alert" size={14} />
+                <span>设置未保存</span>
+              </p>
+            ) : null
+          }
           onClose={(returnFocus) => {
             setMoreAt(null)
             if (returnFocus) moreRef.current?.focus()
