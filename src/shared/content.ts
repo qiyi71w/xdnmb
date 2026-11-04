@@ -24,13 +24,16 @@ export interface OfflineCopy {
   failedPage: number | null
   error: ReadError | 'storage' | 'page-limit' | null
 }
-/** One 浏览记录 row: the thread's retained head fields at its last visit. */
+/** One 访问记录 in 浏览历史: the thread's retained head fields at its last visit. */
 export interface RetainedEntry {
   threadId: ThreadId
   title: string | null
-  /** Complete cached head for the shared preview rules; null once evicted or never fetched. */
+  /**
+   * Complete head for the shared preview rules. The visit protects it from cache eviction, so null
+   * only when it was never fetched, or was already evicted before visits began protecting heads.
+   */
   head: Post | null
-  /** Latest locally observed all-replies count; unknown is never presented as zero. */
+  /** Latest locally observed all-replies count, protected with the head; unknown is never presented as zero. */
   replyCount: number | null
   /** Last visit. */
   at: string
@@ -63,11 +66,14 @@ export interface ContentUsage {
   protectedOverLimit: boolean
 }
 export interface ContentApi {
-  /** 浏览记录, most recently visited first. */
+  /** 浏览历史, most recently visited first. */
   listHistory(): Promise<ContentResult<RetainedEntry[]>>
   /** Offline copies, most recently first saved first; updating a copy keeps its place. */
   listOffline(): Promise<ContentResult<OfflineEntry[]>>
-  /** Value: threads whose reading positions were cleared; empty when `clearReading` is false. */
+  /**
+   * Value: threads whose reading positions were cleared; empty when `clearReading` is false.
+   * A committed deletion releases the visits' protection and then checks the cache limit.
+   */
   clearHistory(input: { threadId: ThreadId | null; clearReading: boolean }): Promise<ContentResult<ThreadId[]>>
   usage(): Promise<ContentResult<ContentUsage>>
   setCacheLimit(input: { bytes: number }): Promise<ContentResult<ContentUsage>>

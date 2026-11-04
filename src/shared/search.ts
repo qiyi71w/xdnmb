@@ -1,6 +1,12 @@
 import type { OperationId, ReadError } from './api'
 import type { PostId, ReadingMode, ThreadCoverage, ThreadId } from './forum'
 
+/**
+ * Text as local search and the list 关键词 compare it: Unicode NFC, then lower case; matching is a
+ * literal substring of the result (spaces are ordinary characters).
+ */
+export const normalizeSearchText = (text: string): string => text.normalize('NFC').toLowerCase()
+
 export interface ContentFilters {
   forumId: string | null
   /** Inclusive server-calendar date bounds YYYY-MM-DD, not inferred UTC instants. */

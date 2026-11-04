@@ -19,7 +19,7 @@ import { useListImageViewer } from '../image/useListImageViewer'
 import { SentPage, useSentAttempts } from '../publication/SentPage'
 import type { SentKind } from '../publication/sentRecords'
 import { ListFilterPanel, ListFilterToggle, useListFilter } from '../search/FilterFields'
-import { contentFilterCount, filterList } from '../search/listFilters'
+import { contentFilterCount, filterList, parseKeyword, threadKeywordFields } from '../search/listFilters'
 import { useThreadMetadata } from '../search/useThreadMetadata'
 import { ContentRegistryContext, useRegisterContent, type HistoryView } from '../tabs/contentRegistry'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
@@ -28,7 +28,7 @@ import type { EntryInit } from '../tabs/tabsState'
 import { contentFailureText, retainedHeading } from './contentText'
 import { OfflinePane } from './OfflinePane'
 import { createReadingResets } from './readingResets'
-import { HistoryConfirm, historyMemory, rememberHistory, useRetainedFilters, useRetainedList, useRetainedScroll } from './retainedList'
+import { HistoryConfirm, historyMemory, rememberHistory, useHistoryKeyword, useRetainedFilters, useRetainedList, useRetainedScroll } from './retainedList'
 import '../feed/feed.css'
 import './content.css'
 
@@ -122,7 +122,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
             </button>
           ))}
         </div>
-        {/* The shown page's actions (浏览: 筛选, 清空历史…); empty elsewhere, nothing moves. */}
+        {/* The shown page's actions (浏览: 筛选, 清空历史…; 新串／回复: 筛选); a fixed slot, nothing moves. */}
         <div className="history-page-actions" ref={setActionsSlot} />
       </header>
       <div className="history-page-view" hidden={view !== 'browsing'}>
@@ -151,6 +151,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
                     openStep={(init) => host.openStep(props.entryKey, init)}
                     openInTab={host.openInTab}
                     onViewerOpenChange={setViewerOpen}
+                    actionsSlot={actionsSlot}
                   />
                 </div>
               ]
@@ -188,20 +189,24 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, ac
   useRegisterContent('lists', entryKey, { refresh: refreshOverride ?? (() => void load()) })
   const onScroll = useRetainedScroll(entryKey, bodyRef, list.status === 'ready', displayed)
 
-  // ---------- Filters ----------
+  // ---------- Filters: 关键词 on the row's main post (else number and kept title), then 版面／时间／图片 ----------
   const [listFilters, changeFilters] = useRetainedFilters('history')
-  const filtering = contentFilterCount(listFilters) > 0
-  const filter = useListFilter(listFilters, changeFilters)
+  const [keywordText, changeKeyword] = useHistoryKeyword('browsing')
+  const filter = useListFilter({ value: listFilters, onChange: changeFilters }, { value: keywordText, onChange: changeKeyword })
+  const filtering = filter.count > 0
+  const contentFiltering = contentFilterCount(listFilters) > 0
   const entryIds = useMemo(() => entries.map((entry) => entry.threadId), [entries])
-  const metadata = useThreadMetadata(entryIds, filtering)
+  const metadata = useThreadMetadata(entryIds, contentFiltering)
+  const keyword = useMemo(() => parseKeyword(keywordText), [keywordText])
   const filtered = useMemo(
     () =>
       filterList(
         entries,
         (entry) => (metadata.status === 'ready' ? (metadata.byId.get(entry.threadId) ?? null) : null),
-        listFilters
+        listFilters,
+        { keyword, fieldsOf: (entry) => threadKeywordFields(entry.threadId, entry.head, entry.title) }
       ),
-    [entries, metadata, listFilters]
+    [entries, metadata, listFilters, keyword]
   )
   const shownIds = useMemo(() => filtered.shown.map(({ item }) => item.threadId), [filtered])
   const roving = useRovingFocus(shownIds, selectedThreadId)
@@ -271,8 +276,7 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, ac
             noun="串"
             total={entries.length}
             result={filtered}
-            metadata={filtering ? metadata : null}
-            coverage={`本机的${PAGE.title}列表`}
+            metadata={contentFiltering ? metadata : null}
           />
         )}
 

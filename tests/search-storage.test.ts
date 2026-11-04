@@ -4,8 +4,7 @@ import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
-import { normalizeSearchText } from '../src/main/storage/search'
-import type { SearchFilters, SearchHit, SearchScope } from '../src/shared/search'
+import { normalizeSearchText, type SearchFilters, type SearchHit, type SearchScope } from '../src/shared/search'
 import type { Post, ThreadPage } from '../src/shared/forum'
 import type { SubscriptionObservation, SubscriptionOperation } from '../src/shared/subscriptions'
 import { matchContentFilters } from '../src/shared/search-filters'
@@ -292,6 +291,15 @@ describe('real SQLite retained search', () => {
     rebuild(db)
     expect(search(db, 'needle').map((hit) => [hit.postId, hit.retention])).toEqual([
       ['200', 'offline'], ['300', 'subscription']])
+  })
+
+  it('still finds a visited thread head after clearing ordinary cache', () => {
+    const { db } = fixture()
+    db.saveThreadPage(page(post('100', 'visited needle'), [post('101', 'reply needle')]), at)
+    db.saveThreadPage(page(post('200', 'unvisited needle'), []), at)
+    db.recordVisit('100', later)
+    clear(db)
+    expect(search(db, 'needle').map((hit) => hit.postId)).toEqual(['100'])
   })
 
   it('keeps offline search ownership on failed deletion and changes it only after the transaction commits', () => {

@@ -1,6 +1,6 @@
 import type { ReadError } from '../../../../shared/api'
 import type { ReadingMode, ThreadCoverage } from '../../../../shared/forum'
-import type { SearchFetch, SearchHit } from '../../../../shared/search'
+import { normalizeSearchText, type SearchFetch, type SearchHit } from '../../../../shared/search'
 import { describeReadError, formatPageList } from '../../lib/format'
 import { formatRecordTime } from '../../lib/time'
 import type { SearchFailure } from './searchState'
@@ -92,7 +92,7 @@ export interface TextPart {
  * Marks nothing when case folding changes the text's length (positions would not line up).
  */
 export function highlightParts(text: string, query: string): TextPart[] {
-  const needle = query.normalize('NFC').toLowerCase()
+  const needle = normalizeSearchText(query)
   const source = text.normalize('NFC')
   const folded = source.toLowerCase()
   if (needle === '' || folded.length !== source.length) return [{ text, match: false }]

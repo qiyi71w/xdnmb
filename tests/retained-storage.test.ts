@@ -84,7 +84,9 @@ describe('retained content storage', () => {
         image: { path: '2026-10-24/shared', ext: '.jpg' } }
     })
     clear(db)
-    expect(db.listHistory()[0]).toMatchObject({ threadId: '100', title: '标题100', head: null })
+    // The visit keeps the head text after cache clearing; only the never-held head stays unknown.
+    expect(db.listHistory()).toMatchObject([{ threadId: '100', title: '标题100', head: { plainText: '保留正文' } },
+      { threadId: '200', head: null, replyCount: null }])
   })
 
   it('keeps full local content and known all-reply counts for consistent previews without truncating spoilers', () => {
@@ -401,9 +403,12 @@ describe('retained content storage', () => {
       pages: [{ page: 1, replyIds: ['101', '102', '103'], endCandidate: false, skippedItems: 1 },
         { page: 3, replyIds: [], endCandidate: true, skippedItems: 0 }] })
     expect(db.getContentUsage().cacheTextBytes).toBeGreaterThan(0)
-    expect(db.getContentUsage().protectedTextBytes).toBe(0)
+    // The visit still protects the head post; deleting the visit releases it as well.
+    expect(db.getContentUsage().protectedTextBytes).toBeGreaterThan(0)
     expect(db.getReadingState('100')).toMatchObject({ mode: reading.mode, positions: reading.positions })
     expect(db.listHistory()).toEqual(history.map((entry) => ({ ...entry, offline: null })))
+    db.clearHistory('100', false)
+    expect(db.getContentUsage().protectedTextBytes).toBe(0)
     db.close()
     const reopened = openReadingDatabase(path)
     connections.push(reopened)
@@ -646,6 +651,106 @@ describe('retained content storage', () => {
     connections.push(upgraded)
     expect(upgraded.status).toEqual({ state: 'ready', schemaVersion: Math.max(...MIGRATIONS.map((migration) => migration.version)) })
     expect(upgraded.listHistory().map((entry) => entry.threadId)).toEqual(['100'])
+  })
+
+  it('keeps a visited thread head text and all-reply count through cache clearing, quota eviction and restart, but not its other content', () => {
+    const { db, folder, path } = fixture()
+    const head = post('100', true, '访问过的正文')
+    db.saveThreadPage({ ...page('100', [post('101', true)]), head, replyCount: 21 }, t0)
+    db.saveThreadPage({ ...page('100', [post('121')], 2), head, replyCount: 21 }, t0)
+    db.saveThreadPage({ ...page('100', [post('101', true)]), head, mode: 'po', replyCount: 2 }, t0)
+    const images = [image(db, folder, 'visited-thumb.jpg', 'thumb'), image(db, folder, 'visited-original.jpg')]
+    db.recordVisit('100', t1)
+    expect(clear(db).sort()).toEqual(images.map((resource) => resource.fileName).sort())
+    expect(db.loadThreadPage('100', 'all', 1)).toBeNull()
+    expect(db.loadThreadPage('100', 'all', 2)).toBeNull()
+    expect(db.loadPost('101')).toBeNull()
+    expect(db.loadPost('121')).toBeNull()
+    expect(db.getThreadCoverage('100', 'po').reportedReplyCount).toBeNull()
+    expect(db.listHistory()).toMatchObject([{ threadId: '100', head, replyCount: 21 }])
+    const held = db.getContentUsage()
+    expect(held.cacheTextBytes).toBe(0)
+    expect(held.protectedTextBytes).toBeGreaterThan(0)
+
+    db.saveThreadPage({ ...page('200', [post('201')]), replyCount: 3 }, t2)
+    db.recordVisit('200', t2)
+    db.saveThreadPage({ ...page('300', [post('301')]), replyCount: 4 }, t2)
+    const quotaImages = [image(db, folder, 'quota-thumb.jpg', 'thumb'), image(db, folder, 'quota-original.jpg')]
+    db.setCacheLimit(0)
+    const evicted = db.evictContentBatch(false)
+    expect(evicted.more).toBe(false)
+    expect(evicted.fileNames.sort()).toEqual(quotaImages.map((resource) => resource.fileName).sort())
+    expect(db.loadPost('201')).toBeNull()
+    expect(db.loadPost('300')).toBeNull()
+    expect(db.getThreadCoverage('300', 'all').reportedReplyCount).toBeNull()
+    expect(db.getContentUsage().cacheTextBytes).toBe(0)
+    db.close()
+    const reopened = openReadingDatabase(path)
+    connections.push(reopened)
+    expect(reopened.listHistory()).toMatchObject([{ threadId: '200', head: post('200'), replyCount: 3 }, { threadId: '100', head, replyCount: 21 }])
+  })
+
+  it('accounts the all-reply count itself as protected while visited and as ordinary cache once released', () => {
+    const { db } = fixture()
+    db.saveThreadPage(page('100', []), t0)
+    db.recordVisit('100', t0)
+    clear(db)
+    const headOnly = db.getContentUsage().protectedTextBytes
+    db.saveThreadPage({ ...page('100', []), replyCount: 21 }, t0)
+    clear(db)
+    const held = db.getContentUsage()
+    // The logical count record: thread, mode, count and fetch time.
+    expect(held.protectedTextBytes - headOnly).toBe(Buffer.byteLength(JSON.stringify(['100', 'all', 21, t0])))
+    expect(held.cacheTextBytes).toBe(0)
+    db.clearHistory('100', false)
+    expect(db.getContentUsage()).toMatchObject({ protectedTextBytes: 0, cacheTextBytes: held.protectedTextBytes })
+  })
+
+  it('moves released head text and reply counts into ordinary cache so eviction removes them without orphans', () => {
+    const { db, path } = fixture()
+    for (const id of ['100', '200', '300']) {
+      db.saveThreadPage({ ...page(id, [post(`${id}1`)]), replyCount: 5 }, t0)
+      db.recordVisit(id, t0)
+    }
+    clear(db)
+    const held = db.getContentUsage()
+    expect(held.cacheTextBytes).toBe(0)
+    expect(db.clearHistory('100', false)).toEqual([])
+    const released = db.getContentUsage()
+    expect(released.cacheTextBytes).toBeGreaterThan(0)
+    expect(released.cacheTextBytes + released.protectedTextBytes).toBe(held.protectedTextBytes)
+    clear(db)
+    expect(db.loadPost('100')).toBeNull()
+    expect(db.loadPost('200')).not.toBeNull()
+    const counts = raw(path).prepare('SELECT thread_id FROM thread_reply_counts ORDER BY thread_id')
+    expect(counts.all()).toEqual([{ thread_id: '200' }, { thread_id: '300' }])
+
+    db.clearHistory(null, false)
+    db.setCacheLimit(0)
+    expect(db.evictContentBatch(false).more).toBe(false)
+    expect(db.loadPost('200')).toBeNull()
+    expect(db.loadPost('300')).toBeNull()
+    expect(counts.all()).toEqual([])
+    expect(db.getContentUsage()).toMatchObject({ cacheTextBytes: 0, protectedTextBytes: 0 })
+  })
+
+  it('keeps offline-copy and draft-target protection after their threads leave history', () => {
+    const { db } = fixture()
+    db.beginOfflineCopy('100', false, t0)
+    db.saveOfflinePage({ ...page('100'), replyCount: 4 }, t0)
+    db.saveThreadPage({ ...page('200', [post('201')]), replyCount: 6 }, t0)
+    const saved = db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '200' }, credentialId: null,
+      fields: { content: 'private draft', title: '', name: '', watermark: false }, attachmentId: null }, t0)
+    expect(saved.ok).toBe(true)
+    db.recordVisit('100', t0)
+    db.recordVisit('200', t0)
+    db.clearHistory(null, false)
+    db.setCacheLimit(0)
+    clear(db)
+    expect(db.listOffline()).toMatchObject([{ threadId: '100', head: post('100'), replyCount: 4 }])
+    expect(db.loadThreadPage('200', 'all', 1)?.value.head).toEqual(post('200'))
+    expect(db.getThreadCoverage('200', 'all').reportedReplyCount).toBe(6)
+    expect(db.getContentUsage().cacheTextBytes).toBe(0)
   })
 
   it('reports unavailable and newer-schema content operations explicitly rather than empty success', () => {

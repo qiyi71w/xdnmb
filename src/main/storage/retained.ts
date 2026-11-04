@@ -256,15 +256,22 @@ export class RetainedContentDatabase {
     const db = this.database()
     return db.transaction(() => {
       const fileNames: string[] = []
+      // A visited thread's all-reply count outlives its cached pages. Once nothing holds it, the
+      // orphan count is ordinary cache; it goes before its head post, which it references.
       const candidates = () => db.prepare<[], { kind: string; id: string; mode: string | null; page: number | null }>(`
         SELECT kind, id, mode, page FROM (
           SELECT 'thread' AS kind, thread_id AS id, NULL AS mode, NULL AS page, min(last_used) AS used FROM thread_pages
             WHERE thread_id NOT IN (SELECT thread_id FROM content_readers) AND thread_id NOT IN (SELECT target_id FROM drafts WHERE target_kind = 'reply') GROUP BY thread_id
+          UNION ALL SELECT 'count', c.thread_id, NULL, NULL, coalesce((SELECT last_used FROM posts WHERE id = c.thread_id), 0) FROM thread_reply_counts c
+            WHERE NOT EXISTS(SELECT 1 FROM thread_pages t WHERE t.thread_id = c.thread_id)
+              AND c.thread_id NOT IN (SELECT thread_id FROM thread_visits) AND c.thread_id NOT IN (SELECT thread_id FROM content_readers)
+              AND c.thread_id NOT IN (SELECT target_id FROM drafts WHERE target_kind = 'reply') GROUP BY c.thread_id
           UNION ALL SELECT 'feed', feed_id, feed_kind, page, last_used FROM feed_pages
           UNION ALL SELECT 'directory', '', NULL, NULL, last_used FROM directory_snapshot
           UNION ALL SELECT 'post', p.id, NULL, NULL, p.last_used FROM posts p
             WHERE NOT EXISTS(SELECT 1 FROM cached_post_references r WHERE r.post_id = p.id)
               AND NOT EXISTS(SELECT 1 FROM protected_posts h WHERE h.post_id = p.id)
+              AND NOT EXISTS(SELECT 1 FROM thread_reply_counts c WHERE c.thread_id = p.id)
           UNION ALL SELECT 'image', CAST(id AS TEXT), NULL, NULL, last_used FROM image_resources r
             WHERE NOT EXISTS(SELECT 1 FROM image_holders h WHERE h.resource_id = r.id)
               AND NOT EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)
@@ -278,11 +285,13 @@ export class RetainedContentDatabase {
         if (!item) break
         if (item.kind === 'thread') {
           db.prepare('DELETE FROM thread_pages WHERE thread_id = ?').run(item.id)
+          db.prepare("DELETE FROM thread_reply_counts WHERE thread_id = ? AND NOT (mode = 'all' AND thread_id IN (SELECT thread_id FROM thread_visits))").run(item.id)
+        } else if (item.kind === 'count') {
           db.prepare('DELETE FROM thread_reply_counts WHERE thread_id = ?').run(item.id)
         } else if (item.kind === 'feed') {
           db.prepare('DELETE FROM feed_pages WHERE feed_kind = ? AND feed_id = ? AND page = ?').run(item.mode, item.id, item.page)
         } else if (item.kind === 'directory') db.exec('DELETE FROM directory_snapshot')
-        else if (item.kind === 'post') db.prepare('DELETE FROM posts WHERE id = ? AND NOT EXISTS(SELECT 1 FROM protected_posts WHERE post_id = ?) AND NOT EXISTS(SELECT 1 FROM cached_post_references WHERE post_id = ?)').run(item.id, item.id, item.id)
+        else if (item.kind === 'post') db.prepare('DELETE FROM posts WHERE id = ? AND NOT EXISTS(SELECT 1 FROM protected_posts WHERE post_id = ?) AND NOT EXISTS(SELECT 1 FROM cached_post_references WHERE post_id = ?) AND NOT EXISTS(SELECT 1 FROM thread_reply_counts WHERE thread_id = ?)').run(item.id, item.id, item.id, item.id)
         else {
           const row = db.prepare<[string], { file_name: string }>('DELETE FROM image_resources WHERE id = ? AND NOT EXISTS(SELECT 1 FROM image_holders WHERE resource_id = image_resources.id) AND NOT EXISTS(SELECT 1 FROM offline_images WHERE resource_id = image_resources.id) RETURNING file_name').get(item.id)
           if (row) fileNames.push(row.file_name)
