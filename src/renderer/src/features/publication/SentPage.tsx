@@ -303,7 +303,6 @@ export function SentPage({
             total={records.length}
             result={filtered}
             metadata={null}
-            coverage="本机的发送记录"
           />
         )}
 

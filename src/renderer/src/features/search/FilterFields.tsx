@@ -304,8 +304,11 @@ export function ListFilterPanel({
   result: FilteredList<unknown>
   /** Local metadata the filters needed; null when the list carries its own main posts. */
   metadata: MetadataState | null
-  /** What the list covers, e.g. “已加载的第 1–3 页”. */
-  coverage: ReactNode
+  /**
+   * What the list covers, e.g. “已加载的第 1–3 页”, when it is only part of what exists; omitted
+   * where the list is the whole local record (历史), so the line just counts.
+   */
+  coverage?: ReactNode
 }) {
   const { content, keyword, count, open, panelId, toggleRef } = filter
   const keywordField = keyword !== null && <KeywordField value={keyword.value} onChange={keyword.onChange} />
@@ -325,7 +328,7 @@ export function ListFilterPanel({
       {count > 0 && (
         <div className="list-filters-status">
           <p className="list-filters-summary" role="status">
-            显示 {result.shown.length} / {total} {unit}{noun}，只在{coverage}中筛选
+            显示 {result.shown.length} / {total} {unit}{noun}{coverage !== undefined && <>，只在{coverage}中筛选</>}
             {notes.length > 0 && `，其中 ${notes.join('、')}`}
             {metadata?.status === 'failed' && '；筛选信息读取失败，按字段未知显示'}
           </p>

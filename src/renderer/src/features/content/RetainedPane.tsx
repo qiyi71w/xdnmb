@@ -277,7 +277,6 @@ function BrowsingPane({ entryKey, forumNames, selectedThreadId, onOpenThread, ac
             total={entries.length}
             result={filtered}
             metadata={contentFiltering ? metadata : null}
-            coverage={`本机的${PAGE.title}列表`}
           />
         )}
 
