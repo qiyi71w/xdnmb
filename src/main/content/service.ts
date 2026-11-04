@@ -167,7 +167,12 @@ export function createContentService(deps: {
   return {
     listHistory: () => result(async () => (await store.listHistory()).map((entry) => ({ ...entry, offline: visibleCopy(entry.offline) }))),
     listOffline: () => result(async () => (await store.listOffline()).map((entry) => ({ ...entry, copy: visibleCopy(entry.copy)! }))),
-    clearHistory: ({ threadId, clearReading }) => result(() => store.clearHistory(threadId, clearReading)),
+    clearHistory: ({ threadId, clearReading }) => result(async () => {
+      const cleared = await store.clearHistory(threadId, clearReading)
+      // Deleted visits release their head posts and reply counts into ordinary cache.
+      await enforce(false).catch(() => undefined)
+      return cleared
+    }),
     usage: () => result(usage),
     setCacheLimit: ({ bytes }) => result(async () => {
       await store.setCacheLimit(bytes)

@@ -288,6 +288,51 @@ describe('retained content operations', () => {
     expect(db.loadThreadPage('100', 'all', 1)?.value.head.id).toBe('100')
   })
 
+  it('checks the quota after committed history deletion only, releasing the visited heads it protected', async () => {
+    let deleteFails = true
+    let quotaFails = false
+    let checks = 0
+    let actual: ContentStore
+    const { service, db } = await setup(async (id, _mode, n) => page(id, n, []), {
+      clearHistory: async (...a) => {
+        if (deleteFails) throw new Error('delete unavailable')
+        return actual.clearHistory(...a)
+      },
+      evictContentBatch: async (...a) => {
+        checks++
+        if (quotaFails) throw new Error('quota unavailable')
+        return actual.evictContentBatch(...a)
+      }
+    })
+    actual = contentStore(db)
+    for (const id of ['100', '200', '300']) {
+      db.saveThreadPage(page(id, 1, [post(`${id}1`)]), '2000-01-01T00:00:00Z')
+      db.recordVisit(id, '2000-01-01T00:00:00Z')
+    }
+    db.setCacheLimit(0)
+    await service.enforceQuota()
+    checks = 0
+    expect(await service.clearHistory({ threadId: '100', clearReading: false })).toEqual({ ok: false, reason: 'storage' })
+    expect(checks).toBe(0)
+    expect(db.listHistory()).toHaveLength(3)
+
+    deleteFails = false
+    expect(await service.clearHistory({ threadId: '100', clearReading: false })).toEqual({ ok: true, value: [] })
+    expect(checks).toBeGreaterThan(0)
+    expect(db.loadPost('100')).toBeNull()
+    expect(db.loadPost('200')).not.toBeNull()
+
+    quotaFails = true
+    expect(await service.clearHistory({ threadId: '200', clearReading: false })).toEqual({ ok: true, value: [] })
+    expect(db.listHistory().map((entry) => entry.threadId)).toEqual(['300'])
+    quotaFails = false
+    checks = 0
+    expect(await service.clearHistory({ threadId: null, clearReading: false })).toEqual({ ok: true, value: [] })
+    expect(checks).toBeGreaterThan(0)
+    expect(db.loadPost('200')).toBeNull()
+    expect(db.loadPost('300')).toBeNull()
+  })
+
   it('drains admitted deletion at quit and accepts a fresh save after reopening', async () => {
     const reached = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()

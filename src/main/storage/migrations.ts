@@ -836,6 +836,32 @@ export const MIGRATIONS: readonly Migration[] = [
     up(db) {
       db.exec('ALTER TABLE reminder_local_replies ADD COLUMN follow_up_sent INTEGER NOT NULL DEFAULT 0 CHECK (follow_up_sent IN (0, 1))')
     }
+  },
+  {
+    // A visit record protects the thread's head post (its id is the thread id) and its latest
+    // all-reply count, like offline copies, drafts and open readers protect theirs. Only the views
+    // change: what is held now becomes protected at once; an already evicted head stays missing.
+    // Reply counts join the metadata accounting, protected while visited, read or drafted.
+    version: 27,
+    up(db) {
+      db.exec(`DROP VIEW protected_posts;
+        CREATE VIEW protected_posts AS
+          SELECT head_id AS post_id FROM offline_pages UNION SELECT post_id FROM offline_page_posts
+          UNION SELECT p.post_id FROM post_threads p JOIN content_readers r ON r.thread_id = p.thread_id
+          UNION SELECT p.post_id FROM post_threads p JOIN drafts d ON d.target_kind = 'reply' AND d.target_id = p.thread_id
+          UNION SELECT thread_id FROM thread_visits;
+        DROP VIEW content_metadata_bytes;
+        CREATE VIEW content_metadata_bytes AS
+          SELECT length(CAST(json_array(thread_id, mode, page, head_id, fetched_at, reply_ids_json, reply_count, skipped_items, end_candidate) AS BLOB)) AS bytes,
+            (thread_id IN (SELECT thread_id FROM content_readers) OR thread_id IN (SELECT target_id FROM drafts WHERE target_kind = 'reply')) AS protected FROM thread_pages
+          UNION ALL SELECT length(CAST(json_array(thread_id, mode, reply_count, fetched_at) AS BLOB)),
+            ((mode = 'all' AND thread_id IN (SELECT thread_id FROM thread_visits)) OR thread_id IN (SELECT thread_id FROM content_readers)
+              OR thread_id IN (SELECT target_id FROM drafts WHERE target_kind = 'reply')) FROM thread_reply_counts
+          UNION ALL SELECT length(CAST(json_array(feed_kind, feed_id, page, fetched_at, summaries_json, skipped_items) AS BLOB)), 0 FROM feed_pages
+          UNION ALL SELECT length(CAST(json_array(directory_json, fetched_at) AS BLOB)), 0 FROM directory_snapshot
+          UNION ALL SELECT length(CAST(json_array(id, kind, source_url, file_name, format, bytes, width, height, fetched_at) AS BLOB)),
+            (EXISTS(SELECT 1 FROM image_holders h WHERE h.resource_id = r.id) OR EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)) FROM image_resources r;`)
+    }
   }
 ]
 

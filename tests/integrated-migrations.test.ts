@@ -1222,3 +1222,75 @@ describe('schema v26: local replies keep whether their follow-up page was read',
     expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
   })
 })
+
+describe('schema v27: visit records protect their head text and reply count', () => {
+  const tables = ['posts', 'post_threads', 'thread_pages', 'thread_reply_counts', 'thread_visits', 'retained_titles', 'offline_copies', 'offline_pages', 'offline_page_posts', 'search_documents']
+  /**
+   * A v26 database: visited 100 with its head held, visited 200 whose head and pages the v26
+   * eviction already removed, visited 300 also saved offline, and unvisited ordinary cache 400.
+   */
+  function v26(): string {
+    const folder = mkdtempSync(join(tmpdir(), 'xidao-v26-visits-'))
+    folders.push(folder)
+    const path = join(folder, 'app.sqlite')
+    const old = openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 26))
+    for (const id of ['100', '200', '300', '400']) {
+      old.saveThreadPage({ ...page(), threadId: id, head: post(id), replies: [post(`${id}1`)], replyCount: Number(id) / 100 }, at)
+      if (id !== '400') old.recordVisit(id, later)
+    }
+    old.beginOfflineCopy('300', false, at)
+    old.saveOfflinePage({ ...page(), threadId: '300', head: post('300'), replies: [post('3001')], replyCount: 3 }, at)
+    old.close()
+    const raw = new Database(path)
+    try {
+      raw.exec(`DELETE FROM thread_pages WHERE thread_id = '200'; DELETE FROM thread_reply_counts WHERE thread_id = '200';
+        DELETE FROM posts WHERE id IN ('200', '2001');`)
+    } finally { raw.close() }
+    return path
+  }
+  const snapshot = (path: string) => {
+    const raw = new Database(path, { readonly: true })
+    try { return Object.fromEntries(tables.map((table) => [table, raw.prepare(`SELECT * FROM ${table} ORDER BY 1, 2`).all()])) } finally { raw.close() }
+  }
+  const evict = (db: ReadingDatabase) => {
+    for (let batch = 0; batch < 100; batch++) if (!db.evictContentBatch(true).more) return
+    throw new Error('eviction did not finish')
+  }
+
+  it('keeps every record, protects held heads and counts without restoring evicted ones, and leaves other cache evictable', () => {
+    const path = v26()
+    const before = snapshot(path)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(snapshot(path)).toEqual(before)
+    evict(db)
+    expect(db.listHistory()).toMatchObject([
+      { threadId: '100', title: '标题100', head: post('100'), replyCount: 1 },
+      { threadId: '200', title: '标题200', head: null, replyCount: null },
+      { threadId: '300', title: '标题300', head: post('300') }
+    ])
+    expect(db.listOffline()).toMatchObject([{ threadId: '300', head: post('300'), replyCount: 3 }])
+    expect(db.loadThreadPage('100', 'all', 1)).toBeNull()
+    expect(db.loadPost('1001')).toBeNull()
+    expect(db.loadPost('400')).toBeNull()
+    expect(db.loadThreadPage('400', 'all', 1)).toBeNull()
+    expect(db.getContentUsage()).toMatchObject({ cacheTextBytes: 0 })
+    expect(db.getContentUsage().protectedTextBytes).toBeGreaterThan(0)
+  })
+
+  it('leaves the v26 file byte for byte when the upgrade fails, then upgrades', () => {
+    const path = v26()
+    const original = readFileSync(path)
+    const failed = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 26), {
+      version: 27, up(connection) {
+        MIGRATIONS.find((migration) => migration.version === 27)!.up(connection)
+        throw new Error('injected failure after replacing the protection views')
+      }
+    }])
+    connections.push(failed)
+    expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failed.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+  })
+})

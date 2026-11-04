@@ -294,6 +294,15 @@ describe('real SQLite retained search', () => {
       ['200', 'offline'], ['300', 'subscription']])
   })
 
+  it('still finds a visited thread head after clearing ordinary cache', () => {
+    const { db } = fixture()
+    db.saveThreadPage(page(post('100', 'visited needle'), [post('101', 'reply needle')]), at)
+    db.saveThreadPage(page(post('200', 'unvisited needle'), []), at)
+    db.recordVisit('100', later)
+    clear(db)
+    expect(search(db, 'needle').map((hit) => hit.postId)).toEqual(['100'])
+  })
+
   it('keeps offline search ownership on failed deletion and changes it only after the transaction commits', () => {
     const { db, path } = fixture()
     db.beginOfflineCopy('100', false, at)
