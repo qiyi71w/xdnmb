@@ -15,7 +15,7 @@ describe('favorite board marks on the rail', () => {
   })
 
   it('takes the character after the longest prefix shared with any colliding favorite', () => {
-    expect(favoriteMarks(['技术宅', '技术讨论', '技能交流'])).toEqual(['技宅', '技讨', '技能'])
+    expect(favoriteMarks(['技术宅', '技能交流', '技术讨论'])).toEqual(['技宅', '技能', '技讨'])
   })
 
   it('keeps a name that is a prefix of another to its first two characters', () => {
