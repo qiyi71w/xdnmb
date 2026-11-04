@@ -53,11 +53,24 @@ export interface RailFavorites {
   onSelect: (ref: ListRef, opening: PageOpening) => void
 }
 
-/** First character of each name; the first two for names whose first characters collide. */
-function favoriteMarks(boards: readonly Board[]): string[] {
-  const chars = boards.map((item) => Array.from(item.label.trim()))
-  const firsts = chars.map((name) => name[0] ?? '')
-  return chars.map((name, index) => (firsts.filter((first) => first === firsts[index]).length > 1 ? name.slice(0, 2).join('') : firsts[index]!))
+/**
+ * First character of each name. Names sharing it add the character right after the longest prefix
+ * they share with another such name, so 技术宅／技术讨论 read 技宅／技讨 and the mark stays two
+ * characters wide; a name with nothing past that prefix (技术 beside 技术宅) keeps its first two.
+ */
+export function favoriteMarks(labels: readonly string[]): string[] {
+  const names = labels.map((label) => Array.from(label.trim()))
+  return names.map((name, index) => {
+    let shared = 0
+    for (const [other, peer] of names.entries()) {
+      if (other === index || peer[0] !== name[0]) continue
+      let length = 1
+      while (length < name.length && name[length] === peer[length]) length += 1
+      shared = Math.max(shared, length)
+    }
+    if (shared === 0) return name[0] ?? ''
+    return shared < name.length ? name[0]! + name[shared]! : name.slice(0, 2).join('')
+  })
 }
 
 /** Ctrl+click (Cmd+click on macOS): the page opens in a background tab. */
@@ -104,7 +117,7 @@ export function Rail({
   const ordered = orderedFeatures(prefs.order)
   const shown = ordered.filter((feature) => !prefs.hidden.includes(feature.id))
   const hidden = ordered.filter((feature) => prefs.hidden.includes(feature.id))
-  const marks = favoriteMarks(favorites.boards)
+  const marks = favoriteMarks(favorites.boards.map((item) => item.label))
   const updateState = useUpdates().state
   const settingsLabel = settingsEntryLabel(updateState)
 
