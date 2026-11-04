@@ -19,6 +19,7 @@ import { MIGRATIONS as RECONCILIATION_V6 } from './fixtures/reconciliation-v6'
 import { MIGRATIONS as LIFECYCLE_V7 } from './fixtures/lifecycle-v7'
 import { MIGRATIONS as REMINDERS_V9 } from './fixtures/reminders-v9'
 import { MIGRATIONS as SEARCH_V8 } from './fixtures/local-search-v8'
+import { v26Post, writeVisitsV26 } from './fixtures/visits-v26'
 
 /** Opens as the app does: an existing database is backed up before it is migrated. */
 function openReadingDatabase(path: string, migrations?: readonly Migration[]): ReadingDatabase {
@@ -1213,6 +1214,62 @@ describe('schema v26: local replies keep whether their follow-up page was read',
       version: 26, up(connection) {
         MIGRATIONS.find((migration) => migration.version === 26)!.up(connection)
         throw new Error('injected failure after adding the follow-up column')
+      }
+    }])
+    connections.push(failed)
+    expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failed.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+  })
+})
+
+describe('schema v27: visit records protect their head text and reply count', () => {
+  const tables = ['posts', 'post_threads', 'thread_pages', 'thread_reply_counts', 'thread_visits', 'retained_titles', 'offline_copies', 'offline_pages', 'offline_page_posts', 'search_documents']
+  function v26(): string {
+    const folder = mkdtempSync(join(tmpdir(), 'xidao-v26-visits-'))
+    folders.push(folder)
+    const path = join(folder, 'app.sqlite')
+    writeVisitsV26(path)
+    return path
+  }
+  const snapshot = (path: string) => {
+    const raw = new Database(path, { readonly: true })
+    try { return Object.fromEntries(tables.map((table) => [table, raw.prepare(`SELECT * FROM ${table} ORDER BY 1, 2`).all()])) } finally { raw.close() }
+  }
+  const evict = (db: ReadingDatabase) => {
+    for (let batch = 0; batch < 100; batch++) if (!db.evictContentBatch(true).more) return
+    throw new Error('eviction did not finish')
+  }
+
+  it('keeps every record, protects held heads and counts without restoring evicted ones, and leaves other cache evictable', () => {
+    const path = v26()
+    const before = snapshot(path)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(snapshot(path)).toEqual(before)
+    evict(db)
+    expect(db.listHistory()).toMatchObject([
+      { threadId: '100', title: '标题100', head: v26Post('100'), replyCount: 1 },
+      { threadId: '200', title: '标题200', head: null, replyCount: null },
+      { threadId: '300', title: '标题300', head: v26Post('300') }
+    ])
+    expect(db.listOffline()).toMatchObject([{ threadId: '300', head: v26Post('300'), replyCount: 3 }])
+    expect(db.loadThreadPage('100', 'all', 1)).toBeNull()
+    expect(db.loadPost('1001')).toBeNull()
+    expect(db.loadPost('400')).toBeNull()
+    expect(db.loadThreadPage('400', 'all', 1)).toBeNull()
+    expect(db.getContentUsage()).toMatchObject({ cacheTextBytes: 0 })
+    expect(db.getContentUsage().protectedTextBytes).toBeGreaterThan(0)
+  })
+
+  it('leaves the v26 file byte for byte when the upgrade fails, then upgrades', () => {
+    const path = v26()
+    const original = readFileSync(path)
+    const failed = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 26), {
+      version: 27, up(connection) {
+        MIGRATIONS.find((migration) => migration.version === 27)!.up(connection)
+        throw new Error('injected failure after replacing the protection views')
       }
     }])
     connections.push(failed)
