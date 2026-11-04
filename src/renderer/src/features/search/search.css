@@ -175,6 +175,15 @@
   flex-basis: 100%;
 }
 
+/* 历史's 关键词: first in its panel, wide enough for a phrase, never wider than the column. */
+.filter-keyword {
+  flex: 0 1 16em;
+}
+
+.filter-keyword .text-input {
+  width: 100%;
+}
+
 .tag-uncertain {
   background: var(--warn-bg);
   color: var(--warn-ink);

@@ -5,7 +5,7 @@ import type { ContentFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { NO_CONTENT_FILTERS } from '../search/searchState'
-import { ContentRegistryContext, type HistoryMemory, type ListMemory, type RetainedPage } from '../tabs/contentRegistry'
+import { ContentRegistryContext, type HistoryMemory, type HistoryView, type ListMemory, type RetainedPage } from '../tabs/contentRegistry'
 import { attempt, contentFailureText, type Refused } from './contentText'
 import { offlineEpoch, offlineGeneration, subscribeOffline } from './offlineSync'
 import type { ReadingResets } from './readingResets'
@@ -315,4 +315,17 @@ export function useRetainedFilters(page: RetainedPage): [ContentFilters, (next: 
     setVersion((version) => version + 1)
   }
   return [memory.get(page) ?? NO_CONTENT_FILTERS, change]
+}
+
+/** The 关键词 of a 历史 page: kept per page while the app runs (outside the shell, per pane). */
+export function useHistoryKeyword(view: HistoryView): [string, (next: string) => void] {
+  const registry = useContext(ContentRegistryContext)
+  const [ownKeywords] = useState(() => new Map<HistoryView, string>())
+  const memory = registry?.historyKeywords ?? ownKeywords
+  const [, setVersion] = useState(0)
+  const change = (next: string) => {
+    memory.set(view, next)
+    setVersion((version) => version + 1)
+  }
+  return [memory.get(view) ?? '', change]
 }

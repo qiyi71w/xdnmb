@@ -16,6 +16,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode
 } from 'react'
+import { createPortal } from 'react-dom'
 import type { Post, PostId, ThreadId } from '../../../../shared/forum'
 import { isSent, isUnsettled, type PublicationAttempt } from '../../../../shared/publication'
 import { ContextMenu, contextMenuPoint, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
@@ -27,7 +28,7 @@ import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { meaningfulName, meaningfulTitle } from '../../lib/format'
 import { formatRecordTime } from '../../lib/time'
 import { useRovingFocus } from '../../lib/useRovingFocus'
-import { historyMemory, rememberHistory } from '../content/retainedList'
+import { historyMemory, rememberHistory, useHistoryKeyword } from '../content/retainedList'
 import { forumLabel } from '../../../../shared/drafts'
 import { useEditorWorkspace } from '../editor/workspace'
 import { cookieColorItems } from '../cookieColors/CookieColorPicker'
@@ -38,7 +39,10 @@ import { useImageScope } from '../image/useImageLoad'
 import { useListImageViewer } from '../image/useListImageViewer'
 import { listRowGestures } from '../tabs/ThreadTabMenu'
 import type { EntryInit, ThreadOpen } from '../tabs/tabsState'
-import { recordCookie, recordPlace, type SentKind } from './sentRecords'
+import { ListFilterPanel, ListFilterToggle, useListFilter } from '../search/FilterFields'
+import { filterList, parseKeyword } from '../search/listFilters'
+import { NO_CONTENT_FILTERS } from '../search/searchState'
+import { recordCookie, recordPlace, sentKeywordFields, type SentKind } from './sentRecords'
 import '../feed/feed.css'
 import '../identity/identity.css'
 import '../content/content.css'
@@ -126,7 +130,8 @@ export function SentPage({
   onOpenThread,
   openStep,
   openInTab,
-  onViewerOpenChange
+  onViewerOpenChange,
+  actionsSlot
 }: {
   kind: SentKind
   entryKey: number
@@ -143,6 +148,8 @@ export function SentPage({
   openInTab: ((init: EntryInit) => void) | null
   /** Told when the image viewer opens or closes, so the 历史 page header can be made inert. */
   onViewerOpenChange?: (open: boolean) => void
+  /** The 历史 page head's slot for this page's actions (筛选), filled while this page is displayed. */
+  actionsSlot: HTMLElement | null
 }) {
   const registry = useContext(ContentRegistryContext)
   const { identities } = useEditorWorkspace()
@@ -153,7 +160,14 @@ export function SentPage({
   useLayoutEffect(() => onViewerOpenChange?.(viewerOpen), [onViewerOpenChange, viewerOpen])
   const attempts = useMemo(() => (list.status === 'ready' ? list.attempts.filter((attempt) => attempt.payload.target.kind === kind) : []), [list, kind])
   const records = useMemo(() => attempts.filter(isSent), [attempts])
-  const recordIds = useMemo(() => records.map((attempt) => attempt.id), [records])
+
+  // ---------- Filters: 关键词 only, on what each record sent ----------
+  const [keywordText, changeKeyword] = useHistoryKeyword(view)
+  const filter = useListFilter(null, { value: keywordText, onChange: changeKeyword })
+  const filtering = filter.count > 0
+  const keyword = useMemo(() => parseKeyword(keywordText), [keywordText])
+  const filtered = useMemo(() => filterList(records, () => null, NO_CONTENT_FILTERS, { keyword, fieldsOf: sentKeywordFields }), [records, keyword])
+  const recordIds = useMemo(() => filtered.shown.map(({ item }) => item.id), [filtered])
   const roving = useRovingFocus(recordIds, null)
 
   // ---------- Scroll memory (runtime, kept while the entry is in navigation history) ----------
@@ -279,6 +293,20 @@ export function SentPage({
   return (
     <section className="list-pane retained-page sent-page" aria-label={text.title} aria-busy={list.status === 'loading' || undefined}>
       <div className="list-scroll" ref={bodyRef} onScroll={onScroll} tabIndex={-1} inert={viewerOpen}>
+        {displayed && actionsSlot !== null && records.length > 0 && createPortal(<ListFilterToggle filter={filter} />, actionsSlot)}
+        {records.length > 0 && (
+          <ListFilterPanel
+            filter={filter}
+            forums={null}
+            noun={text.title}
+            unit="条"
+            total={records.length}
+            result={filtered}
+            metadata={null}
+            coverage="本机的发送记录"
+          />
+        )}
+
         <div className="list-status">
           {(list.status === 'failed' || readFailed) && (
             <div className="notice notice-error is-compact" role="alert">
@@ -302,10 +330,16 @@ export function SentPage({
             </p>
           </div>
         )}
+        {filtering && records.length > 0 && filtered.shown.length === 0 && (
+          <p className="list-filters-empty" role="status">
+            发送记录中没有符合筛选的{text.title}。
+            <KaomojiDecor state="filteredOut" />
+          </p>
+        )}
 
-        {records.length > 0 && (
-          <ul className="thread-list" aria-label={`${text.title}发送记录`} onKeyDown={roving.onKeyDown}>
-            {records.map((attempt) => {
+        {filtered.shown.length > 0 && (
+          <ul className="thread-list" aria-label={filtering ? `${text.title}发送记录（已筛选）` : `${text.title}发送记录`} onKeyDown={roving.onKeyDown}>
+            {filtered.shown.map(({ item: attempt }) => {
               const itemProps = roving.itemProps(attempt.id)
               // The held sent post's image; a send whose image is no longer held shows no thumbnail.
               const thumbPost = attempt.preview?.image != null ? attempt.preview.id : null

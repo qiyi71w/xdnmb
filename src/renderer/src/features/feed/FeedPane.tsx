@@ -87,7 +87,7 @@ export function FeedPane({
   const refreshTurn = useRefreshTurn(state.activity === 'refresh')
   const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtering = contentFilterCount(filters) > 0
-  const filter = useListFilter(filters, setFilters)
+  const filter = useListFilter({ value: filters, onChange: setFilters })
   const scrollRef = useRef<HTMLDivElement>(null)
   // 版规／时间线说明 have no menu of their own: a selected whole number there gets 预览／打开.
   const descriptionNumbers = useNumberSelectionMenu(entryKey)

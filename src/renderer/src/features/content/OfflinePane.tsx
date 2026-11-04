@@ -81,7 +81,7 @@ export function OfflinePane({
   // ---------- Filters ----------
   const [listFilters, changeFilters] = useRetainedFilters('offline')
   const filtering = contentFilterCount(listFilters) > 0
-  const filter = useListFilter(listFilters, changeFilters)
+  const filter = useListFilter({ value: listFilters, onChange: changeFilters })
   const entryIds = useMemo(() => entries.map((entry) => entry.threadId), [entries])
   const metadata = useThreadMetadata(entryIds, filtering)
   const filtered = useMemo(

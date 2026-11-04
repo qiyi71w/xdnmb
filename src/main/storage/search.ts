@@ -1,11 +1,10 @@
 import type Database from 'better-sqlite3'
 import type { Post, ThreadCoverage } from '../../shared/forum'
-import type { SearchBatch, SearchHit, ThreadFilterMetadata } from '../../shared/search'
+import { normalizeSearchText, type SearchBatch, type SearchHit, type ThreadFilterMetadata } from '../../shared/search'
 import { matchSearchFilters } from '../../shared/search-filters'
 import type { SearchScan } from './search-contract'
 import { createSearchFts } from './search-schema'
 
-export const normalizeSearchText = (text: string): string => text.normalize('NFC').toLowerCase()
 interface DocumentRow {
   rowid: number; post_id: string; owner: string; thread_id: string | null; title: string; excerpt_source: string; in_body: number
   forum_id: string | null; created_at: string | null; has_image: number | null; fetched_at: string
