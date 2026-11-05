@@ -59,7 +59,7 @@ export interface SendFollowUpDeps {
   locate: (postId: PostId) => Promise<QuoteLocation>
   /** Reads the thread's last page (full listing), recording its replies for a later locate. */
   readThreadEnd: (threadId: ThreadId) => Promise<void>
-  /** Commits a located reply as a quote jump from the entry. */
+  /** Commits a located reply as a new plain step from the entry (back returns to it). */
   openLocated: (plan: SendFollowUp & { kind: 'reply' }, location: QuoteLocation & { status: 'located' }) => void
   /** Opens the new thread from the forum list entry, as choosing it in the list does. */
   openThread: (plan: SendFollowUp & { kind: 'thread' }, threadId: ThreadId) => void

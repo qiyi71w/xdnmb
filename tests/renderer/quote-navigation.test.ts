@@ -102,6 +102,16 @@ describe('quote navigation in the tab history', () => {
     expect(run(state, { type: 'quote-navigate', tabId: id, entryKey: sourceKey, source: left('101'), thread: open('200', '201') })).toBe(state)
   })
 
+  it('jumping to the own reply after a send is a plain step that back undoes', () => {
+    let state = readingA()
+    const id = state.activeId
+    const source = currentEntry(activeTab(state)!)
+    state = run(state, { type: 'send-navigate', tabId: id, entryKey: source.key, source: left('120'), thread: open('100', '180') })
+    expect(currentEntry(activeTab(state)!)).toMatchObject({ origin: null, feed: forum4, thread: { threadId: '100', target: { postId: '180' } } })
+    state = run(state, { type: 'back', tabId: id })
+    expect(currentEntry(activeTab(state)!)).toMatchObject({ key: source.key, thread: { threadId: '100', snapshot: left('120') } })
+  })
+
   it('choosing another list item ends the quote step without dropping history', () => {
     let state = quote(readingA(), left('101'), open('200', '201'))
     const id = state.activeId
