@@ -55,6 +55,14 @@ describe('web subscription HTML adapter', () => {
     expect(result[0]).toMatchObject({ head: { id: '1001', plainText: '正文', forumId: null }, replyCount: null })
   })
 
+  it('reads the poster name from the info email field, leaving an anonymous blank unknown', () => {
+    // The live page has no name class: the name sits in the email span, which is blank for anonymous threads.
+    const info = (id: string, name: string) => `<div class="h-threads-item-main"><div class="h-threads-info"><span class="h-threads-info-title">标题${id}</span><span class="h-threads-info-email">${name}</span><a class="h-threads-info-id" href="/t/${id}">No.${id}</a></div><div class="h-threads-content">正文</div></div>`
+    const heads = parseWebList(normal(info('1001', '红魔馆') + info('1002', ' ') + info('1003', '<a href="mailto:sage">某人</a>'))).map((thread) => thread.head)
+    expect(heads.map((head) => head.name)).toEqual(['红魔馆', null, '某人'])
+    expect(heads[0]?.title).toBe('标题1001')
+  })
+
   it('does not mistake quoted authentication words for site-level errors', () => {
     expect(parseWebList(normal(item('1001', '验证码、饼干、请登录、请确认饼干是否应用正确？')))[0]?.head.id).toBe('1001')
   })

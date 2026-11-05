@@ -159,7 +159,7 @@ export function parseWebList(response: TransportResponse): ThreadSummary[] {
     const body = parseContent(response.text.slice(bodies[0]!.start, bodies[0]!.end))
     const field = (name: string) => { const value = nodes(item, (node) => hasClass(node, name))[0]; return value ? text(value) : null }
     return { head: { id, forumId: null, createdAt: field('h-threads-info-createdat'), userHash: field('h-threads-info-uid')?.replace(/^ID:\s*/i, '') || null,
-      name: field('h-threads-info-name'), title: field('h-threads-info-title'), isAdmin: null, isSage: null,
+      name: field('h-threads-info-email') || null, title: field('h-threads-info-title'), isAdmin: null, isSage: null,
       content: body.nodes, plainText: body.plainText, image: webImage(item) },
       replyCount: null, recentReplies: [], remainReplies: null }
   })
