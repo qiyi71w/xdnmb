@@ -5,8 +5,10 @@ import {
   useId,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
+  type RefObject,
   type FormEvent,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent
@@ -15,12 +17,14 @@ import type { ForumId, ThreadId, ThreadSummary } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import type {
   SubscriptionAction,
+  SubscriptionArrangement,
   SubscriptionMergeSource,
   SubscriptionOperation,
   SubscriptionOverview,
   SubscriptionSource
 } from '../../../../shared/subscriptions'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
+import { Modal, ModalHeader } from '../../components/Modal'
 import { selectionCopyItem } from '../../components/copyMenuItems'
 import { Icon, Spinner } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
@@ -28,6 +32,7 @@ import { RefreshIcon, useRefreshTurn } from '../../components/RefreshIcon'
 import { FailureNotice } from '../../components/Notices'
 import { describeReadError, meaningfulTitle } from '../../lib/format'
 import { formatRecordTime } from '../../lib/time'
+import { useSettings } from '../../lib/settingsContext'
 import { useSettingsOpener } from '../../lib/settingsOpener'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
@@ -44,14 +49,34 @@ import { previewBlocker, plansNeedingAttention, ReconcileHistoryDialog, Reconcil
 import { taskMode, type ReconcileMode } from './reconcileState'
 import { SubscriptionRowMenu } from './SubscriptionRowMenu'
 import { useSubscriptionOffline } from './SubscriptionOffline'
-import { collectionDisplay, decideChange, isReconcilable, listedThreads, sourceObjectRef } from './subscriptionListState'
-import { SOURCE_NAME, SOURCE_SHORT, failureText, sourceBlocker, threadLabel } from './subscriptionText'
-import { useCollection, useSubscriptionsContext, type WriteNotice } from './useSubscriptions'
+import {
+  arrangeThreads,
+  collectionDisplay,
+  decideChange,
+  isReconcilable,
+  listedThreads,
+  selectionReducer,
+  sourceObjectRef,
+  unresolvedThreads
+} from './subscriptionListState'
+import {
+  ARRANGEMENT_NAME,
+  SOURCE_NAME,
+  SOURCE_SHORT,
+  arrangementNoteText,
+  failureText,
+  removalConfirmTitle,
+  removalSummary,
+  sourceBlocker,
+  threadLabel
+} from './subscriptionText'
+import { useCollection, useSubscriptionsContext, type RemovalTask, type WriteNotice } from './useSubscriptions'
 import { useThreadRules } from '../reminders/useReminders'
 import '../feed/feed.css'
 import '../identity/identity.css'
 import './subscriptions.css'
 
+const ARRANGEMENTS: readonly SubscriptionArrangement[] = ['remote', 'app', 'web']
 const THREAD_ID = /^\d{1,20}$/
 
 /** An unsettled write shown under 加入: the thread, and the collection when it is not the one shown. */
@@ -106,7 +131,11 @@ export function SubscriptionPane({
     claimReveal,
     loadCollection,
     refreshCollection,
-    stopCollection
+    stopCollection,
+    removal,
+    removeMany,
+    stopRemoval,
+    dismissRemoval
   } = subscriptions
   const openSettings = useSettingsOpener()
   const openInTab = useOpenThreadInTab()
@@ -181,7 +210,11 @@ export function SubscriptionPane({
   /** 同步记录 (更多 menu, or 查看 on a result): the plan to open in it, or null for the list only. */
   const [history, setHistory] = useState<{ planId: string | null } | null>(null)
   const [moreAt, setMoreAt] = useState<ContextMenuPoint | null>(null)
+  /** An order was chosen in the 更多 menu open now: a refused save shows under its items. */
+  const [arrangedInMenu, setArrangedInMenu] = useState(false)
   const moreRef = useRef<HTMLButtonElement>(null)
+  const settingsAccess = useSettings()
+  const arrangement = settingsAccess.settings.subscriptionArrangement
   /** This view's filters; kept across source switches, never resetting the thread being read. */
   const [filters, setFilters] = useState<ContentFilters>(() => remembered?.filters ?? NO_CONTENT_FILTERS)
   const filtersRef = useRef(filters)
@@ -296,10 +329,19 @@ export function SubscriptionPane({
   // ---------- Displayed list ----------
   const display = collected === null ? null : collectionDisplay(collected)
   const displayed = display?.observation ?? null
-  const threads = useMemo(
+  const listed = useMemo(
     () => (collection === null ? [] : listedThreads(displayed, operations ?? [], collection)),
     [displayed, operations, collection]
   )
+  // The base side's stored snapshot only: arranging never starts a read of it.
+  const shownSource = overview?.source ?? 'app'
+  const { state: based } = useCollection(arrangement === 'remote' ? shownSource : arrangement)
+  const baseIds = based?.snapshot?.ids ?? null
+  const baseLoading = based === null || based.local === 'idle' || based.local === 'loading'
+  const arranged = useMemo(() => arrangeThreads(listed, shownSource, arrangement, baseIds), [listed, shownSource, arrangement, baseIds])
+  const threads = arranged.threads
+  // Until the stored base snapshot is known, the list keeps its order without a line.
+  const arrangementNote = arranged.note === null || (arranged.note.kind === 'waiting' && baseLoading) ? null : arranged.note
   const filtered = useMemo(() => filterList(threads, (thread) => headMeta(thread.head), filters), [threads, filters])
   const filtering = contentFilterCount(filters) > 0
   const uncertainById = useMemo(() => new Map(filtered.shown.map(({ item, uncertain }) => [item.head.id, uncertain])), [filtered])
@@ -345,6 +387,57 @@ export function SubscriptionPane({
       : blocker
   const taskHint = task?.phase === 'previewing' ? '预览读取中' : task?.phase === 'executing' ? '同步执行中' : null
   const attention = plansNeedingAttention(plans)
+
+  // ---------- 选择多个 ----------
+  /** Ticked threads of the collection shown; another collection's selection is never shown. */
+  const [selection, dispatchSelection] = useReducer(selectionReducer, null)
+  const selected = selection !== null && selection.key === collection ? selection : null
+  const removing = removal?.phase === 'running'
+  const unresolved = useMemo(
+    () => (overview === null ? NO_THREADS : unresolvedThreads(operations, { source: overview.source, objectRef })),
+    [operations, overview?.source, objectRef]
+  )
+  const listedIds = useMemo(() => threads.map((thread) => thread.head.id), [threads])
+  // A refresh keeps the ticks still listed; another source, UUID or binding ends the mode.
+  useEffect(() => {
+    dispatchSelection({ type: 'list', key: collection, listed: listedIds, blocked: unresolved })
+  }, [collection, listedIds, unresolved])
+  // After a 批量取消订阅 only the threads never sent stay ticked: removed ones leave the list, unknown ones await 核对.
+  const keptRemoval = useRef<RemovalTask | null>(null)
+  useEffect(() => {
+    if (removal?.phase !== 'finished' || keptRemoval.current === removal) return
+    keptRemoval.current = removal
+    if (removal.outcome.type !== 'done') return
+    const skipped = removal.outcome.removal.items.filter((item) => item.outcome === 'skipped').map((item) => item.threadId)
+    dispatchSelection({ type: 'keep', key: removal.key, ids: skipped })
+  }, [removal])
+  const selectBarRef = useRef<HTMLDivElement>(null)
+  const [confirming, setConfirming] = useState(false)
+  const toggleRow = (threadId: ThreadId) => {
+    if (!removing) dispatchSelection({ type: 'toggle', id: threadId, blocked: unresolved })
+  }
+  /** 全选 and Ctrl/Cmd+A: the rows shown now, filtered and read so far. */
+  const selectShown = () => {
+    if (!removing) dispatchSelection({ type: 'select-all', shown: ids, blocked: unresolved })
+  }
+  /** 完成 and Esc; focus in the bar that goes away returns to 更多, where the mode started. */
+  const finishSelecting = () => {
+    if (removing) return
+    const fromBar = selectBarRef.current?.contains(document.activeElement) === true
+    dispatchSelection({ type: 'exit' })
+    if (fromBar) moreRef.current?.focus()
+  }
+  const onSelectingKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (selected === null || event.defaultPrevented) return
+    if (event.target instanceof Element && event.target.closest('input, textarea, select, [role="menu"]') !== null) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      finishSelecting()
+    } else if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'a') {
+      event.preventDefault()
+      selectShown()
+    }
+  }
 
   const labelOf = (threadId: ThreadId) => {
     const thread = threads.find((item) => item.head.id === threadId)
@@ -418,13 +511,14 @@ export function SubscriptionPane({
   return (
     <section ref={paneRef} className="list-pane sub-pane" aria-label={`订阅：${SOURCE_NAME[source]}`}>
       <div
-        className="list-scroll"
+        className={selected === null ? 'list-scroll' : 'list-scroll is-selecting'}
         ref={scrollRef}
         onScroll={onScroll}
         tabIndex={-1}
         data-pane-focus={view === 'list' ? '' : undefined}
         hidden={view !== 'list'}
         inert={viewerOpen}
+        onKeyDown={onSelectingKeyDown}
       >
         <header className="list-header">
           <div className="list-title-row">
@@ -489,6 +583,7 @@ export function SubscriptionPane({
                 onClick={(event) => {
                   // A press outside the open menu (this one included) has already closed it.
                   const box = event.currentTarget.getBoundingClientRect()
+                  setArrangedInMenu(false)
                   setMoreAt({ x: box.right, y: box.bottom + 4, end: true })
                 }}
               >
@@ -530,6 +625,13 @@ export function SubscriptionPane({
           )}
 
           <ReconcileResult displayed={pageDisplayed && view === 'list'} onView={(planId) => setHistory({ planId })} />
+          <RemovalResult
+            removal={removal?.phase === 'finished' && removal.key === collection ? removal : null}
+            onDismiss={() => {
+              dismissRemoval()
+              scrollRef.current?.focus()
+            }}
+          />
           <WriteStatus displayed={pageDisplayed && view === 'list'} placed={placed} focusAfter={() => scrollRef.current} />
 
           <AddForm
@@ -621,6 +723,7 @@ export function SubscriptionPane({
               </span>
             </p>
           )}
+          {arrangementNote !== null && threads.length > 0 && <p className="sub-arrangement">{arrangementNoteText(arrangementNote)}</p>}
         </div>
 
         {displayed === null && !readInFlight && !localLoading && blocker === null && (
@@ -657,10 +760,15 @@ export function SubscriptionPane({
                   key={thread.head.id}
                   className={rowMenu?.threadId === thread.head.id ? 'sub-row is-menu-open' : 'sub-row'}
                   onContextMenu={(event) => {
-                    if (!fromInline(event)) openRowMenu(thread.head.id, event)
+                    if (fromInline(event)) return
+                    // Choosing several has no row menu.
+                    if (selected !== null) event.preventDefault()
+                    else openRowMenu(thread.head.id, event)
                   }}
                   onKeyDown={(event) => {
-                    if (isContextMenuKey(event) && !fromInline(event)) openRowMenu(thread.head.id, event)
+                    if (!isContextMenuKey(event) || fromInline(event)) return
+                    if (selected !== null) event.preventDefault()
+                    else openRowMenu(thread.head.id, event)
                   }}
                   onClickCapture={(event) => {
                     if (openInTab === null || (!event.ctrlKey && !event.metaKey) || fromInline(event)) return
@@ -684,8 +792,14 @@ export function SubscriptionPane({
                     selected={thread.head.id === selectedThreadId}
                     uncertain={uncertainById.get(thread.head.id) === true}
                     images={images}
-                    onOpen={() => onOpenThread(thread)}
+                    onOpen={() => (selected === null ? onOpenThread(thread) : toggleRow(thread.head.id))}
                     itemProps={itemProps}
+                    check={
+                      selected === null
+                        ? undefined
+                        : { checked: selected.ids.has(thread.head.id), disabled: removing || unresolved.has(thread.head.id) }
+                    }
+                    metaEnd={selected !== null && unresolved.has(thread.head.id) ? <span>先核对这次订阅操作</span> : undefined}
                   />
                   {entry !== undefined && <UnsettledLine operation={entry} tabIndex={itemProps.tabIndex} focusAfter={focusRowAfter} />}
                 </li>
@@ -707,6 +821,18 @@ export function SubscriptionPane({
             </button>
           )}
         </div>
+        {selected !== null && (
+          <SelectionBar
+            barRef={selectBarRef}
+            count={selected.ids.size}
+            removal={removing ? removal : null}
+            blockedHint={writeBlocked && !removing ? writeHint : null}
+            onSelectAll={selectShown}
+            onRemove={() => setConfirming(true)}
+            onStop={stopRemoval}
+            onDone={finishSelecting}
+          />
+        )}
       </div>
       {viewer}
       {view === 'reconcile' && (
@@ -725,13 +851,48 @@ export function SubscriptionPane({
           point={moreAt}
           label="更多"
           items={[
+            // Ticks threads of the side shown; offered unavailable (with why) while that side cannot be written.
+            ...(threads.length > 0
+              ? [
+                  {
+                    type: 'action',
+                    key: 'select',
+                    label: '选择多个',
+                    disabled: writeBlocked,
+                    title: writeBlocked ? (writeHint ?? undefined) : undefined,
+                    onSelect: () => {
+                      if (collection !== null) dispatchSelection({ type: 'enter', key: collection })
+                    }
+                  } satisfies ContextMenuItem
+                ]
+              : []),
             {
               type: 'action',
               key: 'history',
               label: attention > 0 ? `同步记录（${attention} 份需要查看）` : '同步记录',
               onSelect: () => setHistory({ planId: null })
-            }
+            },
+            { type: 'separator', key: 'arrangement' },
+            // Shared by both lists; takes effect at once and is saved like any setting.
+            ...ARRANGEMENTS.map((value): ContextMenuItem => ({
+              type: 'radio',
+              key: `arrangement-${value}`,
+              label: ARRANGEMENT_NAME[value],
+              checked: arrangement === value,
+              onSelect: () => {
+                setArrangedInMenu(true)
+                if (settingsAccess.latest().subscriptionArrangement !== value) settingsAccess.write({ subscriptionArrangement: value })
+              }
+            }))
           ]}
+          footer={
+            arrangedInMenu && settingsAccess.notSaved ? (
+              <p className="form-message is-error" role="status">
+                <Icon name="alert" size={14} />
+                <span>设置未保存</span>
+              </p>
+            ) : null
+          }
           onClose={(returnFocus) => {
             setMoreAt(null)
             if (returnFocus) moreRef.current?.focus()
@@ -740,6 +901,23 @@ export function SubscriptionPane({
       )}
       {history !== null && (
         <ReconcileHistoryDialog focusPlanId={history.planId} onClose={() => setHistory(null)} fallbackFocus={() => moreRef.current} />
+      )}
+      {confirming && selected !== null && (
+        <RemovalConfirm
+          title={removalConfirmTitle(source, overview.webName, selected.ids.size)}
+          onClose={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false)
+            if (collection === null || selected.ids.size === 0) return
+            void removeMany({
+              source,
+              // In the order shown, filtered-out ticks included.
+              threadIds: listedIds.filter((id) => selected.ids.has(id)),
+              expectedGeneration: overview.context.generation,
+              key: collection
+            })
+          }}
+        />
       )}
       {rowMenu !== null && menuThread !== undefined && (
         <SubscriptionRowMenu
@@ -771,6 +949,115 @@ export function SubscriptionPane({
       )}
       {offline.dialogs}
     </section>
+  )
+}
+
+const NO_THREADS: ReadonlySet<ThreadId> = new Set()
+
+/**
+ * 选择多个's bar at the foot of the list: 全选, 取消订阅（N） and 完成. While the removals run the same
+ * button is 停止后续取消, keeping the focus it had (the confirmation returns focus to it), and the
+ * others are unavailable. A held Enter or Space repeats into whatever has the focus: only a fresh
+ * press acts, so the press that confirmed never also stops.
+ */
+function SelectionBar({
+  barRef,
+  count,
+  removal,
+  blockedHint,
+  onSelectAll,
+  onRemove,
+  onStop,
+  onDone
+}: {
+  barRef: RefObject<HTMLDivElement | null>
+  count: number
+  /** The running removal, if any. */
+  removal: Extract<RemovalTask, { phase: 'running' }> | null
+  /** Why nothing can be removed now (another operation runs, the source is not usable…). */
+  blockedHint: string | null
+  onSelectAll: () => void
+  onRemove: () => void
+  onStop: () => void
+  onDone: () => void
+}) {
+  const hintId = useId()
+  const running = removal !== null
+  const unavailable = running || count === 0 || blockedHint !== null
+  return (
+    <div
+      className="sub-recon-bar sub-select-bar"
+      ref={barRef}
+      role="group"
+      aria-label="选择多个"
+      onKeyDown={(event) => {
+        if (event.repeat && (event.key === 'Enter' || event.key === ' ')) event.preventDefault()
+      }}
+    >
+      <div className="sub-recon-actions">
+        <button type="button" className="btn btn-page" aria-disabled={running || undefined} onClick={() => !running && onSelectAll()}>
+          全选
+        </button>
+        <button
+          type="button"
+          className={running ? 'btn btn-page' : 'btn btn-page btn-danger'}
+          // aria-disabled, not disabled: focus stays on it while the removals start and run.
+          aria-disabled={(running ? removal.stopRequested : unavailable) || undefined}
+          aria-describedby={blockedHint === null || running ? undefined : hintId}
+          onClick={() => {
+            if (running) {
+              if (!removal.stopRequested) onStop()
+            } else if (!unavailable) onRemove()
+          }}
+        >
+          {running && <Spinner />}
+          {running ? (removal.stopRequested ? '正在停止…' : '停止后续取消') : `取消订阅（${count}）`}
+        </button>
+        <button type="button" className="btn btn-page" aria-disabled={running || undefined} onClick={() => !running && onDone()}>
+          完成
+        </button>
+      </div>
+      {blockedHint !== null && (
+        <p className="field-hint" id={hintId}>
+          {blockedHint}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** Asked once before a 批量取消订阅: the collection and the count; Esc and × change nothing. */
+function RemovalConfirm({ title, onConfirm, onClose }: { title: string; onConfirm: () => void; onClose: () => void }) {
+  const titleId = useId()
+  return (
+    <Modal className="sub-remove-dialog" labelledBy={titleId} onClose={onClose}>
+      <ModalHeader title={title} titleId={titleId} closeLabel="关闭，不取消订阅" onClose={onClose} />
+      <div className="modal-actions">
+        <button type="button" className="btn btn-danger" onClick={onConfirm}>
+          取消订阅
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+/** The finished 批量取消订阅 of the collection shown, as one line above the list. A polite live region. */
+function RemovalResult({ removal, onDismiss }: { removal: Extract<RemovalTask, { phase: 'finished' }> | null; onDismiss: () => void }) {
+  const line = removal === null ? null : removalSummary(removal.outcome)
+  return (
+    <div className="sub-write-region" role="status">
+      {line !== null && (
+        <div className={`sub-write is-${line.tone}`}>
+          <Icon name={line.tone === 'done' ? 'check' : 'alert'} className="sub-write-icon" />
+          <div className="sub-write-text">
+            <p className="sub-write-title">{line.text}</p>
+          </div>
+          <button type="button" className="icon-btn" onClick={onDismiss} aria-label="关闭这条结果">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 

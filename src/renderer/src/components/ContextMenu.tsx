@@ -23,6 +23,15 @@ export type ContextMenuItem =
       onSelect: () => void
     }
   | {
+      /** One choice of a group set in place (`menuitemradio`): the menu stays open so the new choice and any error show. */
+      type: 'radio'
+      key: string
+      label: string
+      checked: boolean
+      disabled?: boolean
+      onSelect: () => void
+    }
+  | {
       type: 'action'
       key: string
       label: string
@@ -163,8 +172,8 @@ export function ContextMenu({
     item.onSelect()
   }
 
-  // One label column per menu: when any item is a check, every item reserves the check column.
-  const hasCheck = items.some((item) => item.type === 'check')
+  // One label column per menu: when any item is a check or radio, every item reserves the check column.
+  const hasCheck = items.some((item) => item.type === 'check' || item.type === 'radio')
 
   return createPortal(
     <div
@@ -179,34 +188,47 @@ export function ContextMenu({
       }}
     >
       <div ref={menuRef} role="menu" aria-label={label} className="context-menu-items">
-        {items.map((item) =>
-          item.type === 'separator' ? (
-            <div key={item.key} role="separator" className="context-menu-separator" />
-          ) : (
-            <button
-              key={item.key}
-              type="button"
-              role={item.type === 'check' ? 'menuitemcheckbox' : 'menuitem'}
-              aria-checked={item.type === 'check' ? item.checked : undefined}
-              aria-disabled={item.disabled === true ? true : undefined}
-              aria-busy={item.type === 'check' && item.busy === true ? true : undefined}
-              title={item.type === 'action' ? item.title : undefined}
-              className={item.type === 'check' && item.checked ? 'context-menu-item is-on' : 'context-menu-item'}
-              tabIndex={-1}
-              onClick={() => choose(item)}
-            >
-              {hasCheck && (
-                <span className="context-menu-check" aria-hidden="true">
-                  {item.type === 'check' && item.checked && <Icon name="check" size={14} />}
-                </span>
-              )}
-              <span className="context-menu-label">{item.label}</span>
-            </button>
-          )
-        )}
+        {items.map((item) => (
+          <ContextMenuEntry key={item.key} item={item} checkColumn={hasCheck} onChoose={choose} />
+        ))}
       </div>
       {footer !== undefined && footer !== null && footer !== false && <div className="context-menu-footer">{footer}</div>}
     </div>,
     container ?? document.body
+  )
+}
+
+/** One row of a context menu; `checkColumn` reserves the check mark's place on every row. */
+export function ContextMenuEntry({
+  item,
+  checkColumn,
+  onChoose
+}: {
+  item: ContextMenuItem
+  checkColumn: boolean
+  onChoose: (item: ContextMenuItem) => void
+}) {
+  if (item.type === 'separator') return <div role="separator" className="context-menu-separator" />
+  const checkable = item.type === 'check' || item.type === 'radio'
+  const checked = checkable && item.checked
+  return (
+    <button
+      type="button"
+      role={item.type === 'check' ? 'menuitemcheckbox' : item.type === 'radio' ? 'menuitemradio' : 'menuitem'}
+      aria-checked={checkable ? item.checked : undefined}
+      aria-disabled={item.disabled === true ? true : undefined}
+      aria-busy={item.type === 'check' && item.busy === true ? true : undefined}
+      title={item.type === 'action' ? item.title : undefined}
+      className={checked ? 'context-menu-item is-on' : 'context-menu-item'}
+      tabIndex={-1}
+      onClick={() => onChoose(item)}
+    >
+      {checkColumn && (
+        <span className="context-menu-check" aria-hidden="true">
+          {checked && <Icon name="check" size={14} />}
+        </span>
+      )}
+      <span className="context-menu-label">{item.label}</span>
+    </button>
   )
 }

@@ -1,7 +1,18 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { ContextMenuEntry } from '../../src/renderer/src/components/ContextMenu'
 import type { ThreadSummary } from '../../src/shared/forum'
-import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionOverview } from '../../src/shared/subscriptions'
+import type {
+  SubscriptionContext,
+  SubscriptionObservation,
+  SubscriptionOperation,
+  SubscriptionOverview,
+  SubscriptionRemovalItem,
+  SubscriptionRemovalStop
+} from '../../src/shared/subscriptions'
 import {
+  arrangeThreads,
   blocksNewWrite,
   clearSuccessfulWriteOnLeave,
   collectionDisplay,
@@ -13,11 +24,15 @@ import {
   isRunningChange,
   listedThreads,
   noticeAfterDismiss,
+  selectionReducer,
   threadMembership,
   unloadedCollection,
+  unresolvedThreads,
   type CollectionEvent,
-  type CollectionState
+  type CollectionState,
+  type ListSelection
 } from '../../src/renderer/src/features/subscriptions/subscriptionListState'
+import { removalSummary } from '../../src/renderer/src/features/subscriptions/subscriptionText'
 import type { WriteNotice } from '../../src/renderer/src/features/subscriptions/useSubscriptions'
 
 const context = (generation: number, appCredentialId: string | null, webCredentialId: string | null): SubscriptionContext => ({
@@ -464,5 +479,120 @@ describe('the last result line after a dismissal', () => {
     expect(noticeAfterDismiss(otherGeneration, closed)).toBe(otherGeneration)
     const refused: WriteNotice = { write, outcome: { type: 'refused', reason: 'busy' } }
     expect(noticeAfterDismiss(refused, closed)).toBe(refused)
+  })
+})
+
+describe('subscription arrangement', () => {
+  const rows = (...ids: string[]) => ids.map((id) => ({ head: { id } }))
+  const order = (result: { threads: readonly { head: { id: string } }[] }) => result.threads.map((thread) => thread.head.id)
+
+  it('orders shared threads by the base and keeps each one-sided thread after its nearest shared predecessor', () => {
+    // Web list: 5 and 6 only on the web; 5 follows 2, 6 follows 3 here.
+    const result = arrangeThreads(rows('2', '5', '3', '6', '1'), 'web', 'app', ['1', '2', '9', '3'])
+    expect(order(result)).toEqual(['1', '2', '5', '3', '6'])
+    expect(result.note).toEqual({ kind: 'arranged', base: 'app' })
+  })
+
+  it('puts one-sided threads with no shared one before them first, and keeps threads of one anchor in their order', () => {
+    expect(order(arrangeThreads(rows('8', '7', '2', '6', '5', '1'), 'app', 'web', ['1', '2']))).toEqual(['8', '7', '1', '2', '6', '5'])
+    expect(order(arrangeThreads(rows('8', '7'), 'app', 'web', ['1']))).toEqual(['8', '7'])
+  })
+
+  it('arranges a partly read list as far as it goes, so later pages never move earlier rows', () => {
+    const base = ['3', '1', '2', '4']
+    expect(order(arrangeThreads(rows('1', '2', '3'), 'web', 'app', base))).toEqual(['3', '1', '2'])
+    expect(order(arrangeThreads(rows('1', '2', '3', '4'), 'web', 'app', base))).toEqual(['3', '1', '2', '4'])
+  })
+
+  it('keeps the forum order on the base side, under remote, and while the base has no complete snapshot', () => {
+    const threads = rows('2', '1')
+    expect(arrangeThreads(threads, 'app', 'app', ['1', '2'])).toEqual({ threads, note: null })
+    expect(arrangeThreads(threads, 'web', 'remote', ['1', '2'])).toEqual({ threads, note: null })
+    expect(arrangeThreads(threads, 'app', 'web', null)).toEqual({ threads, note: { kind: 'waiting', base: 'web' } })
+  })
+})
+
+describe('context menu radio items', () => {
+  it('mark the chosen one with menuitemradio and aria-checked', () => {
+    const markup = (checked: boolean) => renderToStaticMarkup(createElement(ContextMenuEntry, {
+      item: { type: 'radio', key: 'app', label: '按 App 顺序排列', checked, onSelect: () => undefined },
+      checkColumn: true,
+      onChoose: () => undefined
+    }))
+    expect(markup(true)).toMatch(/role="menuitemradio"[^>]*aria-checked="true"/)
+    expect(markup(true)).toContain('<svg')
+    expect(markup(false)).toMatch(/role="menuitemradio"[^>]*aria-checked="false"/)
+    expect(markup(false)).not.toContain('<svg')
+  })
+})
+
+describe('choosing several threads', () => {
+  const key = collectionKey('app', context(2, '7', '3'))
+  const none: ReadonlySet<string> = new Set()
+  const ticked = (state: ListSelection | null) => (state === null ? null : [...state.ids].sort())
+  const start = (...ids: string[]) => ids.reduce<ListSelection | null>((state, id) => selectionReducer(state, { type: 'toggle', id, blocked: none }),
+    selectionReducer(null, { type: 'enter', key }))
+
+  it('ends, ticks cleared, when the source or the identity generation changes', () => {
+    const state = start('1', '2')
+    expect(selectionReducer(state, { type: 'list', key: collectionKey('web', context(2, '7', '3')), listed: ['1', '2'], blocked: none })).toBeNull()
+    expect(selectionReducer(state, { type: 'list', key: collectionKey('app', context(3, '7', '3')), listed: ['1', '2'], blocked: none })).toBeNull()
+    expect(selectionReducer(state, { type: 'list', key: null, listed: [], blocked: none })).toBeNull()
+  })
+
+  it('keeps after a refresh only the ticks still listed; a filter does not untick hidden rows', () => {
+    const state = start('1', '2', '3')
+    expect(ticked(selectionReducer(state, { type: 'list', key, listed: ['3', '1', '9'], blocked: none }))).toEqual(['1', '3'])
+    // Filtering changes only what is shown: the listed threads stay the same, and so does the selection.
+    expect(selectionReducer(state, { type: 'list', key, listed: ['1', '2', '3', '4'], blocked: none })).toBe(state)
+  })
+
+  it('selects all of the rows shown that can be ticked, never a row awaiting 核对', () => {
+    const state = start('5')
+    const all = selectionReducer(state, { type: 'select-all', shown: ['1', '2', '3'], blocked: new Set(['2']) })
+    expect(ticked(all)).toEqual(['1', '3', '5'])
+    expect(ticked(selectionReducer(all, { type: 'toggle', id: '2', blocked: new Set(['2']) }))).toEqual(['1', '3', '5'])
+    // A ticked row that comes to await 核对 is unticked.
+    expect(ticked(selectionReducer(all, { type: 'list', key, listed: ['1', '2', '3', '5'], blocked: new Set(['3']) }))).toEqual(['1', '5'])
+  })
+
+  it('leaves only the items never sent ticked after a run on the same collection', () => {
+    const state = start('1', '2', '3')
+    expect(ticked(selectionReducer(state, { type: 'keep', key, ids: ['3'] }))).toEqual(['3'])
+    expect(selectionReducer(state, { type: 'keep', key: collectionKey('web', context(2, '7', '3')), ids: [] })).toBe(state)
+  })
+
+  it('ticks only rows of the collection shown with an unresolved write as unavailable', () => {
+    const operations = [unresolvedAppAdd(context(2, '7', '3')), { ...unresolvedAppAdd(context(2, '8', '3')), id: 'op-2', threadId: '1004' }]
+    expect([...unresolvedThreads(operations, { source: 'app', objectRef: '7' })]).toEqual(['1003'])
+    expect([...unresolvedThreads(operations, { source: 'web', objectRef: '3' })]).toEqual([])
+  })
+})
+
+describe('bulk unsubscribe result line', () => {
+  const item = (outcome: SubscriptionRemovalItem['outcome']): SubscriptionRemovalItem => ({ threadId: '1', outcome, operationId: outcome === 'skipped' ? null : 'op' })
+  const done = (outcomes: SubscriptionRemovalItem['outcome'][], stopReason: SubscriptionRemovalStop | null) =>
+    removalSummary({ type: 'done', removal: { items: outcomes.map(item), stopReason } })
+
+  it('counts the removed, names where and why it stopped, and how many were never sent', () => {
+    expect(done(['confirmed', 'confirmed'], null)).toEqual({ tone: 'done', text: '已取消 2 个。' })
+    expect(done(['confirmed', 'confirmed', 'confirmed', 'confirmed', 'unknown', 'skipped', 'skipped', 'skipped'], 'item-unknown'))
+      .toEqual({ tone: 'warn', text: '已取消 4 个。第 5 个结果不明，已停止；其余 3 个未执行。' })
+    expect(done(['confirmed', 'failed', 'skipped'], 'item-failed')).toEqual({ tone: 'error', text: '已取消 1 个。第 2 个没有取消成功，已停止；其余 1 个未执行。' })
+  })
+
+  it('says a rate limit or a stop, and leaves every sent item it could not confirm counted as unknown', () => {
+    // The rate-limited item counts with the others: every sent item it could not confirm.
+    expect(done(['unknown', 'unknown', 'unknown', 'skipped'], 'rate-limited')).toEqual({ tone: 'warn', text: '第 3 个被限流，已停止；3 个结果不明；其余 1 个未执行。' })
+    expect(done(['unknown', 'skipped'], 'rate-limited').text).toBe('第 1 个被限流，已停止；1 个结果不明；其余 1 个未执行。')
+    expect(done(['unknown', 'failed'], 'rate-limited')).toEqual({ tone: 'error', text: '第 2 个被限流，已停止；1 个结果不明；1 个没有取消成功。' })
+    expect(done(['confirmed', 'skipped', 'skipped'], 'cancelled')).toEqual({ tone: 'warn', text: '已取消 1 个。已停止；其余 2 个未执行。' })
+    expect(done(['confirmed', 'unknown'], null).text).toBe('已取消 1 个。1 个结果不明。')
+  })
+
+  it('says nothing was removed when the batch was refused or the call failed', () => {
+    expect(removalSummary({ type: 'refused', reason: 'busy' }).tone).toBe('error')
+    expect(removalSummary({ type: 'refused', reason: 'busy' }).text).not.toContain('已取消')
+    expect(removalSummary({ type: 'failed' }).tone).toBe('warn')
   })
 })

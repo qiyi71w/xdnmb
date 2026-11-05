@@ -167,8 +167,8 @@ export function App() {
   const settingsWriter = useSettingsWriter(settings, setSettings)
   const { write: writeSettings, latest: latestSettings } = settingsWriter
   const settingsAccess = useMemo<SettingsAccess>(
-    () => ({ settings, latest: latestSettings, write: writeSettings }),
-    [settings, latestSettings, writeSettings]
+    () => ({ settings, latest: latestSettings, write: writeSettings, notSaved: settingsWriter.status.notSaved }),
+    [settings, latestSettings, writeSettings, settingsWriter.status.notSaved]
   )
   const [tabs, dispatch] = useReducer(shellReducer, null)
   // 图片遮罩 reveals of each tab's page visit (renderer memory only).

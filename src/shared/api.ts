@@ -538,6 +538,7 @@ export const IpcChannel = {
   subscriptionSnapshot: 'subscriptions:snapshot',
   subscriptionRead: 'subscriptions:read',
   subscriptionChange: 'subscriptions:change',
+  subscriptionRemoveMany: 'subscriptions:remove-many',
   subscriptionOperations: 'subscriptions:operations',
   subscriptionReconcile: 'subscriptions:reconcile',
   subscriptionDismiss: 'subscriptions:dismiss',

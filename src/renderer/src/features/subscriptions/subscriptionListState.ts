@@ -5,7 +5,8 @@ import type {
   SubscriptionObservation,
   SubscriptionOperation,
   SubscriptionOverview,
-  SubscriptionSource
+  SubscriptionSource,
+  SubscriptionArrangement
 } from '../../../../shared/subscriptions'
 import { completeSubscriptionObservation } from '../../../../shared/subscriptions'
 import type { ThreadId, ThreadSummary } from '../../../../shared/forum'
@@ -210,6 +211,49 @@ export function listedThreads(
 }
 
 /**
+ * Why the list order is not the forum's own, shown as one line above the list: `arranged` follows the
+ * base side's last complete snapshot; `waiting` keeps the forum's order until the base side has one.
+ */
+export type ArrangementNote = { kind: 'arranged' | 'waiting'; base: SubscriptionSource }
+
+/**
+ * The order a list shows. The base side (`arrangement`) and `remote` keep the forum's order. The other
+ * side orders threads both sides have by the base snapshot; a thread only this side has follows the
+ * nearest thread before it (in this list) that both have, or leads the list when there is none, and
+ * threads following the same one keep their order. A partly read list is arranged as far as it goes:
+ * positions come from the base, so later pages never move earlier rows. Display only.
+ * `base`: the base side's last complete snapshot under the same identity, null when there is none.
+ */
+export function arrangeThreads<T extends { head: { id: ThreadId } }>(
+  threads: readonly T[],
+  shown: SubscriptionSource,
+  arrangement: SubscriptionArrangement,
+  base: readonly ThreadId[] | null
+): { threads: readonly T[]; note: ArrangementNote | null } {
+  if (arrangement === 'remote' || arrangement === shown) return { threads, note: null }
+  if (base === null) return { threads, note: { kind: 'waiting', base: arrangement } }
+  const rank = new Map<ThreadId, number>()
+  for (const [index, id] of base.entries()) if (!rank.has(id)) rank.set(id, index)
+  const leading: T[] = []
+  const anchors: { thread: T; rank: number; followers: T[] }[] = []
+  let followers = leading
+  for (const thread of threads) {
+    const at = rank.get(thread.head.id)
+    if (at === undefined) {
+      followers.push(thread)
+      continue
+    }
+    followers = []
+    anchors.push({ thread, rank: at, followers })
+  }
+  anchors.sort((left, right) => left.rank - right.rank)
+  return {
+    threads: [...leading, ...anchors.flatMap((anchor) => [anchor.thread, ...anchor.followers])],
+    note: { kind: 'arranged', base: arrangement }
+  }
+}
+
+/**
  * Whether an unresolved journal entry blocks a new write to the same thread of the same remote
  * collection. Only the source's own reference counts: a generation bump caused by the other
  * source (e.g. a web rebinding) does not release an unresolved App write. Different local refs
@@ -227,6 +271,65 @@ export function blocksNewWrite(
     operation.threadId === target.threadId &&
     sourceObjectRef(operation.context, operation.source) === target.objectRef
   )
+}
+
+/** Threads of one collection with an unresolved write (the same rule as `blocksNewWrite`): nothing new may be sent for them. */
+export function unresolvedThreads(
+  operations: readonly SubscriptionOperation[] | null,
+  target: { source: SubscriptionSource; objectRef: string | null }
+): ReadonlySet<ThreadId> {
+  const ids = new Set<ThreadId>()
+  for (const operation of operations ?? []) if (blocksNewWrite(operation, { ...target, threadId: operation.threadId })) ids.add(operation.threadId)
+  return ids
+}
+
+/**
+ * 选择多个 on the list of one collection (`key`). The ticked threads belong to that collection, not
+ * to what is shown: a filter hides some without unticking them. A thread with an unresolved write
+ * cannot be ticked, and one that gains it, or leaves the list, is unticked.
+ */
+export interface ListSelection {
+  key: string
+  ids: ReadonlySet<ThreadId>
+}
+
+export type SelectionEvent =
+  | { type: 'enter'; key: string }
+  | { type: 'exit' }
+  | { type: 'toggle'; id: ThreadId; blocked: ReadonlySet<ThreadId> }
+  /** 全选 / Ctrl/Cmd+A: every row shown now (filtered, read so far) that can be ticked. */
+  | { type: 'select-all'; shown: readonly ThreadId[]; blocked: ReadonlySet<ThreadId> }
+  /** The list or the collection changed: another collection ends the mode; otherwise ticks stay where they can. */
+  | { type: 'list'; key: string | null; listed: readonly ThreadId[]; blocked: ReadonlySet<ThreadId> }
+  /** After a 批量取消订阅 on collection `key`: only these (the items never sent) stay ticked. */
+  | { type: 'keep'; key: string; ids: readonly ThreadId[] }
+
+export function selectionReducer(state: ListSelection | null, event: SelectionEvent): ListSelection | null {
+  if (event.type === 'enter') return state?.key === event.key ? state : { key: event.key, ids: new Set() }
+  if (state === null) return null
+  switch (event.type) {
+    case 'exit':
+      return null
+    case 'toggle': {
+      if (event.blocked.has(event.id) && !state.ids.has(event.id)) return state
+      const ids = new Set(state.ids)
+      if (!ids.delete(event.id)) ids.add(event.id)
+      return { ...state, ids }
+    }
+    case 'select-all': {
+      const ids = new Set(state.ids)
+      for (const id of event.shown) if (!event.blocked.has(id)) ids.add(id)
+      return ids.size === state.ids.size ? state : { ...state, ids }
+    }
+    case 'list': {
+      if (event.key !== state.key) return null
+      const listed = new Set(event.listed)
+      const ids = new Set([...state.ids].filter((id) => listed.has(id) && !event.blocked.has(id)))
+      return ids.size === state.ids.size ? state : { ...state, ids }
+    }
+    case 'keep':
+      return event.key !== state.key ? state : { ...state, ids: new Set(event.ids.filter((id) => state.ids.has(id))) }
+  }
 }
 
 type ActiveChange = Pick<ActiveWrite, 'kind' | 'source' | 'threadId' | 'action' | 'generation'> | null

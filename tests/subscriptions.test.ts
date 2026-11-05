@@ -73,18 +73,21 @@ function unwrap<T>(result: SubscriptionResult<T>): T {
   return result.value
 }
 
-interface RequestRecord { path: string; cookie: string | undefined; uuid: string | null; page: number }
+interface RequestRecord { path: string; cookie: string | undefined; uuid: string | null; page: number; tid: string | null }
 async function fixture() {
   const app = new Map<string, Set<string>>([[UUID_A, new Set(['1001', '1002'])], [UUID_B, new Set(['2001'])]])
   const web = new Map<string, Set<string>>([[COOKIE_A, new Set(['3001'])], [COOKIE_B, new Set(['4001'])]])
   const requests: RequestRecord[] = []
-  const behavior = { dropNextWrite: false, failPage: 0, failSource: null as SubscriptionSource | null, ignoreWrites: false, writeFailure: null as 'rate-limit' | 'captcha' | null,
-    onWrite: null as null | (() => Promise<void>), onRead: null as null | ((source: SubscriptionSource, page: number) => Promise<void>) }
+  const behavior = { dropNextWrite: false, failPage: 0, failSource: null as SubscriptionSource | null, ignoreWrites: false, writeFailure: null as 'rate-limit' | 'captcha' | 'refused' | null,
+    onWrite: null as null | (() => Promise<void>), onRead: null as null | ((source: SubscriptionSource, page: number) => Promise<void>),
+    /** Lists like the forum: the latest subscription (the last one added to the set) first. */
+    newestFirst: false }
   const server = createServer(async (request, response) => {
     const url = new URL(request.url!, 'http://localhost')
     const isWeb = url.pathname.startsWith('/Forum/') || url.pathname.startsWith('/Home/')
     const page = isWeb ? Number(/\/page\/(\d+)/.exec(url.pathname)?.[1] ?? 0) : Number(url.searchParams.get('page') ?? 0)
-    requests.push({ path: url.pathname, cookie: request.headers.cookie, uuid: url.searchParams.get('uuid'), page })
+    const tid = isWeb ? /\/tid\/(\d+)/.exec(url.pathname)?.[1] ?? null : url.searchParams.get('tid')
+    requests.push({ path: url.pathname, cookie: request.headers.cookie, uuid: url.searchParams.get('uuid'), page, tid })
     const secret = isWeb ? (request.headers.cookie ?? '').replace(/^userhash=/, '') : url.searchParams.get('uuid') ?? ''
     const collection = (isWeb ? web : app).get(secret)
     const write = /(?:addFeed|delFeed)/.test(url.pathname)
@@ -96,7 +99,10 @@ async function fixture() {
         response.end(isWeb ? '<p class="error">需要验证码</p>' : JSON.stringify('需要验证码'))
         return
       }
-      const tid = isWeb ? /\/tid\/(\d+)/.exec(url.pathname)?.[1] : url.searchParams.get('tid')
+      if (behavior.writeFailure === 'refused') {
+        response.end(isWeb ? '<p class="error">该串不存在</p>' : JSON.stringify('该串不存在'))
+        return
+      }
       if (tid && !behavior.ignoreWrites) { if (url.pathname.includes('addFeed')) collection.add(tid); else collection.delete(tid) }
       if (behavior.onWrite) await behavior.onWrite()
       if (behavior.dropNextWrite) { behavior.dropNextWrite = false; request.socket.destroy(); return }
@@ -107,7 +113,7 @@ async function fixture() {
     if (behavior.onRead) await behavior.onRead(isWeb ? 'web' : 'app', page)
     if (page === behavior.failPage && (behavior.failSource === null || behavior.failSource === (isWeb ? 'web' : 'app'))) { response.statusCode = 503; response.end('temporary'); return }
     // Deliberately tiny non-final pages prove that short pages cannot end the read.
-    const ids = [...collection].slice(page - 1, page)
+    const ids = (behavior.newestFirst ? [...collection].reverse() : [...collection]).slice(page - 1, page)
     response.end(isWeb ? `<html><head><title>网页订阅</title></head><body><div class="h-threads-list">${ids.map((id) => `<div class="h-threads-item-main" data-threads-id="${id}"><a class="h-threads-info-id" href="/t/${id}">No.${id}</a><div class="h-threads-content">正文 验证码 饼干 请登录</div></div>`).join('')}</div></body></html>`
       : JSON.stringify(ids.map((id) => ({ id, fid: '4', content: '正文', title: `串${id}` }))))
   })
@@ -766,7 +772,7 @@ describe('previewed subscription reconciliation', () => {
     expect(plan.items.map((item) => item.state)).toEqual(['confirmed', 'confirmed', 'confirmed'])
     expect(plan.items.every((item) => item.operationId !== null)).toBe(true)
     expect([...remote.app.get(UUID_A)!]).toEqual(['1001', '1002', '3001'])
-    expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1001', '1002'])
+    expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1002', '1001'])
     expect(await service.executePlan({ previewId: preview.id, choices: [], operationId: 'again' }, signal())).toEqual({ ok: false, reason: 'stale' })
     expect((await service.getPlans())[0]).toEqual(plan)
   })
@@ -861,8 +867,8 @@ describe('previewed subscription reconciliation', () => {
     expect(preview).toMatchObject({ firstSync: true, context: { webCredentialId: b.id } })
     expect(preview.items.every((item) => item.defaultChoice === 'both' && !item.choices.includes('none'))).toBe(true)
     await executePreview(service, preview)
-    expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1001', '1002'])
-    expect([...remote.web.get(COOKIE_B)!]).toEqual(['4001', '1001', '1002', '3001'])
+    expect([...remote.web.get(COOKIE_A)!]).toEqual(['3001', '1002', '1001'])
+    expect([...remote.web.get(COOKIE_B)!]).toEqual(['4001', '3001', '1002', '1001'])
     expect(db.loadRoleSelections()).toEqual({ 'default-post': { state: 'selected', credentialId: b.id }, 'web-sync': { state: 'selected', credentialId: b.id } })
   })
 
@@ -881,17 +887,17 @@ describe('previewed subscription reconciliation', () => {
     expect(plan.state).toBe('stopped')
     expect(plan.items.map((item) => item.state)).toEqual(['confirmed', failure === 'lost-response' ? 'unknown' : 'failed', 'skipped'])
     expect(writes(remote.requests)).toHaveLength(2)
-    expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(true)
-    expect(remote.app.get(UUID_A)!.has('3001')).toBe(false)
+    expect(remote.app.get(UUID_A)!.has('3001')).toBe(true)
+    expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(false)
     const operation = (await service.getOperations()).find((entry) => entry.id === plan.items[1]!.operationId)!
     if (failure === 'lost-response') expect(operation).toMatchObject({ report: 'unknown', verification: 'present' })
     remote.behavior.onWrite = null
     remote.behavior.writeFailure = null
     remote.behavior.ignoreWrites = false
-    remote.web.get(COOKIE_A)!.delete('1001')
+    remote.app.get(UUID_A)!.delete('3001')
     if (failure !== 'mismatch') remote.web.get(COOKIE_A)!.delete('1002')
     const next = await syncPreview(service)
-    expect(next.items.find((item) => item.threadId === '1001')).toMatchObject({ presentOn: 'app', baseline: true, defaultChoice: 'skip', provenance: { kind: 'gone' } })
+    expect(next.items.find((item) => item.threadId === '3001')).toMatchObject({ presentOn: 'web', baseline: true, defaultChoice: 'skip', provenance: { kind: 'gone' } })
     expect(next.items.find((item) => item.threadId === '1002')).toMatchObject({ presentOn: 'app', ...NEW })
   })
 
@@ -926,7 +932,7 @@ describe('previewed subscription reconciliation', () => {
     expect(plan).toMatchObject({ state: 'stopped', stopReason: 'item-unknown' })
     expect(plan.items.map((item) => item.state)).toEqual(['unknown', 'skipped', 'skipped'])
     expect(writes(remote.requests)).toHaveLength(1)
-    expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(true)
+    expect(remote.app.get(UUID_A)!.has('3001')).toBe(true)
   })
 
   it.each(['report', 'atomic-facts'] as const)('retains linked intent and unchanged item baseline after %s save interruption', async (failure) => {
@@ -949,7 +955,7 @@ describe('previewed subscription reconciliation', () => {
     expect(plan).toMatchObject({ state: 'stopped', stopReason: 'result-storage' })
     expect(plan.items[0]).toMatchObject({ state: 'unknown', operationId: expect.any(String), failure: 'result-storage' })
     expect(writes(remote.requests)).toHaveLength(1)
-    expect(remote.web.get(COOKIE_A)!.has('1001')).toBe(true)
+    expect(remote.app.get(UUID_A)!.has('3001')).toBe(true)
     db.close(); databases.delete(db)
     const restarted = create(asStore(open(file)))
     const before = remote.requests.length
@@ -963,8 +969,8 @@ describe('previewed subscription reconciliation', () => {
     const checked = unwrap(await restarted.reconcile({ id: journal.id, operationId: 'check' }, signal()))
     expect(checked.verification).toBe('present')
     expect(writes(remote.requests)).toHaveLength(1)
-    remote.web.get(COOKIE_A)!.delete('1001')
-    expect((await syncPreview(restarted)).items.find((item) => item.threadId === '1001')).toMatchObject({ presentOn: 'app', ...NEW })
+    remote.app.get(UUID_A)!.delete('3001')
+    expect((await syncPreview(restarted)).items.find((item) => item.threadId === '3001')).toMatchObject({ presentOn: 'web', ...NEW })
   })
 
   it('marks a durable running plan interrupted after storage loss and never resumes it on restart', async () => {
@@ -1021,6 +1027,61 @@ describe('previewed subscription reconciliation', () => {
   })
 })
 
+describe('subscription order of sync and merge writes', () => {
+  // Sets hold the oldest subscription first; with `newestFirst` the remote lists them newest first, as the forum does.
+  it('writes each target from the bottom of its source, so added threads keep the source order on top', async () => {
+    const { service, remote } = await setup()
+    remote.behavior.newestFirst = true
+    remote.app.set(UUID_A, new Set(['9001', '1003', '1002', '1001']))
+    remote.web.set(COOKIE_A, new Set(['9001', '3002', '3001']))
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    const preview = await syncPreview(service)
+    expect(preview.items.map((item) => item.threadId)).toEqual(['1001', '1002', '1003', '3001', '3002'])
+    const plan = await executePreview(service, preview)
+    expect(plan.state).toBe('completed')
+    expect(plan.items.map(({ candidate }) => `${candidate.target}:${candidate.threadId}`)).toEqual(['app:3002', 'app:3001', 'web:1003', 'web:1002', 'web:1001'])
+    expect(writes(remote.requests).map((request) => `${request.path.includes('Feed/tid') ? 'web' : 'app'}:${request.tid}`))
+      .toEqual(['app:3002', 'app:3001', 'web:1003', 'web:1002', 'web:1001'])
+    expect((await service.getPlans())[0]!.items.map((item) => item.candidate.threadId)).toEqual(['3002', '3001', '1003', '1002', '1001'])
+    expect((await scan(service, 'app')).ids).toEqual(['3001', '3002', '1001', '1002', '1003', '9001'])
+    expect((await scan(service, 'web')).ids).toEqual(['1001', '1002', '1003', '3001', '3002', '9001'])
+  })
+
+  it('ends in the source order after a sync that stopped at an unconfirmed item is run again', async () => {
+    const { service, remote } = await setup()
+    remote.behavior.newestFirst = true
+    remote.app.set(UUID_A, new Set(['1003', '1002', '1001']))
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    let count = 0
+    remote.behavior.onWrite = async () => { if (++count === 2) remote.behavior.writeFailure = 'captcha' }
+    const stopped = await executePreview(service, await syncPreview(service))
+    expect(stopped.items.map((item) => [item.candidate.threadId, item.state])).toEqual([['3001', 'confirmed'], ['1003', 'confirmed'], ['1002', 'failed'], ['1001', 'skipped']])
+    remote.behavior.onWrite = null
+    remote.behavior.writeFailure = null
+    // The unconfirmed write blocks its thread until the read-only 核对 settles it; nothing is resent.
+    unwrap(await service.reconcile({ id: stopped.items[2]!.operationId!, operationId: 'check' }, signal()))
+    const again = await syncPreview(service)
+    expect(again.items.map((item) => item.threadId)).toEqual(['1001', '1002'])
+    expect((await executePreview(service, again)).state).toBe('completed')
+    expect((await scan(service, 'app')).ids).toEqual(['3001', '1001', '1002', '1003'])
+    expect((await scan(service, 'web')).ids).toEqual(['1001', '1002', '1003', '3001'])
+  })
+
+  it('merges the old UUID threads into the current one in the old UUID order', async () => {
+    const { service, remote } = await setup()
+    remote.behavior.newestFirst = true
+    remote.app.set(UUID_A, new Set(['1003', '1002', '1001']))
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    unwrap(await service.configureApp({ uuid: UUID_B }))
+    const [source] = await service.getMergeSources()
+    const preview = unwrap(await service.previewMerge({ sourceAppCredentialId: source!.appCredentialId, operationId: 'merge' }, signal()))
+    expect(preview.items.map((item) => item.threadId)).toEqual(['1001', '1002', '1003'])
+    expect((await executePreview(service, preview)).state).toBe('completed')
+    expect(writes(remote.requests).map((request) => request.tid)).toEqual(['1003', '1002', '1001'])
+    expect((await scan(service, 'app')).ids).toEqual(['1001', '1002', '1003', '2001'])
+  })
+})
+
 describe('subscription plan restart boundaries', () => {
   it('retains confirmed facts across restart after a later server commit loses its response', async () => {
     const { service, remote, db, file, create } = await setup()
@@ -1041,10 +1102,10 @@ describe('subscription plan restart boundaries', () => {
     const journal = (await restarted.getOperations()).find((entry) => entry.id === result.items[1]!.operationId)!
     expect(unwrap(await restarted.reconcile({ id: journal.id, operationId: 'read-only' }, signal()))).toMatchObject({ report: 'unknown', verification: 'present' })
     expect(writes(remote.requests)).toHaveLength(2)
-    remote.web.get(COOKIE_A)!.delete('1001')
+    remote.app.get(UUID_A)!.delete('3001')
     remote.web.get(COOKIE_A)!.delete('1002')
     const next = await syncPreview(restarted)
-    expect(next.items.find((item) => item.threadId === '1001')).toMatchObject({ presentOn: 'app', baseline: true, defaultChoice: 'skip' })
+    expect(next.items.find((item) => item.threadId === '3001')).toMatchObject({ presentOn: 'web', baseline: true, defaultChoice: 'skip' })
     expect(next.items.find((item) => item.threadId === '1002')).toMatchObject({ presentOn: 'app', ...NEW })
   })
 
@@ -1136,5 +1197,196 @@ describe('subscription reconciliation persistence', () => {
     expect(differences(next)).toMatchObject([
       { threadId: '1001', presentOn: 'app', baseline: true, defaultChoice: 'skip' }, { threadId: '1002', presentOn: 'app', ...NEW }
     ])
+  })
+})
+
+async function removeMany(service: SubscriptionService, source: SubscriptionSource, threadIds: string[], abortSignal = signal(), generation?: number) {
+  const expectedGeneration = generation ?? (await service.getOverview()).context.generation
+  return service.removeMany({ source, threadIds, expectedGeneration, operationId: 'bulk' }, abortSignal)
+}
+const reads = (requests: RequestRecord[]) => requests.filter((request) => !/addFeed|delFeed/.test(request.path))
+
+describe('bulk subscription removal', () => {
+  it('sends each removal once in order, then reads the list back once to confirm all of them', async () => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    remote.app.set(UUID_A, new Set(['1001', '1002', '1003', '1004']))
+    await scan(service, 'app')
+    remote.requests.length = 0
+    const result = unwrap(await removeMany(service, 'app', ['1003', '1001', '1004']))
+    expect(result).toEqual({ stopReason: null, items: [
+      { threadId: '1003', outcome: 'confirmed', operationId: expect.any(String) },
+      { threadId: '1001', outcome: 'confirmed', operationId: expect.any(String) },
+      { threadId: '1004', outcome: 'confirmed', operationId: expect.any(String) }
+    ] })
+    expect(writes(remote.requests).map((request) => request.tid)).toEqual(['1003', '1001', '1004'])
+    // One readback after the last request: the one remaining page, then the empty end candidate.
+    expect(remote.requests.slice(3).map((request) => request.page)).toEqual([1, 2])
+    expect(reads(remote.requests)).toHaveLength(2)
+    expect([...remote.app.get(UUID_A)!]).toEqual(['1002'])
+    const operations = await service.getOperations()
+    expect(operations).toHaveLength(3)
+    for (const operation of operations) {
+      expect(operation).toMatchObject({ action: 'remove', report: 'success', verification: 'absent-supported', state: 'settled' })
+      expect(operation.after?.id).toBe(operations[0]!.after?.id)
+    }
+    expect(await service.getPlans()).toEqual([])
+  })
+
+  it.each([
+    ['rejected', 'failed', 'item-failed'],
+    ['lost-response', 'unknown', 'item-unknown']
+  ] as const)('stops at the first %s request, records nothing for the rest and still reads back what was sent', async (failure, outcome, stopReason) => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    remote.app.set(UUID_A, new Set(['1001', '1002', '1003']))
+    await scan(service, 'app')
+    remote.requests.length = 0
+    let count = 0
+    remote.behavior.onWrite = async () => {
+      if (++count !== 1) return
+      if (failure === 'rejected') remote.behavior.writeFailure = 'refused'
+      else remote.behavior.dropNextWrite = true
+    }
+    const result = unwrap(await removeMany(service, 'app', ['1001', '1002', '1003']))
+    expect(result.stopReason).toBe(stopReason)
+    expect(result.items.map((item) => item.outcome)).toEqual(failure === 'rejected' ? ['confirmed', outcome, 'skipped'] : [outcome, 'skipped', 'skipped'])
+    const sent = failure === 'rejected' ? 2 : 1
+    expect(writes(remote.requests)).toHaveLength(sent)
+    expect(result.items[sent]!.operationId).toBeNull()
+    expect((await service.getOperations()).map((operation) => operation.threadId).sort()).toEqual(['1001', '1002', '1003'].slice(0, sent))
+    expect(reads(remote.requests).length).toBeGreaterThan(0)
+  })
+
+  // HTTP 429 leaves the report unknown; the forum's captcha page is an explicit refusal.
+  it.each([['rate-limit', 'unknown'], ['captcha', 'failed']] as const)('reads nothing back after a %s answer; every sent item awaits 核对', async (failure, outcome) => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    remote.app.set(UUID_A, new Set(['1001', '1002', '1003']))
+    await scan(service, 'app')
+    remote.requests.length = 0
+    remote.behavior.onWrite = async () => { remote.behavior.writeFailure = failure }
+    const result = unwrap(await removeMany(service, 'app', ['1001', '1002', '1003']))
+    expect(result).toMatchObject({ stopReason: 'rate-limited', items: [{ outcome: 'unknown' }, { outcome }, { outcome: 'skipped', operationId: null }] })
+    expect(remote.requests.map((request) => request.tid)).toEqual(['1001', '1002'])
+    const operations = await service.getOperations()
+    expect(operations).toHaveLength(2)
+    for (const operation of operations) expect(operation).toMatchObject({ state: 'needs-reconciliation', after: null })
+    // Each stays protected until its read-only 核对.
+    expect(await removeMany(service, 'app', ['1001'])).toEqual({ ok: false, reason: 'busy' })
+  })
+
+  it('still reads nothing back when the rate-limited report itself cannot be saved', async () => {
+    const { service, store, create, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    remote.app.set(UUID_A, new Set(['1001', '1002', '1003']))
+    await scan(service, 'app')
+    remote.requests.length = 0
+    remote.behavior.onWrite = async () => { remote.behavior.writeFailure = 'rate-limit' }
+    let saves = 0
+    // Intent 1, report 1, intent 2 save; the rate-limited report 2 does not.
+    const interrupted: AppStore = { ...store, async saveSubscriptionOperation(operation) {
+      if (++saves === 4) throw new Error('report disk failure')
+      await store.saveSubscriptionOperation(operation)
+    } }
+    const result = unwrap(await removeMany(create(interrupted), 'app', ['1001', '1002', '1003']))
+    expect(result).toMatchObject({ stopReason: 'rate-limited', items: [{ outcome: 'unknown' }, { outcome: 'unknown' }, { outcome: 'skipped' }] })
+    expect(remote.requests.map((request) => request.tid)).toEqual(['1001', '1002'])
+    expect(reads(remote.requests)).toEqual([])
+  })
+
+  it('sends nothing after a stop and confirms what was already sent from the shared readback', async () => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    remote.app.set(UUID_A, new Set(['1001', '1002', '1003']))
+    await scan(service, 'app')
+    remote.requests.length = 0
+    const controller = new AbortController()
+    remote.behavior.onWrite = async () => { controller.abort() }
+    const result = unwrap(await removeMany(service, 'app', ['1001', '1002', '1003'], controller.signal))
+    expect(result).toMatchObject({ stopReason: 'cancelled', items: [{ outcome: 'confirmed' }, { outcome: 'skipped' }, { outcome: 'skipped' }] })
+    expect(writes(remote.requests)).toHaveLength(1)
+    expect(reads(remote.requests).map((request) => request.page)).toEqual([1, 2, 3])
+    expect(await service.getOperations()).toMatchObject([{ threadId: '1001', verification: 'absent-supported', state: 'settled' }])
+  })
+
+  it('refuses the whole batch without a request for an unresolved thread or another generation, and shares the write lock', async () => {
+    const { service, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    await scan(service, 'app')
+    remote.behavior.ignoreWrites = true
+    expect(unwrap(await change(service, 'app', '1001', 'remove'))).toMatchObject({ state: 'needs-reconciliation' })
+    remote.behavior.ignoreWrites = false
+    const before = remote.requests.length
+    expect(await removeMany(service, 'app', ['1002', '1001'])).toEqual({ ok: false, reason: 'busy' })
+    const generation = (await service.getOverview()).context.generation
+    expect(await removeMany(service, 'app', ['1002'], signal(), generation + 1)).toEqual({ ok: false, reason: 'stale' })
+    expect(remote.requests).toHaveLength(before)
+
+    const preview = await syncPreview(service)
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    remote.behavior.onWrite = async () => { entered.resolve(); await release.promise }
+    const running = removeMany(service, 'app', ['1002'])
+    await entered.promise
+    expect(await change(service, 'app', '9001', 'add')).toEqual({ ok: false, reason: 'busy' })
+    expect(await removeMany(service, 'web', ['3001'])).toEqual({ ok: false, reason: 'busy' })
+    expect(await service.executePlan({ previewId: preview.id, choices: defaults(preview), operationId: 'execute' }, signal())).toEqual({ ok: false, reason: 'busy' })
+    release.resolve()
+    expect(unwrap(await running).items).toMatchObject([{ threadId: '1002', outcome: 'confirmed' }])
+    expect(writes(remote.requests).map((request) => request.tid)).toEqual(['1001', '1002'])
+  })
+
+  it('sends nothing without a durable intent; an unsaved report leaves an intent that restart turns into 核对, never a resend', async () => {
+    const { service, store, create, db, file, remote } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    await scan(service, 'app')
+    remote.requests.length = 0
+    let saves = 0
+    const interrupted: AppStore = { ...store, async saveSubscriptionOperation(operation) {
+      saves++
+      if (saves === 1) throw new Error('intent disk failure')
+      await store.saveSubscriptionOperation(operation)
+    } }
+    expect(await removeMany(create(interrupted), 'app', ['1001', '1002'])).toEqual({ ok: false, reason: 'storage' })
+    expect(remote.requests).toEqual([])
+    expect(await service.getOperations()).toEqual([])
+
+    // The intent is saved, the request goes out, and from then on nothing saves.
+    saves = 0
+    interrupted.saveSubscriptionOperation = async (operation) => {
+      if (++saves > 1) throw new Error('report disk failure')
+      await store.saveSubscriptionOperation(operation)
+    }
+    const result = unwrap(await removeMany(create(interrupted), 'app', ['1001', '1002']))
+    expect(result).toMatchObject({ stopReason: 'result-storage', items: [{ outcome: 'unknown', operationId: expect.any(String) }, { outcome: 'skipped' }] })
+    expect(writes(remote.requests).map((request) => request.tid)).toEqual(['1001'])
+    expect(remote.app.get(UUID_A)!.has('1001')).toBe(false)
+    expect(db.loadSubscriptionOperations()).toMatchObject([{ threadId: '1001', state: 'pending', report: 'pending', after: null }])
+    db.close(); databases.delete(db)
+    const restarted = create(asStore(open(file)))
+    const count = remote.requests.length
+    await restarted.recover()
+    expect(remote.requests).toHaveLength(count)
+    const [orphan] = await restarted.getOperations()
+    expect(orphan).toMatchObject({ threadId: '1001', state: 'needs-reconciliation', report: 'unknown' })
+    expect(await removeMany(restarted, 'app', ['1001'])).toEqual({ ok: false, reason: 'busy' })
+    const checked = unwrap(await restarted.reconcile({ id: orphan!.id, operationId: 'check' }, signal()))
+    expect(checked).toMatchObject({ verification: 'absent-unproven' })
+    expect(writes(remote.requests)).toHaveLength(1)
+  })
+
+  it('leaves each removal as its own journal entry, which a later sync preview reads as removed here', async () => {
+    const { service, remote, setTime } = await setup()
+    unwrap(await service.configureApp({ uuid: UUID_A }))
+    await executePreview(service, await syncPreview(service))
+    setTime('2026-10-23T13:00:00.000Z')
+    expect(unwrap(await removeMany(service, 'app', ['3001', '1002'])).items.map((item) => item.outcome)).toEqual(['confirmed', 'confirmed'])
+    expect(await service.getPlans()).toHaveLength(1)
+    setTime('2026-10-23T14:00:00.000Z')
+    const preview = await syncPreview(service)
+    const removedHere = (threadId: string) => ({ threadId, presentOn: 'web', baseline: true, provenance: { kind: 'local-removal', at: '2026-10-23T13:00:00.000Z' },
+      choices: ['both', 'none', 'skip'], defaultChoice: 'skip' })
+    expect(differences(preview)).toEqual([removedHere('3001'), removedHere('1002')])
   })
 })

@@ -36,7 +36,8 @@ const FIELD_LABELS: Record<string, string> = {
   listWidth: '列表宽度',
   customKaomoji: '自定义颜文字',
   recentKaomoji: '最近使用的颜文字',
-  defaultSubscriptionSource: '串工具栏默认订阅到'
+  defaultSubscriptionSource: '串工具栏默认订阅到',
+  subscriptionArrangement: '订阅排列'
 }
 
 /** Field path relative to the theme / reading object (`customTheme.colors.text` → `colors.text`). */

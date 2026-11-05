@@ -1,6 +1,6 @@
 // Global preferences: one source of validation for IPC updates, stored rows and theme imports.
 import { CLOSE_ACTIONS, type CloseAction } from './lifecycle'
-import type { SubscriptionSource } from './subscriptions'
+import type { SubscriptionArrangement, SubscriptionSource } from './subscriptions'
 import { UPDATE_NETWORKS, type UpdateNetwork } from './updates'
 import { SEARCH_CHANNELS, type SearchChannel } from './online-search'
 import {
@@ -127,6 +127,12 @@ export interface AppSettings {
    * a write to the other source is chosen per press and never changes this.
    */
   defaultSubscriptionSource: SubscriptionSource
+  /**
+   * Display order of the subscription list on the side that is not the chosen one: `app`/`web` arrange
+   * it by that side's last complete local snapshot; `remote` shows each side as the forum lists it.
+   * Display only: never reads or writes a remote list.
+   */
+  subscriptionArrangement: SubscriptionArrangement
   /** Default for a newly opened online search; never changes the initial local side. */
   onlineSearchChannel: SearchChannel
 }
@@ -154,6 +160,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   updateAutoDownload: false,
   updateNetwork: 'system',
   defaultSubscriptionSource: 'app',
+  subscriptionArrangement: 'app',
   onlineSearchChannel: 'xds'
 }
 
@@ -180,6 +187,7 @@ export const SETTING_KEYS = [
   'updateAutoDownload',
   'updateNetwork',
   'defaultSubscriptionSource',
+  'subscriptionArrangement',
   'onlineSearchChannel'
 ] as const satisfies readonly (keyof AppSettings)[]
 
@@ -326,6 +334,7 @@ const COLOR_SCHEMES: readonly ColorScheme[] = ['system', 'light', 'dark']
 const DENSITIES: readonly Density[] = ['comfortable', 'compact']
 const MOTIONS: readonly MotionPreference[] = ['system', 'reduce']
 const SUBSCRIPTION_SOURCES: readonly SubscriptionSource[] = ['app', 'web']
+const SUBSCRIPTION_ARRANGEMENTS: readonly SubscriptionArrangement[] = ['remote', 'app', 'web']
 
 function choice<T extends string>(value: unknown, values: readonly T[], field: string): Parsed<T> {
   if (typeof value !== 'string') return { ok: false, issues: [{ kind: 'field', field, problem: 'type' }] }
@@ -398,6 +407,9 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
       break
     case 'defaultSubscriptionSource':
       parsed = choice(value, SUBSCRIPTION_SOURCES, key)
+      break
+    case 'subscriptionArrangement':
+      parsed = choice(value, SUBSCRIPTION_ARRANGEMENTS, key)
       break
     case 'onlineSearchChannel':
       parsed = choice(value, SEARCH_CHANNELS, key)

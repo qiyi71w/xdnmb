@@ -323,6 +323,14 @@
   flex: none;
 }
 
+/* The list is shown in the other side's order (or waits for it): quiet text, not a control. */
+.sub-arrangement {
+  margin: 0;
+  padding: 2px 0;
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
 .list-status .notice-inline {
   margin: 6px 4px;
 }
@@ -580,6 +588,61 @@
 
 :root[data-density='compact'] .sub-diff-end {
   padding: 0 10px 6px;
+}
+
+/* ---------- 选择多个 ---------- */
+
+/* The row button is the row's checkbox: a box before the text, the text where it always is. */
+.row-open.has-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: start;
+}
+
+.row-check {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1.5px var(--ink-2);
+  color: var(--on-accent);
+}
+
+.row-check.is-checked {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.row-open.has-check[aria-disabled='true'] {
+  cursor: default;
+}
+
+.row-open.has-check[aria-disabled='true'] .row-check {
+  opacity: 0.45;
+}
+
+/* The spinner of 停止后续取消. */
+.sub-select-bar .btn {
+  gap: 6px;
+}
+
+/* A list shorter than the pane still has the bar at its foot; a longer one keeps it stuck there. */
+.list-scroll.is-selecting:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+}
+
+.list-scroll.is-selecting > .sub-select-bar {
+  margin-top: auto;
+}
+
+.sub-remove-dialog {
+  width: min(420px, calc(100vw - 32px));
 }
 
 /* ---------- Plan items and history ---------- */

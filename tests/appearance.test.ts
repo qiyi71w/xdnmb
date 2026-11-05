@@ -364,6 +364,23 @@ describe('settings', () => {
     expect(open(path).loadSettings()).toEqual({ ...DEFAULT_SETTINGS, defaultSubscriptionSource: 'web' })
   })
 
+  it('keeps the subscription arrangement across a restart; refused or stored-invalid values and older settings use App', async () => {
+    expect(DEFAULT_SETTINGS.subscriptionArrangement).toBe('app')
+    expect(applySettingsPatch(DEFAULT_SETTINGS, { subscriptionArrangement: 'both', density: 'compact' })).toMatchObject({
+      ok: false, issues: [{ field: 'subscriptionArrangement', problem: 'range' }]
+    })
+    expect(settingsFromStored(new Map<string, unknown>([['subscriptionArrangement', 'newest'], ['density', 'compact']]))).toEqual({
+      ...DEFAULT_SETTINGS, density: 'compact'
+    })
+    expect(settingsFromStored(new Map<string, unknown>([['defaultSubscriptionSource', 'web']]))).toEqual({ ...DEFAULT_SETTINGS, defaultSubscriptionSource: 'web' })
+    const path = join(folder(), 'settings.sqlite')
+    const first = open(path)
+    expect(await createSettingsService(storeOf(first)).update({ subscriptionArrangement: 'remote' })).toMatchObject({ saved: true, issues: [] })
+    first.close()
+    databases.splice(databases.indexOf(first), 1)
+    expect(open(path).loadSettings()).toEqual({ ...DEFAULT_SETTINGS, subscriptionArrangement: 'remote' })
+  })
+
   it('defaults old and new settings to XDS and persists an explicit nmb-search preference without changing other settings', async () => {
     expect(settingsFromStored(new Map()).onlineSearchChannel).toBe('xds')
     expect(settingsFromStored(new Map([['onlineSearchChannel', 'unknown']])).onlineSearchChannel).toBe('xds')

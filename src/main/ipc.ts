@@ -25,7 +25,7 @@ import { themeFileName, type SettingsService } from './appearance'
 import type { ReadingService } from './reading/service'
 import type { AppStore } from './storage/contract'
 import { emptyReadingState } from './storage/reading-state'
-import type { SubscriptionItemChoice, SubscriptionSource } from '../shared/subscriptions'
+import { MAX_BULK_REMOVAL, type SubscriptionItemChoice, type SubscriptionSource } from '../shared/subscriptions'
 import type { SubscriptionService } from './subscriptions/service'
 import type { PublicationService } from './publication/service'
 import type { Lifecycle } from './lifecycle/controller'
@@ -850,6 +850,22 @@ export function registerIpc({
     }
     // The service does not pass this cancellation signal to its explicit write request.
     const result = await subscriptionReads.run(event.sender, request.operationId, (signal) => subscriptions.change(request, signal))
+    enforceQuota()
+    return result
+  })
+
+  handle(IpcChannel.subscriptionRemoveMany, async (event, raw) => {
+    const input = record(raw)
+    const { threadIds, expectedGeneration } = input
+    if (typeof expectedGeneration !== 'number' || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) {
+      throw new InvalidRequestError()
+    }
+    if (!Array.isArray(threadIds) || threadIds.length === 0 || threadIds.length > MAX_BULK_REMOVAL) throw new InvalidRequestError()
+    const ids = threadIds.map(forumId)
+    if (new Set(ids).size !== ids.length) throw new InvalidRequestError()
+    const request = { source: subscriptionSource(input.source), threadIds: ids, expectedGeneration, operationId: operationId(input) }
+    // The signal is the stop between items; the service never passes it to a request it has sent.
+    const result = await subscriptionReads.run(event.sender, request.operationId, (signal) => subscriptions.removeMany(request, signal))
     enforceQuota()
     return result
   })
