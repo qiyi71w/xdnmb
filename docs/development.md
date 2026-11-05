@@ -26,7 +26,7 @@ npm run analytics -- serve  # 本机运行使用统计服务（配置见 docs/an
 
 GitHub Actions 有四个工作流。`.github/workflows/ci.yml` 的 `check` 在 Ubuntu 上依次运行类型检查、测试和生产构建，每个 PR（包括只改文档的）及推送到 `main` 时都会运行；`main` 受规则保护：只能经 PR 合并、保持线性历史、禁止强推和删除，`check` 通过才能合并，管理员也不例外。两个打包工作流在 PR、推送到 `main` 及手动触发时运行；只改 `README.md` 或 `docs/` 时跳过，它们的结果显示在 PR 上，但不是合并的必要条件。Dependabot 每月检查一次 Action 版本；npm 依赖仍手工升级。
 
-`.github/workflows/release.yml` 在推送 `v*` tag 时运行：先确认 tag 等于 `v` 加 `package.json` 的版本号，再调用两个打包工作流，对 tag 指向的提交完整构建和检查两个平台的安装包，全部通过后把三个安装包与 `latest.yml`、`latest-mac.yml` 上传到同名的草稿 Release。草稿对客户端的更新检查不可见；填写说明并正式发布仍由维护者手动完成。已正式发布的 Release 不会被重新上传覆盖；重跑时，同名草稿中的文件会被替换。
+`.github/workflows/release.yml` 在推送 `v*` tag 时运行：先确认 `package.json` 的版本号是稳定的 `major.minor.patch`（客户端不接受预发布版本），且 tag 等于 `v` 加该版本号；再调用两个打包工作流，对 tag 指向的提交完整构建和检查两个平台的安装包，全部通过后把三个安装包与 `latest.yml`、`latest-mac.yml` 上传到同名的草稿 Release。草稿对客户端的更新检查不可见；填写说明并正式发布仍由维护者手动完成。已正式发布的 Release 不会被重新上传覆盖；重跑时，同名草稿中的文件会被替换；上传前若 tag 已改指其他提交，这次运行不上传。重跑失败的打包作业时，新产物替换上一次尝试留下的同名产物。
 
 `.github/workflows/macos-packages.yml` 在 GitHub 的 Apple Silicon macOS 机器上运行类型检查和测试，构建两种架构的 DMG，再用 `scripts/ci/mac-update-smoke.mjs` 检查：两个应用的 CPU 架构与 SQLite 原生模块、应用身份、图标、临时签名、`latest-mac.yml` 中的 SHA-512；Intel 版在 Rosetta 下能启动并读写数据；Apple Silicon 版安装后，用只在更新网络会话内应答的受控发布源走完缺少元数据时检查失败（不显示为已是最新）、发现新版、校验失败丢弃、自动下载、打开 DMG、退出、按用户方式替换应用、下次启动显示新版本并保留设置。每次启动后先像用户一样处理启动提示：使用统计首次询问按 Esc 保持关闭（不连接统计服务），当前公告标为“不再提示”，之后的检查不会被这些对话框遮挡。结果不依赖仓库实际发布了哪些 Release。DMG、检查记录和应用输出作为工作流产物保留 14 天；只有经 `release.yml` 调用时，DMG 才会进入草稿 Release。这些是自动化检查，不包括 Gatekeeper 首次打开提示与钥匙串授权等需要真人操作的环节。
 

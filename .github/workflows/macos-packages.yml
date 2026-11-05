@@ -70,4 +70,6 @@ jobs:
             dist/latest-mac.yml
             mac-smoke/
           if-no-files-found: warn
+          # A re-run of a failed job replaces the artifact its earlier attempt uploaded.
+          overwrite: true
           retention-days: 14
