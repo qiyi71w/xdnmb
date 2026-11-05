@@ -728,7 +728,7 @@ export function App() {
         readThreadEnd: async (threadId) => {
           await window.xidao.reading.locateThreadEnd({ operationId: operationId(), threadId, mode: 'all', purpose: 'display' })
         },
-        // Like a located quote: a new step of the tab; back returns to where the send started.
+        // A new plain step of the tab (back reads 后退): back returns to where the send started.
         openLocated: (step, location) => {
           const tab = stateRef.current.tabs?.tabs.find((item) => item.id === step.tabId)
           if (tab === undefined) return
@@ -743,7 +743,7 @@ export function App() {
           const target = { postId: location.target.postId, page: location.target.page, mode: location.target.mode }
           const readerKey = entry.kind === 'online-search' ? entry.key : (entry.thread?.readerKey ?? entry.key)
           const thread: ThreadOpen = { threadId: location.threadId, head: location.head, target, snapshot: null, unlocatedPostId: null, readerKey }
-          dispatch({ type: 'quote-navigate', tabId: tab.id, entryKey: entry.key, source, thread })
+          dispatch({ type: 'send-navigate', tabId: tab.id, entryKey: entry.key, source, thread })
         },
         // A new step either way; the list was refreshed first, so it lists the new thread beside it
         // (split) and when back returns to it.

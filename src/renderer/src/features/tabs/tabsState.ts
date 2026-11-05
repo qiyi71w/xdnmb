@@ -194,6 +194,11 @@ export type TabsAction =
    * 返回搜索结果. Works from any entry, an empty new tab included.
    */
   | { type: 'search-navigate'; tabId: number; entryKey: number; source: ThreadSnapshot | null; thread: ThreadOpen }
+  /**
+   * The same for the jump to one's own reply after a send in the thread shown: a plain step (back
+   * reads 后退, not 返回引用处), since the send started in that thread rather than from a quote.
+   */
+  | { type: 'send-navigate'; tabId: number; entryKey: number; source: ThreadSnapshot | null; thread: ThreadOpen }
 
 function makeEntry(init: EntryInit, key: number, origin: EntryOrigin = null): TabEntry {
   switch (init.kind) {
@@ -420,7 +425,8 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         return replaceCurrent(tab, { ...current, thread } as TabEntry)
       })
     case 'quote-navigate':
-    case 'search-navigate': {
+    case 'search-navigate':
+    case 'send-navigate': {
       const tab = state.tabs.find((item) => item.id === action.tabId)
       if (tab === undefined) return state
       const current = currentEntry(tab)
@@ -430,7 +436,8 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         current.kind === 'list' && current.feed !== null && tab.split
           ? { kind: 'list', feed: current.feed, thread: action.thread }
           : { kind: 'thread', thread: action.thread }
-      return push(left, action.tabId, init, action.type === 'quote-navigate' ? 'quote' : 'local-search')
+      const origin = action.type === 'quote-navigate' ? 'quote' : action.type === 'search-navigate' ? 'local-search' : null
+      return push(left, action.tabId, init, origin)
     }
   }
 }
