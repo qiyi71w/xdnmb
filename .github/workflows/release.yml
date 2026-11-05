@@ -1,0 +1,82 @@
+# Release: a pushed v<version> tag builds and checks both platforms' packages with the same
+# workflows that run on pull requests, then uploads the checked installers and update metadata
+# to a draft GitHub Release. Publishing the draft, with its notes, stays a manual step.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      # The client accepts only stable major.minor.patch versions, v<version> tags and
+      # xidao-<version>-* asset names.
+      - name: Check the tag matches package.json
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::package.json version $version is not a stable major.minor.patch version"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+
+  windows:
+    needs: version
+    uses: ./.github/workflows/windows-packages.yml
+
+  macos:
+    needs: version
+    uses: ./.github/workflows/macos-packages.yml
+
+  draft:
+    needs: [windows, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: '*-packages-${{ github.sha }}'
+          merge-multiple: true
+
+      # A published Release is never modified; a draft left by an earlier attempt gets the new
+      # files. A run whose tag has since moved to another commit uploads nothing.
+      - name: Upload to the draft Release
+        run: |
+          tagged=$(git ls-remote "$GITHUB_SERVER_URL/$GH_REPO" "refs/tags/$GITHUB_REF_NAME" "refs/tags/$GITHUB_REF_NAME^{}" | awk 'END { print $1 }')
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME now points to ${tagged:-nothing}, not $GITHUB_SHA"
+            exit 1
+          fi
+          version=${GITHUB_REF_NAME#v}
+          files=(
+            "dist/xidao-$version-win-x64.exe" dist/latest.yml
+            "dist/xidao-$version-mac-x64.dmg" "dist/xidao-$version-mac-arm64.dmg" dist/latest-mac.yml
+          )
+          if draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::error::Release $GITHUB_REF_NAME is already published"
+              exit 1
+            fi
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" --draft --verify-tag --title "$GITHUB_REF_NAME" --notes ''
+          fi

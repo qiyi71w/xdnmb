@@ -1,15 +1,15 @@
 # macOS packages: builds the x64 and arm64 DMGs (DMGs need macOS) and checks them on an Apple
-# Silicon runner. Packages are kept as workflow artifacts only; no GitHub Release is created.
+# Silicon runner. Packages are kept as workflow artifacts; release.yml calls this workflow for a
+# v* tag and uploads the checked DMGs to a draft Release.
 name: macOS packages
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
-    # Tag pushes ignore path filters, so a release tag always builds.
     paths-ignore: [README.md, 'docs/**']
   pull_request:
     paths-ignore: [README.md, 'docs/**']
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -70,4 +70,6 @@ jobs:
             dist/latest-mac.yml
             mac-smoke/
           if-no-files-found: warn
+          # A re-run of a failed job replaces the artifact its earlier attempt uploaded.
+          overwrite: true
           retention-days: 14
