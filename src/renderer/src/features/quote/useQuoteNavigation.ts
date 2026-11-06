@@ -10,6 +10,7 @@ import { currentEntry, entryThread, newTabEntry, type Tab, type TabEntry, type T
 import { readResumePage } from '../thread/readingStart'
 import { findQuoteElement, quoteHostId, quoteKey, type QuoteController, type QuoteRefInfo } from './QuoteContext'
 import {
+  cardContext,
   initialQuoteState,
   isCurrentLocate,
   isCurrentPreview,
@@ -240,8 +241,13 @@ export function useQuoteNavigation(options: Options) {
       const { id: cardId } = card
       const seq = locate.seq
       markInternal(cardId, { locate: null })
-      const hint = card.source.hint
-      window.xidao.quotes.locate({ operationId: locateOperation(cardId), postId: card.source.postId, ...(hint === undefined ? {} : { hint }) }).then(
+      const { hint, context } = card.source
+      window.xidao.quotes.locate({
+        operationId: locateOperation(cardId),
+        postId: card.source.postId,
+        ...(hint === undefined ? {} : { hint }),
+        ...(context === undefined ? {} : { context })
+      }).then(
         (result) => onLocated(cardId, seq, result),
         () => {
           if (!isCurrentLocate(stateRef.current, cardId, seq)) return
@@ -261,6 +267,10 @@ export function useQuoteNavigation(options: Options) {
       if (shown === null) return null
       const before = stateRef.current.card
       if ('previewId' in info.host && info.host.previewId !== `${before?.id}:${before?.source.postId}`) return null
+      // A quote in a thread reader's post sits in that thread; one in a card's post, in that post's known thread.
+      const context = info.origin === undefined
+        ? 'postId' in info.host && shownThread !== null ? { threadId: shownThread.threadId, fromPostId: info.host.postId } : null
+        : before === null ? null : cardContext(before)
       const source: QuoteSource = {
         tabId: shown.tab.id,
         entryKey: info.entryKey,
@@ -268,6 +278,7 @@ export function useQuoteNavigation(options: Options) {
         focus: info.origin ?? { ...info.host, quoteIndex: info.quoteIndex },
         reference: info.origin === undefined ? undefined : { ...info.host, quoteIndex: info.quoteIndex },
         ...(info.hint === undefined ? {} : { hint: info.hint }),
+        ...(context === null ? {} : { context }),
         // A reference inside a selected number's card keeps that card's place and focus return.
         ...(info.origin !== undefined && 'selectionId' in info.origin && before?.source.selection !== undefined ? { selection: before.source.selection } : {})
       }
@@ -416,6 +427,8 @@ export function useQuoteNavigation(options: Options) {
         // A number selected inside a card's post: the new card replaces that card, whose text (and so
         // the range) goes away. Like a quote followed inside a card, it keeps the original trigger —
         // the quote, or the outer selection with its live range and return focus — for place and focus.
+        const outerContext = outer === null ? null : cardContext(outer)
+        const shownThread = entryThread(shown.entry)
         const source: QuoteSource =
           outer !== null
           ? {
@@ -424,20 +437,22 @@ export function useQuoteNavigation(options: Options) {
               postId: selected.postId,
               focus: outer.source.focus,
               reference,
-              ...(outer.source.selection === undefined ? {} : { selection: outer.source.selection })
+              ...(outer.source.selection === undefined ? {} : { selection: outer.source.selection }),
+              ...(outerContext === null ? {} : { context: outerContext })
             }
           : {
               tabId: shown.tab.id,
               entryKey: selected.entryKey,
               postId: selected.postId,
               focus: reference,
-              selection: { range: selected.range, returnFocus: selected.returnFocus }
+              selection: { range: selected.range, returnFocus: selected.returnFocus },
+              ...(selected.hostPostId === undefined || shownThread === null ? {} : { context: { threadId: shownThread.threadId, fromPostId: selected.hostPostId } })
             }
         if (outer !== null && cardRef.current?.contains(document.activeElement)) focusTrigger(source)
         // An explicit menu choice: pinned like a click, replacing any card.
         const card = apply({ type: 'open', source, trigger: 'activate' }).card
         if (card === null || card.source !== source) return
-        threadOf.current.set(card.id, entryThread(shown.entry)?.threadId ?? null)
+        threadOf.current.set(card.id, shownThread?.threadId ?? null)
         runPreview(card)
         if (action !== 'preview') startLocate(card.id, action)
       }

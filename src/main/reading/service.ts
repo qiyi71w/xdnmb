@@ -1,5 +1,5 @@
-import type { DirectoryStrategy, LocateHint, QuoteLocation, QuotePreview, ReadError, ReadOutcome, ThreadEndResult, ThreadPageResult, ThreadReadPurpose } from '../../shared/api'
-import type { BoardDirectory, CoveragePage, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from '../../shared/forum'
+import type { DirectoryStrategy, LocateContext, LocateHint, QuoteLocation, QuotePreview, ReadError, ReadOutcome, ThreadEndResult, ThreadPageResult, ThreadReadPurpose } from '../../shared/api'
+import { comparePostIds, type BoardDirectory, type CoveragePage, type FeedPage, type FeedRef, type Post, type PostId, type ReadingMode, type ThreadCoverage, type ThreadId, type ThreadPage } from '../../shared/forum'
 import { threadTotalPages } from '../../shared/threadPages'
 import { ForumReadError, ReadCancelledError, type ForumClient } from '../forum/contract'
 import type { ReadingStore, Stored } from '../storage/contract'
@@ -9,6 +9,9 @@ import type { Lane, RequestScheduler } from './scheduler'
 /** With no ReplyCount, look at at most two more pages from page 1. */
 const MAX_PROBE_STEPS = 2
 
+/** Replies per full-listing page; a stored page with fewer may have grown since it was read. */
+const PAGE_SIZE = 19
+
 export interface ReadingService {
   loadDirectory(strategy: DirectoryStrategy, signal: AbortSignal): Promise<ReadOutcome<BoardDirectory>>
   readFeedPage(feed: FeedRef, page: number, signal: AbortSignal): Promise<ReadOutcome<FeedPage>>
@@ -16,8 +19,11 @@ export interface ReadingService {
   readThreadPage(threadId: ThreadId, mode: ReadingMode, page: number, signal: AbortSignal, purpose: ThreadReadPurpose): Promise<ReadOutcome<ThreadPageResult>>
   locateThreadEnd(threadId: ThreadId, mode: ReadingMode, signal: AbortSignal, purpose: ThreadReadPurpose): Promise<ReadOutcome<ThreadEndResult>>
   previewQuote(postId: PostId, signal: AbortSignal): Promise<ReadOutcome<QuotePreview>>
-  /** `hint`: a search result link's thread and page, read once only when local records do not locate the post. */
-  locateQuote(postId: PostId, signal: AbortSignal, hint?: LocateHint | null): Promise<QuoteLocation>
+  /**
+   * `hint`: a search result link's thread and page, read once only when local records do not locate the post.
+   * `context`: the thread and post holding an explicitly followed quote, searched last (see QuoteLocation).
+   */
+  locateQuote(postId: PostId, signal: AbortSignal, hint?: LocateHint | null, context?: LocateContext | null): Promise<QuoteLocation>
 }
 
 /**
@@ -201,6 +207,105 @@ export function createReadingService({ client, store, scheduler, now = () => new
     }
   }
 
+  /**
+   * Without any local record the only verifiable owner is the post itself as a main post: its own
+   * thread's first page must come back with it as the head.
+   */
+  async function locateAsHead(postId: PostId, signal: AbortSignal): Promise<QuoteLocation> {
+    const outcome = await readThreadPage(postId, 'all', 1, signal, 'lookup')
+    if (outcome.status === 'cancelled') return outcome
+    if (outcome.status === 'failed') {
+      return outcome.error.kind === 'not-found' ? { status: 'unknown-thread' } : { status: 'failed', threadId: null, error: outcome.error }
+    }
+    return {
+      status: 'located',
+      threadId: postId,
+      head: outcome.data.page.head,
+      target: { postId, page: 1, mode: 'all' },
+      source: outcome.status,
+      networkError: outcome.status === 'cached' ? outcome.networkError : null
+    }
+  }
+
+  /**
+   * Finds a reply in the thread holding the quote by number. Reply numbers grow with the page, and a
+   * quote names an earlier post, so the candidates are the full-listing pages up to the one holding
+   * `fromPostId` (or the count-based last page when that is not stored). Stored pages narrow them
+   * without a request; then the page just before the quote's is read first (quotes mostly answer what
+   * was just said) and the rest is halved by comparing numbers. A gap between pages, a page whose
+   * numbers span the post without it, or pages above the cookie-less page cap end as unknown.
+   */
+  async function searchThread(postId: PostId, { threadId, fromPostId }: LocateContext, signal: AbortSignal): Promise<QuoteLocation> {
+    const unknown: QuoteLocation = { status: 'unknown-thread' }
+    const stored = await store.getThreadCoverage(threadId, 'all').catch(() => null)
+    const from = fromPostId === threadId ? null : await store.findPostThread(fromPostId).catch(() => null)
+    let lo = 1
+    let hi: number | null = fromPostId === threadId ? 1 : from?.threadId === threadId ? from.pages.all : null
+    hi ??= threadTotalPages(stored?.reportedReplyCount ?? null)
+
+    /** Narrows [lo, hi] by one observed page; true when its numbers span the post without containing it. */
+    const narrow = (page: number, replyIds: readonly PostId[], current: boolean): boolean => {
+      const [first, ...rest] = replyIds
+      if (first === undefined) {
+        // Only a page read now proves the thread ends before it; a stored empty page may have filled since.
+        if (current) hi = Math.min(hi ?? page - 1, page - 1)
+        return false
+      }
+      let min = first
+      let max = first
+      for (const id of rest) {
+        if (comparePostIds(id, min) < 0) min = id
+        if (comparePostIds(id, max) > 0) max = id
+      }
+      if (comparePostIds(postId, min) < 0) hi = Math.min(hi ?? page - 1, page - 1)
+      else if (comparePostIds(postId, max) > 0) lo = Math.max(lo, current || replyIds.length >= PAGE_SIZE ? page + 1 : page)
+      else return !replyIds.includes(postId)
+      return false
+    }
+
+    for (const observed of stored?.pages ?? []) {
+      if (narrow(observed.page, observed.replyIds, false)) return unknown
+    }
+    let neighbour = true
+    while (hi === null || lo <= hi) {
+      const requested: number = hi === null ? lo : neighbour ? hi : Math.floor((lo + hi) / 2)
+      neighbour = false
+      const outcome = await readThreadPage(threadId, 'all', requested, signal, 'lookup')
+      if (outcome.status === 'cancelled') return outcome
+      let shown: ThreadPage
+      if (outcome.status === 'failed') {
+        const { error } = outcome
+        if (error.kind !== 'page-cap') return { status: 'failed', threadId, error }
+        // A repeated lower page is never the requested one: nothing above the readable page can be read.
+        const cap = Math.min(error.highestReadablePage ?? requested - 1, requested - 1)
+        hi = Math.min(hi ?? cap, cap)
+        const readable = error.readablePage?.data.page
+        if (readable === undefined) continue
+        shown = readable
+      } else {
+        shown = outcome.data.page
+      }
+      if (shown.replies.some((reply) => reply.id === postId)) {
+        return {
+          status: 'located',
+          threadId,
+          head: shown.head,
+          target: { postId, page: shown.page, mode: 'all' },
+          source: outcome.status === 'cached' ? 'cached' : 'fresh',
+          networkError: outcome.status === 'cached' ? outcome.networkError : null
+        }
+      }
+      // A stored copy after a network failure says nothing new about where the post is.
+      if (outcome.status === 'cached' && outcome.networkError !== null) return { status: 'failed', threadId, error: outcome.networkError }
+      const total = threadTotalPages(shown.replyCount)
+      if (total !== null) hi = Math.min(hi ?? total, total)
+      if (narrow(shown.page, shown.replies.map((reply) => reply.id), true)) return unknown
+      // Without any count the pages cannot be bounded, and reading on would be a scan.
+      if (hi === null) return unknown
+    }
+    return unknown
+  }
+
   return {
     async loadDirectory(strategy, signal) {
       if (strategy === 'cache-first') {
@@ -241,30 +346,20 @@ export function createReadingService({ client, store, scheduler, now = () => new
       return { ...outcome, data: { post: outcome.data, threadId: await ownerOf(postId) } }
     },
 
-    async locateQuote(postId, signal, hint = null) {
+    async locateQuote(postId, signal, hint = null, context = null) {
       const relation = await store.findPostThread(postId).catch(() => null)
-      // Local records win over a link that names another thread.
+      // Local records win over a link that names another thread; the link wins over the quote's thread.
       const usableHint = hint !== null && (relation === null || relation.threadId === hint.threadId) ? hint : null
       if (relation === null) {
         if (usableHint !== null) {
           const hinted = await readHinted(postId, usableHint, signal)
           return hinted.kind === 'outcome' ? hinted.outcome : { status: 'thread-known', threadId: usableHint.threadId, head: hinted.head }
         }
-        // Without any local record the only verifiable owner is the post itself as a main post:
-        // its own thread's first page must come back with it as the head.
-        const outcome = await readThreadPage(postId, 'all', 1, signal, 'lookup')
-        if (outcome.status === 'cancelled') return outcome
-        if (outcome.status === 'failed') {
-          return outcome.error.kind === 'not-found' ? { status: 'unknown-thread' } : { status: 'failed', threadId: null, error: outcome.error }
-        }
-        return {
-          status: 'located',
-          threadId: postId,
-          head: outcome.data.page.head,
-          target: { postId, page: 1, mode: 'all' },
-          source: outcome.status,
-          networkError: outcome.status === 'cached' ? outcome.networkError : null
-        }
+        // One request settles a main post (of any thread) before the quote's own thread is searched;
+        // a number below that thread's main post cannot be one of its replies.
+        const asHead = await locateAsHead(postId, signal)
+        if (context === null || asHead.status !== 'unknown-thread' || comparePostIds(postId, context.threadId) <= 0) return asHead
+        return searchThread(postId, context, signal)
       }
 
       const { threadId, preferredMode } = relation

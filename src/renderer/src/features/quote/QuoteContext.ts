@@ -44,6 +44,8 @@ export interface SelectedNumber {
   range: Range
   /** Where focus goes back when the card closes (the post or row whose menu offered the action). */
   returnFocus: HTMLElement | null
+  /** Thread reader post whose body holds the selection; unset in other content. */
+  hostPostId?: PostId
 }
 
 /** What a quote reference can ask of the app-level quote controller. */

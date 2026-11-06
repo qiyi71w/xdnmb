@@ -1,4 +1,4 @@
-import type { LocateHint, QuoteLocation, QuotePreview, ReadError, ReadOutcome } from '../../../../shared/api'
+import type { LocateContext, LocateHint, QuoteLocation, QuotePreview, ReadError, ReadOutcome } from '../../../../shared/api'
 import type { PostId } from '../../../../shared/forum'
 import { quoteHostId, type QuoteAnchor } from './QuoteContext'
 
@@ -41,6 +41,12 @@ export interface QuoteSource {
   reference?: QuoteAnchor
   /** Verified forum link clue of the reference, passed to every locate of this card. */
   hint?: LocateHint
+  /**
+   * Thread and post holding the reference: a thread reader's post, or a quote card's post whose owner
+   * is known. Passed to every locate of this card, so a click or 重试 may search that thread; a
+   * preview never locates.
+   */
+  context?: LocateContext
   /** Set for a selected number (no element): where the card sits and where focus goes back. */
   selection?: { range: Range; returnFocus: HTMLElement | null }
 }
@@ -141,6 +147,13 @@ function unavailable(error: ReadError): boolean {
 export function isCurrentPreview(state: QuoteState, cardId: number, seq: number): boolean {
   const preview = current(state, cardId)?.preview ?? null
   return preview !== null && preview.seq === seq && preview.outcome === null
+}
+
+/** Thread and post of a card's previewed post when its owner is known: the context of quotes inside it. */
+export function cardContext(card: QuoteCard): LocateContext | null {
+  const outcome = card.preview.outcome
+  const threadId = outcome?.status === 'fresh' || outcome?.status === 'cached' ? outcome.data.threadId : null
+  return threadId === null ? null : { threadId, fromPostId: card.source.postId }
 }
 
 export function quoteReducer(state: QuoteState, action: QuoteAction): QuoteState {

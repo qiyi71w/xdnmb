@@ -9,19 +9,21 @@ import { selectedPostNumber } from './selectionNumber'
 /**
  * 预览／打开／在新标签页打开 No.x for a selected whole post number: every one goes through the quote
  * card (`QuoteController.selection`), so nothing opens before it is located and a failure stays on
- * the card. Shared by the post menu and the bodies without a menu of their own.
+ * the card. Shared by the post menu and the bodies without a menu of their own. `hostPostId`: the
+ * thread reader post holding the selection, so 打开 may search that thread.
  */
 export function numberActionItems(
   controller: QuoteController,
   entryKey: number,
   number: { postId: PostId; range: Range },
-  returnFocus: HTMLElement | null
+  returnFocus: HTMLElement | null,
+  hostPostId?: PostId
 ): ContextMenuItem[] {
   return (['preview', 'navigate', 'new-tab'] as const).map((action) => ({
     type: 'action' as const,
     key: `number-${action}`,
     label: `${action === 'preview' ? '预览' : action === 'navigate' ? '打开' : '在新标签页打开'} No.${number.postId}`,
-    onSelect: () => controller.selection({ entryKey, postId: number.postId, range: number.range, returnFocus }, action)
+    onSelect: () => controller.selection({ entryKey, postId: number.postId, range: number.range, returnFocus, ...(hostPostId === undefined ? {} : { hostPostId }) }, action)
   }))
 }
 
