@@ -3,21 +3,15 @@
 
 import type { PostId, ThreadId, TimelineId } from './forum'
 
-export const SEARCH_CHANNELS = ['xds', 'nmb-search'] as const
-export type SearchChannel = (typeof SEARCH_CHANNELS)[number]
-
-/** Fixed websites opened only by an explicit user action. */
-export const SEARCH_SITE_URLS: Readonly<Record<SearchChannel, string>> = {
-  xds: 'https://xds.wol.moe/',
-  'nmb-search': 'https://nmb-search.166666666.xyz/'
-}
+/** The search website (nmb-search), opened only by an explicit user action. */
+export const SEARCH_SITE_URL = 'https://nmb-search.166666666.xyz/'
 
 /** Longest accepted query, in UTF-16 code units after trimming. */
 export const MAX_SEARCH_QUERY_LENGTH = 200
 
 /**
- * Caller-generated ID of one search page; same format as OperationId. Each channel holds its own
- * current query chain and returned pages under this ID.
+ * Caller-generated ID of one search page; same format as OperationId. The page's current query
+ * chain and returned pages are held under this ID.
  */
 export type SearchSessionId = string
 
@@ -62,9 +56,9 @@ export interface SearchPage {
 /**
  * Why no further page can be requested in this chain:
  * - `end`: no further page was announced (not a claim the index is complete);
- * - `expired`: an nmb-search token was idle for 15 minutes and is not sent;
- * - `lost`: an nmb-search token was spent on a request whose result never arrived (failure,
- *   cancellation); it is never replayed. XDS numeric pages do not expire or become spent tokens.
+ * - `expired`: the next-page token was idle for 15 minutes and is not sent;
+ * - `lost`: the next-page token was spent on a request whose result never arrived (failure,
+ *   cancellation); it is never replayed.
  */
 export type SearchChainEnd = 'end' | 'expired' | 'lost'
 
@@ -98,13 +92,6 @@ export type SearchOutcome =
   | { status: 'unavailable'; next: SearchChainEnd }
   | { status: 'cancelled' }
   | { status: 'closed' }
-
-/** Third-party ownership is only a clue; the reader must verify any target before navigating. */
-export type ThreadOfOutcome =
-  | { status: 'found'; postId: PostId; threadId: ThreadId; kind: 'thread' | 'reply' }
-  | { status: 'not-indexed' }
-  | { status: 'failed'; error: SearchError }
-  | { status: 'cancelled' }
 
 const FORUM_HOSTS: Readonly<Record<string, true>> = { 'nmbxd1.com': true, 'www.nmbxd1.com': true, 'nmbxd.com': true, 'www.nmbxd.com': true }
 const DECIMAL_ID = /^[1-9]\d{0,19}$/

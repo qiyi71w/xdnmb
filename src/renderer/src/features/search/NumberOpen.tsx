@@ -1,7 +1,6 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react'
 import type { QuotePreview, ReadError, ReadOutcome } from '../../../../shared/api'
 import type { PostId } from '../../../../shared/forum'
-import { SEARCH_SITE_URLS } from '../../../../shared/online-search'
 import { Content } from '../../components/Content'
 import { CookieId } from '../../components/CookieId'
 import { Icon } from '../../components/Icon'
@@ -9,13 +8,9 @@ import { Loading, SourceNotice } from '../../components/Notices'
 import { describeReadError, meaningfulName } from '../../lib/format'
 import { formatForumTime } from '../../lib/time'
 import { QuoteControllerContext } from '../quote/QuoteContext'
-import { lookUpThread } from '../quote/threadLookup'
 import type { EntryInit } from '../tabs/tabsState'
 import { readResumePage } from '../thread/readingStart'
-import { canLookUp, initialNumberOpenState, isCurrentStep, isRunning, numberOpenReducer, type KnownThread, type NumberOpenAction, type NumberOpenState, type NumberStatus } from './numberOpenState'
-import { searchErrorLines } from './onlineSearchText'
-
-const XDS_HOST = new URL(SEARCH_SITE_URLS.xds).host
+import { initialNumberOpenState, isCurrentStep, isRunning, numberOpenReducer, type KnownThread, type NumberOpenAction, type NumberOpenState, type NumberStatus } from './numberOpenState'
 
 type Located = Extract<NonNullable<NumberStatus>, { kind: 'located' }>['location']
 
@@ -41,11 +36,11 @@ function readReason(error: ReadError): string {
 }
 
 /**
- * 按串号打开 on the 搜索 page, independent of 本机｜联网 and of the online channel: a whole number,
- * `No.`, `>>No.` or a verified forum thread link is located through the existing reader navigation.
- * Only a located target (or 打开原串 once its page arrived) commits a step of this tab, or a new active
- * tab with Ctrl/Cmd; failures, cancellation and results arriving while the page is out of sight leave
- * history and position as they were. An unknown owner offers the explicit, disclosed XDS lookup.
+ * 按串号打开 on the 搜索 page, independent of 本机｜联网: a whole number, `No.`, `>>No.` or a verified
+ * forum thread link is located through the existing reader navigation. Only a located target (or
+ * 打开原串 once its page arrived) commits a step of this tab, or a new active tab with Ctrl/Cmd;
+ * failures, cancellation and results arriving while the page is out of sight leave history and
+ * position as they were.
  */
 export function NumberOpen({
   entryKey,
@@ -155,26 +150,6 @@ export function NumberOpen({
     const before = stateRef.current
     const next = apply({ type: 'retry' })
     if (next.seq !== before.seq) runLocate(next)
-  }
-
-  const lookUp = () => {
-    keepFocus()
-    const before = stateRef.current
-    const next = apply({ type: 'lookup-start' })
-    const status = next.status
-    if (next.seq === before.seq || status?.kind !== 'looking-up') return
-    const { seq, target } = status
-    lookUpThread(operationId(seq), target.postId, () => isCurrentStep(stateRef.current, seq)).then(
-      (result) => {
-        if (!isCurrentStep(stateRef.current, seq)) return
-        if (result.status === 'located' && followLocated(result.location, target.newTab)) {
-          apply({ type: 'opened', seq })
-          return
-        }
-        apply({ type: 'lookup-done', seq, result })
-      },
-      () => apply({ type: 'internal', seq })
-    )
   }
 
   const openThread = (newTab: boolean) => {
@@ -290,7 +265,6 @@ export function NumberOpen({
               keepFocus()
             }}
             onRetry={retry}
-            onLookUp={lookUp}
             onOpenThread={(event) => openThread(isNewTab(event))}
             onOpenLocated={(location, event) => openLocated(location, isNewTab(event))}
             onPreview={showPreview}
@@ -308,7 +282,6 @@ function NumberStatusView({
   status,
   onCancel,
   onRetry,
-  onLookUp,
   onOpenThread,
   onOpenLocated,
   onPreview
@@ -316,7 +289,6 @@ function NumberStatusView({
   status: NumberStatus
   onCancel: () => void
   onRetry: () => void
-  onLookUp: () => void
   onOpenThread: (event: MouseEvent) => void
   onOpenLocated: (location: Located, event: MouseEvent) => void
   onPreview: (postId: PostId) => void
@@ -345,23 +317,12 @@ function NumberStatusView({
       打开原串 No.{known.threadId}
     </button>
   )
-  const lookUp = canLookUp(status) ? (
-    <button type="button" className="btn btn-small btn-page" onClick={onLookUp}>
-      <Icon name="search" size={14} />
-      {status.kind === 'unknown-thread' ? '向 XDS 查询所属串' : '重新向 XDS 查询'}
-    </button>
-  ) : null
-  const disclosure = <p className="online-search-status-detail">查询会把串号 {no} 发给第三方服务 XDS（{XDS_HOST}）</p>
 
   let body: ReactNode
   let actions: ReactNode = null
   switch (status.kind) {
     case 'locating':
       body = <Loading live={false}>正在定位 {no}…（Esc 取消）</Loading>
-      actions = cancel
-      break
-    case 'looking-up':
-      body = <Loading live={false}>正在向 XDS 查询 {no} 所属的串…（Esc 取消）</Loading>
       actions = cancel
       break
     case 'opening':
@@ -386,22 +347,7 @@ function NumberStatusView({
     case 'thread-known':
       body = (
         <Status tone="info">
-          <p className="online-search-status-title">
-            {status.known.via === 'xds' ? `XDS 显示 ${no} 属于串 No.${status.known.threadId}，但没有在该串中定位到它` : `已知原串 No.${status.known.threadId}，但没有在该串中定位到 ${no}`}
-          </p>
-        </Status>
-      )
-      actions = (
-        <>
-          {openThread(status.known)}
-          {preview}
-        </>
-      )
-      break
-    case 'unconfirmed':
-      body = (
-        <Status tone="info">
-          <p className="online-search-status-title">XDS 显示 {no} 属于串 No.{status.known.threadId}，但论坛没有确认</p>
+          <p className="online-search-status-title">已知原串 No.{status.known.threadId}，但没有在该串中定位到 {no}</p>
         </Status>
       )
       actions = (
@@ -415,45 +361,10 @@ function NumberStatusView({
       body = (
         <Status tone="info">
           <p className="online-search-status-title">本机记录无法确认 {no} 所属的串</p>
-          {disclosure}
-        </Status>
-      )
-      actions = (
-        <>
-          {lookUp}
-          {preview}
-        </>
-      )
-      break
-    case 'not-indexed':
-      body = (
-        <Status tone="info">
-          <p className="online-search-status-title">XDS 没有收录 {no}，无法得知它所属的串</p>
         </Status>
       )
       actions = preview
       break
-    case 'search-failed': {
-      const { reason, details } = searchErrorLines(status.error, 'XDS')
-      body = (
-        <Status tone="error">
-          <p className="online-search-status-title">查询 {no} 所属的串失败：{reason}</p>
-          {details.map((line) => (
-            <p key={line} className="online-search-status-detail">
-              {line}
-            </p>
-          ))}
-          {disclosure}
-        </Status>
-      )
-      actions = (
-        <>
-          {lookUp}
-          {preview}
-        </>
-      )
-      break
-    }
     case 'failed': {
       const { error } = status
       const title =
@@ -461,20 +372,15 @@ function NumberStatusView({
           ? `${no} 当前不可用，服务端返回不存在`
           : error.kind === 'permission'
             ? `当前身份无法访问 ${no}`
-            : status.via === 'xds' && status.threadId !== null
-              ? `XDS 显示 ${no} 属于串 No.${status.threadId}，读取该串失败`
-              : `定位 ${no} 失败`
+            : `定位 ${no} 失败`
       body = (
         <Status tone="error">
           <p className="online-search-status-title">{title}</p>
           {error.kind !== 'not-found' && error.kind !== 'permission' && <p className="online-search-status-detail">{readReason(error)}</p>}
-          {status.via === 'xds' && disclosure}
         </Status>
       )
       const retry =
-        status.via === 'xds' ? (
-          lookUp
-        ) : error.kind === 'not-found' || error.kind === 'permission' ? null : (
+        error.kind === 'not-found' || error.kind === 'permission' ? null : (
           <button type="button" className="btn btn-small btn-page" onClick={onRetry}>
             <Icon name="refresh" size={14} />
             重试
@@ -508,19 +414,16 @@ function NumberStatusView({
     case 'internal':
       body = (
         <Status tone="error">
-          <p className="online-search-status-title">{status.action === 'lookup' ? `查询 ${no} 所属的串失败` : `定位 ${no} 失败`}</p>
+          <p className="online-search-status-title">定位 {no} 失败</p>
           <p className="online-search-status-detail">原因：应用内部请求失败</p>
         </Status>
       )
-      actions =
-        status.action === 'lookup' ? (
-          lookUp
-        ) : (
-          <button type="button" className="btn btn-small btn-page" onClick={onRetry}>
-            <Icon name="refresh" size={14} />
-            重试
-          </button>
-        )
+      actions = (
+        <button type="button" className="btn btn-small btn-page" onClick={onRetry}>
+          <Icon name="refresh" size={14} />
+          重试
+        </button>
+      )
       break
   }
   return (

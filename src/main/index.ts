@@ -56,7 +56,6 @@ import { createReminderNotifier } from './reminders/notifier'
 import { applyZoom, zoomActionOf } from './zoom'
 import { createSearchService, type SearchService } from './search/service'
 import { createOnlineSearchService, SEARCH_API_ORIGIN } from './online-search/service'
-import { XDS_API_ORIGIN } from './online-search/xds'
 import { createAccountService } from './account/service'
 import { createAccountClient, requestAccountPage } from './account/client'
 import { isAccountLoginNavigation, openAccountLogin } from './account/login'
@@ -492,12 +491,6 @@ async function start(): Promise<void> {
   const onlineSearch = createOnlineSearchService({
     transport: createForumTransport({
       allowedOrigins: [SEARCH_API_ORIGIN],
-      maxCompressedBytes: 2 * 1024 * 1024,
-      maxDecodedBytes: 4 * 1024 * 1024,
-      userAgent: `Xidao/${app.getVersion()}`
-    }),
-    xdsTransport: createForumTransport({
-      allowedOrigins: [XDS_API_ORIGIN],
       maxCompressedBytes: 2 * 1024 * 1024,
       maxDecodedBytes: 4 * 1024 * 1024,
       userAgent: `Xidao/${app.getVersion()}`

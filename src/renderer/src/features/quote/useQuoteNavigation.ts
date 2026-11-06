@@ -9,7 +9,6 @@ import { clearThreadReminders } from '../reminders/useReminders'
 import { currentEntry, entryThread, newTabEntry, type Tab, type TabEntry, type TabsAction, type TabsState, type ThreadOpen, type ThreadSnapshot } from '../tabs/tabsState'
 import { readResumePage } from '../thread/readingStart'
 import { findQuoteElement, quoteHostId, quoteKey, type QuoteController, type QuoteRefInfo } from './QuoteContext'
-import { lookUpThread } from './threadLookup'
 import {
   initialQuoteState,
   isCurrentLocate,
@@ -58,8 +57,6 @@ export interface QuoteInternalFailure {
   previewSeq: number | null
   /** Intent of the last locate / 打开原串 call that rejected (it was dropped), else null. */
   locate: LocateIntent | null
-  /** The last 向 XDS 查询所属串 call rejected. */
-  lookup?: boolean
 }
 
 export interface QuoteCardProps {
@@ -79,8 +76,6 @@ export interface QuoteCardProps {
    */
   onPin: () => void
   onOpenThread: () => void
-  /** 向 XDS 查询所属串 (explicit, disclosed on the card). */
-  onLookUp: () => void
   onClose: () => void
 }
 
@@ -244,7 +239,7 @@ export function useQuoteNavigation(options: Options) {
       if (locate === null || locate.result !== null) return
       const { id: cardId } = card
       const seq = locate.seq
-      markInternal(cardId, { locate: null, lookup: false })
+      markInternal(cardId, { locate: null })
       const hint = card.source.hint
       window.xidao.quotes.locate({ operationId: locateOperation(cardId), postId: card.source.postId, ...(hint === undefined ? {} : { hint }) }).then(
         (result) => onLocated(cardId, seq, result),
@@ -252,46 +247,6 @@ export function useQuoteNavigation(options: Options) {
           if (!isCurrentLocate(stateRef.current, cardId, seq)) return
           apply({ type: 'cancel-locate', cardId })
           markInternal(cardId, { locate: locate.intent })
-        }
-      )
-    },
-    [apply, markInternal, onLocated]
-  )
-
-  /**
-   * 向 XDS 查询所属串, only on the card's explicit (disclosed) action: XDS names a thread, then the
-   * reader verifies it. A located post follows the intent of the locate before it, through the same
-   * commit as any quote; anything else stays on the card.
-   */
-  const runLookUp = useCallback(
-    (card: QuoteCard) => {
-      const locate = card.locate
-      if (locate === null || locate.result !== null || locate.viaLookup !== true) return
-      const { id: cardId } = card
-      const seq = locate.seq
-      markInternal(cardId, { locate: null, lookup: false })
-      lookUpThread(locateOperation(cardId), card.source.postId, () => isCurrentLocate(stateRef.current, cardId, seq)).then(
-        (result) => {
-          switch (result.status) {
-            case 'cancelled':
-              return
-            case 'located':
-              onLocated(cardId, seq, result.location)
-              return
-            case 'thread-known':
-              onLocated(cardId, seq, { status: 'thread-known', threadId: result.threadId, head: result.head })
-              return
-            case 'read-failed':
-              onLocated(cardId, seq, { status: 'failed', threadId: result.threadId, error: result.error })
-              return
-            default:
-              apply({ type: 'lookup-done', cardId, seq, note: result })
-          }
-        },
-        () => {
-          if (!isCurrentLocate(stateRef.current, cardId, seq)) return
-          apply({ type: 'cancel-locate', cardId })
-          markInternal(cardId, { lookup: true })
         }
       )
     },
@@ -646,16 +601,6 @@ export function useQuoteNavigation(options: Options) {
             })
           },
           onPin: pinCard,
-          onLookUp: () => {
-            const before = stateRef.current.card
-            if (before === null || before.id !== card.id) return
-            if (sourceCurrent(before) === null) {
-              apply({ type: 'close', cardId: card.id })
-              return
-            }
-            const next = apply({ type: 'lookup-start', cardId: card.id }).card
-            if (next !== null && next.locate !== null && next.locate.seq !== before.locate?.seq) runLookUp(next)
-          },
           onClose: () => closeCard(true)
         }
 

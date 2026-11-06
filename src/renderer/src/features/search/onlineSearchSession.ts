@@ -1,4 +1,4 @@
-import type { SearchChannel, SearchError, SearchNextState, SearchOutcome, SearchPage } from '../../../../shared/online-search'
+import type { SearchError, SearchNextState, SearchOutcome, SearchPage } from '../../../../shared/online-search'
 
 /** A request of the search page: a new query chain (`run`) or a page of the current chain. */
 export type OnlineSearchRequest = { kind: 'run'; query: string } | { kind: 'page'; page: number }
@@ -50,28 +50,25 @@ const INITIAL: OnlineSearchState = { draft: '', results: null, pending: null, no
 const ignore = (): undefined => undefined
 
 /**
- * Runtime memory and request bookkeeping of one channel of one search history entry. Lives while
- * the entry is in some tab's history, also while its page is not mounted (navigated away) or the
- * other channel is shown, so a response arriving meanwhile is applied to this channel only and
- * coming back needs no request. Only the latest request may change the state: every new request,
- * cancellation and disposal advances `seq`, and an older response is dropped.
+ * Runtime memory and request bookkeeping of the online side of one search history entry. Lives
+ * while the entry is in some tab's history, also while its page is not mounted (navigated away) or
+ * the local side is shown, so a response arriving meanwhile is applied here and coming back needs
+ * no request. Only the latest request may change the state: every new request, cancellation and
+ * disposal advances `seq`, and an older response is dropped.
  *
- * Paging differs by channel. XDS pages are numbered: a next page whose request failed or was
- * cancelled can be asked for again. nmb-search pages follow a one-time token: a next-page request
- * whose result never arrived (failure, cancellation, internal error) spends it for good.
+ * Pages follow nmb-search's one-time token: a next-page request whose result never arrived
+ * (failure, cancellation, internal error) spends it for good.
  */
 export class OnlineSearchSession {
   readonly sessionId: string
-  readonly channel: SearchChannel
   readonly view: OnlineSearchViewMemory = { scrollTop: 0, focus: null }
   private state: OnlineSearchState = INITIAL
   private seq = 0
   private disposed = false
   private readonly listeners = new Set<() => void>()
 
-  constructor(entryKey: number, channel: SearchChannel) {
+  constructor(entryKey: number) {
     this.sessionId = `search-${entryKey}`
-    this.channel = channel
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -109,7 +106,7 @@ export class OnlineSearchSession {
       notice: null,
       results: results === null || !results.live ? results : { ...results, live: false }
     })
-    window.xidao.onlineSearch.run({ sessionId: this.sessionId, channel: this.channel, query }).then(
+    window.xidao.onlineSearch.run({ sessionId: this.sessionId, query }).then(
       (outcome) => this.settle(seq, request, outcome),
       () => this.reject(seq, request)
     )
@@ -121,10 +118,10 @@ export class OnlineSearchSession {
     return request.kind === 'page' && results !== null && request.page > results.pages.length
   }
 
-  /** Results after `request` ended without its page: an nmb-search next-page token is gone. */
+  /** Results after `request` ended without its page: the next-page token is gone. */
   private afterLostRequest(request: OnlineSearchRequest): OnlineSearchResults | null {
     const { results } = this.state
-    return this.channel === 'nmb-search' && this.fetchesNew(request) && results !== null ? { ...results, next: 'lost' } : results
+    return this.fetchesNew(request) && results !== null ? { ...results, next: 'lost' } : results
   }
 
   /**
@@ -143,8 +140,6 @@ export class OnlineSearchSession {
    * Shows an obtained page (from the session cache, no request) or requests the next one. Pages of
    * superseded results are switched here without any IPC: the main process no longer holds that chain,
    * and its token is never restored or replayed. The awaited request and its notice are untouched.
-   * Also the explicit 重试 of an XDS page whose request failed or was cancelled (`next` stays
-   * `available` there); nmb-search offers no such retry.
    */
   goToPage(page: number): void {
     if (this.disposed || !this.canShow(page)) return
@@ -158,16 +153,13 @@ export class OnlineSearchSession {
     const seq = ++this.seq
     const request: OnlineSearchRequest = { kind: 'page', page }
     this.set({ ...this.state, pending: request, notice: null })
-    window.xidao.onlineSearch.page({ sessionId: this.sessionId, channel: this.channel, page }).then(
+    window.xidao.onlineSearch.page({ sessionId: this.sessionId, page }).then(
       (outcome) => this.settle(seq, request, outcome),
       () => this.reject(seq, request)
     )
   }
 
-  /**
-   * Cancels the awaited request; returns whether there was one. A cancelled nmb-search next page
-   * spends its token; a cancelled XDS page can be asked for again.
-   */
+  /** Cancels the awaited request; returns whether there was one. A cancelled next page spends its token. */
   cancel(): boolean {
     const { pending } = this.state
     if (this.disposed || pending === null) return false
@@ -179,7 +171,7 @@ export class OnlineSearchSession {
       notice: cached ? null : { kind: 'cancelled', request: pending },
       results: this.afterLostRequest(pending)
     })
-    if (!cached) window.xidao.onlineSearch.cancel({ sessionId: this.sessionId, channel: this.channel }).catch(ignore)
+    if (!cached) window.xidao.onlineSearch.cancel({ sessionId: this.sessionId }).catch(ignore)
     return true
   }
 
@@ -189,7 +181,7 @@ export class OnlineSearchSession {
     this.disposed = true
     ++this.seq
     this.listeners.clear()
-    window.xidao.onlineSearch.close({ sessionId: this.sessionId, channel: this.channel }).catch(ignore)
+    window.xidao.onlineSearch.close({ sessionId: this.sessionId }).catch(ignore)
   }
 
   private settle(seq: number, request: OnlineSearchRequest, outcome: SearchOutcome): void {
@@ -236,87 +228,34 @@ export class OnlineSearchSession {
 
   private reject(seq: number, request: OnlineSearchRequest): void {
     if (this.disposed || seq !== this.seq) return
-    // Whether an nmb-search next-page token was spent is unknown: it is never offered again.
+    // Whether the next-page token was spent is unknown: it is never offered again.
     this.set({ ...this.state, pending: null, notice: { kind: 'internal', request }, results: this.afterLostRequest(request) })
   }
 }
 
 /**
- * The online side of one search history entry: the channel it shows and one independent session
- * per channel (query, pages, pending request, view). Choosing a channel sends nothing and never
- * touches the other channel's session; its late responses keep landing there.
+ * Online search state of all search history entries, keyed by entry key. The shell releases an
+ * entry when it leaves every tab's history; nothing is persisted.
  */
-export class OnlineSearchEntry {
-  private shown: SearchChannel
-  private readonly sessions = new Map<SearchChannel, OnlineSearchSession>()
-  private readonly listeners = new Set<() => void>()
-  private disposed = false
+export class OnlineSearchSessions {
+  private readonly sessions = new Map<number, OnlineSearchSession>()
 
-  constructor(
-    private readonly entryKey: number,
-    channel: SearchChannel
-  ) {
-    this.shown = channel
-  }
-
-  subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener)
-    return () => this.listeners.delete(listener)
-  }
-
-  getChannel = (): SearchChannel => this.shown
-
-  /** Shows `channel`; returns whether it changed. No request is sent. */
-  setChannel(channel: SearchChannel): boolean {
-    if (this.disposed || channel === this.shown) return false
-    this.shown = channel
-    for (const listener of this.listeners) listener()
-    return true
-  }
-
-  /** The channel's session, created on first use. */
-  session(channel: SearchChannel): OnlineSearchSession {
-    let session = this.sessions.get(channel)
+  /** The entry's online session, created on first use. */
+  session(entryKey: number): OnlineSearchSession {
+    let session = this.sessions.get(entryKey)
     if (session === undefined) {
-      session = new OnlineSearchSession(this.entryKey, channel)
-      this.sessions.set(channel, session)
-      if (this.disposed) session.dispose()
+      session = new OnlineSearchSession(entryKey)
+      this.sessions.set(entryKey, session)
     }
     return session
   }
 
-  dispose(): void {
-    if (this.disposed) return
-    this.disposed = true
-    this.listeners.clear()
-    for (const session of this.sessions.values()) session.dispose()
-  }
-}
-
-/**
- * Online search state of all search history entries, keyed by entry key. The shell releases an
- * entry when it leaves every tab's history; nothing is persisted (the channel preference itself is
- * a setting).
- */
-export class OnlineSearchSessions {
-  private readonly entries = new Map<number, OnlineSearchEntry>()
-
-  /** The entry's online side, created on first use showing `channel`. */
-  entry(entryKey: number, channel: SearchChannel): OnlineSearchEntry {
-    let entry = this.entries.get(entryKey)
-    if (entry === undefined) {
-      entry = new OnlineSearchEntry(entryKey, channel)
-      this.entries.set(entryKey, entry)
-    }
-    return entry
-  }
-
   /** Releases every entry not in `live`. */
   retain(live: ReadonlySet<number>): void {
-    for (const [key, entry] of this.entries) {
+    for (const [key, session] of this.sessions) {
       if (live.has(key)) continue
-      entry.dispose()
-      this.entries.delete(key)
+      session.dispose()
+      this.sessions.delete(key)
     }
   }
 }

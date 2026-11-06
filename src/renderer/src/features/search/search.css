@@ -467,7 +467,7 @@
   padding: 12px 12px 0 16px;
 }
 
-/* 本机｜联网, then (联网 only) XDS｜nmb-search; wraps under each other when narrow or zoomed. */
+/* 本机｜联网; wraps when narrow or zoomed. */
 .search-page-switches {
   display: flex;
   flex-wrap: wrap;

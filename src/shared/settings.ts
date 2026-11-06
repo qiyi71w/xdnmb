@@ -2,7 +2,6 @@
 import { CLOSE_ACTIONS, type CloseAction } from './lifecycle'
 import type { SubscriptionArrangement, SubscriptionSource } from './subscriptions'
 import { UPDATE_NETWORKS, type UpdateNetwork } from './updates'
-import { SEARCH_CHANNELS, type SearchChannel } from './online-search'
 import {
   BUILTIN_PALETTES,
   BUILTIN_RADIUS,
@@ -133,8 +132,6 @@ export interface AppSettings {
    * Display only: never reads or writes a remote list.
    */
   subscriptionArrangement: SubscriptionArrangement
-  /** Default for a newly opened online search; never changes the initial local side. */
-  onlineSearchChannel: SearchChannel
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -160,8 +157,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   updateAutoDownload: false,
   updateNetwork: 'system',
   defaultSubscriptionSource: 'app',
-  subscriptionArrangement: 'app',
-  onlineSearchChannel: 'xds'
+  subscriptionArrangement: 'app'
 }
 
 export const SETTING_KEYS = [
@@ -187,8 +183,7 @@ export const SETTING_KEYS = [
   'updateAutoDownload',
   'updateNetwork',
   'defaultSubscriptionSource',
-  'subscriptionArrangement',
-  'onlineSearchChannel'
+  'subscriptionArrangement'
 ] as const satisfies readonly (keyof AppSettings)[]
 
 /** At most this many entries in any board list (favorites, hidden, one group's order, collapsed). */
@@ -410,9 +405,6 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
       break
     case 'subscriptionArrangement':
       parsed = choice(value, SUBSCRIPTION_ARRANGEMENTS, key)
-      break
-    case 'onlineSearchChannel':
-      parsed = choice(value, SEARCH_CHANNELS, key)
       break
     default:
       parsed = { ok: false, issues: [{ kind: 'field', field: String(key), problem: 'unknown' }] }
