@@ -510,7 +510,7 @@ describe('quote location', () => {
       .toMatchObject({ status: 'failed', threadId: '900', error: { kind: 'not-found' } })
   })
 
-  it('uses an XDS parent-only clue for one verification, never a guessed reply page or a scan', async () => {
+  it('uses a thread clue without a page (a sent record, a link without page) for one verification, never a guessed reply page or a scan', async () => {
     const f = quoteForum({ '700': { all: [['701'], ['702']] } })
     const reading = service(f.client)
     const before = db.getReadingState('700')

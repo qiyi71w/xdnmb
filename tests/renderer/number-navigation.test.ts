@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { QuoteLocation } from '../../src/shared/api'
 import type { Post } from '../../src/shared/forum'
-import type { ThreadOfOutcome } from '../../src/shared/online-search'
+import { parseNumberTarget } from '../../src/shared/online-search'
 import { wholeSelectedNumber } from '../../src/renderer/src/features/quote/selectionNumber'
-import { lookUpThread } from '../../src/renderer/src/features/quote/threadLookup'
-import { initialQuoteState, quoteReducer, type QuoteAction, type QuoteSource, type QuoteState } from '../../src/renderer/src/features/quote/quoteState'
 import {
   initialNumberOpenState,
   isCurrentStep,
@@ -58,6 +56,21 @@ describe('selected numbers', () => {
   })
 })
 
+describe('explicit number inputs', () => {
+  it.each(['1', '1234567', '12345678', '123456789', '99999999999999999999'])('keeps %s exact', (value) => {
+    for (const prefix of ['', 'No.', '>>No.']) expect(parseNumberTarget(` ${prefix}${value} `)).toEqual({ postId: value, hint: null })
+  })
+  it.each(['0', '012', '-1', '1.1', '1e3', '123456789012345678901', '2026-10-30', '$12345', 'text 12345', 'No.1 extra', 'https://evil.example/t/12'])('rejects whole invalid input %s', (value) => {
+    expect(parseNumberTarget(value)).toBeNull()
+  })
+  it('keeps verified reply and page hints', () => {
+    expect(parseNumberTarget('https://www.nmbxd1.com/t/1234567?page=9&r=99999999999999999999')).toEqual({ postId: '99999999999999999999', hint: { threadId: '1234567', page: 9 } })
+  })
+  it.each(['?r=abc', '?r=0', '?page=-1', '?page=0', '?page=1&r=2&r=3', '?page=1&callback=evil', '#other'])('rejects malformed or ambiguous explicit link %s instead of opening its parent', (suffix) => {
+    expect(parseNumberTarget(`https://www.nmbxd1.com/t/1234567${suffix}`)).toBeNull()
+  })
+})
+
 describe('按串号打开', () => {
   it('takes plain numbers, No., >>No. and verified links, and refuses anything else without a request', () => {
     for (const raw of ['68810621', ' No.68810621 ', '>>No.68810621', '>>68810621']) {
@@ -71,10 +84,9 @@ describe('按串号打开', () => {
     }
   })
 
-  it('is busy while a step runs: a second submit, lookup or 打开原串 is dropped synchronously', () => {
+  it('is busy while a step runs: a second submit or 打开原串 is dropped synchronously', () => {
     const started = run(initialNumberOpenState, { type: 'submit', raw: '68810621', newTab: false })
     expect(run(started, { type: 'submit', raw: '1', newTab: false })).toBe(started)
-    expect(run(started, { type: 'lookup-start' })).toBe(started)
     expect(run(started, { type: 'open-thread-start' })).toBe(started)
     expect(run(started, { type: 'retry' })).toBe(started)
   })
@@ -82,26 +94,23 @@ describe('按串号打开', () => {
   it('drops late and cancelled results; cancelling keeps what was known before', () => {
     let state = run(initialNumberOpenState, { type: 'submit', raw: '68810699', newTab: false })
     const first = state.seq
-    state = run(state, { type: 'locate-done', seq: first, result: { status: 'unknown-thread' } })
-    expect(state.status).toMatchObject({ kind: 'unknown-thread' })
-    state = run(state, { type: 'lookup-start' })
-    const lookup = state.seq
+    state = run(state, { type: 'locate-done', seq: first, result: { status: 'thread-known', threadId: '100', head } })
+    state = run(state, { type: 'open-thread-start' })
+    const opening = state.seq
     state = run(state, { type: 'cancel' })
-    expect(state.status).toMatchObject({ kind: 'unknown-thread' })
-    // The cancelled lookup's answer arrives anyway: ignored, nothing follows it.
-    expect(isCurrentStep(state, lookup)).toBe(false)
-    expect(run(state, { type: 'lookup-done', seq: lookup, result: { status: 'located', location: located('68810699') as never } })).toBe(state)
+    expect(state.status).toMatchObject({ kind: 'thread-known' })
+    // The cancelled step's answer arrives anyway: ignored, nothing follows it.
+    expect(isCurrentStep(state, opening)).toBe(false)
+    expect(run(state, { type: 'open-thread-failed', seq: opening, error: null })).toBe(state)
     // A superseded locate's answer is ignored as well.
     expect(run(state, { type: 'locate-done', seq: first, result: located('68810699') })).toBe(state)
   })
 
   it('makes every running step stale on cancel, as leaving the page does: no late result is followed', () => {
     const locating = run(initialNumberOpenState, { type: 'submit', raw: '68810699', newTab: true })
-    const unknown = run(locating, { type: 'locate-done', seq: locating.seq, result: { status: 'unknown-thread' } })
-    const looking = run(unknown, { type: 'lookup-start' })
     const known = run(locating, { type: 'locate-done', seq: locating.seq, result: { status: 'thread-known', threadId: '100', head } })
     const opening = run(known, { type: 'open-thread-start' })
-    for (const running of [locating, looking, opening]) {
+    for (const running of [locating, opening]) {
       const left = run(running, { type: 'cancel' })
       expect(isCurrentStep(left, running.seq)).toBe(false)
       expect(run(left, { type: 'opened', seq: running.seq })).toBe(left)
@@ -111,25 +120,14 @@ describe('按串号打开', () => {
     expect(run(run(opening, { type: 'cancel' }), { type: 'open-thread-failed', seq: opening.seq, error: null }).status).toMatchObject({ kind: 'thread-known' })
   })
 
-  it('offers the XDS lookup only for an unknown owner, and keeps its outcomes apart', () => {
+  it('offers nothing more for an unknown owner; an internal locate failure can be retried', () => {
     const unknown = run(initialNumberOpenState, { type: 'submit', raw: '68810699', newTab: false }, { type: 'locate-done', seq: 1, result: { status: 'unknown-thread' } })
-    const known = run(initialNumberOpenState, { type: 'submit', raw: '68810699', newTab: false }, { type: 'locate-done', seq: 1, result: { status: 'thread-known', threadId: '100', head } })
-    expect(run(known, { type: 'lookup-start' })).toBe(known)
-
-    const looking = run(unknown, { type: 'lookup-start' })
-    expect(looking.status).toMatchObject({ kind: 'looking-up', target: { postId: '68810699' } })
-    const seq = looking.seq
-    expect(run(looking, { type: 'lookup-done', seq, result: { status: 'not-indexed' } }).status).toMatchObject({ kind: 'not-indexed' })
-    const limited = run(looking, { type: 'lookup-done', seq, result: { status: 'search-failed', error: { kind: 'rate-limited', retryAt: 1_800_000_000_000 } } })
-    expect(limited.status).toMatchObject({ kind: 'search-failed', error: { kind: 'rate-limited' } })
-    // A failed lookup can be asked again, explicitly.
-    expect(run(limited, { type: 'lookup-start' }).status).toMatchObject({ kind: 'looking-up' })
-    // XDS named the thread, the forum shows it but not the post: only 打开原串, never a located target.
-    const parent = run(looking, { type: 'lookup-done', seq, result: { status: 'thread-known', threadId: '100', head } })
-    expect(parent.status).toMatchObject({ kind: 'thread-known', known: { threadId: '100', via: 'xds' } })
-    expect(run(parent, { type: 'lookup-start' })).toBe(parent)
-    const unreadable = run(looking, { type: 'lookup-done', seq, result: { status: 'read-failed', threadId: '100', error: { kind: 'network', detail: 'timeout' } as never } })
-    expect(unreadable.status).toMatchObject({ kind: 'failed', threadId: '100', via: 'xds' })
+    expect(unknown.status).toMatchObject({ kind: 'unknown-thread', target: { postId: '68810699' } })
+    expect(run(unknown, { type: 'retry' })).toBe(unknown)
+    expect(run(unknown, { type: 'open-thread-start' })).toBe(unknown)
+    const internal = run(initialNumberOpenState, { type: 'submit', raw: '68810699', newTab: true }, { type: 'internal', seq: 1 })
+    expect(internal.status).toMatchObject({ kind: 'internal' })
+    expect(run(internal, { type: 'retry' }).status).toMatchObject({ kind: 'locating', target: { postId: '68810699', newTab: true } })
   })
 
   it('clears only once the target or the thread was opened; a failed 打开原串 keeps the way back', () => {
@@ -156,76 +154,5 @@ describe('按串号打开', () => {
       type: 'locate-done', seq: 1, result: { status: 'failed', threadId: null, error: { kind: 'not-found' } as never }
     })
     expect(run(missing, { type: 'retry' })).toBe(missing)
-  })
-})
-
-describe('explicit XDS lookup', () => {
-  function stub(clue: ThreadOfOutcome, location: QuoteLocation) {
-    const threadOf = vi.fn(async () => clue)
-    const locate = vi.fn(async () => location)
-    vi.stubGlobal('window', { xidao: { onlineSearch: { threadOf }, quotes: { locate } } })
-    return { threadOf, locate }
-  }
-
-  it('uses the XDS thread only as a clue the reader verifies (first page, no page guess)', async () => {
-    const { threadOf, locate } = stub({ status: 'found', postId: '68810699', threadId: '68810621', kind: 'reply' }, located('68810699', '68810621'))
-    const result = await lookUpThread('op-1', '68810699', () => true)
-    expect(threadOf).toHaveBeenCalledWith({ operationId: 'op-1', postId: '68810699' })
-    expect(locate).toHaveBeenCalledWith({ operationId: 'op-1', postId: '68810699', hint: { threadId: '68810621', page: null } })
-    expect(result).toMatchObject({ status: 'located', location: { threadId: '68810621' } })
-  })
-
-  it('reads nothing when XDS has nothing, failed, or the lookup is no longer wanted', async () => {
-    for (const clue of [{ status: 'not-indexed' }, { status: 'failed', error: { kind: 'verification', httpStatus: 403 } }, { status: 'cancelled' }] as ThreadOfOutcome[]) {
-      const { locate } = stub(clue, located('1'))
-      const result = await lookUpThread('op', '1', () => true)
-      expect(locate).not.toHaveBeenCalled()
-      expect(result.status).toBe(clue.status === 'failed' ? 'search-failed' : clue.status)
-    }
-    const { locate } = stub({ status: 'found', postId: '1', threadId: '2', kind: 'reply' }, located('1', '2'))
-    expect(await lookUpThread('op', '1', () => false)).toEqual({ status: 'cancelled' })
-    expect(locate).not.toHaveBeenCalled()
-  })
-
-  it('reports a readable thread without the post as thread-known, not as located', async () => {
-    stub({ status: 'found', postId: '68810699', threadId: '68810621', kind: 'reply' }, { status: 'thread-known', threadId: '68810621', head })
-    expect(await lookUpThread('op', '68810699', () => true)).toEqual({ status: 'thread-known', threadId: '68810621', head })
-  })
-})
-
-describe('quote card XDS lookup', () => {
-  const source: QuoteSource = { tabId: 1, entryKey: 2, postId: '68810699', focus: { postId: '101', quoteIndex: 0 } }
-  const apply = (state: QuoteState, ...actions: QuoteAction[]) => actions.reduce(quoteReducer, state)
-
-  function unknownCard(): QuoteState {
-    let state = apply(initialQuoteState, { type: 'open', source, trigger: 'activate' })
-    const id = state.card!.id
-    state = apply(state, { type: 'locate-start', cardId: id, intent: 'new-tab' })
-    return apply(state, { type: 'locate-done', cardId: id, seq: state.card!.locate!.seq, result: { status: 'unknown-thread' } })
-  }
-
-  it('starts only after an unknown owner and keeps the jump the user asked for', () => {
-    const state = unknownCard()
-    const id = state.card!.id
-    const looking = apply(state, { type: 'lookup-start', cardId: id })
-    expect(looking.card!.locate).toMatchObject({ intent: 'new-tab', result: null, viaLookup: true, fallback: { status: 'unknown-thread' } })
-    // Nothing else to look up while it runs, nor after a known owner.
-    expect(apply(looking, { type: 'lookup-start', cardId: id })).toBe(looking)
-    const known = apply(looking, { type: 'locate-done', cardId: id, seq: looking.card!.locate!.seq, result: { status: 'thread-known', threadId: '100', head } })
-    expect(apply(known, { type: 'lookup-start', cardId: id })).toBe(known)
-  })
-
-  it('goes back to the unknown owner on cancel, and keeps what XDS said when it found nothing', () => {
-    const state = unknownCard()
-    const id = state.card!.id
-    const looking = apply(state, { type: 'lookup-start', cardId: id })
-    const seq = looking.card!.locate!.seq
-    expect(apply(looking, { type: 'cancel-locate', cardId: id }).card!.locate).toMatchObject({ result: { status: 'unknown-thread' } })
-    const noted = apply(looking, { type: 'lookup-done', cardId: id, seq, note: { status: 'not-indexed' } })
-    expect(noted.card!.locate!.result).toEqual({ status: 'unknown-thread' })
-    expect(noted.card!.lookup).toEqual({ status: 'not-indexed' })
-    // A late answer of a cancelled lookup changes nothing.
-    const cancelled = apply(looking, { type: 'cancel-locate', cardId: id })
-    expect(apply(cancelled, { type: 'lookup-done', cardId: id, seq, note: { status: 'not-indexed' } })).toBe(cancelled)
   })
 })

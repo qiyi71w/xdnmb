@@ -65,7 +65,7 @@ export interface SearchPageHandle {
 /**
  * 搜索 page while mounted or in navigation history: the side shown, where 本机 was scrolled, and
  * 按串号打开's text. `numberFocus`: the page was left by opening from 按串号打开, so coming back
- * focuses its box again. The online channel shown lives in the entry's OnlineSearchEntry.
+ * focuses its box again. The online side's state lives in the entry's OnlineSearchSession.
  */
 export interface SearchPageMemory {
   side: SearchPageSide

@@ -381,20 +381,18 @@ describe('settings', () => {
     expect(open(path).loadSettings()).toEqual({ ...DEFAULT_SETTINGS, subscriptionArrangement: 'remote' })
   })
 
-  it('defaults old and new settings to XDS and persists an explicit nmb-search preference without changing other settings', async () => {
-    expect(settingsFromStored(new Map()).onlineSearchChannel).toBe('xds')
-    expect(settingsFromStored(new Map([['onlineSearchChannel', 'unknown']])).onlineSearchChannel).toBe('xds')
-    expect(applySettingsPatch(DEFAULT_SETTINGS, { onlineSearchChannel: 'other' }).ok).toBe(false)
+  it('ignores the removed onlineSearchChannel setting left by older versions and still saves the others', async () => {
+    expect(applySettingsPatch(DEFAULT_SETTINGS, { onlineSearchChannel: 'nmb-search' }).ok).toBe(false)
     const path = join(folder(), 'search-settings.sqlite')
     const first = open(path)
-    const service = createSettingsService(storeOf(first))
-    expect(await service.update({ onlineSearchChannel: 'nmb-search', density: 'compact' })).toMatchObject({ saved: true })
+    // As written by v1.3.0: the row stays in the table after the upgrade.
+    first.saveSettings({ ...DEFAULT_SETTINGS, onlineSearchChannel: 'xds', density: 'compact' } as AppSettings)
     first.close()
     databases.splice(databases.indexOf(first), 1)
     const reopened = open(path)
-    expect(reopened.loadSettings()).toEqual({ ...DEFAULT_SETTINGS, onlineSearchChannel: 'nmb-search', density: 'compact' })
+    expect(reopened.loadSettings()).toEqual({ ...DEFAULT_SETTINGS, density: 'compact' })
     expect(await createSettingsService(storeOf(reopened)).update({ reminderInterval: 30 })).toMatchObject({ saved: true })
-    expect(reopened.loadSettings().onlineSearchChannel).toBe('nmb-search')
+    expect(reopened.loadSettings()).toEqual({ ...DEFAULT_SETTINGS, density: 'compact', reminderInterval: 30 })
   })
 
   it.each([

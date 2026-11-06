@@ -1,20 +1,18 @@
-import { SEARCH_SITE_URLS, type SearchChannel, type SearchError } from '../../../../shared/online-search'
+import { SEARCH_SITE_URL, type SearchError } from '../../../../shared/online-search'
 import { formatClockTime } from '../../lib/time'
 
-/** Names of the third-party search services, as users see them on their sites. */
-export const CHANNEL_TEXT: Record<SearchChannel, string> = { xds: 'XDS', 'nmb-search': 'nmb-search' }
+/** Name of the third-party search service, as users see it on its site. */
+export const SEARCH_SERVICE = 'nmb-search'
 
-/** Host of the channel's fixed website (`xds.wol.moe`), for saying where a query goes. */
-export function channelHost(channel: SearchChannel): string {
-  return new URL(SEARCH_SITE_URLS[channel]).host
-}
+/** Host of the service's fixed website, for saying where a query goes. */
+export const SEARCH_HOST = new URL(SEARCH_SITE_URL).host
 
 /**
- * Reason lines of a failure of `service` (a channel name). The service's own message is shown
- * verbatim as text; a rate limit gives its retry time when the service sent one. Nothing here offers
- * an automatic retry or another service.
+ * Reason lines of a search failure. The service's own message is shown verbatim as text; a rate
+ * limit gives its retry time when the service sent one. Nothing here offers an automatic retry.
  */
-export function searchErrorLines(error: SearchError, service: string): { reason: string; details: string[] } {
+export function searchErrorLines(error: SearchError): { reason: string; details: string[] } {
+  const service = SEARCH_SERVICE
   switch (error.kind) {
     case 'network':
       return { reason: error.detail === 'timeout' ? `${service} 20 秒内未响应` : `无法连接 ${service}`, details: [] }

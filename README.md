@@ -28,7 +28,7 @@
 - **离线保存**：把整串文字和原图存到本机，断网也能看。
 - **看图**：在应用内查看原图，可缩放、保存，或复制完整原图粘贴到其他应用（动图保留动画）。
 - **图片遮罩**：在设置的“阅读”中开启磨砂模糊，配合示例图实时调整强度；单击揭开、再点看原图，切换串、页面或标签后重新遮挡。
-- **搜索**：本机搜索已读过的内容，或选择 [XDS](https://xds.wol.moe/)／[nmb-search](https://nmb-search.166666666.xyz/) 联网搜索；也可独立按串号打开。
+- **搜索**：本机搜索已读过的内容，或用 [nmb-search](https://nmb-search.166666666.xyz/) 联网搜索；也可独立按串号打开。
 - **屏蔽与饼干颜色**：在本机屏蔽串号或饼干，给饼干 ID 选颜色。
 - **外观**：浅色、深色、跟随系统或自定义主题；正文字体、字号、阅读宽度、密度和界面缩放可调。
 - **公告**：启动时提示 X 岛公告，可按公告选择“不再提示”，也可在“设置 › 公告”随时查看、重新获取。
@@ -80,7 +80,7 @@ macOS 上用 Cmd 代替 Ctrl。
 - Windows：`%APPDATA%\汐岛`
 - macOS：`~/Library/Application Support/汐岛`
 
-饼干和 App UUID 用系统凭据保护加密（Windows DPAPI，macOS 钥匙串）。联网搜索会把搜索词（反查所属串时为串号）发给所选的 XDS 或 nmb-search，不携带饼干、官网登录状态或 App UUID；第三方收录可能不完整或过时。浏览缓存默认 2 GB，在“设置 › 存储与缓存”调整或清理，历史里的主帖与回复数不算在内。
+饼干和 App UUID 用系统凭据保护加密（Windows DPAPI，macOS 钥匙串）。联网搜索会把搜索词发给 nmb-search，不携带饼干、官网登录状态或 App UUID；第三方收录可能不完整或过时。浏览缓存默认 2 GB，在“设置 › 存储与缓存”调整或清理，历史里的主帖与回复数不算在内。
 
 公告在每次启动时从 `nmb.ovear.info` 匿名读取，不携带论坛身份。
 
@@ -100,5 +100,5 @@ npm test
 
 - 协议参考：[TransparentLC/xdcmd 的 API 整理](https://github.com/TransparentLC/xdcmd/wiki/自己整理的-X-岛匿名版-API-文档)、[X 岛原始 API 文档](https://www.zybuluo.com/ovear/note/151481)、[orzogc/xdnmb](https://github.com/orzogc/xdnmb) 与 [orzogc/xdnmb_api](https://github.com/orzogc/xdnmb_api)（AGPL-3.0）。
 - 预设颜文字取自 [xdnmb_api](https://github.com/orzogc/xdnmb_api/blob/28fdba53031a15e0de88954679afe91b9308f71a/lib/src/xdnmb.dart#L1780-L1889) 中的 X 岛官方颜文字列表。
-- 联网搜索使用 [XDS](https://xds.wol.moe/)（[公开 API](https://xds.wol.moe/api/docs)）与 [nmb-search](https://nmb-search.166666666.xyz/)（[API 与使用条款](https://nmb-search.166666666.xyz/api.txt)）；后者基于 [4get](https://git.lolcat.ca/lolcat/4get)。
+- 联网搜索使用 [nmb-search](https://nmb-search.166666666.xyz/)（[API 与使用条款](https://nmb-search.166666666.xyz/api.txt)），它基于 [4get](https://git.lolcat.ca/lolcat/4get)。
 - 第三方依赖的许可说明见 [docs/development.md](docs/development.md#第三方许可)。

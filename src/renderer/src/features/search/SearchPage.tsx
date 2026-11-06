@@ -1,12 +1,9 @@
-import { useContext, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
+import { useContext, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { BoardDirectory } from '../../../../shared/forum'
-import { SEARCH_CHANNELS, type SearchChannel } from '../../../../shared/online-search'
-import { useSettings } from '../../lib/settingsContext'
 import { ContentRegistryContext, useRegisterContent, type SearchPageMemory, type SearchPageSide } from '../tabs/contentRegistry'
 import type { EntryInit } from '../tabs/tabsState'
 import { NumberOpen } from './NumberOpen'
 import { OnlineSearchPane } from './OnlineSearchPane'
-import { CHANNEL_TEXT } from './onlineSearchText'
 import { LocalSearchContext } from './SearchContext'
 import { focusSearch, SearchBody } from './SearchSheet'
 import { tabSearchOf } from './searchState'
@@ -17,12 +14,10 @@ const SIDE_TEXT: Record<SearchPageSide, string> = { local: '本机', online: '�
 
 /**
  * 搜索 page, shown by an `online-search` entry: 本机｜联网 over two separate searches, 本机 first,
- * plus 按串号打开, which belongs to neither side nor channel. 本机 is the tab's local search (the
- * shell holds it open while this page is shown); 联网 shows one channel (XDS｜nmb-search) of the
- * entry's online state, each channel with its own query, pages and requests. Both sides stay
- * mounted, so switching sides keeps each one's text, results and scroll and sends nothing; switching
- * channel sends nothing either and remembers the choice as the default of new search pages. The page
- * is no layer: Esc only cancels a running locate or lookup.
+ * plus 按串号打开, which belongs to neither side. 本机 is the tab's local search (the shell holds it
+ * open while this page is shown); 联网 is the entry's nmb-search session with its own query, pages
+ * and requests. Both sides stay mounted, so switching sides keeps each one's text, results and
+ * scroll and sends nothing. The page is no layer: Esc only cancels a running locate.
  */
 export function SearchPage({
   tabId,
@@ -41,7 +36,6 @@ export function SearchPage({
 }) {
   const registry = useContext(ContentRegistryContext)
   const host = useContext(LocalSearchContext)
-  const settings = useSettings()
   if (registry === null || host === null) throw new Error('SearchPage needs the content registry and the local search')
   const [memory] = useState<SearchPageMemory>(() => {
     const existing = registry.searchPageMemory.get(entryKey)
@@ -50,9 +44,7 @@ export function SearchPage({
     registry.searchPageMemory.set(entryKey, created)
     return created
   })
-  // A new page starts with the saved channel preference; afterwards the page keeps its own choice.
-  const [online] = useState(() => registry.onlineSearches.entry(entryKey, settings.latest().onlineSearchChannel))
-  const channel = useSyncExternalStore(online.subscribe, online.getChannel)
+  const [online] = useState(() => registry.onlineSearches.session(entryKey))
   const [side, setSide] = useState(memory.side)
   const [numberDraft, setNumberDraft] = useState(memory.numberDraft)
   const localScrollRef = useRef<HTMLDivElement>(null)
@@ -63,8 +55,6 @@ export function SearchPage({
   // query), then each time 本机 is chosen. The shell's own focus requests are for the sheet.
   const [localFocus, setLocalFocus] = useState(() => ({ target: host.state.focus, seq: 0 }))
   const focusOnline = useRef(false)
-  /** The channel pane about to mount replaces another by a channel switch: focus stays on the switch. */
-  const channelSwitched = useRef(false)
   const tab = tabSearchOf(host.state, tabId)
 
   const show = (next: SearchPageSide) => {
@@ -78,23 +68,9 @@ export function SearchPage({
     setSide(next)
   }
 
-  /**
-   * Shows `next` without any request (the pane of the channel left behind unmounts, dropping its
-   * running locate; its awaited search keeps landing in its own session) and saves it as the
-   * default channel of new search pages.
-   */
-  const chooseChannel = (next: SearchChannel) => {
-    if (next !== online.getChannel()) {
-      channelSwitched.current = true
-      online.setChannel(next)
-    }
-    if (settings.latest().onlineSearchChannel !== next) settings.write({ onlineSearchChannel: next })
-  }
-
   useRegisterContent('searchPages', entryKey, { show })
 
   useLayoutEffect(() => {
-    channelSwitched.current = false
     if (!focusOnline.current) return
     focusOnline.current = false
     registry.onlineSearchPanes.get(entryKey)?.current.focusInput()
@@ -167,15 +143,6 @@ export function SearchPage({
                 </button>
               ))}
             </div>
-            {side === 'online' && (
-              <div className="segmented" role="group" aria-label="联网搜索服务">
-                {SEARCH_CHANNELS.map((item) => (
-                  <button key={item} type="button" className="segmented-item" aria-pressed={channel === item} onClick={() => chooseChannel(item)}>
-                    {CHANNEL_TEXT[item]}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
           <NumberOpen
             entryKey={entryKey}
@@ -207,11 +174,9 @@ export function SearchPage({
         </div>
         <div className="search-page-side" hidden={side !== 'online'}>
           <OnlineSearchPane
-            key={channel}
             entryKey={entryKey}
-            session={online.session(channel)}
+            session={online}
             displayed={displayed && side === 'online'}
-            takeFocus={!channelSwitched.current}
             directory={directory}
             onOpen={onOpen}
           />

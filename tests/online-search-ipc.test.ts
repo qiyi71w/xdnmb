@@ -11,7 +11,7 @@ vi.mock('electron', () => ({
 const sender = { id: 1, send: () => undefined, isDestroyed: () => false }
 const search = {
   run: vi.fn(async () => ({ status: 'closed' })), page: vi.fn(async () => ({ status: 'closed' })),
-  cancel: vi.fn(), close: vi.fn(), closeAll: vi.fn(), threadOf: vi.fn(async () => ({ status: 'not-indexed' }))
+  cancel: vi.fn(), close: vi.fn(), closeAll: vi.fn()
 }
 beforeEach(() => {
   electron.handlers.clear()
@@ -28,30 +28,23 @@ function call(channel: string, input: unknown, caller: unknown = sender): Promis
 
 describe('search IPC restrictions', () => {
   it.each([
-    { sessionId: 's', query: 'word' },
-    { sessionId: 's', channel: 'other', query: 'word' },
-    { sessionId: 's', channel: 'xds', query: 'word', url: 'https://evil.example' },
-    { sessionId: 's', channel: 'xds', query: 'word', userhash: 'secret' },
-    { sessionId: 's', channel: 'xds', query: '' }
-  ])('refuses missing channels, arbitrary endpoints and identity fields (%#)', async (input) => {
+    { sessionId: 's' },
+    { sessionId: 's', channel: 'nmb-search', query: 'word' },
+    { sessionId: 's', query: 'word', url: 'https://evil.example' },
+    { sessionId: 's', query: 'word', userhash: 'secret' },
+    { sessionId: 's', query: '' }
+  ])('refuses missing queries, unknown fields, arbitrary endpoints and identity fields (%#)', async (input) => {
     await expect(call(IpcChannel.runOnlineSearch, input)).rejects.toThrow('invalid request')
     expect(search.run).not.toHaveBeenCalled()
   })
-  it('rejects non-primary senders for queries and ownership lookup', async () => {
-    await expect(call(IpcChannel.runOnlineSearch, { sessionId: 's', channel: 'xds', query: 'word' }, { id: 2 })).rejects.toThrow('invalid request')
-    await expect(call(IpcChannel.searchThreadOf, { operationId: 'lookup', postId: '7' }, { id: 2 })).rejects.toThrow('invalid request')
-    expect(search.threadOf).not.toHaveBeenCalled()
+  it('rejects non-primary senders', async () => {
+    await expect(call(IpcChannel.runOnlineSearch, { sessionId: 's', query: 'word' }, { id: 2 })).rejects.toThrow('invalid request')
     expect(search.run).not.toHaveBeenCalled()
   })
-  it.each(['0', '012', '123456789012345678901', 'https://evil.example', 7])('rejects unsafe ownership target %s before request', async (postId) => {
-    await expect(call(IpcChannel.searchThreadOf, { operationId: 'lookup', postId })).rejects.toThrow('invalid request')
-    expect(search.threadOf).not.toHaveBeenCalled()
-  })
-  it('opens only the selected fixed website, never a renderer-supplied URL', async () => {
-    await call(IpcChannel.openOnlineSearchSite, { channel: 'xds' })
-    await call(IpcChannel.openOnlineSearchSite, { channel: 'nmb-search' })
-    expect(electron.openExternal.mock.calls).toEqual([['https://xds.wol.moe/'], ['https://nmb-search.166666666.xyz/']])
-    await expect(call(IpcChannel.openOnlineSearchSite, { channel: 'xds', url: 'https://evil.example' })).rejects.toThrow('invalid request')
-    expect(electron.openExternal).toHaveBeenCalledTimes(2)
+  it('opens only the fixed website, never a renderer-supplied URL', async () => {
+    await call(IpcChannel.openOnlineSearchSite, undefined)
+    expect(electron.openExternal.mock.calls).toEqual([['https://nmb-search.166666666.xyz/']])
+    await expect(call(IpcChannel.openOnlineSearchSite, { url: 'https://evil.example' })).rejects.toThrow('invalid request')
+    expect(electron.openExternal).toHaveBeenCalledTimes(1)
   })
 })
