@@ -9,7 +9,7 @@ import { ForumReadError, ReadCancelledError, type ForumClient } from '../src/mai
 import { createForumClient } from '../src/main/forum/client'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { asStore } from './helpers/store'
-import { createReadingService } from '../src/main/reading/service'
+import { createReadingService, type ReadingService } from '../src/main/reading/service'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 
 const THREAD = '50000002'
@@ -523,5 +523,172 @@ describe('quote location', () => {
     expect(await reading.locateQuote('701', signal(), { threadId: '700', page: null }))
       .toMatchObject({ status: 'located', threadId: '700', target: { postId: '701', page: 1 } })
     expect(f.requests).toEqual(['700/all/1'])
+  })
+})
+
+/**
+ * Thread 1000 with `replyCount` replies numbered 1001… in pages of 19; `deleted` replies keep their
+ * slot but are not listed. `heads` are other threads' main posts (no replies); any other ID read as a
+ * thread is `该串不存在`. With `cap`, nonempty pages above it are refused as the client does without a
+ * cookie: page-cap with the verified page `cap`.
+ */
+function pagedForum(replyCount: number, options: { deleted?: string[]; heads?: string[]; cap?: number } = {}) {
+  const requests: string[] = []
+  let failWith: ForumReadError | null = null
+  let onRequest: ((request: string) => void) | null = null
+  const deleted = new Set(options.deleted ?? [])
+  const ids = (page: number) => Array.from({ length: 19 }, (_, i) => 1000 + (page - 1) * 19 + i + 1)
+    .filter((n) => n <= 1000 + replyCount).map(String).filter((id) => !deleted.has(id))
+  const pageOf = (page: number): ThreadPage => {
+    const replies = ids(page).map(post)
+    return { threadId: '1000', mode: 'all', page, head: post('1000'), replies, replyCount, skippedItems: 0, endCandidate: replies.length === 0 }
+  }
+  const client: ForumClient = {
+    getDirectory: () => Promise.reject(new Error('unused')),
+    getFeedPage: () => Promise.reject(new Error('unused')),
+    getRef: () => Promise.reject(new Error('unused')),
+    async getThreadPage(threadId, mode, page, signal): Promise<ThreadPage> {
+      const request = `${threadId}/${page}`
+      requests.push(request)
+      onRequest?.(request)
+      if (signal.aborted) throw new ReadCancelledError()
+      if (failWith) throw failWith
+      if (options.heads?.includes(threadId)) return { threadId, mode, page, head: post(threadId), replies: [], replyCount: 0, skippedItems: 0, endCandidate: true }
+      if (threadId !== '1000' || mode !== 'all') throw new ForumReadError({ kind: 'not-found', detail: 'business', serverMessage: '该串不存在' })
+      if (options.cap !== undefined && page > options.cap && ids(page).length > 0) {
+        throw new ForumReadError({ kind: 'page-cap', detail: 'shape', highestReadablePage: options.cap }, pageOf(options.cap))
+      }
+      return pageOf(page)
+    }
+  }
+  return {
+    client,
+    requests,
+    fail: (error: ForumReadError | null) => (failWith = error),
+    onRequest: (hook: ((request: string) => void) | null) => (onRequest = hook)
+  }
+}
+
+describe('quote location inside the quote\'s thread', () => {
+  const located = (result: QuoteLocation) => (result.status === 'located' ? { threadId: result.threadId, ...result.target, source: result.source } : result)
+  const inThread = (fromPostId: string) => ({ threadId: '1000', fromPostId })
+  /** Reads pages as the user did, then forgets those requests. */
+  async function readPages(f: { requests: string[] }, reading: ReadingService, pages: number[]) {
+    for (const page of pages) await reading.readThreadPage('1000', 'all', page, signal(), 'display')
+    f.requests.length = 0
+  }
+
+  it('checks the main post, then the page before the quote\'s, then halves by number; the found page is kept', async () => {
+    const f = pagedForum(190)
+    const reading = service(f.client)
+    await readPages(f, reading, [10])
+    expect(located(await reading.locateQuote('1050', signal(), null, inThread('1185'))))
+      .toEqual({ threadId: '1000', postId: '1050', page: 3, mode: 'all', source: 'fresh' })
+    // Candidates 1–9: main-post check + page 9 + ⌈log₂ 9⌉ at most.
+    expect(f.requests).toEqual(['1050/1', '1000/9', '1000/4', '1000/2', '1000/3'])
+    expect(f.requests.length).toBeLessThanOrEqual(2 + Math.ceil(Math.log2(9)))
+
+    // Now recorded: the next locate verifies that page only, without searching.
+    f.requests.length = 0
+    expect(located(await reading.locateQuote('1050', signal(), null, inThread('1185')))).toMatchObject({ page: 3 })
+    expect(f.requests).toEqual(['1000/3'])
+  })
+
+  it('finds a reply on the page just before the quote\'s with one read after the main-post check', async () => {
+    const f = pagedForum(190)
+    const reading = service(f.client)
+    await readPages(f, reading, [10])
+    expect(located(await reading.locateQuote('1160', signal(), null, inThread('1185')))).toMatchObject({ page: 9 })
+    expect(f.requests).toEqual(['1160/1', '1000/9'])
+  })
+
+  it('does not read stored pages again and settles a number inside their range without a search request', async () => {
+    const f = pagedForum(190, { deleted: ['1160'] })
+    const reading = service(f.client)
+    await readPages(f, reading, [9, 10])
+    expect(located(await reading.locateQuote('1100', signal(), null, inThread('1185')))).toMatchObject({ page: 6 })
+    expect(f.requests).toEqual(['1100/1', '1000/8', '1000/4', '1000/6'])
+
+    // A deleted reply (or another thread's post numbered in between) within stored page 9.
+    f.requests.length = 0
+    expect(await reading.locateQuote('1160', signal(), null, inThread('1185'))).toEqual({ status: 'unknown-thread' })
+    expect(f.requests).toEqual(['1160/1'])
+  })
+
+  it('ends a bounded search as unknown when the number falls in a gap', async () => {
+    const f = pagedForum(190, { deleted: ['1050'] })
+    const reading = service(f.client)
+    await readPages(f, reading, [10])
+    expect(await reading.locateQuote('1050', signal(), null, inThread('1185'))).toEqual({ status: 'unknown-thread' })
+    expect(f.requests).toEqual(['1050/1', '1000/9', '1000/4', '1000/2', '1000/3'])
+  })
+
+  it('opens another thread\'s main post with one request and checks a number below the thread only as a main post', async () => {
+    const f = pagedForum(190, { heads: ['1500'] })
+    const reading = service(f.client)
+    await readPages(f, reading, [10])
+    expect(located(await reading.locateQuote('1500', signal(), null, inThread('1185'))))
+      .toEqual({ threadId: '1500', postId: '1500', page: 1, mode: 'all', source: 'fresh' })
+    expect(await reading.locateQuote('900', signal(), null, inThread('1185'))).toEqual({ status: 'unknown-thread' })
+    expect(f.requests).toEqual(['1500/1', '900/1'])
+  })
+
+  it('bounds pages by the reply count when the quote\'s page is not stored', async () => {
+    const f = pagedForum(190)
+    const reading = service(f.client)
+    await readPages(f, reading, [1])
+    expect(located(await reading.locateQuote('1100', signal(), null, inThread('1185')))).toMatchObject({ page: 6 })
+    // Page 1 narrows the candidates to 2–10; the count gives page 10 as the first read.
+    expect(f.requests).toEqual(['1100/1', '1000/10', '1000/5', '1000/7', '1000/6'])
+  })
+
+  it('stops reading once cancelled, and reports a failed read as failed so that a retry searches again', async () => {
+    const f = pagedForum(190)
+    const reading = service(f.client)
+    await readPages(f, reading, [10])
+    const controller = new AbortController()
+    f.onRequest((request) => {
+      if (request === '1000/9') controller.abort()
+    })
+    expect(await reading.locateQuote('1050', controller.signal, null, inThread('1185'))).toEqual({ status: 'cancelled' })
+    expect(f.requests).toEqual(['1050/1', '1000/9'])
+
+    f.requests.length = 0
+    f.onRequest((request) => {
+      if (request === '1000/9') f.fail(new ForumReadError({ kind: 'network', detail: 'connection' }))
+    })
+    expect(await reading.locateQuote('1050', signal(), null, inThread('1185')))
+      .toEqual({ status: 'failed', threadId: '1000', error: { kind: 'network', detail: 'connection' } })
+    expect(f.requests).toEqual(['1050/1', '1000/9'])
+
+    f.fail(null)
+    f.onRequest(null)
+    expect(located(await reading.locateQuote('1050', signal(), null, inThread('1185')))).toMatchObject({ page: 3 })
+  })
+
+  it('never takes a repeated page above the cookie-less cap for the target, and searches below it', async () => {
+    const f = pagedForum(120 * 19, { cap: 100 })
+    const reading = service(f.client)
+    await readPages(f, reading, [1])
+    // Page 120 repeats page 100: the target is searched below it, never taken from the repeat.
+    const onPage50 = String(1000 + 49 * 19 + 1)
+    expect(located(await reading.locateQuote(onPage50, signal(), null, inThread('3270')))).toMatchObject({ page: 50 })
+    expect(f.requests.filter((request) => Number(request.split('/')[1]) > 100)).toEqual(['1000/120'])
+    expect(db.loadThreadPage('1000', 'all', 120)).toBeNull()
+
+    // Above the cap nothing real can be read: unknown.
+    f.requests.length = 0
+    const onPage110 = String(1000 + 109 * 19 + 1)
+    expect(await reading.locateQuote(onPage110, signal(), null, inThread('3270'))).toEqual({ status: 'unknown-thread' })
+    expect(f.requests).toEqual([`${onPage110}/1`, '1000/120'])
+    expect(db.loadThreadPage('1000', 'all', 120)).toBeNull()
+  })
+
+  it('leaves a link clue first: with a hint the quote\'s thread is not searched', async () => {
+    const f = pagedForum(190)
+    const reading = service(f.client)
+    await readPages(f, reading, [10])
+    expect(await reading.locateQuote('1050', signal(), { threadId: '1000', page: 1 }, inThread('1185'))).toMatchObject({ status: 'thread-known', threadId: '1000' })
+    expect(f.requests).toEqual(['1000/1'])
   })
 })

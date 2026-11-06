@@ -69,7 +69,7 @@ export function PostView({
   const userHash = post.userHash !== null && post.userHash !== '' ? post.userHash : null
   const number = menu?.number ?? null
   const numberItems: ContextMenuItem[] =
-    number === null || quotes === null || entryKey === null ? [] : numberActionItems(quotes, entryKey, number, articleRef.current)
+    number === null || quotes === null || entryKey === null ? [] : numberActionItems(quotes, entryKey, number, articleRef.current, post.id)
   const items: ContextMenuItem[] = actions === undefined || menu === null ? [] : withSelectionCopy(menu.selection, [
     ...numberItems,
     ...(numberItems.length > 0 ? [{ type: 'separator' as const, key: 'number-separator' }] : []),

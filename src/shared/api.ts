@@ -136,16 +136,30 @@ export interface LocateHint {
 }
 
 /**
- * Result of locating a quoted post. Only recorded ownership is used: the post's thread from local
+ * Where an explicitly followed quote sits: the thread being read (or the known owner of the quote
+ * card's post) and the post whose body holds the quote. Used only when neither local records nor a
+ * `LocateHint` locate the post. A quote can only name an earlier post, so the target is searched in
+ * that thread no later than the page holding `fromPostId`.
+ */
+export interface LocateContext {
+  threadId: ThreadId
+  fromPostId: PostId
+}
+
+/**
+ * Result of locating a quoted post. Recorded ownership comes first: the post's thread from local
  * observations, then the latest stored page of each mode that contained it, verified by reading
- * that page again; or, with no record at all, whether the post is itself a thread's main post.
- * Never scans a thread, trusts web-ref page numbers or guesses an owner.
+ * that page again. Without a record, a `LocateHint` page is read once; otherwise the post is checked
+ * as a thread's main post and, with a `LocateContext` naming a thread whose main post is older than
+ * the post, searched in that thread by number (binary search over its full-listing pages, narrowed by
+ * locally stored pages; never a page-by-page scan). Never trusts web-ref page numbers or guesses an owner.
  * - `located`: the post was found on `target.page` of `target.mode` now (`fresh`), or on the stored
  *   copy of that page after the network read failed (`cached`, `networkError` set).
  * - `thread-known`: the owning thread is known and was just read (its recorded page, or page 1 of the
  *   preferred mode when no stored page records the post), but the post was not on its recorded page
  *   or no page records it. Opening the thread (打开原串) is a separate user action.
- * - `unknown-thread`: no local record and the post is not a thread's main post.
+ * - `unknown-thread`: no local record, the post is not a thread's main post and, with a context, the
+ *   search narrowed to a gap or to pages that cannot be read (above the page cap) without finding it.
  * - `failed`: reading what was needed failed; `threadId` when the owner is known.
  * - `cancelled`: superseded or cancelled; must be ignored.
  */
@@ -287,8 +301,10 @@ export interface XidaoApi {
      * Resolves owner, page and mode of a quoted post; see QuoteLocation. Cancel with `reading.cancel`.
      * With `hint` (a search result link) the hinted page of the hinted thread is read once when local
      * records do not locate the post; a readable hinted thread that does not show it is `thread-known`.
+     * `context` (an explicitly followed quote in a thread body or in a quote card of a known thread)
+     * allows the in-thread search; previews and other entries never pass it.
      */
-    locate(input: { operationId: OperationId; postId: PostId; hint?: LocateHint }): Promise<QuoteLocation>
+    locate(input: { operationId: OperationId; postId: PostId; hint?: LocateHint; context?: LocateContext }): Promise<QuoteLocation>
   }
   /**
    * Online search through nmb-search. Only user run/page/retry actions request data, and no forum

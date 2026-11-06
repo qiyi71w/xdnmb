@@ -4,7 +4,7 @@ import type { AnnouncementService } from './announcements/service'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import {
   CLIPBOARD_EDIT_COMMANDS, IpcChannel, MAX_CLIPBOARD_TEXT_LENGTH, THREAD_READ_PURPOSES, type AppStatus, type ClipboardEditCommand, type DirectoryStrategy,
-  type ReadOutcome, type LocateHint, type ThreadReadPurpose
+  type ReadOutcome, type LocateContext, type LocateHint, type ThreadReadPurpose
 } from '../shared/api'
 import type { FeedRef, ReadingMode } from '../shared/forum'
 import type { ImageFormat, ImageKind } from '../shared/images'
@@ -260,6 +260,13 @@ function locateHint(value: unknown): LocateHint | null {
   if (value === undefined) return null
   const input = record(value)
   return { threadId: forumId(input.threadId), page: input.page === null ? null : page(input.page) }
+}
+
+/** Optional thread and post holding an explicitly followed quote: absent/undefined means none. */
+function locateContext(value: unknown): LocateContext | null {
+  if (value === undefined) return null
+  const input = record(value)
+  return { threadId: forumId(input.threadId), fromPostId: forumId(input.fromPostId) }
 }
 
 function sessionId(input: Record<string, unknown>): string {
@@ -553,11 +560,12 @@ export function registerIpc({
     const postId = forumId(input.postId)
     const id = operationId(input)
     const hint = locateHint(input.hint)
+    const context = locateContext(input.context)
     return operations.run(event.sender, id, async (signal) => {
       const relation = await store.findPostThread(postId).catch(() => null)
-      const held = { viewId: `request-${id}`, threadId: relation?.threadId ?? hint?.threadId ?? postId }
+      const held = { viewId: `request-${id}`, threadId: relation?.threadId ?? hint?.threadId ?? context?.threadId ?? postId }
       await content.holdReader(owner(event.sender), held).catch(() => undefined)
-      try { return await reading.locateQuote(postId, signal, hint) }
+      try { return await reading.locateQuote(postId, signal, hint, context) }
       finally { await content.releaseReader(owner(event.sender), held).catch(() => undefined) }
     })
   })
