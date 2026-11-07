@@ -32,7 +32,7 @@ import { historyMemory, rememberHistory, useHistoryKeyword } from '../content/re
 import { forumLabel } from '../../../../shared/drafts'
 import { useEditorWorkspace } from '../editor/workspace'
 import { cookieColorItems } from '../cookieColors/CookieColorPicker'
-import { ContentRegistryContext } from '../tabs/contentRegistry'
+import { ContentRegistryContext, useInitialListMemory } from '../tabs/contentRegistry'
 import { RowExcerpt } from '../feed/ThreadRow'
 import { RowThumbnail } from '../image/RowThumbnail'
 import { useImageScope } from '../image/useImageLoad'
@@ -142,8 +142,8 @@ export function SentPage({
   onReload: (quiet: boolean) => void
   /** Opens a thread the way list rows do (beside the list when split, else a new step). */
   onOpenThread: (threadId: ThreadId, head: Post | null) => void
-  /** Opens a place as a new step of this tab; false when its 历史 entry is no longer current. */
-  openStep: (init: EntryInit) => boolean
+  /** Opens a place as a new step if its 历史 entry is still current. */
+  openStep: (init: EntryInit) => void
   /** Opens a place in a new tab; null outside the app shell. */
   openInTab: ((init: EntryInit) => void) | null
   /** Told when the image viewer opens or closes, so the 历史 page header can be made inert. */
@@ -172,7 +172,8 @@ export function SentPage({
 
   // ---------- Scroll memory (runtime, kept while the entry is in navigation history) ----------
   const ready = list.status === 'ready'
-  const scrollTop = useRef(registry === null ? 0 : (historyMemory(registry.listMemory, entryKey)?.sentScroll[view] ?? 0))
+  const initialMemory = useInitialListMemory(entryKey)
+  const scrollTop = useRef(initialMemory?.kind === 'retained' ? initialMemory.history?.sentScroll[view] ?? 0 : 0)
   const placed = useRef(false)
   useLayoutEffect(() => {
     const scroller = bodyRef.current

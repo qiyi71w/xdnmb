@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import type { AppPlatform, QuoteLocation } from '../../../../shared/api'
-import type { ThreadId } from '../../../../shared/forum'
-import type { AppSettings } from '../../../../shared/settings'
 import { isEditableTarget } from '../../app/shortcuts'
 import { openLayer } from '../../lib/layers'
-import type { ContentRegistry } from '../tabs/contentRegistry'
 import { clearThreadReminders } from '../reminders/useReminders'
-import { currentEntry, entryThread, newTabEntry, type Tab, type TabEntry, type TabsAction, type TabsState, type ThreadOpen, type ThreadSnapshot } from '../tabs/tabsState'
+import type { NavigationSource, ReadingNavigation } from '../tabs/readingNavigation'
+import { currentEntry, entryThread, type Tab, type TabEntry, type TabsState, type ThreadOpen } from '../tabs/tabsState'
 import { readResumePage } from '../thread/readingStart'
 import { findQuoteElement, quoteHostId, quoteKey, type QuoteController, type QuoteRefInfo } from './QuoteContext'
 import {
@@ -83,9 +81,7 @@ export interface QuoteCardProps {
 interface Options {
   tabs: TabsState | null
   getTabs: () => TabsState | null
-  getSettings: () => AppSettings
-  dispatch: (action: TabsAction) => void
-  registry: ContentRegistry
+  navigation: ReadingNavigation
   platform: AppPlatform | null
 }
 
@@ -93,9 +89,9 @@ const NO_INTERNAL: QuoteInternalFailure = { previewSeq: null, locate: null }
 
 /**
  * App-level quote cards: one top-level card at a time, previews and locates with
- * stale-result guards, and the navigation a located quote commits (same tab, in place, a new active
- * tab or 打开原串). Every async result is checked against the latest card state before anything
- * happens; previews never touch reading state.
+ * stale-result guards, and the navigation a located quote requests (same tab, in place, a new active
+ * tab or 打开原串) from the source bound when its card opened. Every async result is checked against
+ * the latest card state before anything happens; previews never touch reading state.
  */
 export function useQuoteNavigation(options: Options) {
   const opts = useRef(options)
@@ -120,8 +116,8 @@ export function useQuoteNavigation(options: Options) {
   }, [])
 
   const cardRef = useRef<HTMLDivElement>(null)
-  /** Thread shown by the source entry when each card opened: a locate commits only while it still is. */
-  const threadOf = useRef(new Map<number, ThreadId | null>())
+  /** Source entry and the thread it showed when each card opened: a locate navigates only while it still does. */
+  const sources = useRef(new Map<number, NavigationSource | null>())
   const pointer = useRef({ trigger: false, card: false })
   const restoringFocus = useRef(false)
   const openTimer = useRef<number | undefined>(undefined)
@@ -143,15 +139,21 @@ export function useQuoteNavigation(options: Options) {
     return null
   }, [])
 
-  /** The card's source entry is still current in its tab and still shows the same thread. */
+  /** The card's bound source entry is still current in its tab and still shows the same thread. */
   const sourceCurrent = useCallback(
-    (card: QuoteCard): { tab: Tab; entry: TabEntry } | null => {
+    (card: QuoteCard): NavigationSource | null => {
+      const bound = sources.current.get(card.id) ?? null
       const shown = shownEntry(card.source.entryKey)
-      if (shown === null || shown.tab.id !== card.source.tabId) return null
-      return (entryThread(shown.entry)?.threadId ?? null) === threadOf.current.get(card.id) ? shown : null
+      if (bound === null || shown === null || shown.tab.id !== bound.tabId) return null
+      return (entryThread(shown.entry)?.threadId ?? null) === bound.threadId ? bound : null
     },
     [shownEntry]
   )
+
+  /** Binds a newly opened card to the entry and thread it was opened from. */
+  const bindSource = useCallback((card: QuoteCard) => {
+    sources.current.set(card.id, opts.current.navigation.source({ tabId: card.source.tabId, entryKey: card.source.entryKey }))
+  }, [])
 
   const runPreview = useCallback(
     (card: QuoteCard) => {
@@ -176,33 +178,37 @@ export function useQuoteNavigation(options: Options) {
     }
   }, [])
 
-  /** Commits a quote navigation from the card's source entry (located target or 打开原串). */
-  const commit = useCallback(
-    (card: QuoteCard, shown: { tab: Tab; entry: TabEntry }, thread: ThreadOpen) => {
-      const { registry, dispatch, getTabs } = opts.current
-      const { tab, entry } = shown
-      const captured = registry.readers.get(entry.key)?.current.capture() ?? null
-      const focus = 'postId' in card.source.focus ? card.source.focus : captured?.focus ?? null
-      const source: ThreadSnapshot | null = captured === null ? null : { ...captured, focus }
-      // The split list beside the target keeps its loaded pages and scroll position.
-      if (entry.kind === 'list' && entry.feed !== null && tab.split) {
-        const memory = registry.listMemory.get(entry.key)
-        const nextKey = getTabs()?.nextKey
-        if (memory !== undefined && nextKey !== undefined) registry.listMemory.set(nextKey, memory)
-      }
-      apply({ type: 'close', cardId: card.id })
-      dispatch({ type: 'quote-navigate', tabId: tab.id, entryKey: entry.key, source, thread })
+  /**
+   * Requests a quote navigation from the card's bound source (located target or 打开原串). The card
+   * stays while it is pending, so 取消 or a newer card withdraws it; once it settles only that same
+   * card closes.
+   */
+  const navigate = useCallback(
+    async (card: QuoteCard, seq: number, source: NavigationSource, thread: ThreadOpen, newTab: boolean): Promise<void> => {
+      const cardId = card.id
+      const focus = 'postId' in card.source.focus ? card.source.focus : undefined
+      const result = await opts.current.navigation.open(source, {
+        kind: 'quote',
+        thread,
+        ...(focus === undefined ? {} : { focus }),
+        ...(newTab ? { newTab } : {}),
+        isCurrent: () => opts.current.tabs?.activeId === source.tabId && isCurrentLocate(stateRef.current, cardId, seq)
+      })
+      // Already on screen in the same thread and mode: no new history step, just pointed at it. The
+      // jump is still an explicit open of that thread, so its reminder counts go to 0.
+      if (result.kind === 'in-place') clearThreadReminders(thread.threadId)
+      if (isCurrentLocate(stateRef.current, cardId, seq)) apply({ type: 'close', cardId })
     },
     [apply]
   )
 
   const onLocated = useCallback(
-    (cardId: number, seq: number, result: QuoteLocation) => {
+    async (cardId: number, seq: number, result: QuoteLocation): Promise<void> => {
       const current = stateRef.current
       if (!isCurrentLocate(current, cardId, seq) || result.status === 'cancelled') return
       const card = current.card as QuoteCard
-      const shown = sourceCurrent(card)
-      if (shown === null) {
+      const source = sourceCurrent(card)
+      if (source === null) {
         apply({ type: 'close', cardId })
         return
       }
@@ -213,25 +219,10 @@ export function useQuoteNavigation(options: Options) {
       }
       const target = { postId: result.target.postId, page: result.target.page, mode: result.target.mode }
       const thread: ThreadOpen = { threadId: result.threadId, head: result.head, target, snapshot: null, unlocatedPostId: null }
-      if (commitKind === 'new-tab') {
-        // A new tab with its own history becomes the active one; the source tab keeps its place.
-        const { dispatch, getSettings } = opts.current
-        const split = getSettings().newTabSplitDefault
-        apply({ type: 'close', cardId })
-        dispatch({ type: 'open-tab', entry: newTabEntry(shown.entry, split, thread), split })
-        return
-      }
-      // Already on screen in the same thread and mode: no new history step, just point at it. The
-      // jump is still an explicit open of that thread, so its reminder counts go to 0.
-      const reader = opts.current.registry.readers.get(shown.entry.key)?.current
-      if (reader !== undefined && reader.showInPlace(result.threadId, target)) {
-        clearThreadReminders(result.threadId)
-        apply({ type: 'close', cardId })
-        return
-      }
-      commit(card, shown, thread)
+      // A new tab with its own history becomes the active one; the source tab keeps its place.
+      await navigate(card, seq, source, thread, commitKind === 'new-tab')
     },
-    [apply, sourceCurrent, commit]
+    [apply, sourceCurrent, navigate]
   )
 
   const runLocate = useCallback(
@@ -247,14 +238,13 @@ export function useQuoteNavigation(options: Options) {
         postId: card.source.postId,
         ...(hint === undefined ? {} : { hint }),
         ...(context === undefined ? {} : { context })
-      }).then(
-        (result) => onLocated(cardId, seq, result),
-        () => {
+      })
+        .then((result) => onLocated(cardId, seq, result))
+        .catch(() => {
           if (!isCurrentLocate(stateRef.current, cardId, seq)) return
           apply({ type: 'cancel-locate', cardId })
           markInternal(cardId, { locate: locate.intent })
-        }
-      )
+        })
     },
     [apply, markInternal, onLocated]
   )
@@ -291,12 +281,12 @@ export function useQuoteNavigation(options: Options) {
       }
       if (card.id !== before?.id) {
         if (info.origin !== undefined) pointer.current.trigger = false
-        threadOf.current.set(card.id, shownThread?.threadId ?? null)
+        bindSource(card)
         runPreview(card)
       }
       return card
     },
-    [apply, shownEntry, runPreview, focusTrigger]
+    [apply, shownEntry, bindSource, runPreview, focusTrigger]
   )
 
   const startLocate = useCallback(
@@ -452,12 +442,12 @@ export function useQuoteNavigation(options: Options) {
         // An explicit menu choice: pinned like a click, replacing any card.
         const card = apply({ type: 'open', source, trigger: 'activate' }).card
         if (card === null || card.source !== source) return
-        threadOf.current.set(card.id, shownThread?.threadId ?? null)
+        bindSource(card)
         runPreview(card)
         if (action !== 'preview') startLocate(card.id, action)
       }
     }),
-    [open, scheduleLeave, clearTimers, startLocate, apply, shownEntry, runPreview, focusTrigger]
+    [open, scheduleLeave, clearTimers, startLocate, apply, shownEntry, bindSource, runPreview, focusTrigger]
   )
 
   // A closed or replaced card drops its reads.
@@ -469,7 +459,7 @@ export function useQuoteNavigation(options: Options) {
     if (previous === null || previous === cardId) return
     cancelOperation(previewOperation(previous))
     cancelOperation(locateOperation(previous))
-    threadOf.current.delete(previous)
+    sources.current.delete(previous)
     pointer.current.card = cardRef.current?.matches(':hover') ?? false
   }, [cardId])
 
@@ -580,8 +570,7 @@ export function useQuoteNavigation(options: Options) {
           onOpenThread: () => {
             const before = stateRef.current.card
             if (before === null || before.id !== card.id) return
-            const shown = sourceCurrent(before)
-            if (shown === null) {
+            if (sourceCurrent(before) === null) {
               apply({ type: 'close', cardId: card.id })
               return
             }
@@ -592,7 +581,7 @@ export function useQuoteNavigation(options: Options) {
             const threadId = known.threadId
             const cardId = card.id
             markInternal(cardId, { locate: null })
-            // Commit returnable history only once the page the thread resumes at was obtained.
+            // Request returnable history only once the page the thread resumes at was obtained.
             const run = async () => {
               const outcome = await readResumePage(threadId, locateOperation(cardId), () => isCurrentLocate(stateRef.current, cardId, seq))
               const latest = stateRef.current
@@ -607,7 +596,7 @@ export function useQuoteNavigation(options: Options) {
                 apply({ type: 'close', cardId })
                 return
               }
-              commit(current, source, { threadId, head: known.head, target: null, snapshot: null, unlocatedPostId: current.source.postId })
+              await navigate(current, seq, source, { threadId, head: known.head, target: null, snapshot: null, unlocatedPostId: current.source.postId }, false)
             }
             run().catch(() => {
               if (!isCurrentLocate(stateRef.current, cardId, seq)) return

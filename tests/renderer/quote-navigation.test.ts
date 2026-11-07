@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { navigateTabs, navigationHarness } from './helpers/readingNavigation'
 import type { QuoteLocation } from '../../src/shared/api'
 import type { ThreadReadingState } from '../../src/shared/reading'
 import { canLocate, initialQuoteState, isCurrentLocate, locateCommit, quoteReducer, type QuoteAction, type QuoteSource, type QuoteState } from '../../src/renderer/src/features/quote/quoteState'
@@ -44,8 +45,7 @@ function readingA(): TabsState {
 }
 
 function quote(state: TabsState, source: ThreadSnapshot, target: ThreadOpen): TabsState {
-  const tab = activeTab(state)!
-  return run(state, { type: 'quote-navigate', tabId: tab.id, entryKey: currentEntry(tab).key, source, thread: target })
+  return navigateTabs(state, { kind: 'quote', thread: target }, source)
 }
 
 describe('quote navigation in the tab history', () => {
@@ -94,19 +94,23 @@ describe('quote navigation in the tab history', () => {
     })
   })
 
-  it('ignores a late result once the source entry is no longer current', () => {
-    let state = readingA()
-    const id = state.activeId
-    const sourceKey = currentEntry(activeTab(state)!).key
-    state = run(state, { type: 'navigate', tabId: id, entry: { kind: 'list', feed: { kind: 'forum', id: '5' } } })
-    expect(run(state, { type: 'quote-navigate', tabId: id, entryKey: sourceKey, source: left('101'), thread: open('200', '201') })).toBe(state)
+  it('ignores a late result once the source entry is no longer current', async () => {
+    const host = navigationHarness(readingA(), { capture: () => left('101') })
+    const source = host.navigation.source({ tabId: host.tabs.activeId })!
+    host.dispatch({ type: 'navigate', tabId: source.tabId, entry: { kind: 'list', feed: { kind: 'forum', id: '5' } } })
+    host.flush()
+    const before = host.tabs
+    const result = host.navigation.open(source, { kind: 'quote', thread: open('200', '201') })
+    host.flush()
+    expect(await result).toEqual({ kind: 'rejected', reason: 'stale' })
+    expect(host.tabs).toBe(before)
   })
 
   it('jumping to the own reply after a send is a plain step that back undoes', () => {
     let state = readingA()
     const id = state.activeId
     const source = currentEntry(activeTab(state)!)
-    state = run(state, { type: 'send-navigate', tabId: id, entryKey: source.key, source: left('120'), thread: open('100', '180') })
+    state = navigateTabs(state, { kind: 'sent-reply', thread: open('100', '180'), snapshot: left('120') })
     expect(currentEntry(activeTab(state)!)).toMatchObject({ origin: null, feed: forum4, thread: { threadId: '100', target: { postId: '180' } } })
     state = run(state, { type: 'back', tabId: id })
     expect(currentEntry(activeTab(state)!)).toMatchObject({ key: source.key, thread: { threadId: '100', snapshot: left('120') } })

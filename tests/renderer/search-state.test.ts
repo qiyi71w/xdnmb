@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { navigateTabs, navigationHarness } from './helpers/readingNavigation'
 import type { Post } from '../../src/shared/forum'
 import type { SearchBatch, SearchFetch, SearchHit } from '../../src/shared/search'
 import {
@@ -173,15 +174,23 @@ describe('locating search hits', () => {
     expect(state.tabs[1]?.locate?.result).toEqual(known)
   })
 
-  it('opens a hit as a search step from an empty new tab, and back restores the source entry', () => {
+  it('opens a hit as a search step from an empty new tab, and back restores the source entry', async () => {
     let tabs = initialTabsState(true)
     const tab = activeTab(tabs)!
     const source = currentEntry(tab)
     const thread = { threadId: '100', head: null, target: { postId: '150', page: 3, mode: 'all' as const }, snapshot: null, unlocatedPostId: null }
-    tabs = runTabs(tabs, { type: 'search-navigate', tabId: tab.id, entryKey: source.key, source: null, thread })
+    const host = navigationHarness(tabs)
+    const from = host.navigation.source({ tabId: tab.id })!
+    const opened = host.navigation.open(from, { kind: 'search', thread })
+    host.flush()
+    expect(await opened).toMatchObject({ kind: 'history' })
+    tabs = host.tabs
     expect(currentEntry(activeTab(tabs)!)).toMatchObject({ kind: 'thread', origin: 'local-search', thread: { target: { postId: '150', page: 3 } } })
     // A stale commit (entry changed meanwhile) is ignored.
-    expect(runTabs(tabs, { type: 'search-navigate', tabId: tab.id, entryKey: source.key, source: null, thread })).toBe(tabs)
+    const stale = host.navigation.open(from, { kind: 'search', thread })
+    host.flush()
+    expect(await stale).toEqual({ kind: 'rejected', reason: 'stale' })
+    expect(host.tabs).toBe(tabs)
     tabs = runTabs(tabs, { type: 'back', tabId: tab.id })
     expect(currentEntry(activeTab(tabs)!)).toMatchObject({ key: source.key, kind: 'list', feed: null, origin: null })
   })
@@ -241,7 +250,7 @@ describe('returning to search results through history', () => {
     let next = run(search, { type: 'locate-start', tabId: tab.id, view: 'local', postId, entryKey, intent: 'navigate' })
     next = run(next, { type: 'close' })
     returns.set(entryKey, { tabId: tab.id, search: tabSearchOf(next, tab.id) })
-    return { search: next, tabs: runTabs(tabs, { type: 'search-navigate', tabId: tab.id, entryKey, source: null, thread: thread(threadId, postId) }) }
+    return { search: next, tabs: navigateTabs(tabs, { kind: 'search', thread: thread(threadId, postId) }) }
   }
 
   /** Back from a search step: the previous entry gets the search it had when the hit was opened. */

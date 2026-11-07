@@ -42,7 +42,7 @@ import { useListImageViewer } from '../image/useListImageViewer'
 import { ListFilterPanel, ListFilterToggle, useListFilter } from '../search/FilterFields'
 import { contentFilterCount, filterList, headMeta } from '../search/listFilters'
 import { NO_CONTENT_FILTERS } from '../search/searchState'
-import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
+import { ContentRegistryContext, useInitialListMemory, useRegisterContent } from '../tabs/contentRegistry'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 import { UnsettledLine, unsettledEntryOf, unsettledText, WriteStatus, type FocusAfterDismiss } from './SubscriptionActivity'
 import { previewBlocker, plansNeedingAttention, ReconcileHistoryDialog, ReconcileResult, ReconcileView } from './SubscriptionReconcile'
@@ -140,8 +140,9 @@ export function SubscriptionPane({
   const openSettings = useSettingsOpener()
   const openInTab = useOpenThreadInTab()
   const registry = useContext(ContentRegistryContext)
+  const initialMemory = useInitialListMemory(entryKey)
   const [remembered] = useState(() => {
-    const memory = registry?.listMemory.get(entryKey)
+    const memory = initialMemory
     return memory?.kind === 'subscriptions' ? memory : null
   })
   const [saved] = useState(() => remembered === null ? registry?.savedLists.get(entryKey) : undefined)

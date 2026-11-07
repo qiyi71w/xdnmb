@@ -19,7 +19,7 @@ import { useRovingFocus } from '../../lib/useRovingFocus'
 import { ThreadRow } from '../feed/ThreadRow'
 import { useImageScope } from '../image/useImageLoad'
 import { useListImageViewer } from '../image/useListImageViewer'
-import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
+import { ContentRegistryContext, useInitialListMemory, useRegisterContent } from '../tabs/contentRegistry'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 import type { ThreadOpen } from '../tabs/tabsState'
 import { savedStart } from '../thread/readingStart'
@@ -75,13 +75,14 @@ export function ReminderPane({
   selectedThreadId: ThreadId | null
   /** Opens a row by the usual resume rules; `head` when held here, shown until page 1 arrives. */
   onOpenThread: (threadId: ThreadId, head: ReminderThreadRow['head']) => void
-  /** Opens a row at an explicit target; false when this list's entry is no longer current. */
-  onOpenTarget: (thread: ThreadOpen) => boolean
+  /** Opens a row at an explicit target if this list's entry is still current. */
+  onOpenTarget: (thread: ThreadOpen, isCurrent: () => boolean) => void
 }) {
   const { overview, cooldownUntil, failure, reload, updated, refusedForCooldown } = useRemindersContext()
   const openList = useListOpener()
   const openInTab = useOpenThreadInTab()
   const registry = useContext(ContentRegistryContext)
+  const initialMemory = useInitialListMemory(entryKey)
   const headingId = useId()
   const checkReasonId = useId()
   useRegisterContent('lists', entryKey, { refresh: () => void reload() })
@@ -98,7 +99,7 @@ export function ReminderPane({
   const scrollRef = useRef<HTMLDivElement>(null)
   const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(scrollRef), scrollRef)
   const [initialScroll] = useState(() => {
-    const memory = registry?.listMemory.get(entryKey)
+    const memory = initialMemory
     if (memory?.kind === 'reminders') return memory.scrollTop
     return registry?.savedLists.get(entryKey)?.scrollTop ?? 0
   })
@@ -193,7 +194,8 @@ export function ReminderPane({
       .get({ threadId: row.threadId })
       .catch(() => null)
       .then((reading) => {
-        if (!alive.current || at !== openSeq.current) return
+        const isCurrent = () => alive.current && at === openSeq.current
+        if (!isCurrent()) return
         if (savedStart(reading, reading?.mode ?? 'all').position.kind !== 'top') {
           onOpenThread(row.threadId, row.head)
           return
@@ -204,7 +206,7 @@ export function ReminderPane({
           target: { postId: null, page: firstNew.page, mode: firstNew.mode },
           snapshot: null,
           unlocatedPostId: null
-        })
+        }, isCurrent)
       })
   }
 

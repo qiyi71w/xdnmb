@@ -56,12 +56,12 @@ import { LocalSearchContext, SearchOpenerContext, type LocalSearchHost, type Sea
 import { SearchSheet } from '../features/search/SearchSheet'
 import { tabSearchOf } from '../features/search/searchState'
 import { useSearch } from '../features/search/useSearch'
-import { captureLists, ContentRegistryContext, createContentRegistry, type HistoryView, type SearchPageSide } from '../features/tabs/contentRegistry'
+import { captureLists, ContentRegistryContext, ListMemorySeedsContext, createContentRegistry, type HistoryView, type SearchPageSide } from '../features/tabs/contentRegistry'
+import { useReadingNavigation } from '../features/tabs/useReadingNavigation'
 import {
   activeTab,
   currentEntry,
   entryThread,
-  initialTabsState,
   isLocalList,
   isSettingsTab,
   listKey,
@@ -73,7 +73,6 @@ import {
   type StripTab,
   type Tab,
   type TabEntry,
-  type TabsAction,
   type TabsState,
   type ThreadOpen
 } from '../features/tabs/tabsState'
@@ -93,17 +92,6 @@ import { useSettingsWriter } from './useSettingsWriter'
 import { StorageBanner } from '../features/storage/StorageBanner'
 import './layout.css'
 
-/**
- * Tabs exist only once the global split default is known (the first tab takes it), or the
- * workspace saved at the last real quit is restored.
- */
-type ShellAction = TabsAction | { type: 'init'; split: boolean } | { type: 'restore'; tabs: TabsState }
-
-function shellReducer(state: TabsState | null, action: ShellAction): TabsState | null {
-  if (action.type === 'init') return state ?? initialTabsState(action.split)
-  if (action.type === 'restore') return state ?? action.tabs
-  return state === null ? null : tabsReducer(state, action)
-}
 
 function threadTitle(open: ThreadOpen): string {
   const head = open.head
@@ -170,10 +158,10 @@ export function App() {
     () => ({ settings, latest: latestSettings, write: writeSettings, notSaved: settingsWriter.status.notSaved }),
     [settings, latestSettings, writeSettings, settingsWriter.status.notSaved]
   )
-  const [tabs, dispatch] = useReducer(shellReducer, null)
+  const registry = useMemo(createContentRegistry, [])
+  const { tabs, dispatch, navigation: readingNavigation, seeds } = useReadingNavigation(registry, settings.newTabSplitDefault)
   // 图片遮罩 reveals of each tab's page visit (renderer memory only).
   const [reveals, dispatchReveals] = useReducer(imageRevealsReducer, INITIAL_IMAGE_REVEALS)
-  const registry = useMemo(createContentRegistry, [])
   const directory = useDirectory()
   const { start: startDirectory } = directory
   const identities = useIdentities()
@@ -427,9 +415,7 @@ export function App() {
   const quote = useQuoteNavigation({
     tabs,
     getTabs: () => stateRef.current.tabs,
-    getSettings: () => stateRef.current.settings,
-    dispatch,
-    registry,
+    navigation: readingNavigation,
     platform
   })
   // ---------- Workspace restore ----------
@@ -538,14 +524,12 @@ export function App() {
 
   // ---------- Local / thread search ----------
   /** Tab whose reader takes focus after a search hit was opened in it. */
-  const pendingReaderFocus = useRef<number | null>(null)
+  const [pendingReaderFocus, setPendingReaderFocus] = useState<number | null>(null)
   const search = useSearch({
     tabs,
-    getTabs: () => stateRef.current.tabs,
-    dispatch,
-    registry,
+    navigation: readingNavigation,
     onCommitted: (tabId) => {
-      pendingReaderFocus.current = tabId
+      setPendingReaderFocus(tabId)
     }
   })
   const { commands: searchCommands } = search
@@ -695,12 +679,10 @@ export function App() {
   /** The sending tab's entry and reading position when a send starts there. */
   const sendOrigin = useCallback(
     (tabId: number): SendOrigin => {
-      const tab = stateRef.current.tabs?.tabs.find((item) => item.id === tabId)
-      if (tab === undefined) return { tabId, entryKey: null, source: null }
-      const entryKey = currentEntry(tab).key
-      return { tabId, entryKey, source: registry.readers.get(entryKey)?.current.capture() ?? null }
+      const source = readingNavigation.source({ tabId, timing: 'send-start' })
+      return { tabId, entryKey: source?.entryKey ?? null, source: source?.snapshot ?? null }
     },
-    [registry]
+    [readingNavigation]
   )
 
   const followSend = useCallback(
@@ -729,43 +711,24 @@ export function App() {
           await window.xidao.reading.locateThreadEnd({ operationId: operationId(), threadId, mode: 'all', purpose: 'display' })
         },
         // A new plain step of the tab (back reads 后退): back returns to where the send started.
-        openLocated: (step, location) => {
-          const tab = stateRef.current.tabs?.tabs.find((item) => item.id === step.tabId)
-          if (tab === undefined) return
-          const entry = currentEntry(tab)
-          const source = step.source ?? registry.readers.get(entry.key)?.current.capture() ?? null
-          // The split list beside the target keeps its loaded pages and scroll position.
-          if (entry.kind === 'list' && entry.feed !== null && tab.split) {
-            const memory = registry.listMemory.get(entry.key)
-            const nextKey = stateRef.current.tabs?.nextKey
-            if (memory !== undefined && nextKey !== undefined) registry.listMemory.set(nextKey, memory)
-          }
+        openLocated: async (step, location) => {
+          const source = readingNavigation.source({ tabId: step.tabId, entryKey: step.entryKey })
+          if (source === null) return
           const target = { postId: location.target.postId, page: location.target.page, mode: location.target.mode }
-          const readerKey = entry.kind === 'online-search' ? entry.key : (entry.thread?.readerKey ?? entry.key)
-          const thread: ThreadOpen = { threadId: location.threadId, head: location.head, target, snapshot: null, unlocatedPostId: null, readerKey }
-          dispatch({ type: 'send-navigate', tabId: tab.id, entryKey: entry.key, source, thread })
+          const thread: ThreadOpen = { threadId: location.threadId, head: location.head, target, snapshot: null, unlocatedPostId: null }
+          await readingNavigation.open(source, { kind: 'sent-reply', thread, snapshot: step.source, isCurrent: () => stillShown(step) })
         },
         // A new step either way; the list was refreshed first, so it lists the new thread beside it
         // (split) and when back returns to it.
-        openThread: (step, threadId) => {
-          const state = stateRef.current.tabs
-          const tab = state?.tabs.find((item) => item.id === step.tabId)
-          if (state == null || tab === undefined) return
-          const entry = currentEntry(tab)
-          if (!(entry.kind === 'list' && tab.split)) {
-            selectThread(step.tabId, threadId, null)
-            return
-          }
-          // Split: choosing a list item would only replace the thread beside the list (no step).
-          leave(tab)
-          const memory = registry.listMemory.get(entry.key)
-          if (memory !== undefined) registry.listMemory.set(state.nextKey, memory)
+        openThread: async (step, threadId) => {
+          const source = readingNavigation.source({ tabId: step.tabId, entryKey: step.entryKey })
+          if (source === null) return
           const thread: ThreadOpen = { threadId, head: null, target: null, snapshot: null, unlocatedPostId: null }
-          dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'list', feed: entry.feed, thread } })
+          await readingNavigation.open(source, { kind: 'sent-thread', thread, isCurrent: () => stillShown(step) })
         }
       }).catch(() => undefined)
     },
-    [shownEntry, registry, selectThread, leave]
+    [shownEntry, registry, readingNavigation]
   )
   useLayoutEffect(() => {
     sendHooks.current = { origin: sendOrigin, settled: followSend }
@@ -780,24 +743,11 @@ export function App() {
    * so the target applies.
    */
   const openListTarget = useCallback(
-    (tabId: number, entryKey: number, thread: ThreadOpen): boolean => {
-      const state = stateRef.current.tabs
-      const tab = state?.tabs.find((item) => item.id === tabId)
-      if (state == null || tab === undefined) return false
-      const entry = currentEntry(tab)
-      if (entry.key !== entryKey || entry.kind !== 'list') return false
-      if (tab.split && entry.thread?.threadId === thread.threadId) {
-        leave(tab)
-        const memory = registry.listMemory.get(entry.key)
-        if (memory !== undefined) registry.listMemory.set(state.nextKey, memory)
-        dispatch({ type: 'navigate', tabId, entry: { kind: 'list', feed: entry.feed, thread } })
-        return true
-      }
-      if (!tab.split) leave(tab)
-      dispatch({ type: 'select-thread', tabId, thread })
-      return true
+    (tabId: number, entryKey: number, thread: ThreadOpen, isCurrent: () => boolean): void => {
+      const source = readingNavigation.source({ tabId, entryKey })
+      if (source !== null) void readingNavigation.open(source, { kind: 'list-target', thread, isCurrent })
     },
-    [leave, registry]
+    [readingNavigation]
   )
 
   const goBack = useCallback(
@@ -984,22 +934,13 @@ export function App() {
    * otherwise as a page; a forum list as a new list step.
    */
   const openFromHistory = useCallback(
-    (entryKey: number, init: EntryInit): boolean => {
-      const state = stateRef.current.tabs
-      const tab = state?.tabs.find((item) => currentEntry(item).key === entryKey)
-      if (state == null || tab === undefined) return false
-      const entry = currentEntry(tab)
-      leave(tab)
-      if (init.kind === 'thread' && tab.split && entry.kind === 'list') {
-        const memory = registry.listMemory.get(entry.key)
-        if (memory !== undefined) registry.listMemory.set(state.nextKey, memory)
-        dispatch({ type: 'navigate', tabId: tab.id, entry: { kind: 'list', feed: entry.feed, thread: init.thread } })
-        return true
-      }
-      dispatch({ type: 'navigate', tabId: tab.id, entry: init })
-      return true
+    (entryKey: number, init: EntryInit): void => {
+      const tab = stateRef.current.tabs?.tabs.find((item) => currentEntry(item).key === entryKey)
+      if (tab === undefined) return
+      const source = readingNavigation.source({ tabId: tab.id, entryKey })
+      if (source !== null) void readingNavigation.open(source, { kind: 'history', entry: init })
     },
-    [leave, registry]
+    [readingNavigation]
   )
 
   /**
@@ -1170,11 +1111,10 @@ export function App() {
 
   // An opened search hit: its new reader takes focus (the sheet that had it is gone).
   useLayoutEffect(() => {
-    const tabId = pendingReaderFocus.current
-    if (tabId === null) return
-    pendingReaderFocus.current = null
-    document.getElementById(`tabpanel-${tabId}`)?.querySelector<HTMLElement>('main.reader-wrap:not([hidden])')?.focus({ preventScroll: true })
-  }, [tabs])
+    if (pendingReaderFocus === null) return
+    setPendingReaderFocus(null)
+    document.getElementById(`tabpanel-${pendingReaderFocus}`)?.querySelector<HTMLElement>('main.reader-wrap:not([hidden])')?.focus({ preventScroll: true })
+  }, [pendingReaderFocus])
 
   /**
    * The 搜索 page as a new step of the active tab (the tab 设置 returns to while 设置 is active), on
@@ -1471,6 +1411,7 @@ export function App() {
           <div className="measure-reading" ref={readingMeasureRef} aria-hidden="true" />
           <div className="measure-scrollbar" ref={scrollbarMeasureRef} aria-hidden="true" />
           <ContentRegistryContext.Provider value={registry}>
+            <ListMemorySeedsContext value={seeds}>
             <QuoteControllerContext.Provider value={quote.controller}>
             <QuoteActiveContext.Provider value={quote.activeKey}>
             <SearchOpenerContext value={openSearch}>
@@ -1592,6 +1533,7 @@ export function App() {
             </SearchOpenerContext>
             </QuoteActiveContext.Provider>
             </QuoteControllerContext.Provider>
+            </ListMemorySeedsContext>
           </ContentRegistryContext.Provider>
           {/* Outside every reader's content: a quote card is not part of any thread view. Its nested
               quotes still go through the quote controller (click, Enter, menu, new tab). One mount

@@ -82,9 +82,9 @@ export function TabView({
   onShowPane: (tabId: number, pane: Region) => void
   /**
    * A list item opened at an explicit target (a reminder's first new page): shows it from the list
-   * entry `entryKey`. False when that entry is no longer the tab's current one.
+   * entry `entryKey`. Ignored when that entry is no longer the tab's current one.
    */
-  onOpenTarget: (tabId: number, entryKey: number, thread: ThreadOpen) => boolean
+  onOpenTarget: (tabId: number, entryKey: number, thread: ThreadOpen, isCurrent: () => boolean) => void
   /**
    * An online search result opened from entry `entryKey` as a new `online-search` step; false when
    * that entry is no longer current.
@@ -185,7 +185,7 @@ export function TabView({
           forumNames={forumNames}
           selectedThreadId={selectedThreadId}
           onOpenThread={(threadId, head) => onSelectThread(tab.id, threadId, head)}
-          onOpenTarget={(thread) => onOpenTarget(tab.id, entry.key, thread)}
+          onOpenTarget={(thread, isCurrent) => onOpenTarget(tab.id, entry.key, thread, isCurrent)}
         />
       )
     } else if (feed.kind === 'subscriptions') {

@@ -5,7 +5,7 @@ import type { ContentFilters } from '../../../../shared/search'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { NO_CONTENT_FILTERS } from '../search/searchState'
-import { ContentRegistryContext, type HistoryMemory, type HistoryView, type ListMemory, type RetainedPage } from '../tabs/contentRegistry'
+import { ContentRegistryContext, useInitialListMemory, type HistoryMemory, type HistoryView, type ListMemory, type RetainedPage } from '../tabs/contentRegistry'
 import { attempt, contentFailureText, type Refused } from './contentText'
 import { offlineEpoch, offlineGeneration, subscribeOffline } from './offlineSync'
 import type { ReadingResets } from './readingResets'
@@ -258,8 +258,9 @@ export function HistoryConfirm({
  */
 export function useRetainedScroll(entryKey: number, bodyRef: RefObject<HTMLDivElement | null>, ready: boolean, displayed: boolean) {
   const registry = useContext(ContentRegistryContext)
+  const initialMemory = useInitialListMemory(entryKey)
   const [initialScroll] = useState(() => {
-    const memory = registry?.listMemory.get(entryKey)
+    const memory = initialMemory
     if (memory?.kind === 'retained') return memory.scrollTop
     return registry?.savedLists.get(entryKey)?.scrollTop ?? 0
   })

@@ -181,24 +181,6 @@ export type TabsAction =
    * leaving the entry, so coming back restores it.
    */
   | { type: 'snapshot'; tabId: number; entryKey: number; snapshot: ThreadSnapshot }
-  /**
-   * A quote was located (or 打开原串 succeeded) while entry `entryKey` was current: remembers where
-   * that entry was left (`source`, including the triggering quote) and pushes the target as a new
-   * `quote` step, dropping the forward branch. A split list entry keeps its list beside the target.
-   * Ignored when `entryKey` is no longer current (the reader navigated meanwhile).
-   */
-  | { type: 'quote-navigate'; tabId: number; entryKey: number; source: ThreadSnapshot | null; thread: ThreadOpen }
-  /**
-   * The same for a located hit of the local / thread search (or its 打开原串): a `local-search` step,
-   * whose back control reads
-   * 返回搜索结果. Works from any entry, an empty new tab included.
-   */
-  | { type: 'search-navigate'; tabId: number; entryKey: number; source: ThreadSnapshot | null; thread: ThreadOpen }
-  /**
-   * The same for the jump to one's own reply after a send in the thread shown: a plain step (back
-   * reads 后退, not 返回引用处), since the send started in that thread rather than from a quote.
-   */
-  | { type: 'send-navigate'; tabId: number; entryKey: number; source: ThreadSnapshot | null; thread: ThreadOpen }
 
 function makeEntry(init: EntryInit, key: number, origin: EntryOrigin = null): TabEntry {
   switch (init.kind) {
@@ -424,20 +406,5 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         const thread: ThreadOpen = { ...current.thread, target: null, snapshot: { ...action.snapshot, focus } }
         return replaceCurrent(tab, { ...current, thread } as TabEntry)
       })
-    case 'quote-navigate':
-    case 'search-navigate':
-    case 'send-navigate': {
-      const tab = state.tabs.find((item) => item.id === action.tabId)
-      if (tab === undefined) return state
-      const current = currentEntry(tab)
-      if (current.key !== action.entryKey) return state
-      const left = action.source === null ? state : tabsReducer(state, { type: 'snapshot', tabId: action.tabId, entryKey: action.entryKey, snapshot: action.source })
-      const init: EntryInit =
-        current.kind === 'list' && current.feed !== null && tab.split
-          ? { kind: 'list', feed: current.feed, thread: action.thread }
-          : { kind: 'thread', thread: action.thread }
-      const origin = action.type === 'quote-navigate' ? 'quote' : action.type === 'search-navigate' ? 'local-search' : null
-      return push(left, action.tabId, init, origin)
-    }
   }
 }

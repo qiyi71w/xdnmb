@@ -60,9 +60,9 @@ export interface SendFollowUpDeps {
   /** Reads the thread's last page (full listing), recording its replies for a later locate. */
   readThreadEnd: (threadId: ThreadId) => Promise<void>
   /** Commits a located reply as a new plain step from the entry (back returns to it). */
-  openLocated: (plan: SendFollowUp & { kind: 'reply' }, location: QuoteLocation & { status: 'located' }) => void
+  openLocated: (plan: SendFollowUp & { kind: 'reply' }, location: QuoteLocation & { status: 'located' }) => void | Promise<void>
   /** Opens the new thread from the forum list entry, as choosing it in the list does. */
-  openThread: (plan: SendFollowUp & { kind: 'thread' }, threadId: ThreadId) => void
+  openThread: (plan: SendFollowUp & { kind: 'thread' }, threadId: ThreadId) => void | Promise<void>
 }
 
 /**
@@ -73,7 +73,7 @@ export async function runSendFollowUp(plan: SendFollowUp, deps: SendFollowUpDeps
   if (plan.kind === 'thread') {
     // First, so both the list beside the new thread (split) and the one back returns to show it.
     await deps.refreshList(plan.entryKey)
-    if (plan.threadId !== null && deps.stillShown(plan)) deps.openThread(plan, plan.threadId)
+    if (plan.threadId !== null && deps.stillShown(plan)) await deps.openThread(plan, plan.threadId)
     return
   }
   await deps.refreshThread(plan.entryKey)
@@ -88,5 +88,5 @@ export async function runSendFollowUp(plan: SendFollowUp, deps: SendFollowUpDeps
     location = await deps.locate(postId)
   }
   if (location.status !== 'located' || location.threadId !== plan.threadId || !deps.stillShown(plan)) return
-  deps.openLocated(plan, location)
+  await deps.openLocated(plan, location)
 }
