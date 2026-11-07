@@ -71,6 +71,7 @@ export type SearchNextState = 'available' | SearchChainEnd
  * A `retryAt` deadline is epoch milliseconds from Retry-After, or null when the service gave none.
  */
 export type SearchError =
+  | { kind: 'consent-required' }
   | { kind: 'network'; detail: 'timeout' | 'connection' }
   | { kind: 'rate-limited'; retryAt: number | null }
   | { kind: 'verification'; httpStatus: number }

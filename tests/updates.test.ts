@@ -88,7 +88,7 @@ function fakeEngine() {
  * A service on `dir`. The stored record and package start empty, unless `restarted` (a later start
  * of the same installation, keeping both).
  */
-function service(engine: ReturnType<typeof fakeEngine>, options: { platform?: UpdatePlatform; version?: string; restarted?: boolean } = {}) {
+function service(engine: ReturnType<typeof fakeEngine>, options: { platform?: UpdatePlatform; version?: string; restarted?: boolean; isAllowed?: () => boolean } = {}) {
   if (options.restarted !== true) {
     rmSync(join(dir, 'pending'), { recursive: true, force: true })
     rmSync(join(dir, 'update-state.json'), { force: true })
@@ -102,6 +102,7 @@ function service(engine: ReturnType<typeof fakeEngine>, options: { platform?: Up
     unavailable: null,
     currentVersion: options.version ?? '0.1.0',
     engine: engine.api,
+    isAllowed: options.isAllowed ?? (() => true),
     records: createRecordStore(join(dir, 'update-state.json')),
     pendingInstall: createPendingInstallStore(join(dir, 'update-on-start.json')),
     installMarker: createInstallMarkerStore(join(dir, 'update-launched.json')),
@@ -117,6 +118,55 @@ function service(engine: ReturnType<typeof fakeEngine>, options: { platform?: Up
 }
 
 describe('software updates', () => {
+  it('blocks startup, timers and manual requests until authorized, then stops timers and downloads on revocation', async () => {
+    let allowed = false
+    const engine = fakeEngine()
+    const { instance } = service(engine, { isAllowed: () => allowed })
+    await instance.start(settings())
+    await instance.check()
+    await instance.download()
+    await vi.advanceTimersByTimeAsync(2 * DAY)
+    expect(engine.checks).toBe(0)
+    expect(engine.downloads).toBe(0)
+    expect(instance.state().lastCheck).toBeNull()
+
+    allowed = true
+    instance.consentChanged()
+    await instance.check()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(engine.checks).toBe(1)
+    engine.holdDownloads()
+    const downloading = instance.download()
+    await settle()
+    expect(instance.state().release?.download.status).toBe('downloading')
+    allowed = false
+    instance.consentChanged()
+    await downloading
+    expect(instance.state().release?.download).toMatchObject({ status: 'none', cancelled: true })
+    await instance.check()
+    await instance.download()
+    await vi.advanceTimersByTimeAsync(2 * DAY)
+    expect(engine.checks).toBe(1)
+    expect(engine.downloads).toBe(1)
+  })
+
+  it('rechecks permission after asynchronous proxy configuration, before sending a check', async () => {
+    let allowed = true
+    const engine = fakeEngine()
+    const { instance } = service(engine, { isAllowed: () => allowed })
+    await instance.start(settings({ updateAutoCheck: false }))
+    engine.holdNetwork()
+    const pending = instance.check()
+    await settle()
+    allowed = false
+    instance.consentChanged()
+    engine.releaseNetwork()
+    await pending
+    expect(engine.checks).toBe(0)
+    expect(instance.state().checking).toBe(false)
+    expect(instance.state().lastCheck).toBeNull()
+  })
+
   it('checks at cold start and again only after 24 hours; a check while one runs starts no second one', async () => {
     const engine = fakeEngine()
     const { instance } = service(engine)

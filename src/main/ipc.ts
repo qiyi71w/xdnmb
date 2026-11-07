@@ -1,4 +1,6 @@
 import type { AnalyticsService } from './analytics/service'
+import type { ThirdPartyService } from './third-party/service'
+import { isThirdPartyChoices } from '../shared/third-party'
 import { isAnnouncementIdentity } from '../shared/announcements'
 import type { AnnouncementService } from './announcements/service'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
@@ -67,6 +69,7 @@ class InvalidRequestError extends Error {
 
 interface IpcDeps {
   analytics: AnalyticsService
+  thirdParty: ThirdPartyService
   announcements: AnnouncementService
   content: ContentService
   search: SearchService
@@ -335,7 +338,7 @@ export interface IpcRegistration {
 
 export function registerIpc({
   reading, images, identities, account, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
-  analytics, announcements, updates, getStatus, upgrade, restore, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
+  analytics, thirdParty, announcements, updates, getStatus, upgrade, restore, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): IpcRegistration {
   const owner = (sender: WebContents): string => String(sender.id)
   const operations = new OperationRegistry()
@@ -364,9 +367,17 @@ export function registerIpc({
   }
 
   handle(IpcChannel.analyticsGetState, async () => analytics.getState())
-  handle(IpcChannel.analyticsSetChoice, async (_event, raw) => {
-    if (raw !== 'on' && raw !== 'off') throw new InvalidRequestError()
-    return analytics.setChoice(raw)
+  handle(IpcChannel.thirdPartyGetState, async () => thirdParty.getState())
+  handle(IpcChannel.thirdPartyComplete, async (_event, raw) => {
+    if (!isThirdPartyChoices(raw)) throw new InvalidRequestError()
+    return thirdParty.complete(raw)
+  })
+  handle(IpcChannel.thirdPartySetChoice, async (_event, raw) => {
+    const input = record(raw)
+    if (Object.keys(input).length !== 2 || typeof input.allowed !== 'boolean') throw new InvalidRequestError()
+    const service = input.service
+    if (service !== 'updates' && service !== 'search' && service !== 'analytics') throw new InvalidRequestError()
+    return thirdParty.setChoice(service, input.allowed)
   })
 
   handle(IpcChannel.announcementGetState, async () => announcements.getState())
@@ -590,6 +601,7 @@ export function registerIpc({
   })
   handle(IpcChannel.openOnlineSearchSite, async (_event, raw) => {
     if (raw !== undefined) throw new InvalidRequestError()
+    if (!thirdParty.allows('search')) return { opened: false }
     await shell.openExternal(SEARCH_SITE_URL)
     return { opened: true }
   })
@@ -686,6 +698,10 @@ export function registerIpc({
     const parsed = new URL(url)
     // Only explicit web links; never credentials-in-URL, files, custom schemes or app protocols.
     if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:') || parsed.username || parsed.password) return { opened: false }
+    const hostname = parsed.hostname.replace(/\.$/, '')
+    if (hostname === 'nmb-search.166666666.xyz' && !thirdParty.allows('search')) return { opened: false }
+    if (hostname === 'github.com' && parsed.pathname.toLowerCase().startsWith('/qiyi71w/xdnmb/releases') && !thirdParty.allows('updates')) return { opened: false }
+    if (['objects.githubusercontent.com', 'release-assets.githubusercontent.com'].includes(hostname) && !thirdParty.allows('updates')) return { opened: false }
     await shell.openExternal(parsed.href)
     return { opened: true }
   })
@@ -975,8 +991,14 @@ export function registerIpc({
 
   // Software updates: no input names a URL, path or version to fetch; the source is fixed.
   handle(IpcChannel.updateGetState, async () => updates.state())
-  handle(IpcChannel.updateCheck, async () => { await updates.check() })
-  handle(IpcChannel.updateDownload, async () => { await updates.download() })
+  handle(IpcChannel.updateCheck, async () => {
+    if (!thirdParty.allows('updates')) throw new InvalidRequestError()
+    await updates.check()
+  })
+  handle(IpcChannel.updateDownload, async () => {
+    if (!thirdParty.allows('updates')) throw new InvalidRequestError()
+    await updates.download()
+  })
   handle(IpcChannel.updateCancelDownload, async () => updates.cancelDownload())
   handle(IpcChannel.updateInstallAndRestart, async () => updates.installAndRestart())
   handle(IpcChannel.updateOpenInstaller, async () => updates.openInstaller())

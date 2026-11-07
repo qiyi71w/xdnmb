@@ -1,0 +1,280 @@
+/* Third-party services (features/thirdParty): the first-run disclosure, the later question for one
+   service and 设置 › 系统 › 第三方服务. The warning is one tinted callout; the services sit on a
+   single paper sheet divided by hairlines, each a settings-style row (name and purpose left, the
+   shared switch right) over its facts, so the dialog has one layer of grouping instead of a box
+   per service. Text wraps everywhere; the dialogs' buttons stay outside the scrolling body,
+   reachable in narrow windows and at 200% zoom. */
+
+/* Qualified with .modal: components/modal.css sets .modal's width at the same specificity, and
+   the build's stylesheet order must not decide which one wins. */
+.modal.third-party-dialog {
+  width: min(680px, calc(100vw - 32px));
+}
+
+.modal.third-party-ask {
+  width: min(580px, calc(100vw - 32px));
+}
+
+/* The first-run disclosure has no close button; keep its title row as tall as one that has. */
+.third-party-dialog .modal-header:not(:has(.icon-btn)) {
+  min-height: 52px;
+  padding-right: 20px;
+}
+
+.third-party-body {
+  gap: 14px;
+}
+
+.third-party-lead {
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* The same tinted band as the storage banner: warn ink on warn-bg, a faint warn hairline, no shadow. */
+.notice-inline.third-party-warning {
+  margin: 0;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--warn-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--warn-ink) 18%, transparent);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.third-party-warning .icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.third-party-choices {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+.third-party-choice {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px 16px;
+}
+
+.third-party-choice + .third-party-choice {
+  border-top: 1px solid var(--line-soft);
+}
+
+/* Name and purpose left, the switch right on the name's line (16px track in a 19.6px line). */
+.third-party-choice-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.third-party-choice-head .switch {
+  flex: none;
+  margin-top: 2px;
+}
+
+.third-party-choice-text {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.third-party-choice-name {
+  font-size: var(--text-md);
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.third-party-choice.is-unavailable .third-party-choice-name {
+  color: var(--ink-2);
+}
+
+.third-party-choice-purpose {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.third-party-choice-note,
+.third-party-details-purpose {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Terms in a fixed column so all three lists line up; values a step quieter than the purpose. */
+.third-party-facts {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: 6px 14px;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.third-party-ask .third-party-facts {
+  padding: 12px 14px;
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+.third-party-facts dt {
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+.third-party-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Narrow windows and large zoom: each term above its text. */
+@media (max-width: 480px) {
+  .third-party-facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .third-party-facts dd + dt {
+    margin-top: 8px;
+  }
+
+  .third-party-choice {
+    padding: 12px;
+  }
+
+  .third-party-ask .third-party-facts {
+    padding: 10px 12px;
+  }
+}
+
+.third-party-actions {
+  align-items: center;
+}
+
+.third-party-outcome {
+  flex: 1 1 100%;
+  margin: 0;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+
+.third-party-outcome .icon {
+  flex: none;
+  margin-top: 3px;
+}
+
+/* 设置 › 第三方服务 */
+
+.third-party-row {
+  display: grid;
+  gap: 4px;
+}
+
+.third-party-row + .third-party-row {
+  margin-top: 6px;
+}
+
+.third-party-outcome-slot:empty {
+  display: none;
+}
+
+.third-party-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.third-party-details {
+  display: grid;
+  gap: 8px;
+}
+
+/* Under the summary's text, past its chevron (4px padding + 14px icon + 4px gap). */
+.third-party-details > .third-party-details-purpose,
+.third-party-details > .third-party-facts {
+  padding-left: 22px;
+}
+
+@media (max-width: 480px) {
+  .third-party-details > .third-party-details-purpose,
+  .third-party-details > .third-party-facts {
+    padding-left: 0;
+  }
+}
+
+.third-party-details > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: var(--radius-s);
+  font-size: var(--text-sm);
+  color: var(--accent-ink);
+  list-style: none;
+  cursor: pointer;
+}
+
+.third-party-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.third-party-details > summary:hover {
+  background: var(--hover);
+}
+
+.third-party-details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.third-party-details-icon {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.third-party-details[open] > summary .third-party-details-icon {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .third-party-details-icon {
+    transition: transform 0.15s var(--ease-out);
+  }
+}
+
+/* Online search and 软件更新 while the service is off. */
+.third-party-off {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0;
+}
+
+.third-party-off .notice-inline {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

@@ -8,8 +8,8 @@ import { ANALYTICS_INSTANCE_ID_PATTERN, ANALYTICS_STAT_DAY_PATTERN } from './ana
 export type AnalyticsChoice = 'unset' | 'off' | 'on'
 
 /**
- * Why statistics cannot run in this build or on this run. `available` is the only state in which
- * the first-run question is asked or the choice can be changed.
+ * Why statistics cannot run in this build or on this run. Only `available` permits enabling;
+ * the shared third-party disclosure still explains unavailable services and allows refusal.
  */
 export type AnalyticsAvailability =
   | 'available'
@@ -37,7 +37,6 @@ export type AnalyticsChoiceResult =
 
 export interface AnalyticsApi {
   getState(): Promise<AnalyticsState>
-  setChoice(choice: 'on' | 'off'): Promise<AnalyticsChoiceResult>
 }
 
 /** The stored record (settings key `analytics`). The token is OS-protected ciphertext, base64. */

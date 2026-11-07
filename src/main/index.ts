@@ -1,3 +1,5 @@
+import { createThirdPartyService, type ThirdPartyService } from './third-party/service'
+import { THIRD_PARTY_CHANGED_CHANNEL } from '../shared/third-party'
 import { createAnalyticsService, type AnalyticsService } from './analytics/service'
 import { analyticsOrigin, createAnalyticsTransport } from './analytics/transport'
 import { ANNOUNCEMENT_URL, MAX_ANNOUNCEMENT_LENGTH } from '../shared/announcements'
@@ -84,6 +86,7 @@ let search: SearchService | null = null
 let updates: UpdateService | null = null
 let announcements: AnnouncementService | null = null
 let analytics: AnalyticsService | null = null
+let thirdParty: ThirdPartyService | null = null
 /**
  * Windows: a hidden window that exists for the whole run, so a shutdown, restart or log-off is noticed
  * even after the main window has closed while a quit finishes (the system asks every top-level window).
@@ -341,6 +344,7 @@ async function start(): Promise<void> {
   const analyticsService = createAnalyticsService({
     store: openedStore,
     storageReady: () => openedStore.status.state === 'ready',
+    isConsented: () => thirdParty?.isAcknowledged() === true,
     protector,
     transport: statisticsOrigin === null ? null : createAnalyticsTransport({
       origin: statisticsOrigin, timeoutMs: 10_000, userAgent: `Xidao/${app.getVersion()}`
@@ -354,7 +358,6 @@ async function start(): Promise<void> {
       mainWindow !== null && mainWindow.isVisible() && !mainWindow.isMinimized() && mainWindow.isFocused()
   })
   analytics = analyticsService
-  void analyticsService.start()
   powerMonitor.on('lock-screen', () => { screenLocked = true })
   powerMonitor.on('unlock-screen', () => { screenLocked = false; analyticsService.poke() })
   powerMonitor.on('suspend', () => { suspended = true })
@@ -489,6 +492,7 @@ async function start(): Promise<void> {
   void searchService.recover().catch(() => console.error('[search] index unavailable'))
   // Independent fixed-origin transport: forum identity is never passed to online search.
   const onlineSearch = createOnlineSearchService({
+    isAllowed: () => thirdParty?.allows('search') === true,
     transport: createForumTransport({
       allowedOrigins: [SEARCH_API_ORIGIN],
       maxCompressedBytes: 2 * 1024 * 1024,
@@ -521,7 +525,10 @@ async function start(): Promise<void> {
     platform: availability.platform,
     unavailable: availability.unavailable,
     currentVersion: app.getVersion(),
-    engine: availability.unavailable === null && availability.target !== null ? createUpdateEngine(availability.target) : null,
+    engine: availability.unavailable === null && availability.target !== null
+      ? createUpdateEngine(availability.target, () => thirdParty?.allows('updates') === true)
+      : null,
+    isAllowed: () => thirdParty?.allows('updates') === true,
     records: createRecordStore(join(app.getPath('userData'), 'update-state.json')),
     pendingInstall,
     installMarker,
@@ -539,6 +546,18 @@ async function start(): Promise<void> {
     }
   })
   updates = updateService
+  const thirdPartyService = createThirdPartyService({
+    store: openedStore,
+    analytics: analyticsService,
+    changed() {
+      updateService.consentChanged()
+      onlineSearch.consentChanged()
+      if (mainWindow !== null && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send(THIRD_PARTY_CHANGED_CHANNEL)
+    }
+  })
+  thirdParty = thirdPartyService
+  await thirdPartyService.start()
+  await analyticsService.start()
   const host: MainWindowHost = {
     state: () => (mainWindow === null ? 'none' : mainWindow.isVisible() ? 'shown' : 'hidden'),
     open: async () => {
@@ -609,6 +628,7 @@ async function start(): Promise<void> {
 
   ipc = registerIpc({
     analytics: analyticsService,
+    thirdParty: thirdPartyService,
     announcements: announcementService,
     reading,
     images,

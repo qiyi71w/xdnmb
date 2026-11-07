@@ -3,7 +3,7 @@
 // and the update settings. Unavailable buttons stay focusable (aria-disabled) and ignore presses;
 // the download / install action keeps one button across its states so focus stays on it.
 
-import { useId, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 import type { AppSettings } from '../../../../shared/settings'
 import {
   UPDATE_AUTHOR_URL,
@@ -21,6 +21,8 @@ import { formatRecordTime } from '../../lib/time'
 import { useClearOnLeave } from '../../lib/useClearOnLeave'
 import { formatBytes } from '../content/contentText'
 import { ReleaseNotes } from './ReleaseNotes'
+import { useGatedAction, useThirdParty } from '../thirdParty/thirdPartyAccess'
+import '../thirdParty/third-party.css'
 import { useUpdates } from './updatesState'
 import {
   actionFailedText,
@@ -93,24 +95,48 @@ export function AboutSection({ settings, write, active }: { settings: AppSetting
   )
 }
 
+/**
+ * Every request to GitHub needs 软件更新: a press while it is off asks first and continues once,
+ * only if granted and 设置 is still the active tab. Turning an automatic option on asks the same;
+ * turning one off never does.
+ */
+function useUpdatesGate(active: boolean) {
+  const activeRef = useRef(active)
+  useLayoutEffect(() => {
+    activeRef.current = active
+  })
+  const gate = useGatedAction('updates', () => activeRef.current)
+  const { state } = useThirdParty()
+  return { ...gate, off: state !== null && state.acknowledged && !state.updates }
+}
+
 function UpdateArea({ settings, write, active }: { settings: AppSettings; write: Write; active: boolean }) {
   const { state, failed } = useUpdates()
   const statusId = useId()
   const [checkRequested, setCheckRequested] = useState(false)
+  const gate = useUpdatesGate(active)
 
   const status = state?.release?.download.status
   const transferring = status === 'downloading' || status === 'verifying'
   const working = state !== null && state.unavailable === null && (state.checking || checkRequested || transferring)
-  const checkBlocked = state === null || state.unavailable !== null || working
+  const checkBlocked = state === null || state.unavailable !== null || working || gate.asking
 
   // A check, download or verification under way: the button keeps focus and ignores presses.
   const check = () => {
     if (checkBlocked) return
-    setCheckRequested(true)
-    window.xidao.updates
-      .check()
-      .catch(() => undefined)
-      .finally(() => setCheckRequested(false))
+    gate.run(() => {
+      setCheckRequested(true)
+      window.xidao.updates
+        .check()
+        .catch(() => undefined)
+        .finally(() => setCheckRequested(false))
+    })
+  }
+
+  /** Turning an automatic option on needs 软件更新; turning it off is always allowed. */
+  const toggleAuto = (on: boolean, patch: Partial<AppSettings>) => {
+    if (on) write(patch)
+    else gate.run(() => write(patch))
   }
 
   const release = state !== null && state.unavailable === null ? state.release : null
@@ -124,6 +150,14 @@ function UpdateArea({ settings, write, active }: { settings: AppSettings; write:
       <div className="about-check">
         <div className="about-check-status" id={statusId} role="status">
           <CheckStatus state={state} failed={failed} checking={checkRequested} />
+          {gate.off && (
+            <div className="third-party-off">
+              <p className="notice-inline">
+                <Icon name="info" size={14} />
+                软件更新已关闭，不会检查或下载更新
+              </p>
+            </div>
+          )}
           {state !== null && state.lastInstallFailure !== null && (
             <p className="notice-inline is-warning about-status-line">
               <Icon name="alert" size={14} />
@@ -157,7 +191,13 @@ function UpdateArea({ settings, write, active }: { settings: AppSettings; write:
           </div>
           <ReleaseNotes key={release.info.version} notes={release.info.notes} />
           <div className="about-release-page">
-            <button type="button" className="btn btn-small btn-page" title={`在系统浏览器中打开：${release.info.pageUrl}`} onClick={() => openExternal(release.info.pageUrl)}>
+            <button
+              type="button"
+              className="btn btn-small btn-page"
+              title={`在系统浏览器中打开：${release.info.pageUrl}`}
+              aria-disabled={gate.asking || undefined}
+              onClick={() => gate.run(() => openExternal(release.info.pageUrl))}
+            >
               <Icon name="external" size={14} />
               在 GitHub 查看
             </button>
@@ -170,7 +210,7 @@ function UpdateArea({ settings, write, active }: { settings: AppSettings; write:
         <Switch
           labelledBy="setting-update-auto-check"
           checked={settings.updateAutoCheck}
-          onToggle={() => write({ updateAutoCheck: !settings.updateAutoCheck })}
+          onToggle={() => toggleAuto(settings.updateAutoCheck, { updateAutoCheck: !settings.updateAutoCheck })}
         />
       </SettingRow>
       {platform === 'windows' && (
@@ -184,7 +224,7 @@ function UpdateArea({ settings, write, active }: { settings: AppSettings; write:
             labelledBy="setting-update-auto-install"
             describedBy="setting-update-auto-install-help"
             checked={settings.updateAutoInstall}
-            onToggle={() => write({ updateAutoInstall: !settings.updateAutoInstall })}
+            onToggle={() => toggleAuto(settings.updateAutoInstall, { updateAutoInstall: !settings.updateAutoInstall })}
           />
         </SettingRow>
       )}
@@ -199,7 +239,7 @@ function UpdateArea({ settings, write, active }: { settings: AppSettings; write:
             labelledBy="setting-update-auto-download"
             describedBy="setting-update-auto-download-help"
             checked={settings.updateAutoDownload}
-            onToggle={() => write({ updateAutoDownload: !settings.updateAutoDownload })}
+            onToggle={() => toggleAuto(settings.updateAutoDownload, { updateAutoDownload: !settings.updateAutoDownload })}
           />
         </SettingRow>
       )}
@@ -291,6 +331,7 @@ function PackageActions({ state, download, active }: { state: UpdateState; downl
   /** What the last 安装并重启／打开安装包 press came to, when it did not hand over to the installer. */
   const [outcome, setOutcome] = useState<{ kind: 'failed'; text: string } | { kind: 'opened' } | null>(null)
   const begin = useClearOnLeave(active, () => setOutcome((last) => (last?.kind === 'opened' ? null : last)))
+  const gate = useUpdatesGate(active)
 
   const run = async () => {
     setPressedIn('ready')
@@ -316,12 +357,12 @@ function PackageActions({ state, download, active }: { state: UpdateState; downl
 
   let label = ''
   let primary = true
-  let available = !pending
+  let available = !pending && !gate.asking
   let onPress: () => void = () => undefined
   switch (download.status) {
     case 'none':
       label = download.failure === null ? '下载更新' : '重试'
-      onPress = () => call(() => window.xidao.updates.download())
+      onPress = () => gate.run(() => call(() => window.xidao.updates.download()))
       break
     case 'downloading':
       label = '取消下载'

@@ -30,6 +30,7 @@ export interface OnlineSearchService {
   cancel(owner: string, sessionId: string): void
   close(owner: string, sessionId: string): void
   closeAll(owner: string): void
+  consentChanged(): void
 }
 
 interface InFlight {
@@ -156,11 +157,13 @@ function transportFailure(error: unknown, now: number): Fetched {
 
 export function createOnlineSearchService({
   transport,
+  isAllowed,
   origin = SEARCH_API_ORIGIN,
   now = () => Date.now()
 }: {
   /** Must allow only `origin`; it sends no cookies or credentials and follows no redirects. */
   transport: ForumTransport
+  isAllowed: () => boolean
   origin?: string
   now?: () => number
 }): OnlineSearchService {
@@ -169,6 +172,7 @@ export function createOnlineSearchService({
   let limitedUntil = 0
 
   async function request(params: { s: string } | { npt: string }, signal: AbortSignal): Promise<Fetched> {
+    if (!isAllowed()) return failed({ kind: 'consent-required' })
     if (limitedUntil > now()) return failed({ kind: 'rate-limited', retryAt: limitedUntil })
     const url = new URL(SEARCH_API_PATH, origin)
     if ('s' in params) url.searchParams.set('s', params.s)
@@ -233,6 +237,7 @@ export function createOnlineSearchService({
 
   return {
     async run(owner, sessionId, query) {
+      if (!isAllowed()) return { status: 'failed', error: { kind: 'consent-required' }, next: 'end' }
       // During a service cooldown nothing is sent and the current chain keeps its obtained pages.
       if (limitedUntil > now()) return { status: 'failed', error: { kind: 'rate-limited', retryAt: limitedUntil }, next: 'end' }
       const key = keyOf(owner, sessionId)
@@ -266,6 +271,7 @@ export function createOnlineSearchService({
         return { status: 'unavailable', next: next === 'available' ? 'end' : next }
       }
       if (limitedUntil > now()) return { status: 'failed', error: { kind: 'rate-limited', retryAt: limitedUntil }, next }
+      if (!isAllowed()) return { status: 'failed', error: { kind: 'consent-required' }, next }
       // Spent now: if this request's result never arrives, the token is not sent again.
       const token = chain.token.value
       chain.token = null
@@ -283,6 +289,12 @@ export function createOnlineSearchService({
 
     closeAll(owner) {
       for (const key of ownedKeys(owner)) release(key)
+    },
+
+    consentChanged() {
+      if (!isAllowed()) {
+        for (const session of sessions.values()) session.chain?.inFlight?.controller.abort()
+      }
     }
   }
 }

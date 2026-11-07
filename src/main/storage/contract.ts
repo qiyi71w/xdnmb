@@ -1,5 +1,6 @@
 import type { AnnouncementRecord } from '../../shared/announcements'
 import type { AnalyticsRecord } from '../../shared/analytics'
+import type { ThirdPartyRecord } from '../../shared/third-party'
 import type { BlockKind, LocalBlock } from '../../shared/blocks'
 import type { CookieColor, CookieColorName } from '../../shared/cookieColors'
 import type { RestoreInfo, StorageStatus, ThreadReadPurpose } from '../../shared/api'
@@ -123,6 +124,9 @@ export interface ReadingStore {
   /** The usage-statistics record; a missing or unreadable one is `unset` (off). */
   loadAnalytics(): Promise<AnalyticsRecord>
   saveAnalytics(record: AnalyticsRecord): Promise<void>
+  /** Missing or unreadable disclosure requires a new explicit choice. */
+  loadThirdPartyConsent(): Promise<ThirdPartyRecord | null>
+  saveThirdPartyConsent(record: ThirdPartyRecord): Promise<void>
 
   /** Image location of a stored post; null when the post is not stored or has no image. */
   getPostImage(postId: PostId): Promise<PostImage | null>

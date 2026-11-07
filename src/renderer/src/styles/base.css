@@ -246,7 +246,7 @@ ul {
   inset: -4px -2px;
 }
 
-.switch:hover:not(:disabled) {
+.switch:hover:not(:disabled, [aria-disabled='true']) {
   background: color-mix(in oklch, var(--ink-3) 50%, var(--line));
 }
 
@@ -266,7 +266,7 @@ ul {
   background: var(--accent);
 }
 
-.switch[aria-checked='true']:hover:not(:disabled) {
+.switch[aria-checked='true']:hover:not(:disabled, [aria-disabled='true']) {
   background: color-mix(in oklch, var(--accent) 88%, var(--ink));
 }
 
@@ -274,7 +274,9 @@ ul {
   transform: translateX(12px);
 }
 
-.switch:disabled {
+/* Unavailable: native `disabled`, or `aria-disabled` where the switch keeps focus (Switch `locked`). */
+.switch:disabled,
+.switch[aria-disabled='true'] {
   opacity: 0.5;
   cursor: default;
 }

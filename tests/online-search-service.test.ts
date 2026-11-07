@@ -25,7 +25,7 @@ afterEach(async () => {
 })
 
 /** Local stand-in for the search service. `respond` answers each request (or never, to stay in flight). */
-async function service(respond: (seen: Seen, response: ServerResponse) => void, options: { timeoutMs?: number } = {}) {
+async function service(respond: (seen: Seen, response: ServerResponse) => void, options: { timeoutMs?: number; isAllowed?: () => boolean } = {}) {
   const seen: Seen[] = []
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://local')
@@ -43,6 +43,7 @@ async function service(respond: (seen: Seen, response: ServerResponse) => void, 
   let clock = 1_800_000_000_000
   const search = createOnlineSearchService({
     transport: createForumTransport({ allowedOrigins: [origin], timeoutMs: options.timeoutMs }),
+    isAllowed: options.isAllowed ?? (() => true),
     origin,
     now: () => clock
   })
@@ -64,6 +65,33 @@ const chain = (seen: Seen, response: ServerResponse) => {
 const status = (outcome: SearchOutcome) => ({ status: outcome.status, next: 'next' in outcome ? outcome.next : undefined })
 
 describe('online search session', () => {
+  it('requires consent for requests, keeps obtained pages readable, and aborts a revoked in-flight page without replaying its token', async () => {
+    let allowed = false
+    const pending: ServerResponse[] = []
+    const { search, seen } = await service((entry, response) => {
+      if (entry.params.npt === undefined) chain(entry, response)
+      else pending.push(response)
+    }, { isAllowed: () => allowed })
+    expect(await search.run('w', 's', 'private query')).toMatchObject({ status: 'failed', error: { kind: 'consent-required' } })
+    expect(seen).toHaveLength(0)
+    allowed = true
+    await search.run('w', 's', 'q')
+    allowed = false
+    search.consentChanged()
+    expect(await search.page('w', 's', 1)).toMatchObject({ status: 'ok', cached: true })
+    expect(await search.page('w', 's', 2)).toMatchObject({ status: 'failed', error: { kind: 'consent-required' }, next: 'available' })
+    expect(seen).toHaveLength(1)
+    allowed = true
+    const next = search.page('w', 's', 2)
+    await expect.poll(() => pending.length).toBe(1)
+    allowed = false
+    search.consentChanged()
+    expect(await next).toEqual({ status: 'cancelled' })
+    allowed = true
+    expect(await search.page('w', 's', 2)).toEqual({ status: 'unavailable', next: 'lost' })
+    expect(seen).toHaveLength(2)
+  })
+
   it('queries the fixed API path once per user action, then pages with only the opaque token and serves obtained pages without requests', async () => {
     const { search, seen } = await service(chain)
     const first = await search.run('w1', 's1', '游戏 a&b')

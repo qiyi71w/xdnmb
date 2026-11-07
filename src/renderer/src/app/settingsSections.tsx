@@ -2,7 +2,7 @@
 // global preferences and window behavior. Global preferences go through `write` (shown at once,
 // saved by `useSettingsWriter`); the other sections keep their own APIs.
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import type { AppPlatform } from '../../../shared/api'
 import { CLOSE_ACTIONS, type CloseAction } from '../../../shared/lifecycle'
 import {
@@ -202,24 +202,32 @@ function Slider({
   )
 }
 
-/** On / off switch: a text-free track, its name outside (DESIGN.md). */
+/**
+ * On / off switch: a text-free track, its name outside (DESIGN.md). `locked`: unavailable but still
+ * focusable (`aria-disabled`), for a switch that must keep focus or explain itself; presses are ignored.
+ */
 export function Switch({
+  ref,
   labelledBy,
   describedBy,
   checked,
   busy,
   disabled,
+  locked,
   onToggle
 }: {
+  ref?: Ref<HTMLButtonElement>
   labelledBy: string
   describedBy?: string
   checked: boolean
   busy?: boolean
   disabled?: boolean
+  locked?: boolean
   onToggle: () => void
 }) {
   return (
     <button
+      ref={ref}
       type="button"
       role="switch"
       className="switch"
@@ -227,8 +235,11 @@ export function Switch({
       aria-labelledby={labelledBy}
       aria-describedby={describedBy}
       aria-busy={busy}
+      aria-disabled={locked || undefined}
       disabled={disabled}
-      onClick={onToggle}
+      onClick={() => {
+        if (!locked) onToggle()
+      }}
     >
       <span className="switch-thumb" aria-hidden="true" />
     </button>

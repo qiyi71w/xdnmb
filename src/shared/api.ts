@@ -1,5 +1,6 @@
 import type { AnnouncementsApi } from './announcements'
 import type { AnalyticsApi } from './analytics'
+import type { ThirdPartyApi } from './third-party'
 import type { BlocksApi } from './blocks'
 import type { CookieColorsApi } from './cookieColors'
 import type { AccountApi } from './account'
@@ -269,6 +270,7 @@ export const THREAD_READ_PURPOSES: readonly ThreadReadPurpose[] = ['display', 'l
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
   analytics: AnalyticsApi
+  thirdParty: ThirdPartyApi
   announcements: AnnouncementsApi
   blocks: BlocksApi
   cookieColors: CookieColorsApi
@@ -462,7 +464,9 @@ export interface XidaoApi {
 /** IPC channel names. Each maps 1:1 to an XidaoApi method; there is no generic channel. */
 export const IpcChannel = {
   analyticsGetState: 'analytics:get-state',
-  analyticsSetChoice: 'analytics:set-choice',
+  thirdPartyGetState: 'third-party:get-state',
+  thirdPartyComplete: 'third-party:complete',
+  thirdPartySetChoice: 'third-party:set-choice',
   announcementGetState: 'announcements:get-state',
   announcementRefresh: 'announcements:refresh',
   announcementTakeAutomatic: 'announcements:take-automatic',

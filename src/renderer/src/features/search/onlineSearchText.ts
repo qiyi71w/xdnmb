@@ -14,6 +14,9 @@ export const SEARCH_HOST = new URL(SEARCH_SITE_URL).host
 export function searchErrorLines(error: SearchError): { reason: string; details: string[] } {
   const service = SEARCH_SERVICE
   switch (error.kind) {
+    case 'consent-required':
+      // Refused in this app before any request was made: nothing reached the service.
+      return { reason: '联网搜索已关闭，没有发出请求', details: [] }
     case 'network':
       return { reason: error.detail === 'timeout' ? `${service} 20 秒内未响应` : `无法连接 ${service}`, details: [] }
     case 'rate-limited':

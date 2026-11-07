@@ -98,13 +98,13 @@ export function updateAvailability(): { platform: UpdatePlatform; target: Packag
   return { platform: 'none', target: null, unavailable: 'platform' }
 }
 
-export function createUpdateEngine(target: PackageTarget): UpdateEngine {
+export function createUpdateEngine(target: PackageTarget, isAllowed: () => boolean): UpdateEngine {
   const updater = new ReleasePackageUpdater(target)
   // Without a listener an 'error' event would throw; failures already reject the calls below.
   updater.on('error', () => undefined)
   const network = updater.netSession
   // Every request and redirect hop of the update session; anything else is cancelled.
-  network.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !isAllowedUpdateRequest(details.url) }))
+  network.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !isAllowed() || !isAllowedUpdateRequest(details.url) }))
   // The session is in memory and separate from the forum's; no cookie or credential is ever sent.
   network.webRequest.onBeforeSendHeaders((details, callback) => {
     const headers = { ...details.requestHeaders }

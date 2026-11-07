@@ -138,7 +138,7 @@ async function receiver(clock: { wall: number }) {
 
 /** Beijing wall time `day time`, a monotonic clock, captured timers and a foreground switch. */
 function harness(origin: string, start = '2026-10-31T12:00:00+08:00') {
-  const clock = { wall: Date.parse(start), mono: 1_000_000, foreground: true }
+  const clock = { wall: Date.parse(start), mono: 1_000_000, foreground: true, consented: true }
   let timer: { callback: () => void; at: number } | null = null
   const lock = protector()
   const real = createAnalyticsTransport({ origin, timeoutMs: 60_000, userAgent: 'Xidao/1.2.3' })
@@ -159,6 +159,7 @@ function harness(origin: string, start = '2026-10-31T12:00:00+08:00') {
     platform: 'windows',
     version: '1.2.3',
     isForeground: () => clock.foreground,
+    isConsented: () => clock.consented,
     now: () => clock.wall,
     monotonic: () => clock.mono,
     schedule: (callback, ms) => {
@@ -198,6 +199,59 @@ function storedJson(path: string): string {
 }
 
 describe('desktop usage statistics', () => {
+  it('keeps a legacy on preference silent until the new disclosure gate opens', async () => {
+    const db = open(databasePath())
+    db.saveAnalytics({ choice: 'on', identity: null, reportedDay: null })
+    const service = await receiver({ wall: Date.now() })
+    const { clock, create, settle } = harness(service.origin)
+    clock.consented = false
+    const current = create(db)
+    await current.start()
+    for (let i = 0; i < 10; i++) current.poke()
+    await settle()
+    expect(service.requests).toHaveLength(0)
+    expect(db.loadAnalytics().identity).toBeNull()
+    clock.consented = true
+    current.poke()
+    await settle()
+    expect(service.requests.map((request) => request.path)).toEqual(['/v1/instances', '/v1/activity'])
+    await current.stop()
+  })
+
+  it('cancels an in-flight registration when the disclosure gate closes and ignores its late response', async () => {
+    const db = open(databasePath())
+    const service = await receiver({ wall: Date.now() })
+    const { clock, create, settle } = harness(service.origin)
+    const held: Array<() => void> = []
+    service.set((request, response) => { held.push(() => service.protocol(request, response)) })
+    const current = create(db)
+    await current.setChoice('on')
+    await expect.poll(() => held.length).toBe(1)
+    clock.consented = false
+    current.poke()
+    held[0]!()
+    await settle()
+    expect(service.requests.map((request) => request.path)).toEqual(['/v1/instances'])
+    expect(db.loadAnalytics().identity).toBeNull()
+    await current.stop()
+  })
+
+  it('rechecks disclosure after asynchronous protection before sending registration', async () => {
+    const db = open(databasePath())
+    db.saveAnalytics({ choice: 'on', identity: null, reportedDay: null })
+    const service = await receiver({ wall: Date.now() })
+    const { clock, lock, create, settle } = harness(service.origin)
+    const held = Promise.withResolvers<boolean>()
+    lock.isAvailable = () => held.promise
+    const current = create(db)
+    await current.start()
+    clock.consented = false
+    held.resolve(true)
+    await settle()
+    expect(service.requests).toHaveLength(0)
+    await current.stop()
+  })
+
   it('starts unanswered and off on an upgraded database, sends nothing before consent, and keeps an off answer across reopen', async () => {
     const path = databasePath()
     let db = open(path)

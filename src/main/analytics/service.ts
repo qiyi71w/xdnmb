@@ -33,6 +33,7 @@ export const ANALYTICS_PACING = {
 
 export interface AnalyticsService extends AnalyticsApi {
   start(): Promise<void>
+  setChoice(choice: Exclude<AnalyticsChoice, 'unset'>): Promise<AnalyticsChoiceResult>
   /** A fact behind the foreground decision changed (focus, show, restore, unlock, resume). */
   poke(): void
   /**
@@ -83,6 +84,8 @@ export function createAnalyticsService(options: {
   platform: AnalyticsPlatform | null
   version: string
   isForeground: () => boolean
+  /** The new third-party disclosure has been explicitly completed. Defaults closed at startup. */
+  isConsented: () => boolean
   /** Wall clock (ms): decides the local statistics day. */
   now?: () => number
   /** Monotonic clock (ms): spacing and back-off, immune to clock changes. */
@@ -107,6 +110,7 @@ export function createAnalyticsService(options: {
   let initial: Promise<void> | null = null
   let started = false
   let paused = false
+  let choiceRevision = 0
 
   /** Bumped whenever the running statistics stop: late results of an older run change nothing. */
   let generation = 0
@@ -181,12 +185,16 @@ export function createAnalyticsService(options: {
   }
 
   function running(): boolean {
-    return started && !paused && availability === 'available' && choice === 'on' && !halted
+    return started && !paused && options.isConsented() && availability === 'available' && choice === 'on' && !halted
   }
 
   /** Looks whether a report is due now; otherwise when to look again. Never more than one in flight. */
   function evaluate(): void {
-    if (!running() || attempt !== null) return
+    if (!running()) {
+      if (attemptController !== null || cancelTimer !== null) stopRun()
+      return
+    }
+    if (attempt !== null) return
     const wallNow = now()
     const today = beijingDay(wallNow)
     const nextDay = untilNextBeijingDay(wallNow) + 1000
@@ -249,6 +257,7 @@ export function createAnalyticsService(options: {
 
   async function send(path: (typeof ANALYTICS_PATHS)[keyof typeof ANALYTICS_PATHS], body: object, signal: AbortSignal): Promise<AnalyticsResponse> {
     if (transport === null) throw new Error('Analytics not configured')
+    if (!running() || signal.aborted) throw new Error('Analytics consent withdrawn')
     budget.used++
     return transport.post(path, body, signal)
   }
@@ -262,7 +271,7 @@ export function createAnalyticsService(options: {
         return
       }
       const response = await send(ANALYTICS_PATHS.register, { protocol: ANALYTICS_PROTOCOL_VERSION }, signal)
-      if (current !== generation) return
+      if (current !== generation || !running()) return
       const body = response.body as Record<string, unknown> | null
       if (response.status !== 201 || typeof body !== 'object' || body === null ||
           typeof body.instanceId !== 'string' || !ANALYTICS_INSTANCE_ID_PATTERN.test(body.instanceId) ||
@@ -275,7 +284,7 @@ export function createAnalyticsService(options: {
       const ciphertext = Buffer.from(await options.protector.encrypt(received)).toString('base64')
       // Stored before the first report, so a later run reports under the same identity.
       const stored = await update((latest) =>
-        current !== generation || latest.choice !== 'on' || latest.identity !== null
+        current !== generation || !running() || latest.choice !== 'on' || latest.identity !== null
           ? null
           : { ...latest, identity: { instanceId, protectedToken: ciphertext }, reportedDay: null })
       if (!stored) {
@@ -286,9 +295,9 @@ export function createAnalyticsService(options: {
       token = received
     }
     const identity = record.identity
-    if (identity === null || current !== generation) return
+    if (identity === null || current !== generation || !running()) return
     token ??= await options.protector.decrypt(Buffer.from(identity.protectedToken, 'base64'))
-    if (current !== generation) return
+    if (current !== generation || !running()) return
     // A registration or the decryption can outlast the moment that started it: report only
     // foreground use as it is now, and only within today's budget (a registration may have spent
     // its last request).
@@ -300,7 +309,7 @@ export function createAnalyticsService(options: {
       version: options.version,
       platform
     }, signal)
-    if (current !== generation) return
+    if (current !== generation || !running()) return
     const body = response.body as Record<string, unknown> | null
     if (response.status === 200 && typeof body === 'object' && body !== null &&
         typeof body.statDay === 'string' && ANALYTICS_STAT_DAY_PATTERN.test(body.statDay)) {
@@ -337,7 +346,8 @@ export function createAnalyticsService(options: {
       record = EMPTY_ANALYTICS_RECORD
       if (availability === 'available') availability = 'storage-unavailable'
     }
-    choice = availability === 'available' ? record.choice : record.choice === 'on' ? 'off' : record.choice
+    // An explicit off request wins over a slow load; an uncommitted on request does not change the saved choice.
+    if (choice !== 'off') choice = availability === 'available' ? record.choice : record.choice === 'on' ? 'off' : record.choice
     started = true
     evaluate()
   }
@@ -348,9 +358,14 @@ export function createAnalyticsService(options: {
   }
 
   async function setChoice(requested: 'on' | 'off'): Promise<AnalyticsChoiceResult> {
+    const revision = ++choiceRevision
+    if (requested === 'off') {
+      stopRun()
+      choice = 'off'
+    }
     await start()
     return queue('operations', async (): Promise<AnalyticsChoiceResult> => {
-      if (availability !== 'available') return { result: 'refused', reason: 'unavailable', state: state() }
+      // Revocation remains possible on unsupported builds and with unavailable storage.
       if (requested === 'off') {
         // Stops this run first, whatever the save does: off never waits for storage.
         stopRun()
@@ -358,11 +373,12 @@ export function createAnalyticsService(options: {
         const saved = await update((latest) => ({ ...latest, choice: 'off' }))
         return { result: saved ? 'saved' : 'not-saved', state: state() }
       }
+      if (availability !== 'available') return { result: 'refused', reason: 'unavailable', state: state() }
       if (!(await options.protector.isAvailable())) return { result: 'refused', reason: 'protection-unavailable', state: state() }
       const saved = await update((latest) => ({ ...latest, choice: 'on' }))
       if (!saved) return { result: 'not-saved', state: state() }
       stopRun()
-      choice = 'on'
+      choice = revision === choiceRevision ? 'on' : 'off'
       halted = false
       failures = 0
       notBefore = -Infinity

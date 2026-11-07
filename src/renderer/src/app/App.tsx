@@ -21,7 +21,10 @@ import {
 } from '../features/directory/navStore'
 import { useDirectory } from '../features/directory/useDirectory'
 import { HistoryPageContext, type HistoryPageHost } from '../features/content/RetainedPane'
-import { AnalyticsChoiceDialog, useAnalyticsChoicePrompt } from '../features/analytics/AnalyticsChoiceDialog'
+import { ThirdPartyContext, useThirdPartyHost } from '../features/thirdParty/thirdPartyAccess'
+import { ThirdPartyDisclosureDialog } from '../features/thirdParty/ThirdPartyDisclosureDialog'
+import { ThirdPartyAskDialog } from '../features/thirdParty/ThirdPartyAskDialog'
+import { needsDisclosure } from '../features/thirdParty/thirdPartyState'
 import { AnnouncementNavigationContext } from '../features/announcements/AnnouncementBody'
 import { AnnouncementDialog, useAutomaticAnnouncement, useFocusConditions } from '../features/announcements/AnnouncementDialog'
 import { isTextEntry, promptEligible } from '../features/announcements/startupPrompt'
@@ -367,7 +370,7 @@ export function App() {
   })
   const pendingTabFocus = useRef(false)
 
-  // ---------- Startup prompts (the statistics question, then the automatic announcement) ----------
+  // ---------- Startup prompts (the third-party disclosure, then the automatic announcement) ----------
   /**
    * The startup restore finished (tabs, reopened drafts) and the lifecycle check after it settled,
    * so a dialog that check raises is already up. Set once by `LifecycleHost`.
@@ -404,11 +407,32 @@ export function App() {
       !isTextEntry(document.activeElement),
     []
   )
-  // The first-run statistics question comes first; the announcement waits until it is settled
-  // (never asked, answered, or unreadable) and then for its own eligible moment.
-  const analyticsChoice = useAnalyticsChoicePrompt(promptAllowed, promptStillAllowed)
-  const { close: closeAnalyticsChoice, drop: dropAnalyticsChoice } = analyticsChoice
-  const automaticAnnouncement = useAutomaticAnnouncement(promptAllowed && analyticsChoice.settled, promptStillAllowed)
+  /**
+   * The first-run third-party disclosure waits for the same moment, except for a text field
+   * holding focus: the restored workspace may focus one for as long as the user leaves it there,
+   * and nothing third-party may run before the disclosure is answered. (Restored drafts reopen
+   * collapsed while it is unanswered, so they do not hold it back either.)
+   */
+  const disclosureAllowed = promptEligible({
+    restored: tabs !== null && startupChecked,
+    foreground: focusConditions.foreground,
+    covered: coverage.covered,
+    typing: false,
+    sending
+  })
+  const disclosureStillAllowed = useCallback(
+    () =>
+      !stateRef.current.covered &&
+      document.querySelector('dialog[open]') === null &&
+      document.visibilityState === 'visible' &&
+      document.hasFocus(),
+    []
+  )
+  const thirdParty = useThirdPartyHost(disclosureAllowed, disclosureStillAllowed, tabs !== null && startupChecked)
+  const { answered: answerDisclosure, drop: dropDisclosure } = thirdParty.disclosure
+  const { whenRead: whenThirdPartyRead, dropAsk: dropThirdPartyAsk } = thirdParty
+  // The announcement waits until the disclosure is settled and then for its own eligible moment.
+  const automaticAnnouncement = useAutomaticAnnouncement(promptAllowed && thirdParty.disclosure.settled, promptStillAllowed)
   const { close: closeAnnouncement } = automaticAnnouncement
 
   // ---------- Quote cards (preview, locate, quote navigation) ----------
@@ -426,11 +450,17 @@ export function App() {
   /**
    * Reopens the drafts the workspace's tabs were continuing. A draft that no longer exists, or that
    * a send still in progress holds (or when that cannot be read), stays in the library; nothing is sent.
+   * While the third-party disclosure is unanswered they reopen collapsed: an open compose panel
+   * would otherwise hold the disclosure back for as long as it stays open.
    */
   const reopenDrafts = useCallback(
     async (workspace: Workspace, alive: () => boolean) => {
       if (workspace.editors.length === 0) return
-      const [drafts, attempts] = await Promise.allSettled([window.xidao.drafts.list(), window.xidao.publication.listAttempts()])
+      const [drafts, attempts, thirdPartyState] = await Promise.allSettled([
+        window.xidao.drafts.list(),
+        window.xidao.publication.listAttempts(),
+        whenThirdPartyRead()
+      ])
       if (!alive()) return
       if (drafts.status !== 'fulfilled' || !drafts.value.ok || attempts.status !== 'fulfilled' || !attempts.value.ok) return
       const locked = new Set(attempts.value.attempts.flatMap((attempt) => (isUnsettled(attempt) && attempt.draftId !== null ? [attempt.draftId] : [])))
@@ -441,9 +471,10 @@ export function App() {
         const draft = byId.get(item.draftId)
         return draft === undefined || locked.has(draft.id) || !tabIds.has(item.tabId) ? [] : [{ ...item, draft }]
       })
-      dispatchEditors({ type: 'restore-drafts', items })
+      const disclosurePending = thirdPartyState.status !== 'fulfilled' || needsDisclosure(thirdPartyState.value)
+      dispatchEditors({ type: 'restore-drafts', items: disclosurePending ? items.map((item) => ({ ...item, expanded: false })) : items })
     },
-    [dispatchEditors]
+    [dispatchEditors, whenThirdPartyRead]
   )
 
   // Settings and the saved workspace load together; without a readable workspace the shell starts fresh.
@@ -1026,9 +1057,11 @@ export function App() {
     quote.cardProps?.onClose()
     // Closed for this run only, as 确认 would: nothing is stored.
     closeAnnouncement()
-    // Unanswered: asked again if the quit is cancelled, and at the next start.
-    dropAnalyticsChoice()
-  }, [closeNav, searchCommands, quote.cardProps, closeAnnouncement, dropAnalyticsChoice])
+    // Unanswered: shown again if the quit is cancelled, and at the next start.
+    dropDisclosure()
+    // A later question counts as declined; the action that asked does not run.
+    dropThirdPartyAsk()
+  }, [closeNav, searchCommands, quote.cardProps, closeAnnouncement, dropDisclosure, dropThirdPartyAsk])
 
   /** Opens a sent record's place from 历史 in a new active tab (global split default). */
   const openEntryInTab = useCallback((entry: EntryInit) => {
@@ -1396,6 +1429,7 @@ export function App() {
     <SettingsContext value={settingsAccess}>
     <SettingsOpenerContext value={openSettings}>
     <UpdatesContext value={updates}>
+    <ThirdPartyContext value={thirdParty.access}>
       <EditorWorkspaceContext value={editorWorkspace}>
       <SubscriptionsContext value={subscriptions}>
       <RemindersContext value={reminders}>
@@ -1582,8 +1616,16 @@ export function App() {
               onAnswer={(answer) => void resolvePrompt(promptEditor.id, answer)}
             />
           )}
-          {analyticsChoice.shown && (
-            <AnalyticsChoiceDialog onClose={closeAnalyticsChoice} fallbackFocus={activeTabFocus} />
+          {thirdParty.disclosure.shown && (
+            <ThirdPartyDisclosureDialog initial={thirdParty.disclosure.initial} onAnswered={answerDisclosure} fallbackFocus={activeTabFocus} />
+          )}
+          {thirdParty.pending !== null && (
+            <ThirdPartyAskDialog
+              key={thirdParty.pending.service}
+              service={thirdParty.pending.service}
+              onAnswer={thirdParty.pending.answer}
+              fallbackFocus={activeTabFocus}
+            />
           )}
           {automaticAnnouncement.announcement !== null && (
             <AnnouncementDialog announcement={automaticAnnouncement.announcement} onClose={closeAnnouncement} fallbackFocus={activeTabFocus} />
@@ -1619,6 +1661,7 @@ export function App() {
       </RemindersContext>
       </SubscriptionsContext>
       </EditorWorkspaceContext>
+    </ThirdPartyContext>
     </UpdatesContext>
     </SettingsOpenerContext>
     </SettingsContext>

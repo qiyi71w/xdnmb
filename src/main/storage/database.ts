@@ -1,5 +1,6 @@
 import { announcementRecord, type AnnouncementRecord } from '../../shared/announcements'
 import { analyticsRecord, type AnalyticsRecord } from '../../shared/analytics'
+import { thirdPartyRecord, type ThirdPartyRecord } from '../../shared/third-party'
 import type { LocalBlock } from '../../shared/blocks'
 import { IMPORTED_COOKIE_COLOR, isCookieColorName, type CookieColor, type CookieColorName } from '../../shared/cookieColors'
 import { existsSync } from 'node:fs'
@@ -780,6 +781,20 @@ class SqliteReadingDatabase implements ReadingDatabase {
   saveAnalytics(record: AnalyticsRecord): void {
     this.writable().prepare(`
       INSERT INTO settings (key, value_json) VALUES ('analytics', ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json
+    `).run(JSON.stringify(record))
+  }
+
+  loadThirdPartyConsent(): ThirdPartyRecord | null {
+    if (!this.db) throw new StorageWriteRefusedError(this.currentStatus)
+    const row = this.db.prepare<[], { value_json: string }>("SELECT value_json FROM settings WHERE key = 'thirdPartyConsent'").get()
+    if (!row) return null
+    try { return thirdPartyRecord(JSON.parse(row.value_json)) } catch { return null }
+  }
+
+  saveThirdPartyConsent(record: ThirdPartyRecord): void {
+    this.writable().prepare(`
+      INSERT INTO settings (key, value_json) VALUES ('thirdPartyConsent', ?)
       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json
     `).run(JSON.stringify(record))
   }
