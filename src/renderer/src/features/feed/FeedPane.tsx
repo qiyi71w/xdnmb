@@ -13,7 +13,7 @@ import { ListFilterPanel, ListFilterToggle, useListFilter } from '../search/Filt
 import { contentFilterCount, filterList, headMeta } from '../search/listFilters'
 import { NO_CONTENT_FILTERS } from '../search/searchState'
 import type { FeedInfo } from '../directory/feeds'
-import { ContentRegistryContext, useRegisterContent } from '../tabs/contentRegistry'
+import { ContentRegistryContext, useInitialListMemory, useRegisterContent } from '../tabs/contentRegistry'
 import type { WorkspaceList } from '../tabs/workspaceSnapshot'
 import { useImageScope } from '../image/useImageLoad'
 import { useListImageViewer } from '../image/useListImageViewer'
@@ -74,10 +74,11 @@ export function FeedPane({
   compose: ComposeEntry | null
 }) {
   const registry = useContext(ContentRegistryContext)
+  const initialMemory = useInitialListMemory(entryKey)
   const listHost = useContext(ListHostContext)
   // The same entry's list as it was when last unmounted (split toggled, single pane, back/forward).
   const [remembered] = useState(() => {
-    const memory = registry?.listMemory.get(entryKey)
+    const memory = initialMemory
     return memory?.kind === 'feed' && memory.state.pages.length > 0 ? memory : null
   })
   // Otherwise restore the last quit's loaded page count and reading position.

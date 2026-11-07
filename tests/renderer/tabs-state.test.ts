@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { navigateTabs } from './helpers/readingNavigation'
 import {
   activeTab,
   currentEntry,
@@ -30,7 +31,7 @@ describe('tabs and per-tab history', () => {
     state = run(state, { type: 'navigate', tabId, entry: { kind: 'thread', thread: thread('200') }, origin: 'online-search' })
     expect(currentEntry(activeTab(state)!)).toMatchObject({ kind: 'thread', origin: 'online-search' })
     const source = currentEntry(activeTab(state)!)
-    state = run(state, { type: 'search-navigate', tabId, entryKey: source.key, source: null, thread: thread('300') })
+    state = navigateTabs(state, { kind: 'search', thread: thread('300') })
     expect(currentEntry(activeTab(state)!)).toMatchObject({ kind: 'thread', origin: 'local-search' })
     state = run(state, { type: 'back', tabId })
     expect(currentEntry(activeTab(state)!)).toMatchObject({ key: source.key, origin: 'online-search' })

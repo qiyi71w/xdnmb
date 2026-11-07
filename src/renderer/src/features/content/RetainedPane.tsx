@@ -21,14 +21,14 @@ import type { SentKind } from '../publication/sentRecords'
 import { ListFilterPanel, ListFilterToggle, useListFilter } from '../search/FilterFields'
 import { contentFilterCount, filterList, parseKeyword, threadKeywordFields } from '../search/listFilters'
 import { useThreadMetadata } from '../search/useThreadMetadata'
-import { ContentRegistryContext, useRegisterContent, type HistoryView } from '../tabs/contentRegistry'
+import { ContentRegistryContext, useInitialListMemory, useRegisterContent, type HistoryView } from '../tabs/contentRegistry'
 import { useOpenThreadInTab } from '../tabs/openThreadInTab'
 import { listRowGestures } from '../tabs/ThreadTabMenu'
 import type { EntryInit } from '../tabs/tabsState'
 import { contentFailureText, retainedHeading } from './contentText'
 import { OfflinePane } from './OfflinePane'
 import { createReadingResets } from './readingResets'
-import { HistoryConfirm, historyMemory, rememberHistory, useHistoryKeyword, useRetainedFilters, useRetainedList, useRetainedScroll } from './retainedList'
+import { HistoryConfirm, rememberHistory, useHistoryKeyword, useRetainedFilters, useRetainedList, useRetainedScroll } from './retainedList'
 import '../feed/feed.css'
 import './content.css'
 
@@ -45,9 +45,9 @@ export interface HistoryPageHost {
   request: { tabId: number; view: HistoryView; seq: number } | null
   /**
    * Opens a place as a new step of the tab whose current entry is `entryKey` (后退 comes back to
-   * 历史); false when no tab shows that entry now.
+   * 历史); ignored when no tab shows that entry now.
    */
-  openStep: (entryKey: number, init: EntryInit) => boolean
+  openStep: (entryKey: number, init: EntryInit) => void
   /** Opens a place in a new active tab. */
   openInTab: (init: EntryInit) => void
 }
@@ -77,6 +77,7 @@ export function RetainedPane(props: RetainedPaneProps) {
 
 function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPageHost }) {
   const registry = useContext(ContentRegistryContext)
+  const initialMemory = useInitialListMemory(props.entryKey)
   const headingId = useId()
   const headingRef = useRef<HTMLHeadingElement>(null)
   /** Where the shown page puts its actions, at the end of the one head row. */
@@ -84,7 +85,7 @@ function HistoryPage({ host, ...props }: RetainedPaneProps & { host: HistoryPage
   const request = host.request?.tabId === props.tabId ? host.request : null
   const [view, setView] = useState<HistoryView>(() => {
     if (request !== null && request.seq > appliedRequest) return request.view
-    return (registry === null ? undefined : historyMemory(registry.listMemory, props.entryKey)?.view) ?? 'browsing'
+    return initialMemory?.kind === 'retained' ? initialMemory.history?.view ?? 'browsing' : 'browsing'
   })
   /** 新串／回复 read the attempts once either was shown. */
   const [sentShown, setSentShown] = useState(view !== 'browsing')

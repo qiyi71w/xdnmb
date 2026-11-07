@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { QuoteLocation } from '../../../../shared/api'
 import type { ReadingMode } from '../../../../shared/forum'
 import type { SearchFilters, SearchHit, SearchScope } from '../../../../shared/search'
-import type { ContentRegistry } from '../tabs/contentRegistry'
-import { currentEntry, type Tab, type TabEntry, type TabsAction, type TabsState, type ThreadOpen } from '../tabs/tabsState'
+import type { ReadingNavigation } from '../tabs/readingNavigation'
+import type { TabsState, ThreadOpen } from '../tabs/tabsState'
 import { savedStart, startPage } from '../thread/readingStart'
 import {
   commitsJump,
@@ -50,9 +50,7 @@ export function filtersSearchable(filters: SearchFilters): boolean {
 
 interface Options {
   tabs: TabsState | null
-  getTabs: () => TabsState | null
-  dispatch: (action: TabsAction) => void
-  registry: ContentRegistry
+  navigation: ReadingNavigation
   /** A hit's thread was pushed onto the tab's history: its reader should take focus. */
   onCommitted: (tabId: number) => void
 }
@@ -65,7 +63,7 @@ export type SearchOpen = { view: 'local' } | { view: 'thread'; scope: ThreadScop
  * Every async result is checked against the current operation ID or locate `seq` before it is
  * applied; superseded and stopped sessions are cancelled in the main process. Nothing here marks
  * anything read or records a visit: hits are located with the quote locate primitive and opened
- * through the tab history like a located quote.
+ * through reading navigation as a `search` step.
  */
 export function useSearch(options: Options) {
   const opts = useRef(options)
@@ -285,42 +283,45 @@ export function useSearch(options: Options) {
   }, [apply])
 
   // ---------- Hits ----------
-  /** Tab and entry while `entryKey` is still the current entry of tab `tabId`. */
-  const shownEntry = useCallback((tabId: number, entryKey: number): { tab: Tab; entry: TabEntry } | null => {
-    const tab = opts.current.getTabs()?.tabs.find((item) => item.id === tabId)
-    if (tab === undefined) return null
-    const entry = currentEntry(tab)
-    return entry.key === entryKey ? { tab, entry } : null
-  }, [])
-
   /**
    * What the tab's search was when a hit was opened from each history entry (by entry key), so going
    * back to that entry shows its own results again, however many searches were opened since.
    */
   const returns = useRef(new Map<number, SearchReturn>())
 
-  /** Pushes the hit's thread as a `search` step of the tab (after the jump succeeded). */
-  const commit = useCallback(
-    (shown: { tab: Tab; entry: TabEntry }, thread: ThreadOpen) => {
-      const { registry, dispatch, getTabs, onCommitted } = opts.current
-      const { tab, entry } = shown
-      const source = registry.readers.get(entry.key)?.current.capture() ?? null
-      // The split list beside the target keeps its loaded pages, scroll position and filters.
-      if (entry.kind === 'list' && entry.feed !== null && tab.split) {
-        const memory = registry.listMemory.get(entry.key)
-        const nextKey = getTabs()?.nextKey
-        if (memory !== undefined && nextKey !== undefined) registry.listMemory.set(nextKey, memory)
+  /**
+   * Opens a hit's thread from the entry locate `seq` started on, while that locate is still the one
+   * of the tab's open sheet. Already on screen in the same thread and mode, the reader points at it
+   * and the sheet only closes; pushed onto the tab's history, the search the entry had is kept for
+   * 返回搜索结果 and the reader takes focus.
+   */
+  const openHit = useCallback(
+    async (tabId: number, seq: number, entryKey: number, thread: ThreadOpen) => {
+      const { navigation } = opts.current
+      const source = navigation.source({ tabId, entryKey })
+      if (source === null || stateRef.current.openTab !== tabId) {
+        apply({ type: 'locate-cancel', tabId })
+        return
       }
-      const closed = apply({ type: 'close' })
-      returns.current.set(entry.key, { tabId: tab.id, search: tabSearchOf(closed, tab.id) })
-      dispatch({ type: 'search-navigate', tabId: tab.id, entryKey: entry.key, source, thread })
-      onCommitted(tab.id)
+      const isCurrent = () => opts.current.tabs?.activeId === tabId && isCurrentLocate(stateRef.current, tabId, seq) && stateRef.current.openTab === tabId
+      const returnSearch = tabSearchOf(searchReducer(stateRef.current, { type: 'close' }), tabId)
+      const result = await navigation.open(source, { kind: 'search', thread, isCurrent })
+      // Settled after the step was rendered: a newer search session is never closed or replaced.
+      const current = isCurrent()
+      if (result.kind === 'rejected') {
+        if (current) apply({ type: 'locate-cancel', tabId })
+        return
+      }
+      if (current) apply({ type: 'close' })
+      if (result.kind !== 'history') return
+      returns.current.set(source.entryKey, { tabId, search: returnSearch })
+      opts.current.onCommitted(tabId)
     },
     [apply]
   )
 
   const onLocated = useCallback(
-    (tabId: number, seq: number, result: QuoteLocation) => {
+    async (tabId: number, seq: number, result: QuoteLocation) => {
       const current = stateRef.current
       if (!isCurrentLocate(current, tabId, seq) || result.status === 'cancelled') return
       const locate = current.tabs[tabId]?.locate
@@ -331,21 +332,10 @@ export function useSearch(options: Options) {
         return
       }
       if (result.status !== 'located') return
-      const shown = shownEntry(tabId, locate.entryKey)
-      if (shown === null || current.openTab !== tabId) {
-        apply({ type: 'locate-cancel', tabId })
-        return
-      }
       const target = { postId: result.target.postId, page: result.target.page, mode: result.target.mode }
-      // Already on screen in the same thread and mode: point at it, no new history step.
-      const reader = opts.current.registry.readers.get(shown.entry.key)?.current
-      if (reader !== undefined && reader.showInPlace(result.threadId, target)) {
-        apply({ type: 'close' })
-        return
-      }
-      commit(shown, { threadId: result.threadId, head: result.head, target, snapshot: null, unlocatedPostId: null })
+      await openHit(tabId, seq, locate.entryKey, { threadId: result.threadId, head: result.head, target, snapshot: null, unlocatedPostId: null })
     },
-    [apply, shownEntry, commit]
+    [apply, openHit]
   )
 
   /**
@@ -354,24 +344,24 @@ export function useSearch(options: Options) {
    */
   const chooseHit = useCallback(
     (tabId: number, view: SearchView, hit: SearchHit, intent: 'navigate' | 'resolve') => {
-      const tab = opts.current.getTabs()?.tabs.find((item) => item.id === tabId)
-      if (tab === undefined) return
+      const source = opts.current.navigation.source({ tabId })
+      if (source === null) return
       const before = stateRef.current.tabs[tabId]?.locate ?? null
       if (before !== null && before.result === null) cancelRead(locateOperation(before.seq))
-      const next = apply({ type: 'locate-start', tabId, view, postId: hit.postId, entryKey: currentEntry(tab).key, intent })
+      const next = apply({ type: 'locate-start', tabId, view, postId: hit.postId, entryKey: source.entryKey, intent })
       const locate = next.tabs[tabId]?.locate
       if (locate === undefined || locate === null) return
       const { seq } = locate
-      window.xidao.quotes.locate({ operationId: locateOperation(seq), postId: hit.postId }).then(
-        (result) => onLocated(tabId, seq, result),
-        () => apply({ type: 'locate-internal', tabId, seq })
-      )
+      window.xidao.quotes
+        .locate({ operationId: locateOperation(seq), postId: hit.postId })
+        .then((result) => onLocated(tabId, seq, result))
+        .catch(() => apply({ type: 'locate-internal', tabId, seq }))
     },
     [apply, onLocated]
   )
 
   /**
-   * 打开原串 after a `thread-known` result: reads the page the thread would resume at and commits
+   * 打开原串 after a `thread-known` result: reads the page the thread would resume at and opens it
    * only once it was obtained, saying the hit itself was not located.
    */
   const openHitThread = useCallback(
@@ -399,16 +389,11 @@ export function useSearch(options: Options) {
           apply({ type: 'locate-done', tabId, seq, result: { status: 'failed', threadId, error: outcome.error } })
           return
         }
-        const shown = shownEntry(tabId, entryKey)
-        if (shown === null || stateRef.current.openTab !== tabId) {
-          apply({ type: 'locate-cancel', tabId })
-          return
-        }
-        commit(shown, { threadId, head: known.head, target: null, snapshot: null, unlocatedPostId: postId })
+        await openHit(tabId, seq, entryKey, { threadId, head: known.head, target: null, snapshot: null, unlocatedPostId: postId })
       }
       run().catch(() => apply({ type: 'locate-internal', tabId, seq }))
     },
-    [apply, shownEntry, commit]
+    [apply, openHit]
   )
 
   /** Esc while a hit is being located: drops it; returns whether there was one. */

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef } from 'react'
+import { createContext, useContext, useLayoutEffect, useRef } from 'react'
 import type { ReadingMode, ThreadId } from '../../../../shared/forum'
 import type { ContentFilters } from '../../../../shared/search'
 import { createReadingResets, type ReadingResets } from '../content/readingResets'
@@ -169,6 +169,21 @@ export function captureLists(tabs: TabsState, registry: ContentRegistry): Worksp
 
 export const ContentRegistryContext = createContext<ContentRegistry | null>(null)
 
+/** Memory carried by an accepted navigation, available before the destination's first render. */
+export const ListMemorySeedsContext = createContext<ReadonlyMap<number, ListMemory>>(new Map())
+
+export function useInitialListMemory(entryKey: number): ListMemory | undefined {
+  const registry = useContext(ContentRegistryContext)
+  const seeds = useContext(ListMemorySeedsContext)
+  const seed = seeds.get(entryKey)
+  const memory = registry?.listMemory.get(entryKey) ?? seed
+  // Before this pane's own layout effects patch part of its memory, retain the whole seed.
+  useLayoutEffect(() => {
+    if (registry !== null && seed !== undefined && !registry.listMemory.has(entryKey)) registry.listMemory.set(entryKey, seed)
+  }, [registry, entryKey, seed])
+  return memory
+}
+
 /** Registers the latest `handle` under `entryKey` for as long as the component is mounted. */
 export function useRegisterContent<K extends 'readers' | 'lists' | 'onlineSearchPanes' | 'searchPages'>(
   kind: K,
@@ -177,10 +192,10 @@ export function useRegisterContent<K extends 'readers' | 'lists' | 'onlineSearch
 ): void {
   const registry = useContext(ContentRegistryContext)
   const ref = useRef(handle)
-  useEffect(() => {
+  useLayoutEffect(() => {
     ref.current = handle
   })
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (registry === null) return
     const map = registry[kind] as Map<number, { current: typeof handle }>
     map.set(entryKey, ref)
