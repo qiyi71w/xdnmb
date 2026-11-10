@@ -70,12 +70,9 @@ export function createSmoke(results, { diagnose = () => undefined } = {}) {
   }
 
   /**
-   * The dialogs a real profile raises by itself at startup, answered the way a user does before the
-   * checks begin: the first-run statistics question (release builds name a statistics origin), and
-   * the cold-start announcement from the live source. Both are modal and would cover the settings
-   * the checks open. The current announcement is marked 不再提示 first, so it is never granted later
-   * in the run (also not on later starts of the same profile); Esc keeps statistics off, so the app
-   * never contacts the statistics service.
+   * Answer the first-run disclosure through its visible controls, allowing only updates for the
+   * packaging checks. Search and statistics stay off. Suppress the current announcement before
+   * proceeding so it cannot cover the settings exercised below or reappear on later launches.
    */
   async function settleStartupPrompts(app, page) {
     await app.evaluate(({ app, BrowserWindow }) => {
@@ -90,11 +87,16 @@ export function createSmoke(results, { diagnose = () => undefined } = {}) {
       : null
     const start = Date.now()
     for (;;) {
-      if (await page.locator('dialog.modal[open]').count() > 0) await page.keyboard.press('Escape')
+      const disclosure = page.locator('dialog.third-party-dialog[open]')
+      if (await disclosure.count() > 0) {
+        const updates = disclosure.getByRole('switch', { name: '软件更新', exact: true })
+        if (await updates.getAttribute('aria-checked') !== 'true') await updates.click()
+        await disclosure.getByRole('button', { name: '保存选择', exact: true }).click()
+      } else if (await page.locator('dialog.modal[open]').count() > 0) await page.keyboard.press('Escape')
       else {
-        const statistics = await page.evaluate(() => window.xidao.analytics.getState())
-        if (statistics.availability !== 'available' || statistics.saved !== 'unset') {
-          log('startup prompts settled', { announcement: notice.outcome, suppressed, statistics })
+        const consent = await page.evaluate(() => window.xidao.thirdParty.getState())
+        if (consent.acknowledged) {
+          log('startup prompts settled', { announcement: notice.outcome, suppressed, consent })
           return
         }
       }

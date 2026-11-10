@@ -6,6 +6,7 @@ import { OFFLINE_CHANGED_CHANNEL } from '../shared/content'
 import { PUBLICATION_CHANGED_CHANNEL, PUBLICATION_FAILURE_CHANNEL, PUBLICATION_OPEN_DRAFT_CHANNEL, type SendFailureNotice } from '../shared/publication'
 import type { ThreadId } from '../shared/forum'
 import { UPDATE_STATE_CHANNEL, type UpdateState } from '../shared/updates'
+import { THIRD_PARTY_CHANGED_CHANNEL } from '../shared/third-party'
 
 // A notification can create a window before React has mounted its listener. Keep the intent in
 // preload, not an arbitrary timeout, until a subscriber can open the in-app list.
@@ -45,8 +46,17 @@ const onOpenDraft = bufferedChannel<[notice: SendFailureNotice]>(PUBLICATION_OPE
 // Named operations only: no generic invoke/send, no Electron objects, URLs, SQL or file access.
 const api: XidaoApi = {
   analytics: {
-    getState: () => ipcRenderer.invoke(IpcChannel.analyticsGetState),
-    setChoice: (choice) => ipcRenderer.invoke(IpcChannel.analyticsSetChoice, choice)
+    getState: () => ipcRenderer.invoke(IpcChannel.analyticsGetState)
+  },
+  thirdParty: {
+    getState: () => ipcRenderer.invoke(IpcChannel.thirdPartyGetState),
+    complete: (choices) => ipcRenderer.invoke(IpcChannel.thirdPartyComplete, choices),
+    setChoice: (service, allowed) => ipcRenderer.invoke(IpcChannel.thirdPartySetChoice, { service, allowed }),
+    onChanged(listener) {
+      const receive = () => listener()
+      ipcRenderer.on(THIRD_PARTY_CHANGED_CHANNEL, receive)
+      return () => { ipcRenderer.removeListener(THIRD_PARTY_CHANGED_CHANNEL, receive) }
+    }
   },
   announcements: {
     getState: () => ipcRenderer.invoke(IpcChannel.announcementGetState),

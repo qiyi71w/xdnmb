@@ -36,6 +36,7 @@ export interface UpdateServiceDeps {
   currentVersion: string
   /** Null exactly when `unavailable` is set. */
   engine: UpdateEngine | null
+  isAllowed(): boolean
   records: UpdateRecordStore
   pendingInstall: PendingInstallStore
   installMarker: InstallMarkerStore
@@ -58,6 +59,8 @@ export interface UpdateService {
   start(settings: UpdateSettings): Promise<void>
   /** Settings changed (automatic check, download/install and network choices). */
   configure(settings: UpdateSettings): void
+  /** Re-check the permission before scheduling; revoke cancels an active download. */
+  consentChanged(): void
   state(): UpdateState
   check(): Promise<void>
   download(): Promise<void>
@@ -136,7 +139,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
   function schedule(): void {
     clearTimeout(timer)
     timer = undefined
-    if (stopped || engine === null || settings?.updateAutoCheck !== true) return
+    if (stopped || engine === null || !deps.isAllowed() || settings?.updateAutoCheck !== true) return
     const due = lastCheckAt === null ? Date.now() : lastCheckAt + UPDATE_CHECK_INTERVAL_MS
     const wait = Math.max(0, due - Date.now())
     timer = setTimeout(() => {
@@ -156,12 +159,17 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
 
   async function runCheck(): Promise<void> {
     const busy = release?.download.status === 'downloading' || release?.download.status === 'verifying'
-    if (engine === null || settings === null || stopped || checking || busy) return
+    if (!deps.isAllowed() || engine === null || settings === null || stopped || checking || busy) return
     checking = true
     publish()
     let outcome: UpdateCheckResult
     try {
       await engine.setNetwork(settings.updateNetwork)
+      if (!deps.isAllowed()) {
+        checking = false
+        publish()
+        return
+      }
       const result = await engine.check()
       if (result.kind === 'up-to-date') {
         offered = null
@@ -196,7 +204,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
 
   async function download(): Promise<void> {
     const current = release
-    const downloadable = () => engine !== null && settings !== null && !stopped && !checking && current !== null && current.download.status === 'none'
+    const downloadable = () => deps.isAllowed() && engine !== null && settings !== null && !stopped && !checking && current !== null && current.download.status === 'none'
     if (!downloadable() || current === null || engine === null || settings === null) return
     // A package restored from disk whose file went missing: the engine must be offered it again first.
     if (offered !== current.info.version) {
@@ -210,7 +218,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     try {
       await engine.setNetwork(settings.updateNetwork)
       // Cancelled (or quitting) while the network was being set up: no transfer starts.
-      if (abort.signal.aborted) throw new Error('cancelled')
+      if (abort.signal.aborted || !deps.isAllowed()) throw new Error('cancelled')
       const path = await engine.download((transferred, total) => {
         if (abort.signal.aborted || release !== current) return
         // All bytes are in: the checksum is being confirmed and nothing can be installed yet.
@@ -283,6 +291,11 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       if (current !== null && current.download.status === 'none' && automaticDownload() && !cancelled.has(current.info.version) && !checking) {
         void download()
       }
+    },
+
+    consentChanged() {
+      if (!deps.isAllowed()) downloading?.abort()
+      if (started) schedule()
     },
 
     state,

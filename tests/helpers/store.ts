@@ -32,6 +32,8 @@ export function asStore(db: ReadingDatabase): AppStore {
     saveAnnouncements: async (record) => db.saveAnnouncements(record),
     loadAnalytics: async () => db.loadAnalytics(),
     saveAnalytics: async (record) => db.saveAnalytics(record),
+    loadThirdPartyConsent: async () => db.loadThirdPartyConsent(),
+    saveThirdPartyConsent: async (record) => db.saveThirdPartyConsent(record),
     listCookieColors: async () => db.listCookieColors(),
     addCookieColor: async (...args) => db.addCookieColor(...args),
     setCookieColor: async (...args) => db.setCookieColor(...args),

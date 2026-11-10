@@ -15,7 +15,9 @@ import type { EntryInit } from '../tabs/tabsState'
 import { useThreadTabMenu, type ThreadTabMenu } from '../tabs/ThreadTabMenu'
 import type { OnlineSearchNotice, OnlineSearchResults, OnlineSearchSession } from './onlineSearchSession'
 import { SEARCH_HOST, SEARCH_SERVICE, searchErrorLines } from './onlineSearchText'
+import { useGatedAction, useThirdParty } from '../thirdParty/thirdPartyAccess'
 import './online-search.css'
+import '../thirdParty/third-party.css'
 
 const MAX_SOURCE_LENGTH = 80
 
@@ -158,6 +160,10 @@ export function OnlineSearchPane({
   const rowRef = useRef<RowState | null>(null)
   const locateSeq = useRef(0)
   const [siteFailed, setSiteFailed] = useState(false)
+  const { state: thirdParty, entryReady } = useThirdParty()
+  /** Every request needs 联网搜索; a granted question continues the press once, if still on screen. */
+  const searchGate = useGatedAction('search', () => displayedRef.current)
+  const searchOff = thirdParty !== null && thirdParty.acknowledged && !thirdParty.search
 
   useLayoutEffect(() => {
     displayedRef.current = displayed
@@ -181,6 +187,22 @@ export function OnlineSearchPane({
     else inputRef.current?.focus()
     // Mount only: later focus belongs to the user.
   }, [])
+
+  // Entering the page on purpose while 联网搜索 is off asks for it, once per visit: declining
+  // leaves the page as it is until the next visit or an explicit search. A grant searches nothing.
+  // Pages restored at startup were not entered on purpose and ask nothing.
+  const wasDisplayed = useRef(false)
+  useEffect(() => {
+    const was = wasDisplayed.current
+    wasDisplayed.current = displayed
+    if (!displayed) {
+      searchGate.cancel()
+      return
+    }
+    if (was || !entryReady || !searchOff) return
+    searchGate.run(() => inputRef.current?.focus())
+    // Only a new visit asks.
+  }, [displayed])
 
   // A hidden scroller (inactive tab) may drop its position: put it back when shown again.
   useLayoutEffect(() => {
@@ -405,20 +427,30 @@ export function OnlineSearchPane({
   const canSubmit = query !== '' && query.length <= MAX_SEARCH_QUERY_LENGTH && !samePending
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (canSubmit) session.run(query)
+    if (canSubmit) searchGate.run(() => session.run(query))
   }
 
   const rerun = (text: string) => {
-    inputRef.current?.focus()
-    session.run(text)
+    searchGate.run(() => {
+      inputRef.current?.focus()
+      session.run(text)
+    })
   }
 
   const openSite = () => {
-    setSiteFailed(false)
-    window.xidao.onlineSearch.openSite().then(
-      (result) => setSiteFailed(!result.opened),
-      () => setSiteFailed(true)
-    )
+    searchGate.run(() => {
+      setSiteFailed(false)
+      window.xidao.onlineSearch.openSite().then(
+        (result) => setSiteFailed(!result.opened),
+        () => setSiteFailed(true)
+      )
+    })
+  }
+
+  /** Pages already obtained are local; a new page is a request. */
+  const goToPage = (page: number) => {
+    if (results !== null && page <= results.pages.length) session.goToPage(page)
+    else searchGate.run(() => session.goToPage(page))
   }
 
   const runQuery = notice !== null && notice.kind !== 'closed' && notice.request.kind === 'run' ? notice.request.query : null
@@ -476,6 +508,22 @@ export function OnlineSearchPane({
               打开 {SEARCH_SERVICE} 网站
             </button>
           </p>
+          {searchOff && (
+            <div className="third-party-off" role="status">
+              <p className="notice-inline">
+                <Icon name="info" size={14} />
+                联网搜索已关闭，搜索词不会发出
+              </p>
+              <button
+                type="button"
+                className="btn btn-small btn-page"
+                aria-disabled={searchGate.asking || undefined}
+                onClick={() => searchGate.run(() => inputRef.current?.focus())}
+              >
+                开启联网搜索
+              </button>
+            </div>
+          )}
           {siteFailed && (
             <p className="notice-inline is-warning" role="status">
               <Icon name="alert" size={14} />
@@ -575,7 +623,7 @@ export function OnlineSearchPane({
             )}
             {inTab.menu}
 
-            <Pager results={results} session={session} pendingPage={pending?.kind === 'page' ? pending.page : null} />
+            <Pager results={results} session={session} pendingPage={pending?.kind === 'page' ? pending.page : null} onGoTo={goToPage} />
             {notice !== null && notice.kind !== 'closed' && noticePage !== null && (
               // A page request offers no retry: the one-time token that page needed is gone.
               <RequestNotice notice={notice} onRetry={null} />
@@ -639,7 +687,17 @@ function RequestNotice({ notice, onRetry }: { notice: Exclude<OnlineSearchNotice
   )
 }
 
-function Pager({ results, session, pendingPage }: { results: OnlineSearchResults; session: OnlineSearchSession; pendingPage: number | null }) {
+function Pager({
+  results,
+  session,
+  pendingPage,
+  onGoTo
+}: {
+  results: OnlineSearchResults
+  session: OnlineSearchSession
+  pendingPage: number | null
+  onGoTo: (page: number) => void
+}) {
   const previous = results.current - 1
   const next = results.current + 1
   const canPrevious = session.canShow(previous)
@@ -647,14 +705,14 @@ function Pager({ results, session, pendingPage }: { results: OnlineSearchResults
   const fetchingNext = pendingPage !== null && pendingPage > results.pages.length
   return (
     <nav className="online-search-pager" aria-label="搜索结果页">
-      <button type="button" className="btn btn-small btn-page" aria-disabled={!canPrevious} onClick={() => canPrevious && session.goToPage(previous)}>
+      <button type="button" className="btn btn-small btn-page" aria-disabled={!canPrevious} onClick={() => canPrevious && onGoTo(previous)}>
         <Icon name="arrowLeft" size={14} />
         上一页
       </button>
       <span className="online-search-pager-current" aria-current="page">
         第 {results.current} 页
       </span>
-      <button type="button" className="btn btn-small btn-page" aria-disabled={!canNext} onClick={() => canNext && session.goToPage(next)}>
+      <button type="button" className="btn btn-small btn-page" aria-disabled={!canNext} onClick={() => canNext && onGoTo(next)}>
         下一页
         <Icon name="arrowRight" size={14} />
       </button>
