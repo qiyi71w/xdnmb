@@ -20,6 +20,8 @@ export interface PostActions {
   /** The post's cookie ID matches an imported cookie: no 屏蔽 items. */
   own: boolean
   reply: (opener: HTMLElement | null) => void
+  /** +1: a reply with this post's body text as given. */
+  repeat: (opener: HTMLElement | null) => void
   report: (opener: HTMLElement | null) => void
 }
 
@@ -27,7 +29,8 @@ export interface PostActions {
  * One post: the meta line (cookie ID, PO, SAGE, time, No.), then the title and the name in bold on
  * their own lines, the image and the body. The head's title is the reader's one h1; an untitled
  * thread keeps a hidden one. The context menu (right click, ContextMenu key, Shift+F10) offers
- * 回复／举报／屏蔽串号／屏蔽饼干 (no 屏蔽 on the user's own posts), then 复制内容／复制串号／复制饼干
+ * 回复／+1／举报／屏蔽串号／屏蔽饼干 (no 屏蔽 on the user's own posts; +1 unavailable without body
+ * text), then 复制内容／复制串号／复制饼干
  * and 饼干颜色… (not for an admin), under 复制选中文字 when text in the post is selected. A selection
  * that is exactly one whole post number in the body adds 预览／打开／在新标签页打开 for that number
  * (through the quote card: nothing opens before it is located); other digits never do.
@@ -74,6 +77,14 @@ export function PostView({
     ...numberItems,
     ...(numberItems.length > 0 ? [{ type: 'separator' as const, key: 'number-separator' }] : []),
     { type: 'action', key: 'reply', label: '回复', onSelect: () => actions.reply(articleRef.current) },
+    {
+      type: 'action',
+      key: 'repeat',
+      label: '+1',
+      disabled: post.plainText === '',
+      title: post.plainText === '' ? '这条发言没有正文' : undefined,
+      onSelect: () => actions.repeat(articleRef.current)
+    },
     { type: 'action', key: 'report', label: '举报', onSelect: () => actions.report(articleRef.current) },
     ...(!actions.own ? [
       { type: 'action' as const, key: 'block-post', label: '屏蔽串号', onSelect: () => block('post', post.id) },

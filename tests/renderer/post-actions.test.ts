@@ -51,6 +51,39 @@ describe('post actions editor transitions', () => {
     expect(editor.publication).toBeNull()
   })
 
+  it('+1 appends the body text as given on its own line, keeping the rest of the editor', () => {
+    const target = { kind: 'reply' as const, threadId: '100' }
+    const text = '>>No.100\n好耶\n好耶'
+    let state = editorsReducer(INITIAL_EDITORS, { type: 'open-repeat', tabId: 1, target, identity, text })
+    let editor = editorFor(state, target)!
+    expect(editor.fields.content).toBe(text)
+    expect(editor.caret?.offset).toBe(text.length)
+    expect(editor.expanded).toBe(true)
+    const attachment = { id: 'a1', format: 'png' as const, bytes: 10, width: 1, height: 1, originalName: 'a.png', url: 'xidao-image://draft/a1' }
+    state = editorsReducer(state, { type: 'edit', editorId: editor.id, patch: { content: '已有文字', title: '标题', name: '名称' } })
+    state = editorsReducer(state, { type: 'set-attachment', editorId: editor.id, attachment })
+    state = editorsReducer(state, { type: 'open-repeat', tabId: 1, target, identity: { source: 'unknown' }, text })
+    editor = editorFor(state, target)!
+    expect(editor.fields).toEqual({ ...EMPTY_FIELDS, content: `已有文字\n${text}`, title: '标题', name: '名称' })
+    expect(editor.attachment).toEqual(attachment)
+    expect(editor.credentialId).toBe('7')
+    expect(editor.caret?.offset).toBe(editor.fields.content.length)
+    state = editorsReducer(state, { type: 'open-quote', tabId: 1, target, identity, postId: '101' })
+    expect(editorFor(state, target)!.fields.content).toBe(`已有文字\n${text}\n>>No.101\n`)
+    state = editorsReducer(state, { type: 'open-repeat', tabId: 1, target, identity, text: '+1' })
+    expect(editorFor(state, target)!.fields.content).toBe(`已有文字\n${text}\n>>No.101\n+1`)
+  })
+
+  it('+1 only opens a locked editor', () => {
+    const target = { kind: 'reply' as const, threadId: '100' }
+    let state = editorsReducer(INITIAL_EDITORS, { type: 'open-repeat', tabId: 1, target, identity, text: '第一句' })
+    const editor = editorFor(state, target)!
+    state = editorsReducer(state, { type: 'publish-start', editorId: editor.id, requestId: 'synthetic-send' })
+    const locked = editorFor(state, target)!
+    state = editorsReducer(state, { type: 'open-repeat', tabId: 1, target, identity, text: '第二句' })
+    expect(editorFor(state, target)).toEqual(locked)
+  })
+
   it('prepares a report as an ordinary new-thread publication in fid 18, without starting a send', () => {
     let state = editorsReducer(INITIAL_EDITORS, { type: 'open-report', tabId: 1, identity, postId: '123456' })
     const target = { kind: 'thread' as const, forumId: '18' }

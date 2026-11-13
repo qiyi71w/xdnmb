@@ -763,7 +763,7 @@ export function ThreadReader({
               poHash={null}
               images={imageView}
               highlighted={highlighted === head.id}
-              actions={{ own: postActions.isOwn(head), reply: (opener) => postActions.reply(head.id, opener), report: (opener) => postActions.report(head.id, opener) }}
+              actions={{ own: postActions.isOwn(head), reply: (opener) => postActions.reply(head.id, opener), repeat: (opener) => postActions.repeat(head, opener), report: (opener) => postActions.report(head.id, opener) }}
             />
           )}
 
@@ -789,7 +789,7 @@ export function ThreadReader({
                     poHash={head?.userHash ?? null}
                     images={imageView}
                     highlighted={highlighted === reply.id}
-                    actions={{ own: postActions.isOwn(reply), reply: (opener) => postActions.reply(reply.id, opener), report: (opener) => postActions.report(reply.id, opener) }}
+                    actions={{ own: postActions.isOwn(reply), reply: (opener) => postActions.reply(reply.id, opener), repeat: (opener) => postActions.repeat(reply, opener), report: (opener) => postActions.report(reply.id, opener) }}
                   />
                 ))}
                 {endShown && page === lastPage && (
