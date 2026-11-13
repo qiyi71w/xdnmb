@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { boardMarkFrom } from '../../src/shared/settings'
+import { boardMarkFrom, isBoardMark } from '../../src/shared/settings'
 import { favoriteMarks, railMarks } from '../../src/renderer/src/features/directory/Rail'
 
 describe('favorite board marks on the rail', () => {
@@ -36,5 +36,16 @@ describe('favorite board marks on the rail', () => {
     expect(boardMarkFrom(' 综 合版 ')).toBe('综合')
     expect(boardMarkFrom('👍🏽A!')).toBe('👍🏽A')
     expect(boardMarkFrom('   ')).toBe('')
+  })
+
+  it('drops invisible format characters but keeps joined emoji whole', () => {
+    expect(boardMarkFrom('\u200B综\u202E合\u2066')).toBe('综合')
+    expect(boardMarkFrom('\u200D\u0301A')).toBe('A')
+    expect(boardMarkFrom('👨‍👩‍👧技术')).toBe('👨‍👩‍👧技')
+  })
+
+  it('accepts as a saved mark only what the field would keep', () => {
+    for (const mark of ['综', '综合', '👍🏽A', '👨‍👩‍👧技']) expect(isBoardMark(mark)).toBe(true)
+    for (const mark of ['', 'A B', ' 综', '三个字', '\u200B综', '综\u202E', '\u200D', '\n']) expect(isBoardMark(mark)).toBe(false)
   })
 })

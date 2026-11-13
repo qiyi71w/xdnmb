@@ -64,9 +64,21 @@ export function graphemeCount(text: string): number {
   return Array.from(graphemes.segment(text)).length
 }
 
-/** What a mark field keeps of typed text: whitespace and control characters removed, then the first two characters. */
+/** Never in a mark: whitespace, control characters and invisible format characters (bidi controls, zero-width spaces…). */
+const MARK_DROPPED = /[\s\p{Cc}]|(?!\u200D)\p{Cf}/gu
+/** A character the reader sees: anything but combining marks and the joiner that builds emoji sequences. */
+const MARK_VISIBLE = /[^\p{M}\u200D]/u
+
+/**
+ * What a mark field keeps of typed text: whitespace, control and invisible format characters
+ * removed (the zero-width joiner stays inside emoji), characters with nothing visible dropped, then
+ * the first two characters.
+ */
 export function boardMarkFrom(text: string): string {
-  return Array.from(graphemes.segment(text.replace(/[\s\p{Cc}]/gu, '')), (part) => part.segment).slice(0, BOARD_MARK_LENGTH).join('')
+  return Array.from(graphemes.segment(text.replace(MARK_DROPPED, '')), (part) => part.segment)
+    .filter((segment) => MARK_VISIBLE.test(segment))
+    .slice(0, BOARD_MARK_LENGTH)
+    .join('')
 }
 
 /** Split-view list width bounds, CSS pixels; the reader still keeps its minimum text width. */
@@ -100,10 +112,9 @@ export function isKaomojiName(name: string): boolean {
   return name === name.trim() && length >= 1 && length <= KAOMOJI_LIMITS.nameLength && !KAOMOJI_NAME_FORBIDDEN.test(name)
 }
 
-/** Whether `mark` may be a board's rail mark: already trimmed, 1–2 characters, one line, no control characters. */
+/** Whether `mark` may be a board's rail mark: what a mark field would keep of it, and not empty. */
 export function isBoardMark(mark: string): boolean {
-  const length = graphemeCount(mark)
-  return mark === mark.trim() && length >= 1 && length <= BOARD_MARK_LENGTH && !KAOMOJI_NAME_FORBIDDEN.test(mark)
+  return mark !== '' && boardMarkFrom(mark) === mark
 }
 
 export interface AppSettings {

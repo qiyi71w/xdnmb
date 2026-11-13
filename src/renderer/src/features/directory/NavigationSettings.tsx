@@ -68,14 +68,19 @@ export function BoardManageSection({ directory }: { directory: BoardDirectory | 
     return found === undefined || (filtering && !matches(found.label, normalized)) ? [] : [found]
   })
   // Automatic marks as the rail draws them: among the favorites it shows (hidden boards left out).
-  const railFavorites = prefs.favorites.flatMap((key) => {
-    const found = byKey.get(key)
-    return found === undefined || prefs.hidden.includes(key) ? [] : [found]
-  })
-  const railAuto = favoriteMarks(railFavorites.map((item) => item.label))
+  // A hidden favorite gets the one it would have once shown again, among those plus itself.
+  const railFavorites = (include?: Board) =>
+    prefs.favorites.flatMap((key) => {
+      const found = byKey.get(key)
+      return found === undefined || (found !== include && prefs.hidden.includes(key)) ? [] : [found]
+    })
+  const shownFavorites = railFavorites()
+  const railAuto = favoriteMarks(shownFavorites.map((item) => item.label))
   const autoMark = (item: Board) => {
-    const index = railFavorites.indexOf(item)
-    return index < 0 ? favoriteMarks([item.label])[0]! : railAuto[index]!
+    const index = shownFavorites.indexOf(item)
+    if (index >= 0) return railAuto[index]!
+    const withItem = railFavorites(item)
+    return favoriteMarks(withItem.map((entry) => entry.label))[withItem.indexOf(item)]!
   }
   const markHintId = useId()
   const groups = filtering ? matchingGroups(all, normalized) : all

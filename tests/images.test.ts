@@ -500,10 +500,14 @@ describe('版规 images', () => {
   })
 
   it('tells public addresses from local, private, link-local and reserved ones', () => {
-    for (const address of ['93.184.215.14', '1.1.1.1', '2606:4700:4700::1111', '64:ff9b::5db8:d70e', '64:ff9b::93.184.215.14']) expect(isPublicAddress(address)).toBe(true)
-    for (const address of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.10', '169.254.1.1', '100.64.0.1', '0.0.0.0',
+    for (const address of ['93.184.215.14', '1.1.1.1', '2606:4700:4700::1111', '64:ff9b::5db8:d70e', '64:ff9b::93.184.215.14', '64:ff9b:0:0:0:0:101:101']) {
+      expect(isPublicAddress(address)).toBe(true)
+    }
+    for (const address of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.10', '169.254.1.1', '100.64.0.1', '0.0.0.0', '192.88.99.1',
       '::1', '::', 'fe80::1', 'fd00::1', 'fec0::1', 'ff02::1', '::ffff:127.0.0.1', '::ffff:8.8.8.8', '64:ff9b:1::1', '2001:2::1',
-      '2001:db8::1', '2002:c0a8:101::1', '3fff::1', '5f00::1', 'not-an-ip']) expect(isPublicAddress(address)).toBe(false)
+      '2001:db8::1', '2002:c0a8:101::1', '3fff::1', '5f00::1', 'not-an-ip',
+      // NAT64 addresses reaching a non-public IPv4 host, in each spelling.
+      '64:ff9b::a00:1', '64:ff9b::10.0.0.1', '64:ff9b::7f00:1', '64:ff9b:0:0:0:0:c0a8:10a', '64:ff9b::a9fe:a9fe']) expect(isPublicAddress(address)).toBe(false)
   })
 
   it('never connects when a public-looking name resolves to a non-public address, even alongside public ones', async () => {
