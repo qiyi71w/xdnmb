@@ -90,6 +90,8 @@ export type EditorsAction =
    */
   | { type: 'open'; tabId: number; target: PostTarget; identity: IdentityChoice }
   | { type: 'open-quote'; tabId: number; target: PostTarget; identity: IdentityChoice; postId: string }
+  /** +1: the post's body text, as given, appended like a quote. */
+  | { type: 'open-repeat'; tabId: number; target: PostTarget; identity: IdentityChoice; text: string }
   | { type: 'open-report'; tabId: number; identity: IdentityChoice; postId: string }
   | { type: 'edit-report'; editorId: EditorId; patch: Partial<ReportFields> }
   /** Continues a saved draft in a tab. Ignored when any editor already continues it. */
@@ -162,6 +164,19 @@ function unlocked(change: (editor: Editor) => Editor): (editor: Editor) => Edito
   return (editor) => (editor.publication === null ? change(editor) : editor)
 }
 
+/**
+ * Opens the editor for `target` and appends `text` to its body on a line of its own, the caret
+ * after it. A locked editor is only opened.
+ */
+function openAppending(state: EditorsState, tabId: number, target: PostTarget, identity: IdentityChoice, text: string): EditorsState {
+  const opened = editorsReducer(state, { type: 'open', tabId, target, identity })
+  const editor = editorFor(opened, target)!
+  return update(opened, editor.id, unlocked((item) => {
+    const content = `${item.fields.content}${item.fields.content !== '' && !item.fields.content.endsWith('\n') ? '\n' : ''}${text}`
+    return { ...item, fields: { ...item.fields, content }, caret: { offset: content.length, revision: (item.caret?.revision ?? 0) + 1 } }
+  }))
+}
+
 /** Changes the publication of a locked editor only. */
 function locked(change: (editor: Editor, publication: EditorPublication) => Editor): (editor: Editor) => Editor {
   return (editor) => (editor.publication === null ? editor : change(editor, editor.publication))
@@ -179,14 +194,10 @@ export function editorsReducer(state: EditorsState, action: EditorsAction): Edit
         return editorsReducer(opened, { type: 'set-expanded', editorId: editor.id, expanded: item.expanded })
       }, state)
     }
-    case 'open-quote': {
-      const opened = editorsReducer(state, { type: 'open', tabId: action.tabId, target: action.target, identity: action.identity })
-      const editor = editorFor(opened, action.target)!
-      return update(opened, editor.id, unlocked((item) => {
-        const content = `${item.fields.content}${item.fields.content !== '' && !item.fields.content.endsWith('\n') ? '\n' : ''}>>No.${action.postId}\n`
-        return { ...item, fields: { ...item.fields, content }, caret: { offset: content.length, revision: (item.caret?.revision ?? 0) + 1 } }
-      }))
-    }
+    case 'open-quote':
+      return openAppending(state, action.tabId, action.target, action.identity, `>>No.${action.postId}\n`)
+    case 'open-repeat':
+      return openAppending(state, action.tabId, action.target, action.identity, action.text)
     case 'open-report': {
       const target: PostTarget = { kind: 'thread', forumId: '18' }
       const opened = editorsReducer(state, { type: 'open', tabId: action.tabId, target, identity: action.identity })
