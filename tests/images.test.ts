@@ -9,6 +9,7 @@ import type { ImageLoadOutcome } from '../src/shared/images'
 import { openManagedImageFiles, type ManagedImageFiles } from '../src/main/images/files'
 import { createImageService, type ImageService } from '../src/main/images/service'
 import { createImageDownloader } from '../src/main/images/transport'
+import { isPublicAddress, publicLookup } from '../src/main/images/publicAddress'
 import type { ReadingStore } from '../src/main/storage/contract'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { asStore } from './helpers/store'
@@ -467,5 +468,70 @@ describe('saving the original', () => {
     } finally {
       chmodSync(locked, process.platform === 'win32' ? 0o644 : 0o755)
     }
+  })
+})
+
+describe('版规 images', () => {
+  const rules = (resolve: (forumId: string, index: number) => string | null) => createImageService({
+    store,
+    files,
+    download: async () => { throw new Error('the forum image downloader must not fetch 版规 images') },
+    origin,
+    externalDownload: createImageDownloader({ allowedOrigins: [origin], timeoutMs: 5000, idleTimeoutMs: 2000 }),
+    rulesImageUrl: async (forumId, index) => resolve(forumId, index)
+  })
+  const loadRules = (images: ImageService, forumId: string, index: number) =>
+    images.loadRulesImage('1', { viewId: 'view-a', forumId, index, refresh: false }, signal())
+
+  it('loads one by forum and position through the external downloader, then reuses the stored file', async () => {
+    serveBytes('/rules/banner.png', png(4, 3), 'image/png')
+    const images = rules((forumId, index) => (forumId === '120' && index === 0 ? `${origin}/rules/banner.png` : null))
+    expect(await loadRules(images, '120', 0)).toMatchObject({ status: 'ready', image: { format: 'png', width: 4, height: 3, source: 'network' } })
+    expect(await loadRules(images, '120', 0)).toMatchObject({ status: 'ready', image: { source: 'stored' } })
+    expect(requests).toHaveLength(1)
+    expect(await loadRules(images, '120', 1)).toEqual({ status: 'failed', error: { reason: 'no-image' } })
+  })
+
+  it('downloads from public https hosts only, never a local address', async () => {
+    const download = createImageDownloader({ allowedOrigins: 'public-https' })
+    await expect(download(new URL(`${origin}/rules/banner.png`), join(dir, 'partial'), 1000, signal()))
+      .rejects.toMatchObject({ error: { reason: 'unsupported-source' } })
+    expect(requests).toEqual([])
+  })
+
+  it('tells public addresses from local, private, link-local and reserved ones', () => {
+    for (const address of ['93.184.215.14', '1.1.1.1', '2606:4700:4700::1111', '64:ff9b::5db8:d70e', '64:ff9b::93.184.215.14']) expect(isPublicAddress(address)).toBe(true)
+    for (const address of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.10', '169.254.1.1', '100.64.0.1', '0.0.0.0',
+      '::1', '::', 'fe80::1', 'fd00::1', 'fec0::1', 'ff02::1', '::ffff:127.0.0.1', '::ffff:8.8.8.8', '64:ff9b:1::1', '2001:2::1',
+      '2001:db8::1', '2002:c0a8:101::1', '3fff::1', '5f00::1', 'not-an-ip']) expect(isPublicAddress(address)).toBe(false)
+  })
+
+  it('never connects when a public-looking name resolves to a non-public address, even alongside public ones', async () => {
+    const answers: Record<string, string[]> = { 'loopback.example': ['127.0.0.1'], 'mixed.example': ['93.184.215.14', '192.168.1.10'], 'v6.example': ['::1'],
+      'nat64-local.example': ['2606:4700::1', '64:ff9b:1::1'], 'site-local.example': ['fec0::1'] }
+    const resolved: string[] = []
+    const download = createImageDownloader({
+      allowedOrigins: 'public-https',
+      resolve: (hostname, _options, callback) => {
+        resolved.push(hostname)
+        callback(null, (answers[hostname] ?? []).map((address) => ({ address, family: address.includes(':') ? 6 : 4 })))
+      }
+    })
+    for (const host of Object.keys(answers)) {
+      await expect(download(new URL(`https://${host}/a.png`), join(dir, `partial-${host}`), 1000, signal()))
+        .rejects.toMatchObject({ error: { reason: 'unsupported-source' } })
+    }
+    expect(resolved).toEqual(Object.keys(answers))
+    expect(managedFiles()).toEqual([])
+  })
+
+  it('hands the connection exactly the checked public addresses', () => {
+    const lookup = publicLookup((_hostname, _options, callback) => callback(null, [{ address: '93.184.215.14', family: 4 }]))
+    const single: unknown[] = []
+    lookup('cdn.example', {}, (...result) => single.push(...result))
+    expect(single).toEqual([null, '93.184.215.14', 4])
+    const all: unknown[] = []
+    lookup('cdn.example', { all: true }, (...result) => all.push(...result))
+    expect(all).toEqual([null, [{ address: '93.184.215.14', family: 4 }]])
   })
 })

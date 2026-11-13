@@ -124,10 +124,20 @@
 }
 
 /* Revealed: the words sit on the post's own surface (no tint, so no new text/surface contrast
-   pair). It keeps focus after a keyboard reveal (so focus does not fall to the page) but draws no
-   ring for it. */
+   pair, hovered or not). A click hides them again; the pointer cursor marks it clickable. It keeps
+   focus after a keyboard reveal (so focus does not fall to the page) but draws no ring for it. */
+.spoiler.is-revealed {
+  cursor: pointer;
+}
+
 .spoiler.is-revealed:focus {
   outline: none;
+}
+
+/* Just masked: the bar shows at once over the words it hides; the hover tint fades again once the
+   pointer moves. */
+.spoiler.is-masked.is-interactive.is-switched {
+  transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

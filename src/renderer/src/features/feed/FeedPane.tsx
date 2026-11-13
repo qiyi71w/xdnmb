@@ -24,6 +24,7 @@ import type { FeedPageRecord } from './feedState'
 import { ThreadRow } from './ThreadRow'
 import { isPinnedThread } from './pinned'
 import { useFeed } from './useFeed'
+import { RulesImages } from './RulesImages'
 import './feed.css'
 import { ListHostContext } from '../directory/navStore'
 import type { ComposeEntry } from '../editor/ComposePanel'
@@ -92,7 +93,10 @@ export function FeedPane({
   const scrollRef = useRef<HTMLDivElement>(null)
   // 版规／时间线说明 have no menu of their own: a selected whole number there gets 预览／打开.
   const descriptionNumbers = useNumberSelectionMenu(entryKey)
-  const { images, open: viewerOpen, viewer } = useListImageViewer(useImageScope(scrollRef), scrollRef)
+  const imageScope = useImageScope(scrollRef)
+  const { images, open: viewerOpen, viewer } = useListImageViewer(imageScope, scrollRef)
+  // 版规 images load only while 版规 is open.
+  const [descriptionOpen, setDescriptionOpen] = useState(false)
   const sentinelRef = useRef<HTMLDivElement>(null)
   // While filtering, more pages are read only on request: a filter never scans the feed by itself.
   useNearEnd(scrollRef, sentinelRef, canAppend && !filtering, state.pages.length, loadMore)
@@ -291,13 +295,16 @@ export function FeedPane({
           />
         )}
 
-        {info.description.length > 0 && (
-          <details className="feed-description">
+        {(info.description.length > 0 || info.rulesImages.length > 0) && (
+          <details className="feed-description" onToggle={(event) => setDescriptionOpen(event.currentTarget.open)}>
             <summary>
               <Icon name="chevron" size={14} className="disclosure-icon" />
               <span className="feed-description-label">{descriptionLabel}</span>
               <span className="feed-description-preview">{contentText(info.description).trim()}</span>
             </summary>
+            {descriptionOpen && info.rulesImages.length > 0 && (
+              <RulesImages viewId={imageScope.viewId} forumId={info.ref.id} images={info.rulesImages} />
+            )}
             <QuoteEntryContext.Provider value={entryKey}>
               <div {...descriptionNumbers.areaProps} className="number-selection-area">
                 <Content

@@ -5,11 +5,13 @@
 // in view. Every button names itself in a tooltip shortly after a hover or keyboard focus; the name
 // of the current item is announced when it changes. Order and visibility are app settings (`rail`).
 // Ctrl+click (Cmd+click on macOS) or middle-click on a favorite or a page (here or in 更多) opens it
-// in a background tab: the navigation, its panels and focus stay as they are.
+// in a background tab: the navigation, its panels and focus stay as they are. A favorite's context
+// menu edits its mark in a small editor beside it (also in 设置 › 版块管理).
 
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -20,11 +22,14 @@ import {
   type RefObject
 } from 'react'
 import { createPortal } from 'react-dom'
+import { graphemeCount } from '../../../../shared/settings'
+import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuPoint } from '../../components/ContextMenu'
 import { Icon } from '../../components/Icon'
 import { useSettings } from '../../lib/settingsContext'
 import { usePopover } from '../../lib/usePopover'
 import { useRovingFocus } from '../../lib/useRovingFocus'
 import type { ListRef } from '../tabs/tabsState'
+import { BoardMarkField } from './BoardMarkField'
 import { FeatureDot, featureInfo, featureIsDialog, featureLabel, featureTitle, GridIcon, type FeatureHost, type PageOpening } from './navParts'
 import { orderedFeatures, useNavActions, type Board, type FeatureId } from './navStore'
 import { hasNewVersion, settingsEntryLabel, useUpdates } from '../updates/updatesState'
@@ -73,6 +78,12 @@ export function favoriteMarks(labels: readonly string[]): string[] {
   })
 }
 
+/** Each favorite's mark on the rail: the user's own where set, else the automatic one. */
+export function railMarks(boards: readonly Pick<Board, 'key' | 'label'>[], custom: Readonly<Record<string, string>>): string[] {
+  const auto = favoriteMarks(boards.map((item) => item.label))
+  return boards.map((item, index) => custom[item.key] ?? auto[index]!)
+}
+
 /** Ctrl+click (Cmd+click on macOS): the page opens in a background tab. */
 const backgroundClick = (event: MouseEvent) => event.ctrlKey || event.metaKey
 
@@ -112,12 +123,15 @@ export function Rail({
   boards: RailBoards
   favorites: RailFavorites
 }) {
-  const prefs = useSettings().settings.rail
+  const settings = useSettings().settings
+  const prefs = settings.rail
   const actions = useNavActions()
   const ordered = orderedFeatures(prefs.order)
   const shown = ordered.filter((feature) => !prefs.hidden.includes(feature.id))
   const hidden = ordered.filter((feature) => prefs.hidden.includes(feature.id))
-  const marks = favoriteMarks(favorites.boards.map((item) => item.label))
+  const customMarks = settings.boardMarks
+  const autoMarks = favoriteMarks(favorites.boards.map((item) => item.label))
+  const marks = railMarks(favorites.boards, customMarks)
   const updateState = useUpdates().state
   const settingsLabel = settingsEntryLabel(updateState)
 
@@ -133,6 +147,30 @@ export function Rail({
   useEffect(() => {
     if (!hasMore) closeMore(false)
   }, [hasMore, closeMore])
+
+  // A favorite's context menu, and the mark editor it opens beside that favorite. Both are mounted
+  // inside the navigation (as top-layer popovers, so its clipping does not cut them): a press in
+  // them is then a press inside the narrow window's navigation overlay, which stays open.
+  const [markMenu, setMarkMenu] = useState<{ key: string; point: ContextMenuPoint; button: HTMLButtonElement } | null>(null)
+  const markTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const markPanelRef = useRef<HTMLDivElement>(null)
+  const markPopover = usePopover(markTriggerRef, markPanelRef)
+  const [markEditing, setMarkEditing] = useState<{ key: string; left: number; top: number } | null>(null)
+  const markTitleId = useId()
+  const markHintId = useId()
+  const editingIndex = markPopover.open && markEditing !== null ? favorites.boards.findIndex((item) => item.key === markEditing.key) : -1
+  const editingBoard = editingIndex < 0 ? null : favorites.boards[editingIndex]!
+  const openMarkMenu = (event: MouseEvent<HTMLButtonElement> | KeyboardEvent<HTMLButtonElement>, key: string) => {
+    event.preventDefault()
+    tip.hide()
+    setMarkMenu({ key, point: contextMenuPoint(event, event.currentTarget), button: event.currentTarget })
+  }
+  const editMark = (key: string, button: HTMLButtonElement) => {
+    const rect = button.getBoundingClientRect()
+    markTriggerRef.current = button
+    setMarkEditing({ key, left: rect.right + 8, top: rect.top + rect.height / 2 })
+    if (!markPopover.open) markPopover.toggle()
+  }
 
   const railIds = [
     BOARDS_KEY,
@@ -202,6 +240,8 @@ export function Rail({
             aria-label="收藏的版块"
             onScroll={() => {
               tip.hide()
+              // The mark editor sits beside its favorite: it closes when that favorite moves away.
+              markPopover.close(false)
               favoriteEdges.update()
             }}
           >
@@ -212,7 +252,7 @@ export function Rail({
                 <button
                   key={item.key}
                   type="button"
-                  className={['shell-rail-btn', 'shell-rail-fav', current ? 'is-current' : '', Array.from(mark).length > 1 ? 'is-pair' : '']
+                  className={['shell-rail-btn', 'shell-rail-fav', current ? 'is-current' : '', graphemeCount(mark) > 1 ? 'is-pair' : '']
                     .filter(Boolean)
                     .join(' ')}
                   aria-label={item.label}
@@ -220,6 +260,10 @@ export function Rail({
                   data-rail-tip={item.label}
                   data-rail-board=""
                   onClick={(event) => favorites.onSelect(item.ref, backgroundClick(event) ? 'background' : 'nav')}
+                  onContextMenu={(event) => openMarkMenu(event, item.key)}
+                  onKeyDown={(event) => {
+                    if (isContextMenuKey(event)) openMarkMenu(event, item.key)
+                  }}
                   {...backgroundGestures(() => favorites.onSelect(item.ref, 'background'))}
                   {...rail.itemProps(favoriteKey(item.key))}
                 >
@@ -333,6 +377,61 @@ export function Rail({
           </div>
         </div>
       )}
+      {markMenu !== null && (
+        <ContextMenu
+          container={railRef.current?.parentElement ?? undefined}
+          point={markMenu.point}
+          label={favorites.boards.find((item) => item.key === markMenu.key)?.label ?? '收藏的版块'}
+          items={[
+            { type: 'action', key: 'edit', label: '自定义缩写…', onSelect: () => editMark(markMenu.key, markMenu.button) },
+            ...(customMarks[markMenu.key] === undefined
+              ? []
+              : [{ type: 'action' as const, key: 'auto', label: '恢复自动缩写', onSelect: () => actions.setMark(markMenu.key, null) }])
+          ]}
+          onClose={(returnFocus) => {
+            const button = markMenu.button
+            setMarkMenu(null)
+            if (returnFocus) button.focus()
+          }}
+        />
+      )}
+
+      {editingBoard !== null &&
+        markEditing !== null &&
+        createPortal(
+          // React events from this portal would bubble to the rail: its arrow keys and Home / End
+          // must stay with the field. Focus leaving the editor (Tab) closes it where focus went.
+          <div
+            ref={(element) => {
+              markPanelRef.current = element
+              if (element !== null && !element.matches(':popover-open')) element.showPopover()
+            }}
+            className="shell-pop shell-mark-pop"
+            popover="manual"
+            role="dialog"
+            aria-labelledby={markTitleId}
+            style={{ left: markEditing.left, top: markEditing.top }}
+            onKeyDown={(event) => event.stopPropagation()}
+            onBlur={(event: FocusEvent<HTMLDivElement>) => {
+              if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) markPopover.close(false)
+            }}
+          >
+            <p className="shell-mark-title" id={markTitleId}>
+              {editingBoard.label}的缩写
+            </p>
+            <BoardMarkField
+              boardKey={editingBoard.key}
+              label={editingBoard.label}
+              auto={autoMarks[editingIndex]!}
+              describedBy={markHintId}
+              onEnter={() => markPopover.close()}
+            />
+            <p className="shell-mark-hint" id={markHintId}>
+              最多 2 个字，留空自动生成
+            </p>
+          </div>,
+          railRef.current?.parentElement ?? document.body
+        )}
 
       {tip.shown !== null &&
         createPortal(

@@ -1,6 +1,7 @@
 import { Parser } from 'htmlparser2'
-import type { ContentNode, EmphasisStyle } from '../../shared/forum'
+import { MAX_RULES_IMAGES, type ContentNode, type EmphasisStyle, type RulesImage } from '../../shared/forum'
 import { readingLinkTarget, readingReferenceNodes } from '../../shared/reading-references'
+import { publicHttpsUrl } from '../images/external'
 
 const droppedTags: Readonly<Record<string, true>> = {
   script: true, style: true, iframe: true, frame: true, object: true, embed: true,
@@ -196,4 +197,24 @@ export function parseContent(html: string): { nodes: ContentNode[]; plainText: s
     else traversal.push({ list: node.children, index: 0 })
   }
   return { nodes, plainText: text.join('').replace(/\n+$/, '') }
+}
+
+/**
+ * The images of a forum's 版规 HTML, in order: each `<img>` whose address is a public https one
+ * (an `http:` address is taken as https), repeats dropped, at most `MAX_RULES_IMAGES`. Its
+ * alternative text is `alt`, else `title`, one line and at most 100 characters.
+ */
+export function rulesImages(html: string): RulesImage[] {
+  const images: RulesImage[] = []
+  const parser = new Parser({
+    onopentag(name, attributes) {
+      if (name !== 'img' || images.length >= MAX_RULES_IMAGES) return
+      const url = publicHttpsUrl(attributes.src ?? '')
+      if (url === null || images.some((image) => image.url === url.href)) return
+      const alt = (attributes.alt || attributes.title || '').replace(/\s+/g, ' ').trim().slice(0, 100)
+      images.push({ url: url.href, alt })
+    }
+  }, { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true })
+  parser.end(html)
+  return images
 }

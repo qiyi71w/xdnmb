@@ -79,9 +79,23 @@ export interface Forum {
   displayName: string
   /** 版规／说明 parsed into safe content. */
   rules: ContentNode[]
+  /**
+   * Images of 版规, in order (they sit on third-party image hosts). Missing in directories saved
+   * before these were read. The renderer asks for one by forum ID and position, never by address.
+   */
+  rulesImages?: RulesImage[]
   /** Published posting interval in seconds; `null` when not provided. */
   postIntervalSeconds: number | null
 }
+
+/** One 版规 image: a public https address and the forum's alternative text (`''` when none). */
+export interface RulesImage {
+  url: string
+  alt: string
+}
+
+/** At most this many 版规 images are kept per forum. */
+export const MAX_RULES_IMAGES = 4
 
 export interface Timeline {
   id: TimelineId

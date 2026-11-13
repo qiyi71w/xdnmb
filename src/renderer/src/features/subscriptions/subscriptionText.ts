@@ -12,7 +12,7 @@ import type {
   SubscriptionSource,
   SubscriptionArrangement
 } from '../../../../shared/subscriptions'
-import { completeSubscriptionObservation } from '../../../../shared/subscriptions'
+import { completeSubscriptionObservation, MAX_APP_UUID_LENGTH } from '../../../../shared/subscriptions'
 import { describeReadError, meaningfulTitle } from '../../lib/format'
 import { formatClockTime } from '../../lib/time'
 import type { ArrangementNote } from './subscriptionListState'
@@ -100,7 +100,7 @@ export function failureText(reason: SubscriptionFailure): string {
     case 'missing':
       return '网页同步对象已移除，需要在设置中重新选择，未执行'
     case 'invalid-uuid':
-      return 'UUID 格式无效，未更改'
+      return `UUID 需为 1–${MAX_APP_UUID_LENGTH} 个字符，未更改`
     case 'stale':
       return '订阅配置已变化，未执行'
     case 'busy':

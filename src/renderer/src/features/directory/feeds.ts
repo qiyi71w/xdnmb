@@ -1,4 +1,4 @@
-import type { BoardDirectory, ContentNode, FeedRef, ForumId } from '../../../../shared/forum'
+import type { BoardDirectory, ContentNode, FeedRef, ForumId, RulesImage } from '../../../../shared/forum'
 
 /** What the list pane needs to know about the selected forum or timeline. */
 export interface FeedInfo {
@@ -6,6 +6,8 @@ export interface FeedInfo {
   name: string
   /** Forum 版规 or timeline 说明, shown separately from the thread list. */
   description: ContentNode[]
+  /** The 版规 images (timelines have none). */
+  rulesImages: readonly RulesImage[]
   /** Timeline page limit when the forum publishes one. */
   maxPage: number | null
 }
@@ -17,11 +19,11 @@ export function feedKey(ref: FeedRef): string {
 export function findFeed(directory: BoardDirectory, ref: FeedRef): FeedInfo | null {
   if (ref.kind === 'timeline') {
     const timeline = directory.timelines.find((item) => item.id === ref.id)
-    return timeline === undefined ? null : { ref, name: timeline.displayName, description: timeline.notice, maxPage: timeline.maxPage }
+    return timeline === undefined ? null : { ref, name: timeline.displayName, description: timeline.notice, rulesImages: [], maxPage: timeline.maxPage }
   }
   for (const group of directory.groups) {
     const forum = group.forums.find((item) => item.id === ref.id)
-    if (forum !== undefined) return { ref, name: forum.displayName, description: forum.rules, maxPage: null }
+    if (forum !== undefined) return { ref, name: forum.displayName, description: forum.rules, rulesImages: forum.rulesImages ?? [], maxPage: null }
   }
   return null
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { favoriteMarks } from '../../src/renderer/src/features/directory/Rail'
+import { boardMarkFrom } from '../../src/shared/settings'
+import { favoriteMarks, railMarks } from '../../src/renderer/src/features/directory/Rail'
 
 describe('favorite board marks on the rail', () => {
   it('shows the first character when no other favorite starts with it', () => {
@@ -24,5 +25,16 @@ describe('favorite board marks on the rail', () => {
 
   it('ignores surrounding whitespace and keeps astral characters whole', () => {
     expect(favoriteMarks([' 𠮷野家 ', '𠮷野屋'])).toEqual(['𠮷家', '𠮷屋'])
+  })
+
+  it("uses a favorite's own mark where set and the automatic one elsewhere", () => {
+    const boards = [{ key: 'forum:1', label: '技术宅' }, { key: 'forum:2', label: '技术讨论' }]
+    expect(railMarks(boards, { 'forum:2': 'TK' })).toEqual(['技宅', 'TK'])
+  })
+
+  it('keeps at most two characters of typed text, without spaces, emoji kept whole', () => {
+    expect(boardMarkFrom(' 综 合版 ')).toBe('综合')
+    expect(boardMarkFrom('👍🏽A!')).toBe('👍🏽A')
+    expect(boardMarkFrom('   ')).toBe('')
   })
 })

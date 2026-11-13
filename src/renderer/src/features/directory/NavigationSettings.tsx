@@ -1,6 +1,6 @@
 // The settings page's 功能显示 (show / hide each rail feature, sort the rail order by handle) and
 // 版块管理 (filter, favorite, hide, sort favorites and boards within forum groups by handle;
-// timelines keep their order, nothing sorts while filtering).
+// timelines keep their order, nothing sorts while filtering; each favorite's rail mark).
 
 import { useId, useRef, useState } from 'react'
 import type { BoardDirectory } from '../../../../shared/forum'
@@ -9,8 +9,10 @@ import { Icon } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { SortHandle, SortStatus, useSortableList, type SortableList } from '../../components/SortHandle'
 import { useSettings } from '../../lib/settingsContext'
+import { BoardMarkField } from './BoardMarkField'
 import { matches, matchingGroups } from './BoardPicker'
 import { DirectorySkeleton, useBoardView } from './navParts'
+import { favoriteMarks } from './Rail'
 import { isReorderableGroup, orderedFeatures, useNavActions, type Board, type BoardGroup, type NavActions as Actions } from './navStore'
 
 export function FeatureVisibilitySection() {
@@ -65,6 +67,17 @@ export function BoardManageSection({ directory }: { directory: BoardDirectory | 
     const found = byKey.get(key)
     return found === undefined || (filtering && !matches(found.label, normalized)) ? [] : [found]
   })
+  // Automatic marks as the rail draws them: among the favorites it shows (hidden boards left out).
+  const railFavorites = prefs.favorites.flatMap((key) => {
+    const found = byKey.get(key)
+    return found === undefined || prefs.hidden.includes(key) ? [] : [found]
+  })
+  const railAuto = favoriteMarks(railFavorites.map((item) => item.label))
+  const autoMark = (item: Board) => {
+    const index = railFavorites.indexOf(item)
+    return index < 0 ? favoriteMarks([item.label])[0]! : railAuto[index]!
+  }
+  const markHintId = useId()
   const groups = filtering ? matchingGroups(all, normalized) : all
   const nothing = filtering && favorites.length === 0 && groups.length === 0
   const favoriteSort = useSortableList(
@@ -103,11 +116,23 @@ export function BoardManageSection({ directory }: { directory: BoardDirectory | 
                   <KaomojiDecor state="favoritesEmpty" />
                 </p>
               ) : (
-                <ul ref={favoriteSort.listRef} className={`shell-manage-list ${favoriteSort.listClassName}`} style={favoriteSort.listStyle}>
-                  {favorites.map((item) => (
-                    <ManageRow key={item.key} item={item} prefs={prefs} actions={actions} sort={filtering ? null : favoriteSort} />
-                  ))}
-                </ul>
+                <>
+                  <p className="field-hint" id={markHintId}>
+                    左侧栏缩写：最多 2 个字，留空自动生成
+                  </p>
+                  <ul ref={favoriteSort.listRef} className={`shell-manage-list ${favoriteSort.listClassName}`} style={favoriteSort.listStyle}>
+                    {favorites.map((item) => (
+                      <ManageRow
+                        key={item.key}
+                        item={item}
+                        prefs={prefs}
+                        actions={actions}
+                        sort={filtering ? null : favoriteSort}
+                        mark={{ auto: autoMark(item), hintId: markHintId }}
+                      />
+                    ))}
+                  </ul>
+                </>
               )}
               <SortStatus sort={favoriteSort} />
             </div>
@@ -187,13 +212,16 @@ function ManageRow({
   item,
   prefs,
   actions,
-  sort
+  sort,
+  mark
 }: {
   item: Board
   prefs: BoardSettings
   actions: Actions
   /** The list this row sorts in; `null`: no sorting (timelines, filtered list). */
   sort: SortableList | null
+  /** A 收藏 row: its rail mark field (`auto`: the mark an empty field gives). */
+  mark?: { auto: string; hintId: string }
 }) {
   const favorite = prefs.favorites.includes(item.key)
   const hidden = prefs.hidden.includes(item.key)
@@ -204,6 +232,7 @@ function ManageRow({
       <Icon name={item.icon} className="shell-manage-icon" />
       <span className="shell-manage-label">{item.label}</span>
       <span className="shell-manage-actions">
+        {mark !== undefined && <BoardMarkField boardKey={item.key} label={item.label} auto={mark.auto} describedBy={mark.hintId} />}
         <button
           type="button"
           className={favorite ? 'icon-btn shell-manage-star is-on' : 'icon-btn shell-manage-star'}

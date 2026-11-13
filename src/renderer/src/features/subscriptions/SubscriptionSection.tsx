@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { AppSettings } from '../../../../shared/settings'
-import type { SubscriptionOverview, SubscriptionResult, SubscriptionSource } from '../../../../shared/subscriptions'
+import { MAX_APP_UUID_LENGTH, type SubscriptionOverview, type SubscriptionResult, type SubscriptionSource } from '../../../../shared/subscriptions'
 import { Choice, SettingRow, type Write } from '../../app/settingsSections'
 import { ContextMenu, type ContextMenuPoint } from '../../components/ContextMenu'
 import { Icon } from '../../components/Icon'
@@ -290,7 +290,7 @@ function AppUuidForm({
 
   const onInput = () => {
     if (invalid) setInvalid(false)
-    setDirty((uuidRef.current?.value.trim().toLowerCase() ?? '') !== (saved ?? ''))
+    setDirty((uuidRef.current?.value.trim() ?? '') !== (saved ?? ''))
   }
 
   /** Taken synchronously: a second press or Enter before `pending` renders does not write twice. */
@@ -333,9 +333,10 @@ function AppUuidForm({
     // Nothing at all while blocked or writing: no message, no field state, no write.
     if (blocked || pending !== null) return
     const value = uuidRef.current?.value.trim() ?? ''
-    if (value === '') {
+    // No `maxLength` on the field: it would silently keep a prefix of a longer paste, another UUID.
+    if (value === '' || value.length > MAX_APP_UUID_LENGTH) {
       setInvalid(true)
-      setMessage({ tone: 'error', text: '请先输入 UUID' })
+      setMessage({ tone: 'error', text: value === '' ? '请先输入 UUID' : failureText('invalid-uuid') })
       uuidRef.current?.focus()
       return
     }

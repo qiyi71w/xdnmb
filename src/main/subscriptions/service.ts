@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { ReadError } from '../../shared/api'
 import type { ThreadId } from '../../shared/forum'
 import type { SubscriptionCandidate, SubscriptionChoice, SubscriptionContext, SubscriptionDifference, SubscriptionFailure, SubscriptionObservation, SubscriptionOperation, SubscriptionOverview, SubscriptionPlan, SubscriptionPreview, SubscriptionProvenance, SubscriptionRemoval, SubscriptionRemovalItem, SubscriptionRemovalStop, SubscriptionResult, SubscriptionSource, SubscriptionsApi } from '../../shared/subscriptions'
-import { completeSubscriptionObservation } from '../../shared/subscriptions'
+import { completeSubscriptionObservation, MAX_APP_UUID_LENGTH } from '../../shared/subscriptions'
 import type { SecretProtector } from '../identity/protection'
 import type { RequestScheduler } from '../reading/scheduler'
 import type { AppStore, SubscriptionBaseline } from '../storage/contract'
@@ -23,7 +23,15 @@ export interface SubscriptionService extends Omit<SubscriptionsApi, 'cancel' | '
   recover(): Promise<void>
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/**
+ * The forum accepts any text as an App UUID (Chinese or arbitrary English included), so it is kept
+ * exactly as entered, only trimmed, and compared exactly: differently cased values may name
+ * different collections.
+ */
+function appUuid(value: string): string | null {
+  const trimmed = value.trim()
+  return trimmed === '' || trimmed.length > MAX_APP_UUID_LENGTH ? null : trimmed
+}
 function sameContext(left: SubscriptionContext, right: SubscriptionContext): boolean {
   return left.generation === right.generation && left.appCredentialId === right.appCredentialId && left.webCredentialId === right.webCredentialId
 }
@@ -78,7 +86,7 @@ export function createSubscriptionService(deps: {
     try {
       if (!(await protector.isAvailable())) throw new Error('locked')
       const secret = await protector.decrypt(ciphertext)
-      if (source === 'app' && !UUID.test(secret)) throw new Error('invalid protected UUID')
+      if (source === 'app' && appUuid(secret) !== secret) throw new Error('invalid protected UUID')
       return secret
     } catch { throw new UnavailableIdentity('locked') }
   }
@@ -168,7 +176,7 @@ export function createSubscriptionService(deps: {
       if (source === 'web') {
         if (entry.context.webCredentialId === context.webCredentialId) return true
       } else if (entry.context.appCredentialId === context.appCredentialId ||
-        (await identity('app', entry.context)).toLowerCase() === secret.toLowerCase()) return true
+        (await identity('app', entry.context)) === secret) return true
     }
     return false
   }
@@ -318,7 +326,7 @@ export function createSubscriptionService(deps: {
       const leftContext = mode === 'merge' ? { ...context, appCredentialId: sourceId } : context
       if (mode === 'merge') {
         if (!sourceId || !(await store.listSubscriptionAppCredentials()).includes(sourceId)) return { ok: false, reason: 'not-found' }
-        if ((await identity('app', leftContext)).toLowerCase() === (await identity('app', context)).toLowerCase()) return { ok: false, reason: 'invalid-selection' }
+        if ((await identity('app', leftContext)) === (await identity('app', context))) return { ok: false, reason: 'invalid-selection' }
       }
       const bounded = AbortSignal.any([signal, AbortSignal.timeout(20_000)])
       const left = await collect('app', leftContext, bounded)
@@ -481,13 +489,13 @@ export function createSubscriptionService(deps: {
       configuring = true
       try {
         if (store.status.state !== 'ready') return { ok: false, reason: 'storage' }
-        const secret = uuid === null ? randomUUID() : uuid.trim().toLowerCase()
-        if (!UUID.test(secret)) return { ok: false, reason: 'invalid-uuid' }
+        const secret = uuid === null ? randomUUID() : appUuid(uuid)
+        if (secret === null) return { ok: false, reason: 'invalid-uuid' }
         if (!(await protector.isAvailable())) return { ok: false, reason: 'locked' }
         const configuration = await store.loadSubscriptionConfiguration()
         if (configuration.context.appCredentialId !== null) {
           try {
-            if ((await identity('app', configuration.context)).toLowerCase() === secret) return { ok: true, value: await overview() }
+            if ((await identity('app', configuration.context)) === secret) return { ok: true, value: await overview() }
           } catch (error) { if (error instanceof UnavailableIdentity && error.reason === 'locked') return { ok: false, reason: 'locked' } }
         }
         let ciphertext: Uint8Array
@@ -546,11 +554,11 @@ export function createSubscriptionService(deps: {
     getPlans: () => store.loadSubscriptionPlans(),
     async getMergeSources() {
       const { context } = await store.loadSubscriptionConfiguration()
-      const current = context.appCredentialId === null ? null : (await identity('app', context)).toLowerCase()
+      const current = context.appCredentialId === null ? null : await identity('app', context)
       const sources = []
       for (const id of await store.listSubscriptionAppCredentials()) {
         if (id === context.appCredentialId) continue
-        if (current !== null && (await identity('app', { ...context, appCredentialId: id })).toLowerCase() === current) continue
+        if (current !== null && (await identity('app', { ...context, appCredentialId: id })) === current) continue
         sources.push({ appCredentialId: id, label: `之前的 App UUID ${sources.length + 1}` })
       }
       return sources

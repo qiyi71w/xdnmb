@@ -54,6 +54,21 @@ export interface BoardSettings {
   collapsed: readonly string[]
 }
 
+/** Longest custom rail mark, in user-perceived characters; the rail button fits two. */
+export const BOARD_MARK_LENGTH = 2
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+/** User-perceived characters of `text` (an emoji or a combined character counts once). */
+export function graphemeCount(text: string): number {
+  return Array.from(graphemes.segment(text)).length
+}
+
+/** What a mark field keeps of typed text: whitespace and control characters removed, then the first two characters. */
+export function boardMarkFrom(text: string): string {
+  return Array.from(graphemes.segment(text.replace(/[\s\p{Cc}]/gu, '')), (part) => part.segment).slice(0, BOARD_MARK_LENGTH).join('')
+}
+
 /** Split-view list width bounds, CSS pixels; the reader still keeps its minimum text width. */
 export const LIST_WIDTH_LIMITS = { min: 260, max: 1600, default: 340 } as const
 
@@ -85,6 +100,12 @@ export function isKaomojiName(name: string): boolean {
   return name === name.trim() && length >= 1 && length <= KAOMOJI_LIMITS.nameLength && !KAOMOJI_NAME_FORBIDDEN.test(name)
 }
 
+/** Whether `mark` may be a board's rail mark: already trimmed, 1–2 characters, one line, no control characters. */
+export function isBoardMark(mark: string): boolean {
+  const length = graphemeCount(mark)
+  return mark === mark.trim() && length >= 1 && length <= BOARD_MARK_LENGTH && !KAOMOJI_NAME_FORBIDDEN.test(mark)
+}
+
 export interface AppSettings {
   /** Automatic reminder checks in minutes; 0 disables only the timer. */
   reminderInterval: 0 | 15 | 30 | 60
@@ -107,6 +128,11 @@ export interface AppSettings {
   motion: MotionPreference
   rail: RailSettings
   boards: BoardSettings
+  /**
+   * The user's own rail marks of favorite boards, by board key; a board without one gets an
+   * automatic mark. A setting of its own, so versions that predate it keep reading `boards`.
+   */
+  boardMarks: Readonly<Record<string, string>>
   /** List width chosen with the split divider. */
   listWidth: number
   /** Kaomoji added by the user, after the presets, in the order added. */
@@ -149,6 +175,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   motion: 'system',
   rail: { order: [], hidden: [] },
   boards: { favorites: [], hidden: [], order: {}, collapsed: [] },
+  boardMarks: {},
   listWidth: LIST_WIDTH_LIMITS.default,
   customKaomoji: [],
   recentKaomoji: [],
@@ -175,6 +202,7 @@ export const SETTING_KEYS = [
   'motion',
   'rail',
   'boards',
+  'boardMarks',
   'listWidth',
   'customKaomoji',
   'recentKaomoji',
@@ -263,6 +291,14 @@ function parseBoards(value: unknown, field: string): Parsed<BoardSettings> {
   }
   if (favorites === null || hidden === null || collapsed === null || order === null || issues.length > 0) return { ok: false, issues }
   return { ok: true, value: { favorites, hidden, order, collapsed } }
+}
+
+/** Rail marks by board key: each key a board key, each mark a valid board mark. */
+function parseBoardMarks(value: unknown, field: string): Parsed<Record<string, string>> {
+  if (!isRecord(value)) return { ok: false, issues: [{ kind: 'field', field, problem: 'type' }] }
+  const entries = Object.entries(value)
+  const valid = entries.length <= MAX_BOARD_ENTRIES && entries.every(([key, mark]) => BOARD_KEY.test(key) && typeof mark === 'string' && isBoardMark(mark))
+  return valid ? { ok: true, value: Object.fromEntries(entries) as Record<string, string> } : { ok: false, issues: [{ kind: 'field', field, problem: 'range' }] }
 }
 
 /** A stored or submitted entry `{ text, name? }`, or null when it is not a valid one. */
@@ -387,6 +423,9 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
       break
     case 'boards':
       parsed = parseBoards(value, key)
+      break
+    case 'boardMarks':
+      parsed = parseBoardMarks(value, key)
       break
     case 'listWidth':
       parsed = parseListWidth(value, key)

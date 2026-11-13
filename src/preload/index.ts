@@ -192,6 +192,7 @@ const api: XidaoApi = {
   },
   images: {
     load: (input) => ipcRenderer.invoke(IpcChannel.loadImage, input),
+    loadRules: (input) => ipcRenderer.invoke(IpcChannel.loadRulesImage, input),
     cancel: (input) => ipcRenderer.invoke(IpcChannel.cancelImage, input),
     releaseView: (input) => ipcRenderer.invoke(IpcChannel.releaseImageView, input),
     saveOriginal: (input) => ipcRenderer.invoke(IpcChannel.saveOriginalImage, input),

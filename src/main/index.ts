@@ -431,6 +431,13 @@ async function start(): Promise<void> {
     files: imageFiles,
     download: createImageDownloader({ allowedOrigins: [IMAGE_ORIGIN] }),
     origin: IMAGE_ORIGIN,
+    // 版规 images live on third-party hosts; the address is the stored directory's, never the renderer's.
+    externalDownload: createImageDownloader({ allowedOrigins: 'public-https' }),
+    async rulesImageUrl(forumId, index) {
+      const directory = await openedStore.loadDirectory()
+      const forum = directory?.value.groups.flatMap((group) => group.forums).find((item) => item.id === forumId)
+      return forum?.rulesImages?.[index]?.url ?? null
+    },
     clipboard: imageClipboard
   })
   // Before any view can load images: drop last run's reading holders and leftover files.

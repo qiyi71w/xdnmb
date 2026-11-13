@@ -2,7 +2,7 @@
 // The renderer never names a network address or a file path: it asks for the image of a post it
 // has shown, and displays the managed file through the app's own image scheme.
 
-import type { PostId } from './forum'
+import type { ForumId, PostId } from './forum'
 
 /** Thumbnail (`thumb/`) and original (`image/`) are different forum resources. */
 export type ImageKind = 'thumb' | 'original'
@@ -107,4 +107,14 @@ export interface ImageLoadRequest {
   refresh?: boolean
   /** Reuse only local files (including an original for a thumbnail); overrides refresh and never downloads. */
   localOnly?: boolean
+}
+
+/** One 版规 image by its forum and position (`Forum.rulesImages`); main looks up its address. */
+export interface RulesImageLoadRequest {
+  operationId: string
+  viewId: ImageViewId
+  forumId: ForumId
+  index: number
+  /** Fetch again even when a stored file exists (the renderer failed to decode it). */
+  refresh?: boolean
 }
