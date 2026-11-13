@@ -8,7 +8,7 @@ import {
   CLIPBOARD_EDIT_COMMANDS, IpcChannel, MAX_CLIPBOARD_TEXT_LENGTH, THREAD_READ_PURPOSES, type AppStatus, type ClipboardEditCommand, type DirectoryStrategy,
   type ReadOutcome, type LocateContext, type LocateHint, type ThreadReadPurpose
 } from '../shared/api'
-import type { FeedRef, ReadingMode } from '../shared/forum'
+import { MAX_RULES_IMAGES, type FeedRef, type ReadingMode } from '../shared/forum'
 import type { ImageFormat, ImageKind } from '../shared/images'
 import { IDENTITY_ROLES, validateCookieId, type CredentialId, type IdentityRole } from '../shared/identity'
 import { isCookieColorName } from '../shared/cookieColors'
@@ -27,7 +27,7 @@ import { themeFileName, type SettingsService } from './appearance'
 import type { ReadingService } from './reading/service'
 import type { AppStore } from './storage/contract'
 import { emptyReadingState } from './storage/reading-state'
-import { MAX_BULK_REMOVAL, type SubscriptionItemChoice, type SubscriptionSource } from '../shared/subscriptions'
+import { MAX_APP_UUID_LENGTH, MAX_BULK_REMOVAL, type SubscriptionItemChoice, type SubscriptionSource } from '../shared/subscriptions'
 import type { SubscriptionService } from './subscriptions/service'
 import type { PublicationService } from './publication/service'
 import type { Lifecycle } from './lifecycle/controller'
@@ -720,6 +720,15 @@ export function registerIpc({
     return operations.run(event.sender, operationId(input), (signal) => images.load(String(event.sender.id), load, signal)).finally(enforceQuota)
   })
 
+  handle(IpcChannel.loadRulesImage, async (event, raw) => {
+    const input = record(raw)
+    if (input.refresh !== undefined && typeof input.refresh !== 'boolean') throw new InvalidRequestError()
+    const index = input.index
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= MAX_RULES_IMAGES) throw new InvalidRequestError()
+    const load = { viewId: viewId(input.viewId), forumId: forumId(input.forumId), index, refresh: input.refresh === true }
+    return operations.run(event.sender, operationId(input), (signal) => images.loadRulesImage(String(event.sender.id), load, signal)).finally(enforceQuota)
+  })
+
   handle(IpcChannel.cancelImage, async (event, raw) => {
     operations.cancel(event.sender, operationId(record(raw)))
   })
@@ -822,7 +831,7 @@ export function registerIpc({
 
   handle(IpcChannel.subscriptionConfigureApp, async (_event, raw) => {
     const uuid = record(raw).uuid
-    if (uuid !== null && (typeof uuid !== 'string' || uuid.length > 64)) throw new InvalidRequestError()
+    if (uuid !== null && (typeof uuid !== 'string' || uuid.length > MAX_APP_UUID_LENGTH)) throw new InvalidRequestError()
     return subscriptions.configureApp({ uuid })
   })
 

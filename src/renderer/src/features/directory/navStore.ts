@@ -181,6 +181,8 @@ export interface NavActions {
   setFavorite(key: string, favorite: boolean): void
   /** Moves a favorite into `target`'s place in the favorites order. */
   moveFavorite(key: string, target: string): void
+  /** Sets a board's own rail mark; `null` returns it to the automatic mark. */
+  setMark(key: string, mark: string | null): void
   setBoardsHidden(keys: readonly string[], hidden: boolean): void
   setCollapsed(groupIds: readonly string[], collapsed: boolean): void
   /** Moves a board into `target`'s place within its forum group; `keys` is the group's current display order. */
@@ -215,6 +217,12 @@ export function useNavActions(): NavActions {
       moveFavorite(key: string, target: string) {
         const favorites = moveKey(latest().boards.favorites, key, target)
         if (favorites !== null) boards({ favorites })
+      },
+      setMark(key: string, mark: string | null) {
+        const boardMarks = { ...latest().boardMarks }
+        if (mark === null) delete boardMarks[key]
+        else boardMarks[key] = mark
+        write({ boardMarks })
       },
       setBoardsHidden(keys: readonly string[], hidden: boolean) {
         const set = new Set(latest().boards.hidden)

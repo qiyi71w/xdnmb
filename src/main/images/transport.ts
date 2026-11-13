@@ -5,6 +5,8 @@ import { request as httpsRequest } from 'node:https'
 import { pipeline, Transform } from 'node:stream'
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib'
 import type { ImageError } from '../../shared/images'
+import { publicHttpsUrl } from './external'
+import { NonPublicAddressError, publicLookup } from './publicAddress'
 
 export class ImageFetchError extends Error {
   override readonly name = 'ImageFetchError'
@@ -31,19 +33,28 @@ export type ImageDownloader = (url: URL, destination: string, maxBytes: number, 
  * Image requests: GET only to the allowed image origins, with no cookies, credentials or forum
  * identity of any kind; redirects are reported, never followed. The body streams straight to disk
  * under a byte limit; a body shorter than its Content-Length is a network failure.
+ * `public-https` allows any public https host instead (版规 images, see `publicHttpsUrl`), and only
+ * when every address its name resolves to is public; the connection uses those checked addresses.
  */
 export function createImageDownloader(options: {
-  allowedOrigins: readonly string[]
+  allowedOrigins: readonly string[] | 'public-https'
   timeoutMs?: number
   idleTimeoutMs?: number
   userAgent?: string
+  /** Name resolution for `public-https` (a test seam); the system resolver by default. */
+  resolve?: Parameters<typeof publicLookup>[0]
 }): ImageDownloader {
-  const origins = new Set(options.allowedOrigins)
+  const { allowedOrigins } = options
+  const origins = new Set(allowedOrigins === 'public-https' ? [] : allowedOrigins)
+  const lookup = allowedOrigins === 'public-https' ? publicLookup(options.resolve) : undefined
   const timeoutMs = options.timeoutMs ?? 180_000
   const idleTimeoutMs = options.idleTimeoutMs ?? 20_000
 
   return (url, destination, maxBytes, signal) => {
-    if (!origins.has(url.origin) || !['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    const allowed = allowedOrigins === 'public-https'
+      ? publicHttpsUrl(url.href)?.href === url.href
+      : origins.has(url.origin) && ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
+    if (!allowed) {
       return Promise.reject(new ImageFetchError({ reason: 'unsupported-source' }))
     }
     if (signal.aborted) return Promise.reject(new ImageFetchCancelledError())
@@ -77,7 +88,8 @@ export function createImageDownloader(options: {
           Accept: 'image/avif,image/webp,image/png,image/jpeg,image/gif,*/*;q=0.5',
           'Accept-Encoding': 'identity',
           'User-Agent': options.userAgent ?? 'Xidao/0.1'
-        }
+        },
+        ...(lookup === undefined ? {} : { lookup })
       }, (incoming) => {
         response = incoming
         if (settled) { incoming.destroy(); return }
@@ -139,7 +151,7 @@ export function createImageDownloader(options: {
         else pipeline(incoming, countRaw, limit, file, complete)
       })
       request.setTimeout(idleTimeoutMs, () => failWith({ reason: 'timeout' }))
-      request.on('error', () => failWith({ reason: 'network' }))
+      request.on('error', (error) => failWith({ reason: error instanceof NonPublicAddressError ? 'unsupported-source' : 'network' }))
       request.end()
     } catch {
       failWith({ reason: 'network' })

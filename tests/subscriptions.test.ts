@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { SubscriptionChoice, SubscriptionItemChoice, SubscriptionOperation, SubscriptionPreview, SubscriptionResult, SubscriptionSource } from '../src/shared/subscriptions'
+import { MAX_APP_UUID_LENGTH, type SubscriptionChoice, type SubscriptionItemChoice, type SubscriptionOperation, type SubscriptionPreview, type SubscriptionResult, type SubscriptionSource } from '../src/shared/subscriptions'
 import type { SecretProtector } from '../src/main/identity/protection'
 import type { AppStore } from '../src/main/storage/contract'
 import { openReadingDatabase } from '../src/main/storage/database'
@@ -169,7 +169,7 @@ describe('protected subscription configuration and observations', () => {
     const configured = unwrap(await service.configureApp({ uuid: UUID_A }))
     // The settings view reads the saved UUID back; it stays out of the overview.
     expect(unwrap(await service.revealAppUuid())).toBe(UUID_A)
-    const same = unwrap(await service.configureApp({ uuid: UUID_A.toUpperCase() }))
+    const same = unwrap(await service.configureApp({ uuid: `  ${UUID_A} ` }))
     expect(same.context).toEqual(configured.context)
     await service.selectSource({ source: 'web' })
     expect((await service.getOverview()).context).toEqual(configured.context)
@@ -195,7 +195,9 @@ describe('protected subscription configuration and observations', () => {
 
   it('allows explicit generated UUID only and refuses invalid, locked or missing identities without requests', async () => {
     const { service, protector, remote, db, a } = await setup()
-    expect(await service.configureApp({ uuid: 'not-a-uuid' })).toEqual({ ok: false, reason: 'invalid-uuid' })
+    expect(await service.configureApp({ uuid: '   ' })).toEqual({ ok: false, reason: 'invalid-uuid' })
+    expect(await service.configureApp({ uuid: 'x'.repeat(MAX_APP_UUID_LENGTH + 1) })).toEqual({ ok: false, reason: 'invalid-uuid' })
+    expect(unwrap(await service.configureApp({ uuid: '汐'.repeat(MAX_APP_UUID_LENGTH) })).appConfigured).toBe(true)
     expect(unwrap(await service.configureApp({ uuid: null })).appConfigured).toBe(true)
     protector.available = false
     expect(await service.configureApp({ uuid: UUID_A })).toEqual({ ok: false, reason: 'locked' })
@@ -205,6 +207,19 @@ describe('protected subscription configuration and observations', () => {
     expect((await service.getOverview()).webSelection).toEqual({ state: 'missing', credentialId: a.id })
     expect(await service.read({ source: 'web', observationId: null, operationId: 'read' }, signal())).toEqual({ ok: false, reason: 'missing' })
     expect(remote.requests).toEqual([])
+  })
+
+  it('keeps a free-form App UUID exactly as entered and sends it unchanged', async () => {
+    const { service, remote } = await setup()
+    const custom = '我的订阅 Feed'
+    remote.app.set(custom, new Set(['5001']))
+    const configured = unwrap(await service.configureApp({ uuid: ` ${custom} ` }))
+    expect(unwrap(await service.revealAppUuid())).toBe(custom)
+    expect((await scan(service, 'app')).ids).toEqual(['5001'])
+    expect(new Set(remote.requests.map((request) => request.uuid))).toEqual(new Set([custom]))
+    // Another casing is another UUID: it is saved, never folded into the current one.
+    const cased = unwrap(await service.configureApp({ uuid: '我的订阅 FEED' }))
+    expect(cased.context.generation).toBe(configured.context.generation + 1)
   })
 
   it('reads App/web separately through short pages and records fixed contexts', async () => {

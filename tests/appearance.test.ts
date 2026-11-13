@@ -272,9 +272,10 @@ describe('settings', () => {
     expect(settingsFromStored(stored)).toEqual({ ...DEFAULT_SETTINGS, density: 'compact', colorScheme: 'system', customTheme: null })
   })
 
-  const navigation: Pick<AppSettings, 'rail' | 'boards' | 'listWidth' | 'customKaomoji'> = {
+  const navigation: Pick<AppSettings, 'rail' | 'boards' | 'boardMarks' | 'listWidth' | 'customKaomoji'> = {
     rail: { order: ['history', 'search'], hidden: ['drafts'] },
     boards: { favorites: ['forum:4', 'timeline:1'], hidden: ['forum:20'], order: { 'group-1': ['forum:9', 'forum:4'] }, collapsed: ['group-2', 'timelines'] },
+    boardMarks: { 'forum:4': '综', 'timeline:1': '👍🏽A' },
     listWidth: 512,
     customKaomoji: [{ text: '(｀・ω・)' }, { text: '多行\n颜文字', name: '多行' }]
   }
@@ -299,10 +300,32 @@ describe('settings', () => {
     const set = raw.prepare('UPDATE settings SET value_json = ? WHERE key = ?')
     set.run('{not json', 'rail')
     set.run(JSON.stringify({ ...navigation.boards, hidden: ['forum:20', 'forum:20'] }), 'boards')
+    set.run(JSON.stringify({ 'forum:4': '三个字' }), 'boardMarks')
     set.run(JSON.stringify(99), 'listWidth')
     raw.prepare('DELETE FROM settings WHERE key = ?').run('customKaomoji')
     raw.close()
     expect(open(path).loadSettings()).toEqual({ ...DEFAULT_SETTINGS, density: 'compact' })
+  })
+
+  it('keeps rail marks out of the stored board settings, and refuses an invalid mark', async () => {
+    const path = join(folder(), 'settings.sqlite')
+    const db = open(path)
+    await createSettingsService(storeOf(db)).update(navigation)
+    // Versions that predate custom marks accept exactly these board keys; marks live in their own row.
+    const raw = new Database(path, { readonly: true })
+    const row = (key: string): unknown => {
+      const json: unknown = raw.prepare('SELECT value_json FROM settings WHERE key = ?').pluck().get(key)
+      if (typeof json !== 'string') throw new Error(`no stored ${key}`)
+      return JSON.parse(json)
+    }
+    expect(Object.keys(row('boards') as object).sort()).toEqual(['collapsed', 'favorites', 'hidden', 'order'])
+    expect(row('boardMarks')).toEqual(navigation.boardMarks)
+    raw.close()
+    expect(settingsFromStored(new Map([['boards', navigation.boards]])).boardMarks).toEqual({})
+    for (const mark of ['三个字', ' 综', '', '\n']) {
+      expect(applySettingsPatch(DEFAULT_SETTINGS, { boardMarks: { 'forum:4': mark } })).toMatchObject({ ok: false, issues: [{ field: 'boardMarks' }] })
+    }
+    expect(applySettingsPatch(DEFAULT_SETTINGS, { boardMarks: { 'forum:x!': '综' } })).toMatchObject({ ok: false })
   })
 
   it('reads stored kaomoji saved as plain strings as unnamed entries', () => {

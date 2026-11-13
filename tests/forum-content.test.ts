@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseContent, submittedText } from '../src/main/forum/content'
+import { parseContent, rulesImages, submittedText } from '../src/main/forum/content'
 
 describe('safe forum content', () => {
   it('uses br elements, not source line terminators, for visible breaks', () => {
@@ -192,5 +192,26 @@ describe('safe forum content', () => {
     expect(submittedText(plain)).toBe('[1,5]后')
     expect(submittedText(parseContent('<span style="color:red"><b>2</b></span>后').nodes)).toBe('2后')
     expect(submittedText(parseContent('<b><i>2</i></b><small>[1,5]</small>后').nodes)).toBe('[1,5]后')
+  })
+})
+
+describe('版规 images', () => {
+  it('lists the images of 版规 in order, as https addresses, while the text keeps none', () => {
+    const html = '<img src="https://file.moetu.org/images/2022/06/29/SV4S52QUAGPL7KWNPNM52fe167575c4bdbf.png"><br /> &bull; 请遵守总版规' +
+      '<img title="买买买！" src="http://nmbimg.fastmirror.org/thumb/2017-06-02/5930e117606fd.jpg" height=132px style="float:left" />' +
+      '<img src="https://file.moetu.org/images/2022/06/29/SV4S52QUAGPL7KWNPNM52fe167575c4bdbf.png">'
+    expect(rulesImages(html)).toEqual([
+      { url: 'https://file.moetu.org/images/2022/06/29/SV4S52QUAGPL7KWNPNM52fe167575c4bdbf.png', alt: '' },
+      { url: 'https://nmbimg.fastmirror.org/thumb/2017-06-02/5930e117606fd.jpg', alt: '买买买！' }
+    ])
+    expect(parseContent(html).plainText).toBe('\n • 请遵守总版规')
+  })
+
+  it('drops addresses that are not public https hosts and keeps at most four', () => {
+    const refused = ['/thumb/a.jpg', 'https://127.0.0.1/a.png', 'https://0x7f.1/a.png', 'https://[::1]/a.png', 'https://localhost/a.png', 'https://intranet/a.png',
+      'https://user:pw@example.com/a.png', 'https://example.com:8443/a.png', 'javascript:alert(1)', 'data:image/png;base64,AAAA']
+    expect(rulesImages(refused.map((src) => `<img src="${src}">`).join(''))).toEqual([])
+    const many = Array.from({ length: 6 }, (_, index) => `<img src="https://example.com/${index}.png">`).join('')
+    expect(rulesImages(many).map((image) => image.url)).toEqual([0, 1, 2, 3].map((index) => `https://example.com/${index}.png`))
   })
 })

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
 import { copyFile, lstat, open, rename, unlink } from 'node:fs/promises'
-import type { PostId, PostImage } from '../../shared/forum'
+import type { ForumId, PostId, PostImage } from '../../shared/forum'
 import {
   IMAGE_FORMAT_EXTENSION,
   IMAGE_SCHEME,
@@ -40,9 +40,19 @@ export interface ImageLoadInput {
   waitForCleanup?: boolean
 }
 
+/** One image of a forum's 版规, by its position there. */
+export interface RulesImageLoadInput {
+  viewId: string
+  forumId: ForumId
+  index: number
+  refresh: boolean
+}
+
 export interface ImageService {
   /** `owner` scopes view IDs to one renderer (its WebContents ID). */
   load(owner: string, input: ImageLoadInput, signal: AbortSignal): Promise<ImageLoadOutcome>
+  /** A 版规 image, held for the view like a thumbnail; its address comes from the stored directory. */
+  loadRulesImage(owner: string, input: RulesImageLoadInput, signal: AbortSignal): Promise<ImageLoadOutcome>
   releaseView(owner: string, viewId: string): Promise<void>
   /** Release all owner holders; persistence failures reject so background task cleanup can be retried. */
   releaseOwner(owner: string): Promise<void>
@@ -114,6 +124,10 @@ export function createImageService(options: {
   download: ImageDownloader
   /** Image server origin, e.g. `https://image.nmb.best`. */
   origin: string
+  /** Downloads 版规 images from their third-party hosts. */
+  externalDownload?: ImageDownloader
+  /** The address of a forum's 版规 image at `index`, or null when there is none. */
+  rulesImageUrl?: (forumId: ForumId, index: number) => Promise<string | null>
   maxConcurrent?: number
   now?: () => Date
   clipboard?: OriginalClipboard
@@ -160,13 +174,13 @@ export function createImageService(options: {
     }
   }
 
-  async function fetchResource(flight: Flight, url: string): Promise<ImageResourceRecord> {
+  async function fetchResource(flight: Flight, url: string, downloader: ImageDownloader): Promise<ImageResourceRecord> {
     const { signal } = flight.controller
     const release = await slots.acquire(flight.kind, signal)
     const partial = files.partialPath()
     let committedName: string | null = null
     try {
-      const { bytes } = await download(new URL(url), partial, MAX_IMAGE_BYTES[flight.kind], signal)
+      const { bytes } = await downloader(new URL(url), partial, MAX_IMAGE_BYTES[flight.kind], signal)
       let handle
       try {
         handle = await open(partial, 'r')
@@ -212,11 +226,12 @@ export function createImageService(options: {
    * Joins (or starts) the single download of `kind` + `url`; cancelling the last waiter aborts it.
    * An aborted download may still be cleaning up: a new load starts its own download instead.
    */
-  function joinFlight(key: string, kind: ImageKind, url: string, holder: string, signal: AbortSignal, waitForCleanup: boolean): Promise<ImageLoadOutcome> {
+  function joinFlight(key: string, kind: ImageKind, url: string, holder: string, signal: AbortSignal, waitForCleanup: boolean,
+    downloader: ImageDownloader = download): Promise<ImageLoadOutcome> {
     let flight = flights.get(key)
     if (!flight || flight.controller.signal.aborted) {
       const created: Flight = { kind, holders: new Map(), waiters: 0, controller: new AbortController(), result: null as never }
-      created.result = fetchResource(created, url).finally(() => {
+      created.result = fetchResource(created, url, downloader).finally(() => {
         if (flights.get(key) === created) flights.delete(key)
       })
       // Waiters handle the outcome; this keeps an abandoned flight from reporting an unhandled rejection.
@@ -305,6 +320,29 @@ export function createImageService(options: {
       }
       if (input.localOnly) return signal.aborted ? { status: 'cancelled' } : { status: 'failed', error: { reason: 'not-stored' } }
       return joinFlight(`${input.kind}|${url}`, input.kind, url, holder, signal, input.waitForCleanup === true)
+    },
+
+    async loadRulesImage(owner, input, signal) {
+      if (signal.aborted) return { status: 'cancelled' }
+      const holder = holderId(owner, input.viewId)
+      activeHolders.add(holder)
+      let url: string | null
+      try {
+        url = (await options.rulesImageUrl?.(input.forumId, input.index)) ?? null
+      } catch {
+        return { status: 'failed', error: { reason: 'storage' } }
+      }
+      if (url === null) return { status: 'failed', error: { reason: 'no-image' } }
+      if (!input.refresh) {
+        try {
+          const stored = await store.findImageResource('thumb', url, activeHolders.has(holder) ? reading(holder) : null)
+          if (stored !== null && (await storedPath(stored)) !== null) return signal.aborted ? { status: 'cancelled' } : loaded(stored, 'stored')
+        } catch {
+          return { status: 'failed', error: { reason: 'storage' } }
+        }
+      }
+      if (options.externalDownload === undefined) return { status: 'failed', error: { reason: 'unsupported-source' } }
+      return joinFlight(`thumb|${url}`, 'thumb', url, holder, signal, false, options.externalDownload)
     },
 
     async releaseView(owner, viewId) {

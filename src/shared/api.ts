@@ -7,7 +7,7 @@ import type { AccountApi } from './account'
 import type { ContentApi } from './content'
 import type { BoardDirectory, FeedPage, FeedRef, Post, PostId, ReadingMode, ThreadCoverage, ThreadId, ThreadPage } from './forum'
 import type { CredentialId, IdentityMutationResult, IdentityOverview, IdentityRole, ImportResult } from './identity'
-import type { ImageCopyOutcome, ImageLoadOutcome, ImageLoadRequest, ImageSaveOutcome, ImageViewId } from './images'
+import type { ImageCopyOutcome, ImageLoadOutcome, ImageLoadRequest, ImageSaveOutcome, ImageViewId, RulesImageLoadRequest } from './images'
 import type {
   AttachmentId, AttachResult, DraftDeleteResult, DraftId, DraftListResult, DraftSaveInput, DraftSaveResult, EditorId,
   IdentityChoice, PostTarget
@@ -369,6 +369,11 @@ export interface XidaoApi {
      * bytes, and protects it from cleanup while `viewId` is held. Originals are queued before thumbnails.
      */
     load(input: ImageLoadRequest): Promise<ImageLoadOutcome>
+    /**
+     * The same for a 版规 image, named by forum and position: it comes from its third-party host
+     * over https, likewise without cookies or credentials and never following redirects.
+     */
+    loadRules(input: RulesImageLoadRequest): Promise<ImageLoadOutcome>
     /** Cancels a queued or running `load` of this caller. Unknown IDs are ignored. */
     cancel(input: { operationId: OperationId }): Promise<void>
     /** The view closed: its images are no longer protected by reading. */
@@ -522,6 +527,7 @@ export const IpcChannel = {
   clipboard: 'clipboard:run',
   openExternal: 'links:open-external',
   loadImage: 'images:load',
+  loadRulesImage: 'images:load-rules',
   cancelImage: 'images:cancel',
   releaseImageView: 'images:release-view',
   saveOriginalImage: 'images:save-original',

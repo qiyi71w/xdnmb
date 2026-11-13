@@ -79,6 +79,13 @@ export type SubscriptionResult<T> = { ok: true; value: T } | { ok: false; reason
 /** Most threads one 批量取消订阅 may name. */
 export const MAX_BULK_REMOVAL = 1000
 
+/**
+ * Longest App UUID accepted, in UTF-16 code units; any other text is accepted as entered. The forum
+ * sets no limit of its own, but the UUID travels in the request URL: 256 characters stay well under
+ * the length at which the forum refuses that URL even when every one is a Chinese character.
+ */
+export const MAX_APP_UUID_LENGTH = 256
+
 /** One thread of a bulk removal, in the order it was submitted. */
 export interface SubscriptionRemovalItem {
   threadId: ThreadId

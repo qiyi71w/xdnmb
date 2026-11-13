@@ -5,7 +5,7 @@ import type {
 import { pageCapFor } from '../../shared/threadPages'
 import { ForumReadError } from './contract'
 import type { ForumClient, ForumRequestRunner, ForumTransport } from './contract'
-import { parseContent } from './content'
+import { parseContent, rulesImages } from './content'
 
 const idKeys: Readonly<Record<string, true>> = { id: true, fid: true, resto: true }
 const idPattern = /^\d{1,20}$/
@@ -175,6 +175,7 @@ export function createForumClient(options: {
             name: rawForum.name,
             displayName: displayName(rawForum.showName, rawForum.name),
             rules: parseContent(text(rawForum.msg) ?? '').nodes,
+            rulesImages: rulesImages(text(rawForum.msg) ?? ''),
             postIntervalSeconds: nonNegativeNumber(rawForum.interval)
           })
         }

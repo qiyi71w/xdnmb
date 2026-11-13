@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import type { PostId } from '../../../../shared/forum'
-import type { ImageError, ImageKind, ImageViewId, LoadedImage } from '../../../../shared/images'
+import type { ForumId, PostId } from '../../../../shared/forum'
+import type { ImageError, ImageKind, ImageLoadOutcome, ImageViewId, LoadedImage } from '../../../../shared/images'
 import { NearViewport, type ImageScope } from './imageView'
 
 export type ImageLoadState =
@@ -34,6 +34,26 @@ export interface ImageLoad {
  * download, retry included; a missing image fails with `not-stored`.
  */
 export function useImageLoad(viewId: ImageViewId, postId: PostId, kind: ImageKind, localOnly = false): ImageLoad {
+  const request = useCallback(
+    (operationId: string, refresh: boolean) =>
+      window.xidao.images.load({ operationId, viewId, postId, kind, ...(refresh ? { refresh: true } : {}), ...(localOnly ? { localOnly: true } : {}) }),
+    [viewId, postId, kind, localOnly]
+  )
+  return useLoadOperation(request)
+}
+
+/** One 版规 image (`index` in its forum's `rulesImages`), loaded for a view like a thumbnail. */
+export function useRulesImageLoad(viewId: ImageViewId, forumId: ForumId, index: number): ImageLoad {
+  const request = useCallback(
+    (operationId: string, refresh: boolean) =>
+      window.xidao.images.loadRules({ operationId, viewId, forumId, index, ...(refresh ? { refresh: true } : {}) }),
+    [viewId, forumId, index]
+  )
+  return useLoadOperation(request)
+}
+
+/** The load state machine shared by every image kind; `request` starts one operation in main. */
+function useLoadOperation(request: (operationId: string, refresh: boolean) => Promise<ImageLoadOutcome>): ImageLoad {
   const [state, setState] = useState<ImageLoadState>({ status: 'idle' })
   const current = useRef<string | null>(null)
 
@@ -50,8 +70,7 @@ export function useImageLoad(viewId: ImageViewId, postId: PostId, kind: ImageKin
       const operationId = crypto.randomUUID()
       current.current = operationId
       setState({ status: 'loading' })
-      const request = { operationId, viewId, postId, kind, ...(refresh ? { refresh: true } : {}), ...(localOnly ? { localOnly: true } : {}) }
-      window.xidao.images.load(request).then(
+      request(operationId, refresh).then(
         (outcome) => {
           if (current.current !== operationId) return
           current.current = null
@@ -74,7 +93,7 @@ export function useImageLoad(viewId: ImageViewId, postId: PostId, kind: ImageKin
         }
       )
     },
-    [cancelCurrent, viewId, postId, kind, localOnly]
+    [cancelCurrent, request]
   )
 
   /** Stops a load in flight and forgets it; a later `load` starts afresh. */
