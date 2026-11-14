@@ -1,6 +1,6 @@
 import type { DraftId, DraftSaveInput, PostTarget, SavedDraft } from './drafts'
 import type { CredentialId } from './identity'
-import type { Post } from './forum'
+import type { Post, ThreadId } from './forum'
 
 /**
  * `confirmed`: sent, its post known. `unconfirmed`: the forum reported success but the post could
@@ -152,6 +152,16 @@ export const PUBLICATION_FAILURE_CHANNEL = 'publication:failure-notice'
 export const PUBLICATION_OPEN_DRAFT_CHANNEL = 'publication:open-draft'
 export const PUBLICATION_CHANGED_CHANNEL = 'publication:changed'
 
+/**
+ * 串内发言次数 of one stored cookie: its sends (`isSent`) in a thread, the main post included. A
+ * send counts for the cookie it went with, or for any cookie now carrying the 饼干 ID it was sent
+ * under. A sent new thread whose number was never learned belongs to no thread.
+ */
+export interface ThreadPostCount {
+  credentialId: CredentialId
+  count: number
+}
+
 export interface PublicationApi {
   submit(input: SubmitInput): Promise<SubmitResult>
   /**
@@ -164,6 +174,8 @@ export interface PublicationApi {
   getAttempt(input: { attemptId: string }): Promise<{ ok: true; attempt: PublicationAttempt | null; draft: SavedDraft | null } | { ok: false; reason: 'storage' }>
   getPoWarning(): Promise<{ enabled: boolean }>
   setPoWarning(input: { enabled: boolean }): Promise<{ ok: boolean; enabled: boolean }>
+  /** 串内发言次数 of the stored cookies in `threadId`; cookies without any are left out. */
+  threadPostCounts(input: { threadId: ThreadId }): Promise<{ ok: true; counts: ThreadPostCount[] } | { ok: false; reason: 'storage' }>
   /**
    * An explicit failure to show as an in-app notice. `missed` false: the window was in front when
    * it happened; true: the window is shown again after its system notification could not be shown.

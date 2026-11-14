@@ -952,6 +952,7 @@ export function registerIpc({
   handle(IpcChannel.listPublications, async () => publication.listAttempts())
   handle(IpcChannel.getPublication, async (_event, raw) => publication.getAttempt({ attemptId: localId(record(raw).attemptId) }))
   handle(IpcChannel.getPoWarning, async () => publication.getPoWarning())
+  handle(IpcChannel.threadPostCounts, async (_event, raw) => publication.threadPostCounts({ threadId: forumId(record(raw).threadId) }))
   handle(IpcChannel.setPoWarning, async (_event, raw) => {
     const input = record(raw)
     if (typeof input.enabled !== 'boolean') throw new InvalidRequestError()

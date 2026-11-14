@@ -577,6 +577,7 @@ export const IpcChannel = {
   getPublication: 'publication:get',
   getPoWarning: 'publication:get-po-warning',
   setPoWarning: 'publication:set-po-warning',
+  threadPostCounts: 'publication:thread-post-counts',
   lifecycleReside: 'lifecycle:reside',
   lifecycleRequestQuit: 'lifecycle:request-quit',
   lifecyclePresentQuit: 'lifecycle:present-quit',

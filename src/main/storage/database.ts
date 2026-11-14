@@ -30,7 +30,7 @@ import type { AttachmentId, DraftId, DraftSaveInput, PostTarget } from '../../sh
 import type { SubscriptionContext, SubscriptionObservation, SubscriptionOperation, SubscriptionPlan, SubscriptionSource } from '../../shared/subscriptions'
 import { completeSubscriptionObservation } from '../../shared/subscriptions'
 import type { SubscriptionBaseline, SubscriptionConfiguration } from './contract'
-import type { PublicationAttempt } from '../../shared/publication'
+import type { PublicationAttempt, ThreadPostCount } from '../../shared/publication'
 import type { PublicationStore } from '../publication/contract'
 import { StorageWriteRefusedError } from './contract'
 import type {
@@ -1290,6 +1290,20 @@ class SqliteReadingDatabase implements ReadingDatabase {
       ORDER BY julianday(created_at) DESC, id DESC LIMIT 1
     `).get(credentialId, forumId)
     return row?.created_at ?? null
+  }
+
+  threadPostCounts(threadId: string): ThreadPostCount[] {
+    // A sent reply without its number still names its thread in the payload; a sent new thread
+    // without one belongs to none. A cookie removed and imported again keeps its 饼干 ID's sends.
+    return this.publicationDatabase().prepare<[string], ThreadPostCount>(`
+      SELECT CAST(c.id AS TEXT) AS credentialId, count(*) AS count
+      FROM credentials c JOIN publication_attempts p
+        ON p.credential_id = c.id OR (c.cookie_id IS NOT NULL AND p.cookie_id = c.cookie_id)
+      WHERE p.state IN ('confirmed', 'unconfirmed')
+        AND coalesce(p.thread_id, CASE WHEN json_extract(p.payload_json, '$.target.kind') = 'reply'
+          THEN json_extract(p.payload_json, '$.target.threadId') END) = ?
+      GROUP BY c.id ORDER BY c.id
+    `).all(threadId)
   }
 
   deleteDraft(id: DraftId): boolean | 'locked' {

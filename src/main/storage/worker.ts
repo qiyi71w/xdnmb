@@ -139,6 +139,7 @@ port.on('message', (request: StorageRequest) => {
       case 'getPoWarningEnabled': value = db.getPoWarningEnabled(...request.args); break
       case 'setPoWarningEnabled': value = db.setPoWarningEnabled(...request.args); break
       case 'lastPublicationAt': value = db.lastPublicationAt(...request.args); break
+      case 'threadPostCounts': value = db.threadPostCounts(...request.args); break
       case 'getReminderRules': value = db.getReminderRules(...request.args); break
       case 'setReminderRule': value = db.setReminderRule(...request.args); break
       case 'closeReminderThreads': value = db.closeReminderThreads(...request.args); break

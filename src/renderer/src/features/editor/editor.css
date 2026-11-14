@@ -630,6 +630,24 @@
   font-weight: 400;
 }
 
+/* 串内发言次数: a tag like 浏览, after the role tags at the same 4px spacing. */
+.compose-cookie-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.compose-cookie-tags + .compose-cookie-count {
+  margin-inline-start: -4px;
+}
+
+/* The counts could not be read: one quiet line under the list; choosing is unaffected. */
+.compose-cookie-count-note {
+  margin: 0;
+  padding: 4px 10px 2px 30px;
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
 .compose-cookie-separator {
   height: 1px;
   margin: 4px 6px;

@@ -750,7 +750,8 @@ const TYPEAHEAD_PAUSE = 500
 /**
  * Header: the 发言饼干 as a compact pill (`饼干 名称 ▾`, or `选择饼干` in warning ink).
  * The pill opens a listbox under it: the cookies in the user's order (the current one checked, the
- * browsing and default ones tagged as in settings), then 管理饼干. Arrow keys, Home/End and typed
+ * browsing and default ones tagged as in settings, and in a reply each one's 串内发言次数 when it
+ * has any, read again at every opening), then 管理饼干. Arrow keys, Home/End and typed
  * letters move; Enter or Space chooses; Esc closes with focus back on the pill.
  */
 function CookiePill({ editor, onChoose }: { editor: Editor; onChoose: (credentialId: CredentialId) => void }) {
@@ -770,6 +771,10 @@ function CookiePill({ editor, onChoose }: { editor: Editor; onChoose: (credentia
   /** The option the keys act on (aria-activedescendant), by position. */
   const [active, setActive] = useState(0)
   const typeahead = useRef({ text: '', at: 0 })
+  const threadId = editor.target.kind === 'reply' ? editor.target.threadId : null
+  /** 串内发言次数 by cookie for the list now open; null while reading or outside a reply. */
+  const [postCounts, setPostCounts] = useState<ReadonlyMap<CredentialId, number> | 'failed' | null>(null)
+  const postCountsRead = useRef(0)
 
   const disabled = overview === null || credentials.length === 0 || locked
   const { close: closeMenu } = menu
@@ -777,9 +782,26 @@ function CookiePill({ editor, onChoose }: { editor: Editor; onChoose: (credentia
     if (disabled) closeMenu(false)
   }, [disabled, closeMenu])
 
+  /** Reads the counts for this opening; a later opening's read supersedes it. */
+  const readPostCounts = () => {
+    const read = ++postCountsRead.current
+    setPostCounts(null)
+    if (threadId === null) return
+    const apply = (next: ReadonlyMap<CredentialId, number> | 'failed') => {
+      if (read === postCountsRead.current) setPostCounts(next)
+    }
+    window.xidao.publication.threadPostCounts({ threadId }).then(
+      (result) => apply(result.ok ? new Map(result.counts.map((item) => [item.credentialId, item.count])) : 'failed'),
+      () => apply('failed')
+    )
+  }
+
   /** Opens or closes the list; each opening starts on the current cookie (else the first). */
   const toggleList = () => {
-    if (!menu.open) setActive(Math.max(selectedIndex, 0))
+    if (!menu.open) {
+      setActive(Math.max(selectedIndex, 0))
+      readPostCounts()
+    }
     menu.toggle()
   }
 
@@ -920,6 +942,7 @@ function CookiePill({ editor, onChoose }: { editor: Editor; onChoose: (credentia
           >
             {credentials.map((credential, index) => {
               const isSelected = credential.id === value
+              const postCount = postCounts === null || postCounts === 'failed' ? undefined : postCounts.get(credential.id)
               const tags = [credential.id === browsingId ? '浏览' : null, credential.id === defaultId ? ROLE_INFO['default-post'].label : null].filter(
                 (tag) => tag !== null
               )
@@ -949,10 +972,21 @@ function CookiePill({ editor, onChoose }: { editor: Editor; onChoose: (credentia
                       ))}
                     </span>
                   )}
+                  {postCount !== undefined && (
+                    <span className="tag compose-cookie-count">
+                      <span className="visually-hidden">本串发言 </span>
+                      {postCount} 次
+                    </span>
+                  )}
                 </div>
               )
             })}
           </div>
+          {postCounts === 'failed' && (
+            <p className="compose-cookie-count-note" role="status">
+              发言次数读取失败
+            </p>
+          )}
           {openSettings !== null && (
             <>
               <div role="separator" className="compose-cookie-separator" />

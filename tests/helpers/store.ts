@@ -111,6 +111,7 @@ export function asStore(db: ReadingDatabase): AppStore {
     getPoWarningEnabled: async () => db.getPoWarningEnabled(),
     setPoWarningEnabled: async (...args) => db.setPoWarningEnabled(...args),
     lastPublicationAt: async (...args) => db.lastPublicationAt(...args),
+    threadPostCounts: async (...args) => db.threadPostCounts(...args),
     getReminderRules: async (...args) => db.getReminderRules(...args),
     setReminderRule: async (...args) => db.setReminderRule(...args),
     closeReminderThreads: async (...args) => db.closeReminderThreads(...args),

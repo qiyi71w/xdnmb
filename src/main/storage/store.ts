@@ -248,6 +248,7 @@ export async function openReadingStore(options: {
     getPoWarningEnabled: () => request('getPoWarningEnabled'),
     setPoWarningEnabled: (enabled) => request('setPoWarningEnabled', enabled),
     lastPublicationAt: (credentialId, forumId) => request('lastPublicationAt', credentialId, forumId),
+    threadPostCounts: (threadId) => request('threadPostCounts', threadId),
     getReminderRules: (ids) => request('getReminderRules', ids),
     setReminderRule: (id, kind, enabled, at) => request('setReminderRule', id, kind, enabled, at),
     closeReminderThreads: (ids, reason, at) => request('closeReminderThreads', ids, reason, at),
