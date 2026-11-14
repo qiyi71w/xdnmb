@@ -150,7 +150,7 @@ export interface AppSettings {
   customKaomoji: readonly CustomKaomoji[]
   /** Texts of the kaomoji inserted most recently (presets and the user's own), latest first. */
   recentKaomoji: readonly string[]
-  /** Check for updates at cold start and every 24 hours while running. */
+  /** Check for updates at cold start and every hour while running. */
   updateAutoCheck: boolean
   /** Windows: download a found release and install it when the user really quits. */
   updateAutoInstall: boolean

@@ -51,7 +51,7 @@ GitHub Actions 有四个工作流。`.github/workflows/ci.yml` 的 `check` 在 U
 | `src/main/publication/` | 发布预检、固定意图、单次 multipart 与回读确认、PO 提示和发送记录 |
 | `src/main/reminders/` | 单次触发、单调定时与冷却、持久化退避、回复数基线比较、引用断点与请求预算、打开时的 PO 读取、提醒通知 |
 | `src/main/appearance.ts`、`src/main/zoom.ts` | 设置串行更新、受限主题导入导出、缩放与按键 |
-| `src/main/updates/` | 固定来源的版本检查与下载（electron-updater、请求白名单、更新专用网络会话）、更新说明的安全解析、24 小时检查与就绪记录、退出安装与系统会话结束后的一次性启动安装 |
+| `src/main/updates/` | 固定来源的版本检查与下载（electron-updater、请求白名单、更新专用网络会话）、更新说明的安全解析、每小时检查（自动下载失败的同一安装包 24 小时内不再自动下载，手动重试不受限）与就绪记录、退出安装与系统会话结束后的一次性启动安装 |
 | `src/main/announcements/`、`src/renderer/src/features/announcements/` | 冷启动公告读取、独立持久记录、一次性自动展示资格与设置主动查看 |
 | `src/main/analytics/` | 自愿使用统计客户端：持久记录、受保护凭证、前台日活调度与关闭 |
 | `src/main/third-party/`、`src/renderer/src/features/thirdParty/` | 三类第三方服务的独立授权、首次不可跳过告知、按需重询与设置撤回 |

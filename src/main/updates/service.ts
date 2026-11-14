@@ -83,8 +83,20 @@ export interface UpdateService {
   endSession(unsaved: boolean): void
 }
 
-/** Timers wake at most this far apart and compare wall-clock time, so sleep or a clock change cannot stretch the 24 hours. */
+/** Timers wait at most this long, so a clock set far back never hands `setTimeout` a delay beyond its limit. */
 const MAX_TIMER_MS = 60 * 60 * 1000
+
+/** After a failed download, the same package is downloaded automatically again only this much later. */
+const AUTOMATIC_RETRY_MS = 24 * 60 * 60 * 1000
+
+interface OfferedRelease {
+  info: ReleaseInfo
+  sha512: string
+  download: UpdateDownload
+  path: string | null
+  /** Wall-clock time before which this package is not downloaded automatically (0: any time). */
+  automaticAfter: number
+}
 
 export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
   const { engine } = deps
@@ -94,7 +106,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
   let checking = false
   let lastCheck: UpdateCheckResult | null = null
   let lastCheckAt: number | null = null
-  let release: { info: ReleaseInfo; sha512: string; download: UpdateDownload; path: string | null } | null = null
+  let release: OfferedRelease | null = null
   let record: UpdateRecord = { notified: null, ready: null }
   let notice: UpdateState['notice'] = null
   const readyNotified = new Set<string>()
@@ -133,8 +145,10 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     }
   }
 
-  const automaticDownload = () =>
-    deps.platform === 'windows' ? settings?.updateAutoInstall === true : settings?.updateAutoDownload === true
+  /** The platform setting is on, and the user did not cancel this package's download nor did it recently fail automatically. */
+  const downloadsAutomatically = (current: OfferedRelease) =>
+    current.download.status === 'none' && !cancelled.has(current.info.version) && Date.now() >= current.automaticAfter &&
+    (deps.platform === 'windows' ? settings?.updateAutoInstall === true : settings?.updateAutoDownload === true)
 
   function schedule(): void {
     clearTimeout(timer)
@@ -142,6 +156,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     if (stopped || engine === null || !deps.isAllowed() || settings?.updateAutoCheck !== true) return
     const due = lastCheckAt === null ? Date.now() : lastCheckAt + UPDATE_CHECK_INTERVAL_MS
     const wait = Math.max(0, due - Date.now())
+    // The timer re-compares wall-clock time when it fires, so a clock change cannot bring a check forward.
     timer = setTimeout(() => {
       timer = undefined
       if (lastCheckAt === null || Date.now() >= lastCheckAt + UPDATE_CHECK_INTERVAL_MS) void runCheck()
@@ -183,7 +198,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
           release.info = found.info
         } else {
           if (release?.download.status === 'ready') await discardReady()
-          release = { info: found.info, sha512: found.sha512, download: { status: 'none', failure: null, cancelled: false }, path: null }
+          release = { info: found.info, sha512: found.sha512, download: { status: 'none', failure: null, cancelled: false }, path: null, automaticAfter: 0 }
         }
         if (record.notified !== found.info.version && release.download.status !== 'ready') notice = { version: found.info.version, kind: 'available' }
         outcome = { at: new Date().toISOString(), outcome: 'available', failure: null }
@@ -197,12 +212,13 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     schedule()
     publish()
     const current = release
-    if (current !== null && current.download.status === 'none' && automaticDownload() && !cancelled.has(current.info.version)) {
-      await download()
+    if (current !== null && downloadsAutomatically(current)) {
+      await download(true)
     }
   }
 
-  async function download(): Promise<void> {
+  /** `automatic`: started by a check or the platform setting rather than by 「下载更新」 / 「重试」. */
+  async function download(automatic = false): Promise<void> {
     const current = release
     const downloadable = () => deps.isAllowed() && engine !== null && settings !== null && !stopped && !checking && current !== null && current.download.status === 'none'
     if (!downloadable() || current === null || engine === null || settings === null) return
@@ -231,9 +247,11 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       await persist({ ...record, ready: { release: current.info, sha512: current.sha512, path } })
       if (!readyNotified.has(current.info.version)) notice = { version: current.info.version, kind: 'ready' }
     } catch (error) {
-      current.download = abort.signal.aborted
-        ? { status: 'none', failure: null, cancelled: true }
-        : { status: 'none', failure: classifyUpdateError(error), cancelled: false }
+      if (abort.signal.aborted) current.download = { status: 'none', failure: null, cancelled: true }
+      else {
+        current.download = { status: 'none', failure: classifyUpdateError(error), cancelled: false }
+        if (automatic) current.automaticAfter = Date.now() + AUTOMATIC_RETRY_MS
+      }
     } finally {
       if (downloading === abort) downloading = null
     }
@@ -272,7 +290,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
         // Installed (or older) packages are removed; a waiting one must still match its checksum.
         if (deps.unavailable !== null || !newer || (await deps.sha512(ready.path)) !== ready.sha512) await discardReady()
         else {
-          release = { info: ready.release, sha512: ready.sha512, download: { status: 'ready' }, path: ready.path }
+          release = { info: ready.release, sha512: ready.sha512, download: { status: 'ready' }, path: ready.path, automaticAfter: 0 }
           notice = { version: ready.release.version, kind: 'ready' }
         }
       }
@@ -288,8 +306,8 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       if (previous?.updateAutoCheck !== next.updateAutoCheck) schedule()
       publish()
       const current = release
-      if (current !== null && current.download.status === 'none' && automaticDownload() && !cancelled.has(current.info.version) && !checking) {
-        void download()
+      if (current !== null && downloadsAutomatically(current) && !checking) {
+        void download(true)
       }
     },
 
@@ -302,7 +320,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
 
     check: runCheck,
 
-    download,
+    download: () => download(),
 
     cancelDownload() {
       const current = release

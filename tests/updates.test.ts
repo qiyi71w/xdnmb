@@ -9,7 +9,7 @@ import { createUpdateService, type UpdateSettings } from '../src/main/updates/se
 import { createLifecycle } from '../src/main/lifecycle/controller'
 import type { UpdatePlatform, UpdateState } from '../src/shared/updates'
 
-const DAY = 24 * 60 * 60 * 1000
+const HOUR = 60 * 60 * 1000
 const BYTES = Buffer.from('xidao 0.2.0 installer')
 const SHA = createHash('sha512').update(BYTES).digest('base64')
 const FOUND: EngineCheck = {
@@ -34,7 +34,7 @@ afterEach(() => {
 /** Lets settled promise chains run (setImmediate stays real). */
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve))
 
-/** Controlled engine: `result` is what a check returns; downloads write the package, or wait while held. */
+/** Controlled engine: `result` is what a check returns; downloads write the package, wait while held, or throw `downloadError`. */
 function fakeEngine() {
   let next: EngineCheck | Error = FOUND
   let hold: PromiseWithResolvers<void> | null = null
@@ -44,6 +44,7 @@ function fakeEngine() {
   const engine = {
     checks: 0,
     downloads: 0,
+    downloadError: null as Error | null,
     networks: [] as string[],
     set result(value: EngineCheck | Error) { next = value },
     holdDownloads() { hold = Promise.withResolvers<void>() },
@@ -68,6 +69,7 @@ function fakeEngine() {
       },
       async download(onProgress, signal) {
         engine.downloads++
+        if (engine.downloadError !== null) throw engine.downloadError
         const pending = hold
         if (pending !== null) {
           const aborted = Promise.withResolvers<never>()
@@ -97,13 +99,15 @@ function service(engine: ReturnType<typeof fakeEngine>, options: { platform?: Up
   const states: UpdateState[] = []
   const installers: Array<{ path: string; restart: boolean }> = []
   let installQuits = 0
+  const records = createRecordStore(join(dir, 'update-state.json'))
+  let lastWrite: Promise<void> = Promise.resolve()
   const instance = createUpdateService({
     platform: options.platform ?? 'windows',
     unavailable: null,
     currentVersion: options.version ?? '0.1.0',
     engine: engine.api,
     isAllowed: options.isAllowed ?? (() => true),
-    records: createRecordStore(join(dir, 'update-state.json')),
+    records: { load: () => records.load(), save: (record) => (lastWrite = records.save(record)) },
     pendingInstall: createPendingInstallStore(join(dir, 'update-on-start.json')),
     installMarker: createInstallMarkerStore(join(dir, 'update-launched.json')),
     lastInstallFailure: null,
@@ -114,7 +118,8 @@ function service(engine: ReturnType<typeof fakeEngine>, options: { platform?: Up
     requestInstallQuit: () => { installQuits++ },
     publish: (state) => states.push(state)
   })
-  return { instance, states, installers, get installQuits() { return installQuits } }
+  /** `written()` settles once every record write started so far is on disk (writes run in call order). */
+  return { instance, states, installers, get installQuits() { return installQuits }, written: () => lastWrite.catch(() => undefined) }
 }
 
 describe('software updates', () => {
@@ -125,7 +130,7 @@ describe('software updates', () => {
     await instance.start(settings())
     await instance.check()
     await instance.download()
-    await vi.advanceTimersByTimeAsync(2 * DAY)
+    await vi.advanceTimersByTimeAsync(2 * HOUR)
     expect(engine.checks).toBe(0)
     expect(engine.downloads).toBe(0)
     expect(instance.state().lastCheck).toBeNull()
@@ -145,7 +150,7 @@ describe('software updates', () => {
     expect(instance.state().release?.download).toMatchObject({ status: 'none', cancelled: true })
     await instance.check()
     await instance.download()
-    await vi.advanceTimersByTimeAsync(2 * DAY)
+    await vi.advanceTimersByTimeAsync(2 * HOUR)
     expect(engine.checks).toBe(1)
     expect(engine.downloads).toBe(1)
   })
@@ -167,14 +172,14 @@ describe('software updates', () => {
     expect(instance.state().lastCheck).toBeNull()
   })
 
-  it('checks at cold start and again only after 24 hours; a check while one runs starts no second one', async () => {
+  it('checks at cold start and again only after an hour; a check while one runs starts no second one', async () => {
     const engine = fakeEngine()
     const { instance } = service(engine)
     await instance.start(settings())
     expect(engine.checks).toBe(1)
     expect(instance.state().lastCheck?.outcome).toBe('available')
 
-    await vi.advanceTimersByTimeAsync(DAY - 60_000)
+    await vi.advanceTimersByTimeAsync(HOUR - 60_000)
     expect(engine.checks).toBe(1)
     await vi.advanceTimersByTimeAsync(60_000)
     expect(engine.checks).toBe(2)
@@ -190,7 +195,7 @@ describe('software updates', () => {
     const engine = fakeEngine()
     const { instance } = service(engine)
     await instance.start(settings({ updateAutoCheck: false }))
-    await vi.advanceTimersByTimeAsync(3 * DAY)
+    await vi.advanceTimersByTimeAsync(3 * HOUR)
     expect(engine.checks).toBe(0)
 
     engine.result = new Error('net::ERR_INTERNET_DISCONNECTED')
@@ -200,7 +205,7 @@ describe('software updates', () => {
 
     engine.result = FOUND
     instance.configure(settings({ updateAutoCheck: true, updateNetwork: 'direct' }))
-    await vi.advanceTimersByTimeAsync(DAY)
+    await vi.advanceTimersByTimeAsync(HOUR)
     expect(engine.checks).toBe(2)
     expect(engine.networks.at(-1)).toBe('direct')
   })
@@ -222,7 +227,7 @@ describe('software updates', () => {
     await started
     expect(instance.state().release?.download).toEqual({ status: 'none', failure: null, cancelled: true })
 
-    await vi.advanceTimersByTimeAsync(DAY)
+    await vi.advanceTimersByTimeAsync(HOUR)
     expect(engine.checks).toBe(2)
     expect(engine.downloads).toBe(1)
 
@@ -230,6 +235,44 @@ describe('software updates', () => {
     await instance.download()
     expect(instance.state().release?.download).toEqual({ status: 'ready' })
     expect(instance.state().installOnQuit).toBe(true)
+  })
+
+  it('downloads a package that failed automatically again only a day later; the manual retry stays available', async () => {
+    const engine = fakeEngine()
+    engine.downloadError = new Error('net::ERR_CONNECTION_RESET')
+    const { instance, written } = service(engine)
+    await instance.start(settings({ updateAutoInstall: true }))
+    expect(engine.downloads).toBe(1)
+    expect(instance.state().release?.download).toMatchObject({ status: 'none', failure: 'network' })
+
+    await instance.download()
+    expect(engine.downloads).toBe(2)
+    await vi.advanceTimersByTimeAsync(23 * HOUR)
+    expect(engine.checks).toBe(24)
+    expect(engine.downloads).toBe(2)
+
+    engine.downloadError = null
+    await vi.advanceTimersByTimeAsync(HOUR)
+    expect(engine.checks).toBe(25)
+    expect(engine.downloads).toBe(3)
+    expect(instance.state().release?.download).toEqual({ status: 'ready' })
+    await written()
+  })
+
+  it('leaves automatic download to the setting after a failed 「下载更新」', async () => {
+    const engine = fakeEngine()
+    engine.downloadError = new Error('net::ERR_CONNECTION_RESET')
+    const { instance, written } = service(engine)
+    await instance.start(settings())
+    await instance.download()
+    expect(instance.state().release?.download).toMatchObject({ status: 'none', failure: 'network' })
+
+    engine.downloadError = null
+    instance.configure(settings({ updateAutoInstall: true }))
+    for (let turn = 0; turn < 1000 && instance.state().release?.download.status !== 'ready'; turn++) await settle()
+    expect(engine.downloads).toBe(2)
+    expect(instance.state().release?.download).toEqual({ status: 'ready' })
+    await written()
   })
 
   it('keeps a verified package across a restart without checking, and drops one whose bytes changed', async () => {
@@ -381,12 +424,12 @@ describe('software updates', () => {
     expect(instance.state().release?.download).toEqual({ status: 'none', failure: null, cancelled: true })
   })
 
-  it('keeps checking every 24 hours when a download spans the time a check falls due', async () => {
+  it('keeps checking every hour when a download spans the time a check falls due', async () => {
     const engine = fakeEngine()
     const { instance } = service(engine)
     await instance.start(settings())
     expect(engine.checks).toBe(1)
-    await vi.advanceTimersByTimeAsync(DAY - 60_000)
+    await vi.advanceTimersByTimeAsync(HOUR - 60_000)
     engine.holdDownloads()
     const downloading = instance.download()
     await vi.advanceTimersByTimeAsync(2 * 60_000)
@@ -396,8 +439,25 @@ describe('software updates', () => {
     await downloading
     await vi.advanceTimersByTimeAsync(0)
     expect(engine.checks).toBe(2)
-    await vi.advanceTimersByTimeAsync(DAY)
+    await vi.advanceTimersByTimeAsync(HOUR)
     expect(engine.checks).toBe(3)
+  })
+
+  it('keeps waiting without spinning when the clock is set back beyond the longest timer delay', async () => {
+    const engine = fakeEngine()
+    const { instance } = service(engine)
+    await instance.start(settings())
+    const start = Date.now()
+    vi.setSystemTime(start - 30 * 24 * HOUR)
+    await vi.advanceTimersByTimeAsync(HOUR)
+    const timers = vi.spyOn(globalThis, 'setTimeout')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(timers).not.toHaveBeenCalled()
+    expect(engine.checks).toBe(1)
+
+    vi.setSystemTime(start + HOUR)
+    await vi.advanceTimersByTimeAsync(HOUR)
+    expect(engine.checks).toBe(2)
   })
 
   it('keeps every record write when writes overlap', async () => {
