@@ -9,7 +9,7 @@ import { createUpdateService, type UpdateSettings } from '../src/main/updates/se
 import { createLifecycle } from '../src/main/lifecycle/controller'
 import type { UpdatePlatform, UpdateState } from '../src/shared/updates'
 
-const DAY = 24 * 60 * 60 * 1000
+const HOUR = 60 * 60 * 1000
 const BYTES = Buffer.from('xidao 0.2.0 installer')
 const SHA = createHash('sha512').update(BYTES).digest('base64')
 const FOUND: EngineCheck = {
@@ -125,7 +125,7 @@ describe('software updates', () => {
     await instance.start(settings())
     await instance.check()
     await instance.download()
-    await vi.advanceTimersByTimeAsync(2 * DAY)
+    await vi.advanceTimersByTimeAsync(2 * HOUR)
     expect(engine.checks).toBe(0)
     expect(engine.downloads).toBe(0)
     expect(instance.state().lastCheck).toBeNull()
@@ -145,7 +145,7 @@ describe('software updates', () => {
     expect(instance.state().release?.download).toMatchObject({ status: 'none', cancelled: true })
     await instance.check()
     await instance.download()
-    await vi.advanceTimersByTimeAsync(2 * DAY)
+    await vi.advanceTimersByTimeAsync(2 * HOUR)
     expect(engine.checks).toBe(1)
     expect(engine.downloads).toBe(1)
   })
@@ -167,14 +167,14 @@ describe('software updates', () => {
     expect(instance.state().lastCheck).toBeNull()
   })
 
-  it('checks at cold start and again only after 24 hours; a check while one runs starts no second one', async () => {
+  it('checks at cold start and again only after an hour; a check while one runs starts no second one', async () => {
     const engine = fakeEngine()
     const { instance } = service(engine)
     await instance.start(settings())
     expect(engine.checks).toBe(1)
     expect(instance.state().lastCheck?.outcome).toBe('available')
 
-    await vi.advanceTimersByTimeAsync(DAY - 60_000)
+    await vi.advanceTimersByTimeAsync(HOUR - 60_000)
     expect(engine.checks).toBe(1)
     await vi.advanceTimersByTimeAsync(60_000)
     expect(engine.checks).toBe(2)
@@ -190,7 +190,7 @@ describe('software updates', () => {
     const engine = fakeEngine()
     const { instance } = service(engine)
     await instance.start(settings({ updateAutoCheck: false }))
-    await vi.advanceTimersByTimeAsync(3 * DAY)
+    await vi.advanceTimersByTimeAsync(3 * HOUR)
     expect(engine.checks).toBe(0)
 
     engine.result = new Error('net::ERR_INTERNET_DISCONNECTED')
@@ -200,7 +200,7 @@ describe('software updates', () => {
 
     engine.result = FOUND
     instance.configure(settings({ updateAutoCheck: true, updateNetwork: 'direct' }))
-    await vi.advanceTimersByTimeAsync(DAY)
+    await vi.advanceTimersByTimeAsync(HOUR)
     expect(engine.checks).toBe(2)
     expect(engine.networks.at(-1)).toBe('direct')
   })
@@ -222,7 +222,7 @@ describe('software updates', () => {
     await started
     expect(instance.state().release?.download).toEqual({ status: 'none', failure: null, cancelled: true })
 
-    await vi.advanceTimersByTimeAsync(DAY)
+    await vi.advanceTimersByTimeAsync(HOUR)
     expect(engine.checks).toBe(2)
     expect(engine.downloads).toBe(1)
 
@@ -381,12 +381,12 @@ describe('software updates', () => {
     expect(instance.state().release?.download).toEqual({ status: 'none', failure: null, cancelled: true })
   })
 
-  it('keeps checking every 24 hours when a download spans the time a check falls due', async () => {
+  it('keeps checking every hour when a download spans the time a check falls due', async () => {
     const engine = fakeEngine()
     const { instance } = service(engine)
     await instance.start(settings())
     expect(engine.checks).toBe(1)
-    await vi.advanceTimersByTimeAsync(DAY - 60_000)
+    await vi.advanceTimersByTimeAsync(HOUR - 60_000)
     engine.holdDownloads()
     const downloading = instance.download()
     await vi.advanceTimersByTimeAsync(2 * 60_000)
@@ -396,7 +396,7 @@ describe('software updates', () => {
     await downloading
     await vi.advanceTimersByTimeAsync(0)
     expect(engine.checks).toBe(2)
-    await vi.advanceTimersByTimeAsync(DAY)
+    await vi.advanceTimersByTimeAsync(HOUR)
     expect(engine.checks).toBe(3)
   })
 

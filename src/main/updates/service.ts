@@ -83,9 +83,6 @@ export interface UpdateService {
   endSession(unsaved: boolean): void
 }
 
-/** Timers wake at most this far apart and compare wall-clock time, so sleep or a clock change cannot stretch the 24 hours. */
-const MAX_TIMER_MS = 60 * 60 * 1000
-
 export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
   const { engine } = deps
   let settings: UpdateSettings | null = null
@@ -142,11 +139,12 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     if (stopped || engine === null || !deps.isAllowed() || settings?.updateAutoCheck !== true) return
     const due = lastCheckAt === null ? Date.now() : lastCheckAt + UPDATE_CHECK_INTERVAL_MS
     const wait = Math.max(0, due - Date.now())
+    // The timer re-compares wall-clock time when it fires, so a clock change cannot bring a check forward.
     timer = setTimeout(() => {
       timer = undefined
       if (lastCheckAt === null || Date.now() >= lastCheckAt + UPDATE_CHECK_INTERVAL_MS) void runCheck()
       else schedule()
-    }, Math.min(wait, MAX_TIMER_MS))
+    }, wait)
   }
 
   /** Drops a waiting package (superseded, installed or corrupt). */

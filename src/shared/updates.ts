@@ -14,8 +14,8 @@
 export const UPDATE_REPOSITORY_URL = 'https://github.com/qiyi71w/xdnmb'
 export const UPDATE_AUTHOR_URL = 'https://github.com/qiyi71w'
 
-/** Automatic checks run at cold start and then every 24 hours while the app runs (also in the tray). */
-export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+/** Automatic checks run at cold start and then every hour while the app runs (also in the tray). */
+export const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
 
 /** Network used by update checks and package downloads only; forum, images, search and login are unaffected. */
 export type UpdateNetwork = 'system' | 'direct'
