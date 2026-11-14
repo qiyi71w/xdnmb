@@ -457,6 +457,12 @@ export function createPublicationService(deps: {
     async setPoWarning({ enabled }) {
       try { await store.setPoWarningEnabled(enabled); if (enabled) suppressed = false; return { ok: true, enabled } }
       catch { return { ok: false, enabled: await store.getPoWarningEnabled().catch(() => true) } }
+    },
+    async threadPostCounts({ threadId }) {
+      try {
+        if (store.status.state === 'unavailable') throw new Error('storage')
+        return { ok: true, counts: await store.threadPostCounts(threadId) }
+      } catch { return { ok: false, reason: 'storage' } }
     }
   }
   return api

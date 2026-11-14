@@ -234,6 +234,7 @@ const api: XidaoApi = {
     getAttempt: (input) => ipcRenderer.invoke(IpcChannel.getPublication, input),
     getPoWarning: () => ipcRenderer.invoke(IpcChannel.getPoWarning),
     setPoWarning: (input) => ipcRenderer.invoke(IpcChannel.setPoWarning, input),
+    threadPostCounts: (input) => ipcRenderer.invoke(IpcChannel.threadPostCounts, input),
     onFailureNotice,
     onOpenDraft,
     onChanged(listener) {

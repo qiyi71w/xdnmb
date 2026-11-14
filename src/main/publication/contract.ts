@@ -1,5 +1,5 @@
 import type { DraftSaveInput } from '../../shared/drafts'
-import type { PublicationAttempt, PublicationProblem, PublicationState } from '../../shared/publication'
+import type { PublicationAttempt, PublicationProblem, PublicationState, ThreadPostCount } from '../../shared/publication'
 
 /** Original limit of one send, from its recorded intent. A quit never extends or restarts it. */
 export const PUBLISH_DEADLINE_MS = 60_000
@@ -46,6 +46,8 @@ export interface PublicationStore {
   setPoWarningEnabled(enabled: boolean): Promise<void>
   /** Last intent start for this identity in this forum; survives restarts. */
   lastPublicationAt(credentialId: string, forumId: string): Promise<string | null>
+  /** 串内发言次数 of the stored cookies in this thread (see `ThreadPostCount`); cookies without any are left out. */
+  threadPostCounts(threadId: string): Promise<ThreadPostCount[]>
 }
 
 export type PublishReport =
