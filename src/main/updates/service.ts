@@ -145,7 +145,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     }
   }
 
-  /** The platform setting is on, and the user neither cancelled nor (recently) failed this package's download. */
+  /** The platform setting is on, and the user did not cancel this package's download nor did it recently fail automatically. */
   const downloadsAutomatically = (current: OfferedRelease) =>
     current.download.status === 'none' && !cancelled.has(current.info.version) && Date.now() >= current.automaticAfter &&
     (deps.platform === 'windows' ? settings?.updateAutoInstall === true : settings?.updateAutoDownload === true)
@@ -213,11 +213,12 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     publish()
     const current = release
     if (current !== null && downloadsAutomatically(current)) {
-      await download()
+      await download(true)
     }
   }
 
-  async function download(): Promise<void> {
+  /** `automatic`: started by a check or the platform setting rather than by 「下载更新」 / 「重试」. */
+  async function download(automatic = false): Promise<void> {
     const current = release
     const downloadable = () => deps.isAllowed() && engine !== null && settings !== null && !stopped && !checking && current !== null && current.download.status === 'none'
     if (!downloadable() || current === null || engine === null || settings === null) return
@@ -249,7 +250,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       if (abort.signal.aborted) current.download = { status: 'none', failure: null, cancelled: true }
       else {
         current.download = { status: 'none', failure: classifyUpdateError(error), cancelled: false }
-        current.automaticAfter = Date.now() + AUTOMATIC_RETRY_MS
+        if (automatic) current.automaticAfter = Date.now() + AUTOMATIC_RETRY_MS
       }
     } finally {
       if (downloading === abort) downloading = null
@@ -306,7 +307,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       publish()
       const current = release
       if (current !== null && downloadsAutomatically(current) && !checking) {
-        void download()
+        void download(true)
       }
     },
 
@@ -319,7 +320,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
 
     check: runCheck,
 
-    download,
+    download: () => download(),
 
     cancelDownload() {
       const current = release

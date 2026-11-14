@@ -99,13 +99,15 @@ function service(engine: ReturnType<typeof fakeEngine>, options: { platform?: Up
   const states: UpdateState[] = []
   const installers: Array<{ path: string; restart: boolean }> = []
   let installQuits = 0
+  const records = createRecordStore(join(dir, 'update-state.json'))
+  let lastWrite: Promise<void> = Promise.resolve()
   const instance = createUpdateService({
     platform: options.platform ?? 'windows',
     unavailable: null,
     currentVersion: options.version ?? '0.1.0',
     engine: engine.api,
     isAllowed: options.isAllowed ?? (() => true),
-    records: createRecordStore(join(dir, 'update-state.json')),
+    records: { load: () => records.load(), save: (record) => (lastWrite = records.save(record)) },
     pendingInstall: createPendingInstallStore(join(dir, 'update-on-start.json')),
     installMarker: createInstallMarkerStore(join(dir, 'update-launched.json')),
     lastInstallFailure: null,
@@ -116,7 +118,8 @@ function service(engine: ReturnType<typeof fakeEngine>, options: { platform?: Up
     requestInstallQuit: () => { installQuits++ },
     publish: (state) => states.push(state)
   })
-  return { instance, states, installers, get installQuits() { return installQuits } }
+  /** `written()` settles once every record write started so far is on disk (writes run in call order). */
+  return { instance, states, installers, get installQuits() { return installQuits }, written: () => lastWrite.catch(() => undefined) }
 }
 
 describe('software updates', () => {
@@ -237,7 +240,7 @@ describe('software updates', () => {
   it('downloads a package that failed automatically again only a day later; the manual retry stays available', async () => {
     const engine = fakeEngine()
     engine.downloadError = new Error('net::ERR_CONNECTION_RESET')
-    const { instance } = service(engine)
+    const { instance, written } = service(engine)
     await instance.start(settings({ updateAutoInstall: true }))
     expect(engine.downloads).toBe(1)
     expect(instance.state().release?.download).toMatchObject({ status: 'none', failure: 'network' })
@@ -253,6 +256,23 @@ describe('software updates', () => {
     expect(engine.checks).toBe(25)
     expect(engine.downloads).toBe(3)
     expect(instance.state().release?.download).toEqual({ status: 'ready' })
+    await written()
+  })
+
+  it('leaves automatic download to the setting after a failed 「下载更新」', async () => {
+    const engine = fakeEngine()
+    engine.downloadError = new Error('net::ERR_CONNECTION_RESET')
+    const { instance, written } = service(engine)
+    await instance.start(settings())
+    await instance.download()
+    expect(instance.state().release?.download).toMatchObject({ status: 'none', failure: 'network' })
+
+    engine.downloadError = null
+    instance.configure(settings({ updateAutoInstall: true }))
+    for (let turn = 0; turn < 1000 && instance.state().release?.download.status !== 'ready'; turn++) await settle()
+    expect(engine.downloads).toBe(2)
+    expect(instance.state().release?.download).toEqual({ status: 'ready' })
+    await written()
   })
 
   it('keeps a verified package across a restart without checking, and drops one whose bytes changed', async () => {
