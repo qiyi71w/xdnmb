@@ -323,9 +323,11 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   }
 
   /**
-   * One quote page: its replies newer than the checked ID are new. A quoted post is mine when it is a
-   * confirmed own publication, else when its 饼干 ID (stored, or read by a controlled quote read)
-   * matches an imported cookie's. A reply counts once however many of my posts it quotes.
+   * One quote page: its replies newer than the checked ID are new. A reply of the user's own (a
+   * confirmed own publication, or its 饼干 ID matching an imported cookie's) is skipped: it neither
+   * counts nor stays unverified, and its quoted posts are not read for it. A quoted post is mine
+   * when it is a confirmed own publication, else when its 饼干 ID (stored, or read by a controlled
+   * quote read) matches an imported cookie's. A reply counts once however many of my posts it quotes.
    */
   async function quoteStep(run: ThreadRun, budget: { remaining: number }): Promise<boolean> {
     const q = run.quote!
@@ -359,13 +361,21 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       value.issues.add('incomplete')
       return stop()
     }
-    const quotes = page.replies.filter((reply) => comparePostIds(reply.id, q.checked) > 0).map((reply) => [...quotedPostIds(reply.content)])
+    const fresh = page.replies.filter((reply) => comparePostIds(reply.id, q.checked) > 0)
+      .map((reply) => ({ reply, ids: [...quotedPostIds(reply.content)] })).filter((item) => item.ids.length > 0)
+    const loaded = q.sources === null
     if (q.sources === null) {
-      const ids = [...new Set(quotes.flat())]
+      // The quoting replies' own IDs are looked up too: whether each is a confirmed own publication.
+      const ids = [...new Set(fresh.flatMap((item) => [item.reply.id, ...item.ids]))]
       q.sources = new Map((ids.length > 0 ? await store.reminderQuoteSources(ids) : []).map((source) => [source.postId, source]))
+    }
+    const sources = q.sources
+    const quotes = fresh.filter(({ reply }) => !sources.get(reply.id)!.own && (reply.userHash === null || !cookieIds.has(reply.userHash)))
+      .map((item) => item.ids)
+    if (loaded) {
       // Without any known 饼干 ID a quote read could not match anything.
-      q.refs = cookieIds.size === 0 ? [] : [...q.sources.values()].filter((source) => !source.own && source.cookieId === null)
-        .map((source) => source.postId).sort(comparePostIds)
+      q.refs = cookieIds.size === 0 ? [] : [...new Set(quotes.flat())].map((id) => sources.get(id)!)
+        .filter((source) => !source.own && source.cookieId === null).map((source) => source.postId).sort(comparePostIds)
     }
     while (q.refs.length > 0) {
       const id = q.refs[0]!

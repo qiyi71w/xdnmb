@@ -38,6 +38,8 @@ interface ForumThread {
   po: number[]
   /** Posts quoted by reply n. */
   quotes: Map<number, string[]>
+  /** 饼干 ID of reply n when it is neither the PO's nor `Someone`'s. */
+  authors?: Map<number, string>
   /** `ReplyCount` served instead of the real count; `null` omits it. */
   reported?: number | null
 }
@@ -95,7 +97,8 @@ async function harness(options: { cookieIds?: string[] } = {}) {
     const numbers = po ? thread.po : Array.from({ length: thread.count }, (_, index) => index + 1)
     const page = entry.page ?? 1
     const replies = numbers.slice((page - 1) * 19, page * 19).map((n) => forumPost(replyId(id, n),
-      [`回复 ${n}`, ...(thread.quotes.get(n) ?? []).map((quoted) => `>>No.${quoted}`)].join(' '), thread.po.includes(n) ? 'PoHash' : 'Someone'))
+      [`回复 ${n}`, ...(thread.quotes.get(n) ?? []).map((quoted) => `>>No.${quoted}`)].join(' '),
+      thread.authors?.get(n) ?? (thread.po.includes(n) ? 'PoHash' : 'Someone')))
     const reported = po ? numbers.length : thread.reported === undefined ? thread.count : thread.reported
     send(200, JSON.stringify({ ...forumPost(id, '主帖', 'PoHash'), ...(reported === null ? {} : { ReplyCount: reported }), Replies: replies }))
   })
@@ -344,6 +347,22 @@ describe('引用我的发言', () => {
     expect(await h.check()).toEqual(['thread:100:1'])
     Object.assign(thread, { count: 21, quotes: new Map([[20, ['92']], [21, ['90']]]) })
     expect(await h.check()).toEqual(['thread:100:1', 'thread:100:2'])
+    expect(await h.row('100')).toMatchObject({ counts: { quote: 1 }, unverifiedQuotes: 0, issues: [] })
+  })
+
+  it('skips the user’s own new replies, confirmed sends or matching 饼干 IDs, without reading their quoted posts', async () => {
+    const h = await harness({ cookieIds: ['Mine'] })
+    const thread = h.thread('100', { count: 19 })
+    h.confirmOwn('90')
+    h.db.savePost(localPost('91', 'Mine'), t0)
+    // 93 is unknown and unreadable: quoted by anyone else it would stay unverified.
+    await h.enable('100', 'quote')
+    await h.check()
+    // 20: sent and confirmed here; 21, 22: the user's 饼干 ID; 23: someone else.
+    h.confirmOwn(replyId('100', 20))
+    Object.assign(thread, { count: 23, authors: new Map([[21, 'Mine'], [22, 'Mine']]),
+      quotes: new Map([[20, ['90']], [21, ['91']], [22, ['93']], [23, ['90']]]) })
+    expect(await h.check()).toEqual(['thread:100:1', 'thread:100:2+cookie'])
     expect(await h.row('100')).toMatchObject({ counts: { quote: 1 }, unverifiedQuotes: 0, issues: [] })
   })
 
