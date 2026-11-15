@@ -19,6 +19,7 @@ import { createRequestScheduler } from '../src/main/reading/scheduler'
 import { createReminderService } from '../src/main/reminders/service'
 import { openReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS } from '../src/main/storage/migrations'
+import { DEFAULT_SETTINGS } from '../src/shared/settings'
 import { asStore } from './helpers/store'
 
 // A reply sent from this app leaves the 全串／PO reminder count only when two reads place it in
@@ -169,6 +170,8 @@ async function harness(options: { own?: 'Po' | 'Other'; initialCount?: number; a
   cleanups.push(() => current.reminders.stop('quit'))
   db.setReminderRule('100', 'all', true, at)
   db.setReminderRule('100', 'po', true, at)
+  // 全串／PO deduction only: sends here turn on no 引用我 rule, whose pages would join every check.
+  db.saveSettings({ ...DEFAULT_SETTINGS, reminderAutoQuote: false })
   async function check() {
     monotonic += 60_000
     requests.length = 0

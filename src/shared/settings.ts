@@ -121,6 +121,8 @@ export interface AppSettings {
   /** Automatic reminder checks in minutes; 0 disables only the timer. */
   reminderInterval: 0 | 15 | 30 | 60
   reminderSystemNotifications: boolean
+  /** 发言后提醒引用我: a confirmed send from this app enables or renews 引用我 for its thread. */
+  reminderAutoQuote: boolean
   /** Split preference given to tabs created from now on; existing tabs keep their own. */
   newTabSplitDefault: boolean
   /** Remembered close behavior; actual quit still handles unsaved editors. */
@@ -174,6 +176,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   reminderInterval: 15,
   reminderSystemNotifications: true,
+  reminderAutoQuote: true,
   newTabSplitDefault: true,
   closeAction: 'ask',
   colorScheme: 'system',
@@ -201,6 +204,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export const SETTING_KEYS = [
   'reminderInterval',
   'reminderSystemNotifications',
+  'reminderAutoQuote',
   'newTabSplitDefault',
   'closeAction',
   'colorScheme',
@@ -396,6 +400,7 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
           : { ok: false, issues: [{ kind: 'field', field: key, problem: 'range' }] }
       break
     case 'reminderSystemNotifications':
+    case 'reminderAutoQuote':
     case 'imageMaskEnabled':
     case 'newTabSplitDefault':
     case 'customThemeEnabled':

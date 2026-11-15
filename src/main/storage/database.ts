@@ -1228,6 +1228,11 @@ class SqliteReadingDatabase implements ReadingDatabase {
           .run(savedDraftId, input.id)
       }
       if (input.state === 'confirmed' && attempt.payload.target.kind === 'reply') this.reminders.confirmedPublication(Number(input.id), input.threadId!)
+      // 发言后提醒引用我 commits with the confirmation: a restart never leaves a confirmed send without it.
+      if (input.state === 'confirmed' && this.loadSettings().reminderAutoQuote) {
+        this.reminders.autoQuote({ publicationId: Number(input.id), threadId: input.threadId!, postId: input.postId!,
+          newThread: attempt.payload.target.kind === 'thread', sentAt: attempt.createdAt, at: input.at })
+      }
       const finished = this.getPublication(input.id)
       if (!finished) throw new Error('publication result returned no row')
       return finished

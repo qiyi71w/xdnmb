@@ -209,10 +209,10 @@ it('keeps new counts silent when notifications are off, but retains the rate-lim
 it('rejects invalid reminder settings without changing the saved choice', async () => {
   const h = await harness()
   const settings = createSettingsService(asStore(h.db), h.service.configure)
-  expect((await settings.update({ reminderInterval: 60, reminderSystemNotifications: false })).saved).toBe(true)
-  for (const patch of [{ reminderInterval: 1 }, { reminderInterval: '15' }, { reminderInterval: null }, { reminderSystemNotifications: 0 }]) {
+  expect((await settings.update({ reminderInterval: 60, reminderSystemNotifications: false, reminderAutoQuote: false })).saved).toBe(true)
+  for (const patch of [{ reminderInterval: 1 }, { reminderInterval: '15' }, { reminderInterval: null }, { reminderSystemNotifications: 0 }, { reminderAutoQuote: 'on' }]) {
     expect((await settings.update(patch)).saved).toBe(false)
-    expect(h.db.loadSettings()).toMatchObject({ reminderInterval: 60, reminderSystemNotifications: false })
+    expect(h.db.loadSettings()).toMatchObject({ reminderInterval: 60, reminderSystemNotifications: false, reminderAutoQuote: false })
   }
 })
 
