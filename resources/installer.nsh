@@ -160,3 +160,13 @@
     !insertmacro MUI_PAGE_FINISH
   !macroend
 !endif
+
+; 开机自启 is the Run entry the app writes itself (Electron's app.setLoginItemSettings, named by the
+; app's AppUserModelId) plus its Task Manager state; both go with an uninstallation. An in-app update
+; (`--updated`) runs the old uninstaller too and keeps them.
+!macro customUnInstall
+  ${ifNot} ${isUpdated}
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_ID}"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "${APP_ID}"
+  ${endif}
+!macroend

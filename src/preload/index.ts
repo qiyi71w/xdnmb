@@ -264,6 +264,11 @@ const api: XidaoApi = {
     listUnstoredResults: () => ipcRenderer.invoke(IpcChannel.listUnstoredResults),
     retryUnstoredResults: () => ipcRenderer.invoke(IpcChannel.retryUnstoredResults)
   },
+  loginItem: {
+    get: () => ipcRenderer.invoke(IpcChannel.loginItemGet),
+    set: (input) => ipcRenderer.invoke(IpcChannel.loginItemSet, input),
+    openSystemSettings: () => ipcRenderer.invoke(IpcChannel.loginItemOpenSystemSettings)
+  },
   updates: {
     getState: () => ipcRenderer.invoke(IpcChannel.updateGetState),
     onState(listener) {

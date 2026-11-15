@@ -25,6 +25,7 @@ const FIELD_LABELS: Record<string, string> = {
   motion: '动态效果',
   newTabSplitDefault: '新标签默认开启分栏',
   closeAction: '关闭窗口时的操作',
+  loginLaunchResident: '开机启动时后台驻留',
   rail: '图标栏设置',
   'rail.order': '图标栏顺序',
   'rail.hidden': '隐藏的功能',

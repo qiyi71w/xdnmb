@@ -22,8 +22,11 @@ export type LifecyclePhase = 'starting' | 'running' | 'quitting' | 'finishing' |
 export interface MainWindowHost {
   /** `hidden`: exists but not shown (resident, or created and not shown yet). Minimized counts as shown. */
   state(): 'none' | 'hidden' | 'shown'
-  /** Creates the window; resolves once it is shown. */
-  open(): Promise<void>
+  /**
+   * Creates the window; resolves once it is shown. `show: false` (后台驻留 from the start) resolves
+   * once it is ready to show and leaves it hidden.
+   */
+  open(show: boolean): Promise<void>
   /** Shows, restores and focuses the existing window. */
   reveal(): void
   hide(): void
@@ -78,8 +81,11 @@ export interface Lifecycle {
   readonly phase: LifecyclePhase
   /** The current finishing/exiting quit left drafts or the workspace unsaved; cancelled or reopened quits do not count. */
   readonly unsaved: boolean
-  /** Cold start: opens the first window, then reports `cold-start` once. */
-  start(): Promise<void>
+  /**
+   * Cold start: opens the first window, then reports `cold-start` once. `resident`: a 开机自启 that
+   * starts in 后台驻留; the window stays hidden until the tray or the Dock opens it (a `reopen`).
+   */
+  start(resident?: boolean): Promise<void>
   /** The window's close button. */
   closeRequested(): Promise<void>
   /** 后台驻留 chosen in the renderer. */
@@ -94,8 +100,12 @@ export interface Lifecycle {
   cancelQuit(): void
   /** The renderer handled the editors and the workspace; `saved: false` when drafts or the workspace were not saved. */
   completeQuit(saved: boolean): void
-  /** Explicit opening from the tray, the Dock or a second instance. */
-  reopen(): void
+  /**
+   * Opening from the tray, the Dock or a second instance. `activate`: the Dock's, which macOS also
+   * sends while launching; only an `explicit` opening during the start is kept and shows the window
+   * of a resident start once it is ready.
+   */
+  reopen(source?: 'explicit' | 'activate'): void
   /** Notification clicks reveal/create a window without starting another check. */
   revealWithoutTrigger(): Promise<void>
   /**
@@ -116,12 +126,14 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
   /** The running quit continues although drafts or the workspace were not saved. */
   let unsaved = false
   let sessionEnding = false
+  /** The tray or a second launch asked for the window before the first one was ready. */
+  let openedWhileStarting = false
 
   /** `trigger`: an explicit opening to report; `null` when the app brings its window back itself. */
   async function openWindow(trigger: LaunchTrigger | null): Promise<void> {
     opening = true
     try {
-      openingTask = window.open()
+      openingTask = window.open(true)
       await openingTask
     } finally {
       opening = false
@@ -203,17 +215,21 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       return (phase === 'finishing' || phase === 'exiting') && unsaved
     },
 
-    async start() {
+    async start(resident = false) {
       if (phase !== 'starting') return
       opening = true
       try {
-        await window.open()
+        await window.open(!resident)
       } finally {
         opening = false
       }
       if (phase !== 'starting') return
       phase = 'running'
       deps.onTrigger('cold-start')
+      if (openedWhileStarting && window.state() === 'hidden') {
+        window.reveal()
+        deps.onTrigger('reopen')
+      }
     },
 
     async closeRequested() {
@@ -252,7 +268,13 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       void finish()
     },
 
-    reopen() {
+    reopen(source = 'explicit') {
+      if (phase === 'starting') {
+        // Kept for after the start: a resident start would otherwise stay hidden. macOS also
+        // sends `activate` while launching, which is no opening by the user.
+        if (source === 'explicit') openedWhileStarting = true
+        return
+      }
       if (phase === 'finishing') {
         // Opening again before the process ended: no exit; results now only update their records.
         stopFinishing('reopen')

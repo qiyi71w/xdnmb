@@ -112,6 +112,8 @@ export interface SettingsPageProps {
   active: boolean
   /** Closes the 设置 tab. */
   onClose: () => void
+  /** The system did not take a 开机自启 change: App shows it as a bottom notice. */
+  onLoginItemNotApplied: () => void
 }
 
 export interface SettingsTarget {
@@ -489,7 +491,7 @@ function SectionJump({
 
 // ---------- Sections ----------
 
-function SectionBody({ id, settings, write, adopt, platform, identities, subscriptions, directory, active }: SettingsPageProps & { id: SectionId }) {
+function SectionBody({ id, settings, write, adopt, platform, identities, subscriptions, directory, active, onLoginItemNotApplied }: SettingsPageProps & { id: SectionId }) {
   switch (id) {
     case 'appearance':
       return <AppearanceSection settings={settings} write={write} />
@@ -520,7 +522,7 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
     case 'publication':
       return <PublicationSection />
     case 'window':
-      return <WindowSection settings={settings} write={write} />
+      return <WindowSection settings={settings} write={write} active={active} onLoginItemNotApplied={onLoginItemNotApplied} />
     case 'cache':
       return <CacheSection active={active} />
     case 'announcements':

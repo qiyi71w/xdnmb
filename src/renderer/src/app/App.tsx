@@ -48,7 +48,7 @@ import { RateLimitNotice } from '../features/reminders/RateLimitNotice'
 import { SendFailureNotices } from '../features/publication/SendFailureNotices'
 import { UpdateNotice } from '../features/updates/UpdateNotice'
 import { hasNewVersion, UpdatesContext, useUpdatesSource } from '../features/updates/updatesState'
-import { BottomNoticeStack } from '../components/BottomNotice'
+import { BottomNotice, BottomNoticeStack } from '../components/BottomNotice'
 import { computeLayout, LAYOUT_DEFAULTS, type LayoutView } from '../features/layout/layout'
 import { ImageMaskScope } from '../features/image/imageMask'
 import { imageRevealsReducer, INITIAL_IMAGE_REVEALS, revealView, type RevealView } from '../features/image/imageMaskState'
@@ -516,6 +516,9 @@ export function App() {
    * leaves an already open 设置 where it was. A new request (`seq`) applies while it is shown too.
    */
   const [settingsTarget, setSettingsTarget] = useState<SettingsTarget>({ section: null, seq: 0, keep: false })
+  /** 开机自启 change the system did not take (shown until closed). */
+  const [loginItemNotApplied, setLoginItemNotApplied] = useState(false)
+  const showLoginItemNotApplied = useCallback(() => setLoginItemNotApplied(true), [])
 
   /**
    * Shows the one 设置 tab (opening it when there is none) at `section`; without a section a new
@@ -1534,6 +1537,7 @@ export function App() {
                           tabId={settingsTab.id}
                           active={settingsActive}
                           onClose={closeSettingsTab}
+                          onLoginItemNotApplied={showLoginItemNotApplied}
                         />
                       )}
                     </div>
@@ -1553,6 +1557,13 @@ export function App() {
                 <LaunchNotices openDraft={openFailedDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
                 <DraftDeletedNotices onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
                 <UpdateNotice fallbackFocus={activeTabFocus} />
+                <BottomNotice
+                  open={loginItemNotApplied}
+                  actions={[{ label: '关闭', icon: 'close', onAction: () => setLoginItemNotApplied(false) }]}
+                  fallbackFocus={activeTabFocus}
+                >
+                  开机启动设置未生效
+                </BottomNotice>
               </BottomNoticeStack>
 
               {navOverlay && navPopover.open && (

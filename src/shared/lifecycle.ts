@@ -86,3 +86,25 @@ export interface LifecycleApi {
    */
   retryUnstoredResults(): Promise<{ ok: boolean }>
 }
+
+/**
+ * 开机自启 as the operating system reports it at the moment of asking; the app never keeps its own
+ * copy, so a change made in Task Manager or System Settings shows here as it is.
+ * - `unpackaged`: a development run, whose executable must never become a login item.
+ * - `unsupported`: a system without login items here (only Windows and macOS have them).
+ * - `needsApproval` (macOS): registered, but the user has yet to allow it under 登录项 in System Settings.
+ */
+export type LoginItemState =
+  | { available: false; reason: 'unpackaged' | 'unsupported' }
+  | { available: true; enabled: boolean; needsApproval: boolean }
+
+export interface LoginItemApi {
+  get(): Promise<LoginItemState>
+  /**
+   * Writes the system login item, then reads it back. `applied: false`: the system does not report
+   * what was asked for; `state` is what it does report.
+   */
+  set(input: { enabled: boolean }): Promise<{ applied: boolean; state: LoginItemState }>
+  /** macOS: opens System Settings at 登录项. Does nothing elsewhere. */
+  openSystemSettings(): Promise<void>
+}

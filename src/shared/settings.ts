@@ -127,6 +127,11 @@ export interface AppSettings {
   newTabSplitDefault: boolean
   /** Remembered close behavior; actual quit still handles unsaved editors. */
   closeAction: CloseAction
+  /**
+   * 开机启动时后台驻留: a start by 开机自启 keeps the window hidden. A start by the user always shows
+   * it. Belongs to this device only, like 开机自启 itself.
+   */
+  loginLaunchResident: boolean
   colorScheme: ColorScheme
   customThemeEnabled: boolean
   /** The user's custom theme; `null` until one is created or imported. Kept when another scheme is chosen. */
@@ -179,6 +184,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reminderAutoQuote: true,
   newTabSplitDefault: true,
   closeAction: 'ask',
+  loginLaunchResident: false,
   colorScheme: 'system',
   customThemeEnabled: false,
   customTheme: null,
@@ -207,6 +213,7 @@ export const SETTING_KEYS = [
   'reminderAutoQuote',
   'newTabSplitDefault',
   'closeAction',
+  'loginLaunchResident',
   'colorScheme',
   'customThemeEnabled',
   'customTheme',
@@ -407,6 +414,7 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
     case 'updateAutoCheck':
     case 'updateAutoInstall':
     case 'updateAutoDownload':
+    case 'loginLaunchResident':
       parsed = typeof value === 'boolean' ? { ok: true, value } : { ok: false, issues: [{ kind: 'field', field: key, problem: 'type' }] }
       break
     case 'imageMaskStrength':

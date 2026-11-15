@@ -31,6 +31,7 @@ import { createAppDocumentMatcher } from './app-document'
 import { registerIpc, type IpcRegistration } from './ipc'
 import { createLifecycle, type FinishingSummary, type Lifecycle, type MainWindowHost } from './lifecycle/controller'
 import { isProcessRunning, relaunchArguments, relaunchedAfter, takeSingleInstanceLock } from './lifecycle/relaunch'
+import { createLoginItemService, LOGIN_LAUNCH_ARG } from './loginItem'
 import { createReadingService } from './reading/service'
 import { createRequestScheduler } from './reading/scheduler'
 import type { AppStore } from './storage/contract'
@@ -112,10 +113,15 @@ void primaryInstance.then((primary) => {
 // Managed image files are shown through the app's own scheme, never by file path or remote URL.
 protocol.registerSchemesAsPrivileged([{ scheme: IMAGE_SCHEME, privileges: { standard: true, secure: true } }])
 
-// A second launch never opens a second writer: it is an explicit reopen of this process.
-app.on('second-instance', () => lifecycle?.reopen())
-// macOS Dock. Also fires during launch; the lifecycle ignores it until the first window is shown.
-app.on('activate', () => lifecycle?.reopen())
+// A second launch never opens a second writer: it is an explicit reopen of this process. One that
+// arrives before the lifecycle exists is handed to it as soon as it does.
+let openedBeforeLifecycle = false
+app.on('second-instance', () => {
+  if (lifecycle === null) openedBeforeLifecycle = true
+  else lifecycle.reopen()
+})
+// macOS Dock. Also fires during launch; the lifecycle ignores it until the first window is ready.
+app.on('activate', () => lifecycle?.reopen('activate'))
 
 app.on('web-contents-created', (_event, contents) => {
   contents.on('will-attach-webview', (event) => event.preventDefault())
@@ -565,9 +571,17 @@ async function start(): Promise<void> {
   thirdParty = thirdPartyService
   await thirdPartyService.start()
   await analyticsService.start()
+  const loginItem = createLoginItemService({
+    platform: process.platform,
+    packaged: app.isPackaged,
+    argv: process.argv,
+    read: (args) => app.getLoginItemSettings({ args: [...args] }),
+    write: (openAtLogin, args) => app.setLoginItemSettings({ openAtLogin, args: [...args], enabled: true }),
+    openExternal: (url) => shell.openExternal(url)
+  })
   const host: MainWindowHost = {
     state: () => (mainWindow === null ? 'none' : mainWindow.isVisible() ? 'shown' : 'hidden'),
-    open: async () => {
+    open: async (show) => {
       await backgroundStopped
       updateService.resume()
       await reminders.startScheduling().catch(() => console.error('[reminders] scheduling unavailable'))
@@ -579,7 +593,7 @@ async function start(): Promise<void> {
       const window = createWindow()
       attach(window)
       window.once('ready-to-show', () => {
-        window.show()
+        if (show) window.show()
         resolve()
       })
       await promise
@@ -619,7 +633,8 @@ async function start(): Promise<void> {
         .then(finishStorage)
         .finally(() => {
           // The new process waits for this one to end before it takes the lock and opens storage.
-          if (relaunch) app.relaunch({ args: relaunchArguments(process.argv.slice(1), process.pid) })
+          // A restart is the user's own: it never starts in 后台驻留 as a 开机自启 would.
+          if (relaunch) app.relaunch({ args: relaunchArguments(process.argv.slice(1).filter((arg) => arg !== LOGIN_LAUNCH_ARG), process.pid) })
           app.quit()
         })
     },
@@ -628,6 +643,7 @@ async function start(): Promise<void> {
     onTrigger: () => { void reminders.request().catch(() => console.error('[reminders] check unavailable')) }
   })
   lifecycle = controller
+  if (openedBeforeLifecycle) controller.reopen()
   if (sessionEnding) {
     updateService.endSession(controller.unsaved)
     controller.endSession()
@@ -648,6 +664,7 @@ async function start(): Promise<void> {
     reminders,
     lifecycle: controller,
     updates: updateService,
+    loginItem,
     search: searchService,
     onlineSearch,
     store: openedStore,
@@ -705,7 +722,11 @@ async function start(): Promise<void> {
     tray.on('click', () => controller.reopen())
   }
 
-  await controller.start()
+  // 开机启动时后台驻留: only a start by 开机自启, and only with storage ready; a storage problem
+  // needs the window, and the setting cannot be read without it.
+  const resident = loginItem.launchedAtLogin() && openedStore.status.state === 'ready' &&
+    await openedStore.loadSettings().then((saved) => saved.loginLaunchResident, () => false)
+  await controller.start(resident)
   // Cold start only: reopening or focusing the window never checks again.
   void updateService.start(await openedStore.loadSettings().catch(() => DEFAULT_SETTINGS))
     .catch(() => console.error('[updates] unavailable'))

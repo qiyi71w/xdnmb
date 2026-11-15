@@ -15,7 +15,7 @@ import type {
 import type { ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
 import type { SubscriptionsApi } from './subscriptions'
 import type { PublicationApi } from './publication'
-import type { LifecycleApi } from './lifecycle'
+import type { LifecycleApi, LoginItemApi } from './lifecycle'
 import type { RemindersApi } from './reminders'
 import type { AppSettings, ZoomAction, ZoomState } from './settings'
 import type { AppearanceIssue } from './theme'
@@ -446,6 +446,8 @@ export interface XidaoApi {
   publication: PublicationApi
   /** Close choice, real quit, workspace restore and notices left by sends that finished without a window. */
   lifecycle: LifecycleApi
+  /** 开机自启: the system login item, read and written as the system reports it. */
+  loginItem: LoginItemApi
   /** Thread reminders, bounded catch-up checks and reminder notifications. */
   reminders: RemindersApi
   /** About and software updates (fixed GitHub Releases source; see `shared/updates.ts`). */
@@ -589,6 +591,9 @@ export const IpcChannel = {
   dismissLaunchNotices: 'lifecycle:dismiss-launch-notices',
   listUnstoredResults: 'lifecycle:list-unstored-results',
   retryUnstoredResults: 'lifecycle:retry-unstored-results',
+  loginItemGet: 'login-item:get',
+  loginItemSet: 'login-item:set',
+  loginItemOpenSystemSettings: 'login-item:open-system-settings',
   reminderGetRules: 'reminders:get-rules',
   reminderSetRule: 'reminders:set-rule',
   reminderOverview: 'reminders:overview',
