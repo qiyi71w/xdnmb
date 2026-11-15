@@ -53,16 +53,23 @@ function forumPost(id: string, content: string, userHash: string) {
 async function harness() {
   const folder = mkdtempSync(join(tmpdir(), 'xidao-auto-quote-'))
   const path = join(folder, 'app.sqlite')
-  const db = openReadingDatabase(path)
+  let db = openReadingDatabase(path)
   const credentialId = db.insertCredential({ name: 'Mine', cookieId: 'Mine', source: 'raw', importedAt: new Date(t0).toISOString(), ciphertext: Uint8Array.of(1) }).id
   const threads = new Map<string, ForumThread>()
   /** Thread pages the forum served, as `page` numbers (reply-count and quote reads alike). */
   const pages: number[] = []
   const refs: string[] = []
+  /** Thread reads fail: a server error, or a rate limit. */
+  const remote: { failing: 'error' | 'limit' | null } = { failing: null }
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://local')
     const id = url.searchParams.get('id') ?? ''
     response.setHeader('Content-Type', 'application/json')
+    if (url.pathname === '/api/thread' && remote.failing !== null) {
+      response.statusCode = remote.failing === 'limit' ? 429 : 500
+      response.end('{}')
+      return
+    }
     if (url.pathname === '/api/ref') {
       refs.push(id)
       response.end(JSON.stringify('该串不存在'))
@@ -91,9 +98,10 @@ async function harness() {
   let wall = t0
   let monotonic = 0
   const now = () => new Date(wall += 1000).toISOString()
-  const service = createReminderService({ store: asStore(db), client, scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }),
+  const start = () => createReminderService({ store: asStore(db), client, scheduler: createRequestScheduler({ backgroundSpacingMs: 0 }),
     notifier: { show: () => true }, now, monotonicNow: () => monotonic })
-  resources.push({ folder, db, server, service })
+  const resource = { folder, db, server, service: start() }
+  resources.push(resource)
   const signal = new AbortController().signal
   /** One SQL statement on a second connection: `get` for a row, otherwise run. */
   function sql<T>(query: string, ...args: unknown[]): T {
@@ -105,7 +113,7 @@ async function harness() {
   }
 
   return {
-    db, pages, refs,
+    get db() { return db }, pages, refs, remote,
     thread(threadId: string, count: number): ForumThread {
       const thread: ForumThread = { count, mine: new Set(), quotes: new Map() }
       threads.set(threadId, thread)
@@ -147,6 +155,17 @@ async function harness() {
     },
     advance(ms: number) { wall += ms },
     sql,
+    /** Quits and starts again on the same database file, as the app does. */
+    async restart() {
+      await resource.service.stop('quit')
+      db.close()
+      resource.db = db = openReadingDatabase(path)
+      resource.service = start()
+    },
+    /** The user opens the thread: its counts are cleared. */
+    async open(threadId: string) {
+      expect(await resource.service.clear({ threadId, source: 'open' })).toEqual({ ok: true })
+    },
     quote(threadId: string) { return db.getReminderRules([threadId])[0]!.rules.quote },
     expiresAt(threadId: string) {
       return sql<{ expires_at: string | null }>("SELECT expires_at FROM reminder_rules WHERE thread_id = ? AND kind = 'quote'", threadId).expires_at
@@ -163,13 +182,18 @@ async function harness() {
       monotonic += 60_000
       pages.length = 0
       refs.length = 0
-      expect((await service.check()).accepted).toBe(true)
-      await service.whenIdle()
+      expect((await resource.service.check()).accepted).toBe(true)
+      await resource.service.whenIdle()
     },
     async count(threadId: string) {
-      const result = await service.overview()
+      const result = await resource.service.overview()
       if (!result.ok) throw new Error('overview failed')
       return result.overview.threads.find((row) => row.threadId === threadId)?.counts.quote ?? null
+    },
+    async unverified(threadId: string) {
+      const result = await resource.service.overview()
+      if (!result.ok) throw new Error('overview failed')
+      return result.overview.threads.find((row) => row.threadId === threadId)?.unverifiedQuotes ?? null
     }
   }
 }
@@ -343,4 +367,146 @@ it('a send reported successful without its number turns nothing on; confirmed la
   await h.check()
   expect(await h.count('100')).toBe(1)
   expect(h.pages).toEqual([1, 3])
+})
+
+// Expiry and closing. Each thread below has 40 replies read before the send, so the sent reply is
+// 41 on page 3 and a check reads pages 1 and 3.
+
+it('past its expiry, the next check reads the thread first, then closes the rule as automatic; a later send enables it again', async () => {
+  const h = await harness()
+  const thread = h.thread('100', 40)
+  await h.read('100', 1)
+  h.send('100')
+  await h.check()
+  h.advance(WEEK)
+  // Expired, but nothing closes before a check.
+  expect(h.quote('100')).toMatchObject({ enabled: true, source: 'auto' })
+  h.peers(thread, 1)
+  await h.check()
+  expect(h.pages).toEqual([1, 3])
+  expect(h.quote('100')).toMatchObject({ enabled: false, closedBy: 'auto' })
+  expect(await h.count('100')).toBeNull()
+  const generation = h.generation('100')
+  const again = h.send('100')
+  expect(h.quote('100')).toMatchObject({ enabled: true, source: 'auto', closedBy: null })
+  expect(h.expiresAt('100')).toBe(week(h.sentAt(again.id)))
+  expect(h.generation('100')).toBe(generation + 1)
+})
+
+it('a final check that fails or is rate limited keeps the rule; the next one that completes closes it', async () => {
+  const h = await harness()
+  h.thread('100', 40)
+  await h.read('100', 1)
+  h.send('100')
+  h.advance(WEEK)
+  for (const failing of ['error', 'limit'] as const) {
+    h.remote.failing = failing
+    await h.check()
+    expect(h.quote('100')).toMatchObject({ enabled: true, source: 'auto' })
+  }
+  h.remote.failing = null
+  await h.check()
+  expect(h.pages).toEqual([1, 3])
+  expect(h.quote('100')).toMatchObject({ enabled: false, closedBy: 'auto' })
+})
+
+it('a count at expiry keeps the rule checked as usual until the thread is opened; an open before the final check closes nothing', async () => {
+  const h = await harness()
+  const threads = ['100', '200'].map((id) => h.thread(id, 40))
+  for (const id of ['100', '200']) await h.read(id, 1)
+  const [first, second] = ['100', '200'].map((id) => h.send(id))
+  h.peers(threads[1]!, 1, { 42: [second!.postId] })
+  await h.check()
+  expect(await h.count('200')).toBe(1)
+  h.advance(WEEK)
+  h.peers(threads[0]!, 1, { 42: [first!.postId] })
+  // Thread 200 is opened past its expiry, before its final check: cleared, still on.
+  await h.open('200')
+  expect(h.quote('200')).toMatchObject({ enabled: true, source: 'auto' })
+  await h.check()
+  // The final checks: thread 100 counts the quote and stays; thread 200 has nothing new and closes.
+  expect(await h.count('100')).toBe(1)
+  expect(h.quote('100')).toMatchObject({ enabled: true, source: 'auto' })
+  expect(h.quote('200')).toMatchObject({ enabled: false, closedBy: 'auto' })
+  h.peers(threads[0]!, 1, { 43: [first!.postId] })
+  await h.check()
+  expect(h.pages).toEqual([1, 3])
+  expect(await h.count('100')).toBe(2)
+  expect(h.quote('100').enabled).toBe(true)
+  await h.open('100')
+  expect(h.quote('100')).toMatchObject({ enabled: false, closedBy: 'auto' })
+})
+
+it('started again more than seven days after quitting, an expired rule is checked once before it closes', async () => {
+  const h = await harness()
+  const thread = h.thread('100', 40)
+  await h.read('100', 1)
+  h.send('100')
+  await h.check()
+  await h.restart()
+  h.advance(8 * 24 * 60 * 60 * 1000)
+  expect(h.quote('100')).toMatchObject({ enabled: true, source: 'auto' })
+  h.peers(thread, 1)
+  await h.check()
+  expect(h.pages).toEqual([1, 3])
+  expect(h.quote('100')).toMatchObject({ enabled: false, closedBy: 'auto' })
+})
+
+it('turning the setting off closes automatic rules without a count at once, those with a count once opened; the user’s rules and other kinds stay', async () => {
+  const h = await harness()
+  const threads = ['100', '200', '300'].map((id) => h.thread(id, 40))
+  for (const id of ['100', '200', '300']) await h.read(id, 1)
+  const at = new Date(t0).toISOString()
+  h.db.setReminderRule('100', 'all', true, at)
+  h.db.setReminderRule('300', 'quote', true, at)
+  const [, second] = ['100', '200'].map((id) => h.send(id))
+  h.peers(threads[1]!, 1, { 42: [second!.postId] })
+  await h.check()
+  expect(await h.count('200')).toBe(1)
+
+  h.db.saveSettings({ ...DEFAULT_SETTINGS, reminderAutoQuote: false })
+  expect(h.db.getReminderRules(['100'])[0]!.rules).toMatchObject({ all: { enabled: true }, quote: { enabled: false, closedBy: 'auto' } })
+  expect(h.quote('200')).toMatchObject({ enabled: true, source: 'auto' })
+  expect(h.quote('300')).toMatchObject({ enabled: true, source: 'user' })
+  await h.open('300')
+  expect(h.quote('300')).toMatchObject({ enabled: true, source: 'user' })
+  await h.open('200')
+  expect(h.quote('200')).toMatchObject({ enabled: false, closedBy: 'auto' })
+
+  // Closed by the app, not by the user: back on, the next send enables it again.
+  h.db.saveSettings({ ...DEFAULT_SETTINGS })
+  h.send('100')
+  expect(h.quote('100')).toMatchObject({ enabled: true, source: 'auto' })
+})
+
+// Reply 42 below quotes post 999, unknown here; the forum cannot return it, so the quote stays unverified.
+
+it('a final check whose quoted post cannot be read is not complete: opening the thread before the next check closes nothing', async () => {
+  const h = await harness()
+  const thread = h.thread('100', 40)
+  await h.read('100', 1)
+  h.send('100')
+  h.advance(WEEK)
+  h.peers(thread, 1, { 42: ['999'] })
+  await h.check()
+  expect(h.refs).toEqual(['999'])
+  expect(await h.unverified('100')).toBe(1)
+  expect(h.quote('100')).toMatchObject({ enabled: true, source: 'auto' })
+  await h.open('100')
+  expect(h.quote('100')).toMatchObject({ enabled: true, source: 'auto' })
+  await h.check()
+  expect(h.quote('100')).toMatchObject({ enabled: false, closedBy: 'auto' })
+})
+
+it('an unverified quote is not a count: turning the setting off closes the rule at once', async () => {
+  const h = await harness()
+  const thread = h.thread('100', 40)
+  await h.read('100', 1)
+  h.send('100')
+  h.peers(thread, 1, { 42: ['999'] })
+  await h.check()
+  expect(await h.count('100')).toBe(0)
+  expect(await h.unverified('100')).toBe(1)
+  h.db.saveSettings({ ...DEFAULT_SETTINGS, reminderAutoQuote: false })
+  expect(h.quote('100')).toMatchObject({ enabled: false, closedBy: 'auto' })
 })

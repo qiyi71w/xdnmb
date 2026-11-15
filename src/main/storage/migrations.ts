@@ -892,6 +892,16 @@ export const MIGRATIONS: readonly Migration[] = [
         ALTER TABLE reminder_rules_v28 RENAME TO reminder_rules;
         ALTER TABLE publication_attempts ADD COLUMN reply_count_before INTEGER CHECK (reply_count_before IS NULL OR reply_count_before >= 0);`)
     }
+  },
+  {
+    // An automatic 引用我 rule closes after a check that began past its expiry finished without
+    // issues: at once without a count, else when the count is cleared. Each 引用我 state records
+    // when its latest such check began; existing states have none, so an expired rule still gets
+    // its final check.
+    version: 29,
+    up(db) {
+      db.exec('ALTER TABLE reminder_state ADD COLUMN completed_from TEXT')
+    }
   }
 ]
 

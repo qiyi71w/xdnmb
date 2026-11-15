@@ -47,9 +47,15 @@ const keptColumns = (table: string) => table === 'publication_attempts' ? `SELEC
   : table === 'drafts' ? `SELECT ${draftColumns} FROM drafts` : `SELECT * FROM ${table}`
 /** Rule columns every version since v16 keeps; v28 adds `source` and `expires_at`. */
 const ruleColumns = 'thread_id, kind, enabled, generation, enabled_at, closed_by, changed_at'
-/** What snapshots taken from v21 to v27 compare: v28 adds rule sources and expiry, and each attempt's pre-send reply count. */
+/** Reminder state columns before v29, which adds `completed_from`. */
+const reminderStateColumns = 'thread_id, kind, baseline, checked_post_id, count, first_page, increased_at, unverified, issues_json, last_error_json, checked_at'
+/**
+ * What snapshots taken from v21 to v27 compare: v28 adds rule sources and expiry, and each
+ * attempt's pre-send reply count; v29 when each 引用我 state's latest clean check began.
+ */
 const beforeV28 = (table: string) => table === 'reminder_rules' ? `SELECT ${ruleColumns} FROM reminder_rules`
-  : table === 'publication_attempts' ? `SELECT ${publicationColumns}, cookie_id, forum_message FROM publication_attempts` : `SELECT * FROM ${table}`
+  : table === 'publication_attempts' ? `SELECT ${publicationColumns}, cookie_id, forum_message FROM publication_attempts`
+  : table === 'reminder_state' ? `SELECT ${reminderStateColumns} FROM reminder_state` : `SELECT * FROM ${table}`
 
 function plan(): SubscriptionPlan {
   return { id: 'historical-plan', preview: { id: 'historical-preview', mode: 'sync', context, createdAt: at,
@@ -1010,7 +1016,7 @@ describe('schema v24: reminder baselines record ordered segments', () => {
     expect(db.getReminderRules(['900'])[0]!.rules.po.baseline).toBe('pending')
     expect(db.reminderOverview().threads.find((row) => row.threadId === '900')!.counts.all).toBe(2)
     // Clearing marks check segments only; the open segment never counted anything.
-    expect(db.clearReminderCounts('900')).toBe(true)
+    expect(db.clearReminderCounts('900', later)).toBe(true)
     expect(rows(path, 'SELECT source, cleared FROM reminder_baseline_segments ORDER BY id')).toEqual([
       { source: 'check', cleared: 1 }, { source: 'check', cleared: 1 }, { source: 'open', cleared: 0 }
     ])
@@ -1351,5 +1357,52 @@ describe('schema v28: rules record who enabled them and when an automatic one ex
     expect(readFileSync(path)).toEqual(original)
     expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
     expect(rows(path, "SELECT count(*) AS rules FROM reminder_rules WHERE thread_id IN ('900', '901')")).toEqual([{ rules: 3 }])
+  })
+})
+
+describe('schema v29: a 引用我 state records when its latest clean check began', () => {
+  /** A v28 database: thread 900's automatic 引用我, expired long ago, holding a count. */
+  function v28(): string {
+    const path = predecessor('reminders-v9')
+    openReadingDatabase(path, MIGRATIONS.filter((migration) => migration.version <= 28)).close()
+    const raw = new Database(path)
+    try {
+      raw.prepare("INSERT INTO reminder_rules VALUES ('900', 'quote', 1, 2, ?, NULL, ?, 'auto', ?)").run(at, at, at)
+      raw.prepare(`INSERT INTO reminder_state (thread_id, kind, baseline, checked_post_id, count, first_page, increased_at, checked_at, issues_json)
+        VALUES ('900', 'quote', 40, '90040', 1, 3, ?, ?, '[]')`).run(later, later)
+    } finally { raw.close() }
+    return path
+  }
+  const rows = (path: string, sql: string) => {
+    const raw = new Database(path, { readonly: true })
+    try { return raw.prepare(sql).all() } finally { raw.close() }
+  }
+  const state = (path: string) => rows(path, `${beforeV28('reminder_state')} ORDER BY 1, 2`)
+
+  it('keeps every state; an expired automatic rule still waits for its final check, so clearing it closes nothing', () => {
+    const path = v28()
+    const before = state(path)
+    const db = open(path)
+    expect(db.status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
+    expect(state(path)).toEqual(before)
+    expect(rows(path, 'SELECT completed_from FROM reminder_state')).toEqual([{ completed_from: null }])
+    expect(db.clearReminderCounts('900', later)).toBe(true)
+    expect(db.getReminderRules(['900'])[0]!.rules.quote).toMatchObject({ enabled: true, source: 'auto' })
+  })
+
+  it('leaves the v28 file byte for byte when the upgrade fails, then upgrades', () => {
+    const path = v28()
+    const original = readFileSync(path)
+    const failed = openReadingDatabase(path, [...MIGRATIONS.filter((migration) => migration.version <= 28), {
+      version: 29, up(connection) {
+        MIGRATIONS.find((migration) => migration.version === 29)!.up(connection)
+        throw new Error('injected failure after adding the column')
+      }
+    }])
+    connections.push(failed)
+    expect(failed.status).toEqual({ state: 'unavailable', reason: 'migration-failed' })
+    failed.close()
+    expect(readFileSync(path)).toEqual(original)
+    expect(open(path).status).toEqual({ state: 'ready', schemaVersion: supportedVersion })
   })
 })

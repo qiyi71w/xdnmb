@@ -17,7 +17,7 @@ interface RuleRow {
 interface StateRow {
   thread_id: string; kind: ReminderKind; baseline: number | null; checked_post_id: string | null; count: number
   first_page: number | null; increased_at: string | null; unverified: number; issues_json: string
-  last_error_json: string | null; checked_at: string | null
+  last_error_json: string | null; checked_at: string | null; completed_from: string | null
 }
 /** A confirmed local reply whose 全串／PO baseline now covers its proof count. */
 interface SettleRow {
@@ -166,6 +166,34 @@ export class ReminderDatabase {
     if (page !== null) return (page - 1) * PAGE_SIZE
     return db.prepare<[number], { before: number | null }>('SELECT reply_count_before AS before FROM publication_attempts WHERE id = ?')
       .get(publicationId)?.before ?? null
+  }
+
+  /**
+   * Closes the thread's automatic 引用我 rule as `auto` (deleting its state, as every close does)
+   * when it holds no count (an unverified quote is a coverage issue, not a count), and its final
+   * check is done (a check that began at or after its expiry finished without issues) or
+   * 发言后提醒引用我 is off. A later confirmed send in the thread enables it again.
+   */
+  private closeAutoQuote(threadId: string, at: string, switchedOff: boolean): boolean {
+    const db = this.database()
+    const closed = db.prepare(`UPDATE reminder_rules SET enabled = 0, generation = generation + 1, closed_by = 'auto', changed_at = @at
+      WHERE thread_id = @threadId AND kind = 'quote' AND enabled = 1 AND source = 'auto'
+        AND NOT EXISTS (SELECT 1 FROM reminder_state s WHERE s.thread_id = @threadId AND s.kind = 'quote' AND s.count > 0)
+        AND (@switchedOff OR EXISTS (SELECT 1 FROM reminder_state s WHERE s.thread_id = @threadId AND s.kind = 'quote'
+          AND julianday(s.completed_from) >= julianday(reminder_rules.expires_at)))`).run({ threadId, at, switchedOff: Number(switchedOff) })
+    if (closed.changes === 0) return false
+    this.dropKind(threadId, 'quote')
+    return true
+  }
+
+  /**
+   * Called in the transaction that saves the settings while 发言后提醒引用我 is off: automatic
+   * rules without a count close at once, without a final check; the others when cleared.
+   */
+  closeAutoQuotes(at: string): void {
+    const rows = this.database().prepare<[], { thread_id: string }>(
+      "SELECT thread_id FROM reminder_rules WHERE kind = 'quote' AND enabled = 1 AND source = 'auto'").all()
+    for (const row of rows) this.closeAutoQuote(row.thread_id, at, true)
   }
 
   closeThreads(threadIds: string[], reason: ReminderCloseReason, at: string): string[] {
@@ -461,12 +489,14 @@ export class ReminderDatabase {
           unverified = unverified + @unverified,
           issues_json = coalesce(@issues, issues_json),
           last_error_json = CASE WHEN @issues IS NULL THEN last_error_json ELSE @lastError END,
-          checked_at = CASE WHEN @markChecked THEN @at ELSE checked_at END
+          checked_at = CASE WHEN @markChecked THEN @at ELSE checked_at END,
+          completed_from = coalesce(@completedFrom, completed_from)
         WHERE thread_id = @threadId AND kind = @kind`).run({
         threadId: value.threadId, kind: value.kind, at: value.at, add, firstPage: firstPage ?? null,
         baseline: baseline ?? null, checked: value.checkedPostId ?? null, unverified: value.unverified ?? 0,
         issues: value.issues === undefined ? null : JSON.stringify([...new Set(value.issues)]),
-        lastError: value.lastError ? JSON.stringify(value.lastError) : null, markChecked: value.checked ? 1 : 0
+        lastError: value.lastError ? JSON.stringify(value.lastError) : null, markChecked: value.checked ? 1 : 0,
+        completedFrom: value.completedFrom ?? null
       })
       if (add > 0) {
         const counted = value.kind !== 'quote' && previous.baseline !== null && baseline === previous.baseline + add
@@ -475,6 +505,7 @@ export class ReminderDatabase {
           .run(value.threadId, value.kind, value.generation, value.roundId ?? '', counted ? previous.baseline : null, counted ? baseline! : null, add)
       }
       this.settle(value.threadId)
+      if (value.kind === 'quote' && value.completedFrom !== undefined) this.closeAutoQuote(value.threadId, value.at, false)
       return true
     }).immediate()
   }
@@ -497,13 +528,18 @@ export class ReminderDatabase {
       .run(threadId, kind, current.generation, current.baseline, replyCount)
   }
 
-  /** Every count of the thread becomes 0; its check segments are marked cleared. */
-  clearCounts(threadId: string): boolean {
+  /**
+   * Every count of the thread becomes 0; its check segments are marked cleared. Its automatic
+   * 引用我 rule then closes once its final check is done, or while 发言后提醒引用我 is off.
+   */
+  clearCounts(threadId: string, at: string, switchedOff: boolean): boolean {
     const db = this.database()
     return db.transaction(() => {
       db.prepare("UPDATE reminder_baseline_segments SET cleared = 1 WHERE thread_id = ? AND source = 'check'").run(threadId)
-      return db.prepare('UPDATE reminder_state SET count = 0, first_page = NULL, unverified = 0 WHERE thread_id = ? AND (count > 0 OR unverified > 0)')
+      const cleared = db.prepare('UPDATE reminder_state SET count = 0, first_page = NULL, unverified = 0 WHERE thread_id = ? AND (count > 0 OR unverified > 0)')
         .run(threadId).changes > 0
+      const closed = this.closeAutoQuote(threadId, at, switchedOff)
+      return cleared || closed
     }).immediate()
   }
 

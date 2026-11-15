@@ -330,7 +330,7 @@ class SqliteReadingDatabase implements ReadingDatabase {
   releaseReminderFollowUps: ReadingDatabase['releaseReminderFollowUps'] = (keys) => this.reminders.releaseFollowUps(keys)
   missReminderFollowUps: ReadingDatabase['missReminderFollowUps'] = (keys) => this.reminders.missFollowUps(keys)
   reminderIncreasedThreads: ReadingDatabase['reminderIncreasedThreads'] = (roundId) => this.reminders.increasedThreads(roundId)
-  clearReminderCounts: ReadingDatabase['clearReminderCounts'] = (id) => this.reminders.clearCounts(id)
+  clearReminderCounts: ReadingDatabase['clearReminderCounts'] = (id, at) => this.reminders.clearCounts(id, at, !this.loadSettings().reminderAutoQuote)
   finishReminderCheck: ReadingDatabase['finishReminderCheck'] = (at) => this.reminders.finishCheck(at)
   loadReminderBackoff: ReadingDatabase['loadReminderBackoff'] = () => this.reminders.loadBackoff()
   saveReminderBackoff: ReadingDatabase['saveReminderBackoff'] = (value) => this.reminders.saveBackoff(value)
@@ -755,6 +755,8 @@ class SqliteReadingDatabase implements ReadingDatabase {
         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json
       `)
       for (const [key, value] of Object.entries(settings)) statement.run(key, JSON.stringify(value))
+      // 发言后提醒引用我 off closes automatic 引用我 rules without a count with the setting itself.
+      if (!settings.reminderAutoQuote) this.reminders.closeAutoQuotes(new Date().toISOString())
     })()
   }
 

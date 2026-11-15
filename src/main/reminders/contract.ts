@@ -48,6 +48,11 @@ export interface ReminderUpdate {
   lastError?: ReadError | null
   /** The check finished reading this kind (sets its last-checked time). */
   checked?: boolean
+  /**
+   * 引用我: this write finishes a check without issues that began at this time. An automatic rule
+   * whose expiry is not after it closes now without a count, otherwise once its count is cleared.
+   */
+  completedFrom?: string
 }
 
 /** Whether a quoted post is the user's: a confirmed own publication, or its 饼干 ID as held locally. */
@@ -110,8 +115,12 @@ export interface ReminderStore {
   missReminderFollowUps(keys: LocalReplyKey[]): Promise<void>
   /** Threads with an uncleared, unexcluded increment from this check, in current generations. */
   reminderIncreasedThreads(roundId: string): Promise<ThreadId[]>
-  /** Every count of the thread becomes 0; `false` when there was nothing to clear. */
-  clearReminderCounts(threadId: ThreadId): Promise<boolean>
+  /**
+   * Every count of the thread becomes 0; `false` when there was nothing to clear and nothing
+   * closed. Its automatic 引用我 rule closes too once its final check is done, or while
+   * 发言后提醒引用我 is off.
+   */
+  clearReminderCounts(threadId: ThreadId, at: string): Promise<boolean>
   finishReminderCheck(at: string): Promise<void>
   loadReminderBackoff(): Promise<ReminderBackoff>
   saveReminderBackoff(value: ReminderBackoff): Promise<void>
