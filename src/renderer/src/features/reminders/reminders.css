@@ -76,8 +76,24 @@
   color: var(--warn-ink);
 }
 
-/* 自动 — the 引用我 rule was enabled by the app: the neutral tag at the meta line's right end, after
-   the counts and the warning icon, never squeezing them; when the meta wraps it ends the last line. */
+/* The row's reminder state at the end of its meta: counts, baseline text, warning icon, 自动. One
+   wrapping unit that fills the rest of the meta line: short of room, it moves below No. and the reply
+   count as a whole and only then wraps inside itself, so the icon never strands at a line's start.
+   The meta stays the tip's positioning box, so the warning tip still spans the text column. */
+.reminder-row .row-meta {
+  position: relative;
+}
+
+.reminder-status {
+  display: inline-flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+/* 自动 — the 引用我 rule was enabled by the app: the neutral tag at the right end of that unit, after
+   the counts and the warning icon, never squeezing them. */
 .reminder-auto {
   flex: none;
   margin-left: auto;

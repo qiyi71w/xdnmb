@@ -406,14 +406,16 @@ export function ReminderPane({
                     itemProps={roving.itemProps(row.threadId)}
                     metaEnd={
                       (counts !== null || baseline !== null || issues !== null || auto) && (
-                        <>
+                        // One group: when the meta line is short of room it moves down whole, so the
+                        // counts, the warning icon and 自动 stay on one line instead of splitting.
+                        <span className="reminder-status">
                           {counts !== null && <span className="reminder-counts">{counts}</span>}
                           {baseline !== null && (
                             <span className={baseline.failed ? 'reminder-baseline is-warning' : 'reminder-baseline'}>{baselineRowText(baseline)}</span>
                           )}
                           {issues !== null && <IssueStatus text={issues} missing={row.issues.includes('not-found')} />}
                           <AutoQuoteTag rules={row.rules} />
-                        </>
+                        </span>
                       )
                     }
                   />
