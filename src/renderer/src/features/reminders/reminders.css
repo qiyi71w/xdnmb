@@ -76,6 +76,13 @@
   color: var(--warn-ink);
 }
 
+/* 自动 — the 引用我 rule was enabled by the app: the neutral tag at the meta line's right end, after
+   the counts and the warning icon, never squeezing them; when the meta wraps it ends the last line. */
+.reminder-auto {
+  flex: none;
+  margin-left: auto;
+}
+
 /* The same state under a 提醒 menu's kinds, beside any save error. */
 .form-message.reminder-baseline-note {
   color: var(--ink-2);

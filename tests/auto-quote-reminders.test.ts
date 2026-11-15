@@ -186,14 +186,16 @@ async function harness() {
       await resource.service.whenIdle()
     },
     async count(threadId: string) {
-      const result = await resource.service.overview()
-      if (!result.ok) throw new Error('overview failed')
-      return result.overview.threads.find((row) => row.threadId === threadId)?.counts.quote ?? null
+      return (await this.row(threadId))?.counts.quote ?? null
     },
     async unverified(threadId: string) {
+      return (await this.row(threadId))?.unverifiedQuotes ?? null
+    },
+    /** The thread's 提醒 page row; null when no kind is on. */
+    async row(threadId: string) {
       const result = await resource.service.overview()
       if (!result.ok) throw new Error('overview failed')
-      return result.overview.threads.find((row) => row.threadId === threadId)?.unverifiedQuotes ?? null
+      return result.overview.threads.find((row) => row.threadId === threadId) ?? null
     }
   }
 }
@@ -509,4 +511,43 @@ it('an unverified quote is not a count: turning the setting off closes the rule 
   expect(await h.unverified('100')).toBe(1)
   h.db.saveSettings({ ...DEFAULT_SETTINGS, reminderAutoQuote: false })
   expect(h.quote('100')).toMatchObject({ enabled: false, closedBy: 'auto' })
+})
+
+it('the whole cycle: a send turns 引用我 on as automatic, only others’ quotes count, opening clears, the final check after expiry closes it, a new send turns it on again', async () => {
+  const h = await harness()
+  const thread = h.thread('100', 40)
+  await h.read('100', 1)
+  const first = h.send('100')
+  expect((await h.row('100'))?.rules.quote).toMatchObject({ enabled: true, source: 'auto' })
+
+  // 42: someone else quotes the sent reply. 43: the user, from the web under an imported cookie,
+  // quotes it. 44: the user's next reply from this app quotes it (and renews the rule).
+  h.peers(thread, 1, { 42: [first.postId] })
+  thread.mine.add(++thread.count)
+  thread.quotes.set(43, [first.postId])
+  thread.quotes.set(44, [first.postId])
+  const second = h.send('100')
+  expect(second.postId).toBe(replyId('100', 44))
+  expect(h.expiresAt('100')).toBe(week(h.sentAt(second.id)))
+  await h.check()
+  expect(await h.count('100')).toBe(1)
+  expect(await h.unverified('100')).toBe(0)
+  expect(h.pages).toEqual([1, 3])
+  expect(h.refs).toEqual([])
+
+  // Opened before the final check: cleared, still on and listed as automatic.
+  await h.open('100')
+  expect((await h.row('100'))?.counts.quote).toBe(0)
+  expect((await h.row('100'))?.rules.quote).toMatchObject({ enabled: true, source: 'auto' })
+
+  h.advance(WEEK)
+  h.peers(thread, 1)
+  await h.check()
+  expect(h.pages).toEqual([1, 3])
+  expect(h.quote('100')).toMatchObject({ enabled: false, closedBy: 'auto' })
+  expect(await h.row('100')).toBeNull()
+
+  const again = h.send('100')
+  expect((await h.row('100'))?.rules.quote).toMatchObject({ enabled: true, source: 'auto' })
+  expect(h.expiresAt('100')).toBe(week(h.sentAt(again.id)))
 })
