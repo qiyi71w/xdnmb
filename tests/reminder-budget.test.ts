@@ -9,6 +9,7 @@ import { runReminderRound } from '../src/main/reminders/engine'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 import { EMPTY_FIELDS } from '../src/shared/drafts'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
+import { DEFAULT_SETTINGS } from '../src/shared/settings'
 import { asStore } from './helpers/store'
 
 const at = '2026-10-26T00:00:00.000Z'
@@ -226,9 +227,13 @@ describe('reminder HTTP budgets', () => {
     expect(h.seen.length).toBeLessThanOrEqual(100)
   })
 
-  /** Thread 100 checked at 200, then a confirmed local reply, number 201, and a peer: page 1 reads 202. */
+  /**
+   * Thread 100 checked at 200, then a confirmed local reply, number 201, and a peer: page 1 reads
+   * 202. 全串 budgets only: the send turns on no 引用我 rule.
+   */
   async function pendingReply() {
     const h = await harness()
+    h.db.saveSettings({ ...DEFAULT_SETTINGS, reminderAutoQuote: false })
     const thread = { count: 200, refsPerReply: 0 }
     h.threads.set('100', thread)
     await h.enable('100', 'all')

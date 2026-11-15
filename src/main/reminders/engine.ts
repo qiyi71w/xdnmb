@@ -298,7 +298,9 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   async function startQuote(run: ThreadRun, first: ThreadPage): Promise<void> {
     const value = run.kinds.quote!
     const replyCount = first.replyCount
-    const checked = value.state?.checkedPostId ?? null
+    // A checked position counts only with its reply count: an automatic rule holds its sent post
+    // before any page places it, and until then starts as a newly enabled rule does.
+    const checked = (value.state?.baseline ?? null) === null ? null : value.state?.checkedPostId ?? null
     const verified = value.state?.baseline ?? 0
     const highest = first.replies.reduce((max, reply) => comparePostIds(reply.id, max) > 0 ? reply.id : max, run.threadId)
     if (replyCount === null) {

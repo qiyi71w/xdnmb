@@ -862,6 +862,36 @@ export const MIGRATIONS: readonly Migration[] = [
           UNION ALL SELECT length(CAST(json_array(id, kind, source_url, file_name, format, bytes, width, height, fetched_at) AS BLOB)),
             (EXISTS(SELECT 1 FROM image_holders h WHERE h.resource_id = r.id) OR EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)) FROM image_resources r;`)
     }
+  },
+  {
+    // 发言后提醒引用我: a rule records who enabled it, the user or the app after a confirmed send
+    // (引用我 only), and when an app-enabled one expires; the app may close a rule itself (`auto`).
+    // Every existing rule was enabled by the user and has no expiry; generations, states and
+    // counts are untouched. Each reply attempt keeps the 全部 reply count known before its send
+    // intent, so that an app-enabled rule can start at the page of that reply; earlier attempts
+    // have none. SQLite cannot change a CHECK in place, so the rule table is rebuilt.
+    version: 28,
+    up(db) {
+      db.exec(`CREATE TABLE reminder_rules_v28 (
+          thread_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('all', 'po', 'quote')),
+          enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+          generation INTEGER NOT NULL,
+          enabled_at TEXT NOT NULL,
+          closed_by TEXT CHECK (closed_by IN ('user', 'unsubscribe', 'sync-delete', 'auto')),
+          changed_at TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'user' CHECK (source IN ('user', 'auto')),
+          expires_at TEXT,
+          CHECK ((source = 'auto') = (expires_at IS NOT NULL)),
+          CHECK (source = 'user' OR kind = 'quote'),
+          PRIMARY KEY (thread_id, kind)
+        );
+        INSERT INTO reminder_rules_v28 (thread_id, kind, enabled, generation, enabled_at, closed_by, changed_at)
+          SELECT thread_id, kind, enabled, generation, enabled_at, closed_by, changed_at FROM reminder_rules;
+        DROP TABLE reminder_rules;
+        ALTER TABLE reminder_rules_v28 RENAME TO reminder_rules;
+        ALTER TABLE publication_attempts ADD COLUMN reply_count_before INTEGER CHECK (reply_count_before IS NULL OR reply_count_before >= 0);`)
+    }
   }
 ]
 
