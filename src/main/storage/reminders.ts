@@ -3,7 +3,7 @@ import type { ReadError } from '../../shared/api'
 import { comparePostIds, type Post, type PostId, type ReadingMode, type ThreadPage } from '../../shared/forum'
 import {
   REMINDER_KINDS, type CoverageIssue, type ReminderCloseReason, type ReminderKind, type ReminderRule,
-  type ReminderThreadRow, type ThreadReminders
+  type ReminderRuleSource, type ReminderThreadRow, type ThreadReminders
 } from '../../shared/reminders'
 import { threadTotalPages } from '../../shared/threadPages'
 import type {
@@ -12,12 +12,12 @@ import type {
 
 interface RuleRow {
   thread_id: string; kind: ReminderKind; enabled: number; generation: number; enabled_at: string
-  closed_by: ReminderCloseReason | null
+  closed_by: ReminderCloseReason | null; source: ReminderRuleSource; expires_at: string | null
 }
 interface StateRow {
   thread_id: string; kind: ReminderKind; baseline: number | null; checked_post_id: string | null; count: number
   first_page: number | null; increased_at: string | null; unverified: number; issues_json: string
-  last_error_json: string | null; checked_at: string | null
+  last_error_json: string | null; checked_at: string | null; completed_from: string | null
 }
 /** A confirmed local reply whose 全串／PO baseline now covers its proof count. */
 interface SettleRow {
@@ -34,8 +34,14 @@ interface FollowUpRow {
 }
 type LocalReplyResult = 'excluded' | 'absorbed' | 'unprovable'
 
+/** Replies per thread page: the forum splits `ReplyCount` into pages of 19. */
+const PAGE_SIZE = 19
+
+/** An automatically enabled 引用我 rule expires this long after the latest confirmed send in its thread. */
+export const AUTO_QUOTE_RULE_MS = 7 * 24 * 60 * 60 * 1000
+
 function emptyRules(): ThreadReminders['rules'] {
-  const disabled = (kind: ReminderKind): ReminderRule => ({ kind, enabled: false, closedBy: null, baseline: null })
+  const disabled = (kind: ReminderKind): ReminderRule => ({ kind, enabled: false, closedBy: null, source: null, baseline: null })
   return { all: disabled('all'), po: disabled('po'), quote: disabled('quote') }
 }
 
@@ -81,7 +87,7 @@ export class ReminderDatabase {
         const ready = value?.baseline !== null && value?.baseline !== undefined
           && (row.kind !== 'quote' || value.checked_post_id !== null)
         rules[row.kind] = { kind: row.kind, enabled: row.enabled !== 0, closedBy: row.closed_by,
-          baseline: row.enabled === 0 ? null : ready ? 'ready' : 'pending' }
+          source: row.enabled === 0 ? null : row.source, baseline: row.enabled === 0 ? null : ready ? 'ready' : 'pending' }
       }
       return { threadId, rules }
     })
@@ -89,7 +95,8 @@ export class ReminderDatabase {
 
   /**
    * Every change of a rule starts a new generation and drops that kind's state: enabling makes the
-   * next check set a new baseline (nothing counted then), disabling deletes the count.
+   * next check set a new baseline (nothing counted then), disabling deletes the count. A rule the
+   * user enables is the user's, without expiry.
    */
   setRule(threadId: string, kind: ReminderKind, enabled: boolean, at: string): ThreadReminders {
     const db = this.database()
@@ -97,19 +104,96 @@ export class ReminderDatabase {
       const current = db.prepare<[string, string], RuleRow>('SELECT * FROM reminder_rules WHERE thread_id = ? AND kind = ?').get(threadId, kind)
       if (Boolean(current?.enabled) === enabled) return this.getRules([threadId])[0]!
       if (enabled) {
-        db.prepare(`INSERT INTO reminder_rules VALUES (?, ?, 1, 1, ?, NULL, ?)
+        db.prepare(`INSERT INTO reminder_rules (thread_id, kind, enabled, generation, enabled_at, closed_by, changed_at, source, expires_at)
+          VALUES (?, ?, 1, 1, ?, NULL, ?, 'user', NULL)
           ON CONFLICT(thread_id, kind) DO UPDATE SET enabled = 1, generation = generation + 1,
-          enabled_at = excluded.enabled_at, closed_by = NULL, changed_at = excluded.changed_at`).run(threadId, kind, at, at)
+          enabled_at = excluded.enabled_at, closed_by = NULL, changed_at = excluded.changed_at, source = 'user', expires_at = NULL`).run(threadId, kind, at, at)
       } else {
         db.prepare("UPDATE reminder_rules SET enabled = 0, generation = generation + 1, closed_by = 'user', changed_at = ? WHERE thread_id = ? AND kind = ?")
           .run(at, threadId, kind)
       }
-      db.prepare('DELETE FROM reminder_state WHERE thread_id = ? AND kind = ?').run(threadId, kind)
-      // A new generation starts without the old one's evidence: replies sent before it are not its.
-      db.prepare('DELETE FROM reminder_local_replies WHERE thread_id = ? AND kind = ?').run(threadId, kind)
-      db.prepare('DELETE FROM reminder_baseline_segments WHERE thread_id = ? AND kind = ?').run(threadId, kind)
+      this.dropKind(threadId, kind)
       return this.getRules([threadId])[0]!
     }).immediate()
+  }
+
+  /** A new generation of the kind starts without the old one's state and evidence: replies sent before it are not its. */
+  private dropKind(threadId: string, kind: ReminderKind): void {
+    const db = this.database()
+    db.prepare('DELETE FROM reminder_state WHERE thread_id = ? AND kind = ?').run(threadId, kind)
+    db.prepare('DELETE FROM reminder_local_replies WHERE thread_id = ? AND kind = ?').run(threadId, kind)
+    db.prepare('DELETE FROM reminder_baseline_segments WHERE thread_id = ? AND kind = ?').run(threadId, kind)
+  }
+
+  /**
+   * Called in the transaction that confirms a send from this app (a reply or a new thread) while
+   * 发言后提醒引用我 is on. The thread's 引用我 is enabled as an automatic rule, unless the user
+   * last turned it off. An automatic rule already on only has its expiry moved to this send plus
+   * `AUTO_QUOTE_RULE_MS` (same generation, counts and checked position); one the user enabled is
+   * left as it is. A newly enabled rule starts after the sent post, kept as its checked position:
+   * its first check reads from the page known to hold the post, else from the page after the reply
+   * count kept with the send intent, page 1 for a new thread. Without either the position has no
+   * reply count yet; a page saved before the first check may still place it, otherwise the first
+   * check sets the position, as for the user's.
+   */
+  autoQuote(input: { publicationId: number; threadId: string; postId: string; newThread: boolean; sentAt: string; at: string }): void {
+    const db = this.database()
+    const expiresAt = new Date(Date.parse(input.sentAt) + AUTO_QUOTE_RULE_MS).toISOString()
+    const rule = db.prepare<[string], RuleRow>("SELECT * FROM reminder_rules WHERE thread_id = ? AND kind = 'quote'").get(input.threadId)
+    if (rule?.enabled === 1) {
+      // A late confirmation of an earlier send never shortens it.
+      if (rule.source === 'auto' && later(expiresAt, rule.expires_at)) {
+        db.prepare("UPDATE reminder_rules SET expires_at = ? WHERE thread_id = ? AND kind = 'quote'").run(expiresAt, input.threadId)
+      }
+      return
+    }
+    if (rule?.closed_by === 'user') return
+    db.prepare(`INSERT INTO reminder_rules (thread_id, kind, enabled, generation, enabled_at, closed_by, changed_at, source, expires_at)
+      VALUES (@threadId, 'quote', 1, 1, @at, NULL, @at, 'auto', @expiresAt)
+      ON CONFLICT(thread_id, kind) DO UPDATE SET enabled = 1, generation = generation + 1, enabled_at = excluded.enabled_at,
+        closed_by = NULL, changed_at = excluded.changed_at, source = 'auto', expires_at = excluded.expires_at`)
+      .run({ threadId: input.threadId, at: input.at, expiresAt })
+    this.dropKind(input.threadId, 'quote')
+    const start = input.newThread ? 0 : this.replyStart(input.publicationId, input.threadId, input.postId)
+    db.prepare("INSERT INTO reminder_state (thread_id, kind, baseline, checked_post_id) VALUES (?, 'quote', ?, ?)").run(input.threadId, start, input.postId)
+  }
+
+  /** Replies certainly older than a sent reply: those before a saved page holding it, else the count kept with its intent. */
+  private replyStart(publicationId: number, threadId: string, postId: string): number | null {
+    const db = this.database()
+    const page = db.prepare<[string, string], { page: number | null }>(`SELECT min(t.page) AS page
+      FROM thread_pages t, json_each(t.reply_ids_json) r WHERE t.thread_id = ? AND t.mode = 'all' AND r.value = ?`).get(threadId, postId)?.page ?? null
+    if (page !== null) return (page - 1) * PAGE_SIZE
+    return db.prepare<[number], { before: number | null }>('SELECT reply_count_before AS before FROM publication_attempts WHERE id = ?')
+      .get(publicationId)?.before ?? null
+  }
+
+  /**
+   * Closes the thread's automatic 引用我 rule as `auto` (deleting its state, as every close does)
+   * when it holds no count (an unverified quote is a coverage issue, not a count), and its final
+   * check is done (a check that began at or after its expiry finished without issues) or
+   * 发言后提醒引用我 is off. A later confirmed send in the thread enables it again.
+   */
+  private closeAutoQuote(threadId: string, at: string, switchedOff: boolean): boolean {
+    const db = this.database()
+    const closed = db.prepare(`UPDATE reminder_rules SET enabled = 0, generation = generation + 1, closed_by = 'auto', changed_at = @at
+      WHERE thread_id = @threadId AND kind = 'quote' AND enabled = 1 AND source = 'auto'
+        AND NOT EXISTS (SELECT 1 FROM reminder_state s WHERE s.thread_id = @threadId AND s.kind = 'quote' AND s.count > 0)
+        AND (@switchedOff OR EXISTS (SELECT 1 FROM reminder_state s WHERE s.thread_id = @threadId AND s.kind = 'quote'
+          AND julianday(s.completed_from) >= julianday(reminder_rules.expires_at)))`).run({ threadId, at, switchedOff: Number(switchedOff) })
+    if (closed.changes === 0) return false
+    this.dropKind(threadId, 'quote')
+    return true
+  }
+
+  /**
+   * Called in the transaction that saves the settings while 发言后提醒引用我 is off: automatic
+   * rules without a count close at once, without a final check; the others when cleared.
+   */
+  closeAutoQuotes(at: string): void {
+    const rows = this.database().prepare<[], { thread_id: string }>(
+      "SELECT thread_id FROM reminder_rules WHERE kind = 'quote' AND enabled = 1 AND source = 'auto'").all()
+    for (const row of rows) this.closeAutoQuote(row.thread_id, at, true)
   }
 
   closeThreads(threadIds: string[], reason: ReminderCloseReason, at: string): string[] {
@@ -156,13 +240,17 @@ export class ReminderDatabase {
   }
 
   /**
-   * Called in the transaction that persists a reply's send intent. For each enabled 全串 rule, and
-   * the PO rule when the sending 饼干 ID is known and equals the head's public one, the reply gets
-   * the largest reply count committed for that mode since the count last fell (saved pages and the
-   * baseline they set): a count the reply cannot be within. Without one it is unprovable there.
+   * Called in the transaction that persists a reply's send intent. The attempt keeps the largest
+   * 全部 reply count committed since the count last fell, whatever rules are on: an automatic 引用我
+   * rule may start at the page after it. For each enabled 全串 rule, and the PO rule when the
+   * sending 饼干 ID is known and equals the head's public one, the reply gets the largest reply
+   * count committed for that mode since the count last fell (saved pages and the baseline they
+   * set): a count the reply cannot be within. Without one it is unprovable there.
    */
   recordIntent(publicationId: number, threadId: string): void {
     const db = this.database()
+    db.prepare(`UPDATE publication_attempts SET reply_count_before = (
+      SELECT max_count FROM reminder_count_observations WHERE thread_id = ? AND mode = 'all') WHERE id = ?`).run(threadId, publicationId)
     const po = db.prepare(`SELECT 1 FROM publication_attempts p JOIN posts h ON h.id = ?
       WHERE p.id = ? AND p.cookie_id IS NOT NULL AND p.cookie_id = h.user_hash`).get(threadId, publicationId) !== undefined
     // Every baseline comes from a saved page, so it is part of the observation; it stands in alone
@@ -210,6 +298,7 @@ export class ReminderDatabase {
    * baseline; then replies the baseline now covers are settled.
    */
   pageSaved(page: ThreadPage, display: boolean): void {
+    this.raiseAutoQuoteStart(page)
     const count = page.replyCount
     if (count === null || !Number.isSafeInteger(count) || count < 0) return
     const db = this.database()
@@ -231,6 +320,22 @@ export class ReminderDatabase {
     }
     if (display) this.absorbDisplayed(page.threadId, page.mode, count)
     this.settle(page.threadId)
+  }
+
+  /**
+   * An automatic 引用我 rule whose checked post is on this saved 全部 page: every reply on earlier
+   * pages is older than it, so a start before this page, or none yet, moves to it. This places the
+   * sent post found by a read after sending, before the rule's first check.
+   */
+  private raiseAutoQuoteStart(page: ThreadPage): void {
+    if (page.mode !== 'all' || page.replies.length === 0) return
+    const db = this.database()
+    const args = { threadId: page.threadId, start: (page.page - 1) * PAGE_SIZE, ids: JSON.stringify(page.replies.map((reply) => reply.id)) }
+    const where = "thread_id = @threadId AND kind = 'quote' AND (baseline IS NULL OR baseline < @start) AND checked_post_id IN (SELECT value FROM json_each(@ids))"
+    // Almost no saved page holds such a position; the rule is looked up only for one that does.
+    if (db.prepare(`SELECT 1 FROM reminder_state WHERE ${where}`).get(args) === undefined) return
+    db.prepare(`UPDATE reminder_state SET baseline = @start WHERE ${where}
+      AND EXISTS (SELECT 1 FROM reminder_rules r WHERE r.thread_id = @threadId AND r.kind = 'quote' AND r.enabled = 1 AND r.source = 'auto')`).run(args)
   }
 
   /**
@@ -384,12 +489,14 @@ export class ReminderDatabase {
           unverified = unverified + @unverified,
           issues_json = coalesce(@issues, issues_json),
           last_error_json = CASE WHEN @issues IS NULL THEN last_error_json ELSE @lastError END,
-          checked_at = CASE WHEN @markChecked THEN @at ELSE checked_at END
+          checked_at = CASE WHEN @markChecked THEN @at ELSE checked_at END,
+          completed_from = coalesce(@completedFrom, completed_from)
         WHERE thread_id = @threadId AND kind = @kind`).run({
         threadId: value.threadId, kind: value.kind, at: value.at, add, firstPage: firstPage ?? null,
         baseline: baseline ?? null, checked: value.checkedPostId ?? null, unverified: value.unverified ?? 0,
         issues: value.issues === undefined ? null : JSON.stringify([...new Set(value.issues)]),
-        lastError: value.lastError ? JSON.stringify(value.lastError) : null, markChecked: value.checked ? 1 : 0
+        lastError: value.lastError ? JSON.stringify(value.lastError) : null, markChecked: value.checked ? 1 : 0,
+        completedFrom: value.completedFrom ?? null
       })
       if (add > 0) {
         const counted = value.kind !== 'quote' && previous.baseline !== null && baseline === previous.baseline + add
@@ -398,6 +505,7 @@ export class ReminderDatabase {
           .run(value.threadId, value.kind, value.generation, value.roundId ?? '', counted ? previous.baseline : null, counted ? baseline! : null, add)
       }
       this.settle(value.threadId)
+      if (value.kind === 'quote' && value.completedFrom !== undefined) this.closeAutoQuote(value.threadId, value.at, false)
       return true
     }).immediate()
   }
@@ -420,13 +528,18 @@ export class ReminderDatabase {
       .run(threadId, kind, current.generation, current.baseline, replyCount)
   }
 
-  /** Every count of the thread becomes 0; its check segments are marked cleared. */
-  clearCounts(threadId: string): boolean {
+  /**
+   * Every count of the thread becomes 0; its check segments are marked cleared. Its automatic
+   * 引用我 rule then closes once its final check is done, or while 发言后提醒引用我 is off.
+   */
+  clearCounts(threadId: string, at: string, switchedOff: boolean): boolean {
     const db = this.database()
     return db.transaction(() => {
       db.prepare("UPDATE reminder_baseline_segments SET cleared = 1 WHERE thread_id = ? AND source = 'check'").run(threadId)
-      return db.prepare('UPDATE reminder_state SET count = 0, first_page = NULL, unverified = 0 WHERE thread_id = ? AND (count > 0 OR unverified > 0)')
+      const cleared = db.prepare('UPDATE reminder_state SET count = 0, first_page = NULL, unverified = 0 WHERE thread_id = ? AND (count > 0 OR unverified > 0)')
         .run(threadId).changes > 0
+      const closed = this.closeAutoQuote(threadId, at, switchedOff)
+      return cleared || closed
     }).immediate()
   }
 

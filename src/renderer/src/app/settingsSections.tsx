@@ -827,7 +827,10 @@ export function TabsSection({ settings, write }: { settings: AppSettings; write:
 /** 自动检查间隔 choices in minutes; 关闭 stops only the timer (cold start, reopen and 手动检查 remain). */
 const REMINDER_INTERVALS: readonly AppSettings['reminderInterval'][] = [0, 15, 30, 60]
 
-/** 提醒 settings: how often reminders are checked in the background and whether new ones notify the system. */
+/**
+ * 提醒 settings: how often reminders are checked in the background, whether new ones notify the
+ * system, and whether a send from this app turns on 引用我 for its thread.
+ */
 export function ReminderSection({ settings, write }: { settings: AppSettings; write: Write }) {
   return (
     <Section id="settings-reminders" title="提醒">
@@ -847,6 +850,19 @@ export function ReminderSection({ settings, write }: { settings: AppSettings; wr
           labelledBy="setting-reminder-notifications"
           checked={settings.reminderSystemNotifications}
           onToggle={() => write({ reminderSystemNotifications: !settings.reminderSystemNotifications })}
+        />
+      </SettingRow>
+      <SettingRow
+        labelId="setting-reminder-auto-quote"
+        label="发言后提醒引用我"
+        helpId="setting-reminder-auto-quote-help"
+        help="在汐岛发言的串自动开启，7 天没再发言后关闭"
+      >
+        <Switch
+          labelledBy="setting-reminder-auto-quote"
+          describedBy="setting-reminder-auto-quote-help"
+          checked={settings.reminderAutoQuote}
+          onToggle={() => write({ reminderAutoQuote: !settings.reminderAutoQuote })}
         />
       </SettingRow>
     </Section>

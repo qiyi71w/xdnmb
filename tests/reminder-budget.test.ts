@@ -9,6 +9,7 @@ import { runReminderRound } from '../src/main/reminders/engine'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 import { EMPTY_FIELDS } from '../src/shared/drafts'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
+import { DEFAULT_SETTINGS } from '../src/shared/settings'
 import { asStore } from './helpers/store'
 
 const at = '2026-10-26T00:00:00.000Z'
@@ -226,9 +227,46 @@ describe('reminder HTTP budgets', () => {
     expect(h.seen.length).toBeLessThanOrEqual(100)
   })
 
-  /** Thread 100 checked at 200, then a confirmed local reply, number 201, and a peer: page 1 reads 202. */
+  it('automatic rules, expired ones awaiting their final check among them, share the round cap with manual ones and stop at a rate limit', async () => {
+    const h = await harness()
+    for (let n = 100; n < 160; n++) {
+      h.threads.set(String(n), { count: 0, refsPerReply: 0 })
+      await h.enable(String(n), 'quote')
+    }
+    // Threads 200–259 turn on automatically after a confirmed send; the even ones were sent more than seven days ago.
+    const old = new Date(Date.parse(at) - 8 * 24 * 60 * 60 * 1000).toISOString()
+    const automatic = Array.from({ length: 60 }, (_, n) => String(200 + n))
+    for (const id of automatic) {
+      h.threads.set(id, { count: 1, refsPerReply: 0 })
+      const sent = h.db.createPublication({ requestId: `own-${id}`, editorId: 'editor', forumId: '4', at: Number(id) % 2 === 0 ? old : at,
+        payload: { draftId: null, target: { kind: 'reply', threadId: id }, credentialId: h.credentialId, fields: { ...EMPTY_FIELDS, content: 'mine' }, attachmentId: null } })
+      h.db.finishPublication({ id: sent.id, state: 'confirmed', problem: null, postId: String(Number(id) * 10000 + 1), threadId: id, at })
+    }
+    const quote = async (ids: string[]) => (await h.store.getReminderRules(ids)).map((thread) => thread.rules.quote)
+    expect((await quote(automatic)).every((rule) => rule.enabled && rule.source === 'auto')).toBe(true)
+
+    h.remote.rateLimitPage = 1
+    expect(await h.round()).toEqual({ rateLimited: true, complete: false })
+    expect(h.seen.map((read) => `${read.id}:${read.page}`)).toEqual(['100:1'])
+    expect((await quote(automatic)).every((rule) => rule.enabled)).toBe(true)
+
+    h.remote.rateLimitPage = 0
+    expect((await h.round()).complete).toBe(false)
+    expect(h.seen).toHaveLength(100)
+    expect((await h.round()).complete).toBe(true)
+    expect(h.seen.length).toBeLessThanOrEqual(100)
+    // Each expired rule closed after its own check; the others stay.
+    expect((await quote(automatic)).map((rule) => rule.enabled)).toEqual(automatic.map((id) => Number(id) % 2 === 1))
+    expect((await quote(Array.from({ length: 60 }, (_, n) => String(100 + n)))).every((rule) => rule.enabled && rule.source === 'user')).toBe(true)
+  })
+
+  /**
+   * Thread 100 checked at 200, then a confirmed local reply, number 201, and a peer: page 1 reads
+   * 202. 全串 budgets only: the send turns on no 引用我 rule.
+   */
   async function pendingReply() {
     const h = await harness()
+    h.db.saveSettings({ ...DEFAULT_SETTINGS, reminderAutoQuote: false })
     const thread = { count: 200, refsPerReply: 0 }
     h.threads.set('100', thread)
     await h.enable('100', 'all')

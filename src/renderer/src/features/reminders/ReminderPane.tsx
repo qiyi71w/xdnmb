@@ -1,8 +1,9 @@
 // 提醒 as a list page of a tab: the thread lists' row for every thread with an enabled kind, in the
 // order the overview gives (counted threads first). The meta line ends with the thread's counts
 // (全串:3 PO:2 引用:1), the kinds still waiting for their baseline and, when its latest check left
-// something unknown, a warning icon whose accessible name and tip give the reasons. Refreshed by
-// `reminders.onChanged` only (no polling).
+// something unknown, a warning icon whose accessible name and tip give the reasons; a 引用我 rule the
+// app enabled after a send adds 自动 at the line's right end. Refreshed by `reminders.onChanged` only
+// (no polling).
 
 import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import type { ForumId, ThreadId } from '../../../../shared/forum'
@@ -26,11 +27,13 @@ import { savedStart } from '../thread/readingStart'
 import { useListOpener } from './openList'
 import { ReminderRowMenu } from './ReminderRowMenu'
 import {
+  AUTO_QUOTE_NAME,
   BASELINE_RETRY_TEXT,
   baselineRowText,
   baselineState,
   countsText,
   hasCounts,
+  isAutoQuote,
   issuesText,
   RATE_LIMIT_TEXT,
   rateLimitRetry,
@@ -58,6 +61,21 @@ function IssueStatus({ text, missing }: { text: string; missing: boolean }) {
       <span className="row-status-tip" aria-hidden="true">
         {text}
       </span>
+    </span>
+  )
+}
+
+/**
+ * 自动 at the right end of the row's meta line while its 引用我 rule is one the app enabled after a
+ * send; nothing for a rule the user enabled or a disabled one. The row's name carries the full
+ * meaning instead of the bare word.
+ */
+export function AutoQuoteTag({ rules }: { rules: ReminderThreadRow['rules'] }) {
+  if (!isAutoQuote(rules)) return null
+  return (
+    <span className="tag reminder-auto">
+      <span aria-hidden="true">自动</span>
+      <span className="visually-hidden">{AUTO_QUOTE_NAME}</span>
     </span>
   )
 }
@@ -347,6 +365,7 @@ export function ReminderPane({
               const baseline = baselineState(row.rules, row.issues)
               const reasons = issuesText(row)
               const issues = reasons !== null && baseline?.failed === true ? `${reasons}；${BASELINE_RETRY_TEXT}` : reasons
+              const auto = isAutoQuote(row.rules)
               const clearFailure = clearFailures.get(row.threadId)
               // 在新标签页打开, the three kinds and 清除提醒 live in the row's context menu (right-click,
               // ContextMenu, Shift+F10); middle-click or Ctrl/Cmd+click opens a new tab, as in 订阅.
@@ -386,14 +405,21 @@ export function ReminderPane({
                     onOpen={() => openRow(row)}
                     itemProps={roving.itemProps(row.threadId)}
                     metaEnd={
-                      (counts !== null || baseline !== null || issues !== null) && (
-                        <>
-                          {counts !== null && <span className="reminder-counts">{counts}</span>}
-                          {baseline !== null && (
-                            <span className={baseline.failed ? 'reminder-baseline is-warning' : 'reminder-baseline'}>{baselineRowText(baseline)}</span>
+                      (counts !== null || baseline !== null || issues !== null || auto) && (
+                        // One group that moves below No. as a whole when the meta line is short of
+                        // room: the counts, baseline text and warning icon, then 自动 at its right end.
+                        <span className="reminder-status">
+                          {(counts !== null || baseline !== null || issues !== null) && (
+                            <span className="reminder-state">
+                              {counts !== null && <span className="reminder-counts">{counts}</span>}
+                              {baseline !== null && (
+                                <span className={baseline.failed ? 'reminder-baseline is-warning' : 'reminder-baseline'}>{baselineRowText(baseline)}</span>
+                              )}
+                              {issues !== null && <IssueStatus text={issues} missing={row.issues.includes('not-found')} />}
+                            </span>
                           )}
-                          {issues !== null && <IssueStatus text={issues} missing={row.issues.includes('not-found')} />}
-                        </>
+                          <AutoQuoteTag rules={row.rules} />
+                        </span>
                       )
                     }
                   />

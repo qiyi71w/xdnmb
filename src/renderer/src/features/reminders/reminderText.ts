@@ -26,6 +26,14 @@ export function enabledKinds(rules: Record<ReminderKind, ReminderRule>): Reminde
   return REMINDER_KINDS.filter((kind) => rules[kind].enabled)
 }
 
+/** Whether the thread's 引用我 rule is on because the app enabled it after a send (自动 on its 提醒 row). */
+export function isAutoQuote(rules: Record<ReminderKind, ReminderRule>): boolean {
+  return rules.quote.enabled && rules.quote.source === 'auto'
+}
+
+/** Accessible name of a 提醒 row's 自动 tag. */
+export const AUTO_QUOTE_NAME = '引用我的发言提醒为自动开启'
+
 /** `全串:3 PO:2 引用:1`: enabled, non-zero kinds in the fixed order; null when nothing is counted. */
 export function countsText(row: Pick<ReminderThreadRow, 'rules' | 'counts'>): string | null {
   const parts = REMINDER_KINDS.filter((kind) => row.rules[kind].enabled && row.counts[kind] > 0).map(

@@ -272,8 +272,8 @@ describe('PO and rule state', () => {
     await h.read('100', 'all', 1, 'display')
     await h.read('300', 'all', 1, 'display')
     expect(h.db.getReminderRules(['100', '300']).map((item) => item.rules.all)).toEqual([
-      { kind: 'all', enabled: true, closedBy: null, baseline: 'pending' },
-      { kind: 'all', enabled: false, closedBy: null, baseline: null }
+      { kind: 'all', enabled: true, closedBy: null, source: 'user', baseline: 'pending' },
+      { kind: 'all', enabled: false, closedBy: null, source: null, baseline: null }
     ])
     // The first check sets the baseline (nothing counted); the reader's read did not.
     thread.count = 204

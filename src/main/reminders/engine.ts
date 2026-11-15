@@ -33,6 +33,8 @@ interface KindRun {
   state: ReminderKindState | undefined
   issues: Set<CoverageIssue>
   error: ReadError | null
+  /** 引用我: a quoted post this check needed could not be read; its replies stay unverified. */
+  unread: boolean
   done: boolean
 }
 /** Quote pages still to read in this check; committed page by page. */
@@ -109,6 +111,8 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
 }): Promise<{ rateLimited: boolean; complete: boolean }> {
   const { store, now } = deps
   const roundId = input.roundId ?? randomUUID()
+  // Every page this check reads is read after this: replies before it are within its reach.
+  const startedAt = now()
   const states = new Map((await store.reminderStates()).map((state) => [`${state.threadId}:${state.kind}`, state]))
   const cookieIds = new Set(await store.reminderCookieIds())
   const hasCookie = (await store.listCredentials()).length > 0
@@ -118,7 +122,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   for (const threadId of new Set(input.rules.map((rule) => rule.threadId))) {
     const kinds: ThreadRun['kinds'] = {}
     for (const rule of input.rules.filter((item) => item.threadId === threadId)) {
-      kinds[rule.kind] = { rule, state: states.get(`${threadId}:${rule.kind}`), issues: new Set(), error: null, done: false }
+      kinds[rule.kind] = { rule, state: states.get(`${threadId}:${rule.kind}`), issues: new Set(), error: null, unread: false, done: false }
     }
     const steps: Step[] = []
     if (kinds.all || kinds.quote) steps.push('all')
@@ -131,13 +135,18 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
     const applied = await store.updateReminderState({ ...update, roundId, threadId: run.threadId, kind, generation: run.kinds[kind]!.rule.generation, at: now() })
     if (applied && (update.add ?? 0) > 0) input.increased.add(run.threadId)
   }
-  /** Saves the kind's issues of this check and marks it checked. */
+  /**
+   * Saves the kind's issues of this check and marks it checked. A 引用我 check that finished
+   * without issues records when it began: past an automatic rule's expiry, it is the final check.
+   */
   async function finish(run: ThreadRun, kind: ReminderKind, checked = true): Promise<void> {
     const value = run.kinds[kind]
     if (!value || value.done) return
     value.done = true
-    if (!checked || value.issues.size > 0 || value.error !== null) complete = false
-    await write(run, kind, { issues: [...value.issues], lastError: value.error, checked })
+    const clean = checked && value.issues.size === 0 && value.error === null && !value.unread
+    if (!clean) complete = false
+    await write(run, kind, { issues: [...value.issues], lastError: value.error, checked,
+      ...(clean && kind === 'quote' ? { completedFrom: startedAt } : {}) })
   }
   /**
    * The kind stops before it finished this check. Quote pages still unread (this check's, or a
@@ -298,7 +307,9 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   async function startQuote(run: ThreadRun, first: ThreadPage): Promise<void> {
     const value = run.kinds.quote!
     const replyCount = first.replyCount
-    const checked = value.state?.checkedPostId ?? null
+    // A checked position counts only with its reply count: an automatic rule holds its sent post
+    // before any page places it, and until then starts as a newly enabled rule does.
+    const checked = (value.state?.baseline ?? null) === null ? null : value.state?.checkedPostId ?? null
     const verified = value.state?.baseline ?? 0
     const highest = first.replies.reduce((max, reply) => comparePostIds(reply.id, max) > 0 ? reply.id : max, run.threadId)
     if (replyCount === null) {
@@ -323,9 +334,11 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
   }
 
   /**
-   * One quote page: its replies newer than the checked ID are new. A quoted post is mine when it is a
-   * confirmed own publication, else when its 饼干 ID (stored, or read by a controlled quote read)
-   * matches an imported cookie's. A reply counts once however many of my posts it quotes.
+   * One quote page: its replies newer than the checked ID are new. A reply of the user's own (a
+   * confirmed own publication, or its 饼干 ID matching an imported cookie's) is skipped: it neither
+   * counts nor stays unverified, and its quoted posts are not read for it. A quoted post is mine
+   * when it is a confirmed own publication, else when its 饼干 ID (stored, or read by a controlled
+   * quote read) matches an imported cookie's. A reply counts once however many of my posts it quotes.
    */
   async function quoteStep(run: ThreadRun, budget: { remaining: number }): Promise<boolean> {
     const q = run.quote!
@@ -359,13 +372,21 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       value.issues.add('incomplete')
       return stop()
     }
-    const quotes = page.replies.filter((reply) => comparePostIds(reply.id, q.checked) > 0).map((reply) => [...quotedPostIds(reply.content)])
+    const fresh = page.replies.filter((reply) => comparePostIds(reply.id, q.checked) > 0)
+      .map((reply) => ({ reply, ids: [...quotedPostIds(reply.content)] })).filter((item) => item.ids.length > 0)
+    const loaded = q.sources === null
     if (q.sources === null) {
-      const ids = [...new Set(quotes.flat())]
+      // The quoting replies' own IDs are looked up too: whether each is a confirmed own publication.
+      const ids = [...new Set(fresh.flatMap((item) => [item.reply.id, ...item.ids]))]
       q.sources = new Map((ids.length > 0 ? await store.reminderQuoteSources(ids) : []).map((source) => [source.postId, source]))
+    }
+    const sources = q.sources
+    const quotes = fresh.filter(({ reply }) => !sources.get(reply.id)!.own && (reply.userHash === null || !cookieIds.has(reply.userHash)))
+      .map((item) => item.ids)
+    if (loaded) {
       // Without any known 饼干 ID a quote read could not match anything.
-      q.refs = cookieIds.size === 0 ? [] : [...q.sources.values()].filter((source) => !source.own && source.cookieId === null)
-        .map((source) => source.postId).sort(comparePostIds)
+      q.refs = cookieIds.size === 0 ? [] : [...new Set(quotes.flat())].map((id) => sources.get(id)!)
+        .filter((source) => !source.own && source.cookieId === null).map((source) => source.postId).sort(comparePostIds)
     }
     while (q.refs.length > 0) {
       const id = q.refs[0]!
@@ -377,7 +398,7 @@ export async function runReminderRound(deps: RoundEngineDeps, input: {
       } catch (error) {
         // Not obtained: the reply stays unverified, never a non-match. A rate limit stops the round.
         if (!(error instanceof ForumReadError) || error.error.kind === 'rate-limited') throw error
-        complete = false
+        value.unread = true
         q.refs.shift()
         continue
       }

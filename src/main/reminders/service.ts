@@ -111,9 +111,11 @@ export function createReminderService(deps: {
     schedule()
   }
   function configure(value: AppSettings): void {
-    const previous = settings?.reminderInterval
+    const previous = settings
     settings = value
-    if (previous !== value.reminderInterval) schedule()
+    if (previous?.reminderInterval !== value.reminderInterval) schedule()
+    // Turning 发言后提醒引用我 off closed automatic rules with the saved setting.
+    else if (previous?.reminderAutoQuote !== value.reminderAutoQuote) changed()
     armInitialization()
   }
   function suspend(): void {
@@ -487,7 +489,7 @@ export function createReminderService(deps: {
     clear: ({ threadId, source }) => storage(async () => {
       const open = source === 'open' ? registerOpen(threadId) : null
       try {
-        if (await deps.store.clearReminderCounts(threadId)) changed()
+        if (await deps.store.clearReminderCounts(threadId, now())) changed()
       } catch (error) {
         open?.cancel()
         throw error

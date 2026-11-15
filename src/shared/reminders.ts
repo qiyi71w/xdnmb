@@ -10,13 +10,22 @@ export type ReminderKind = 'all' | 'po' | 'quote'
 /** Display order everywhere: 全串, PO, 引用. */
 export const REMINDER_KINDS: readonly ReminderKind[] = ['all', 'po', 'quote']
 
-/** Why a rule was last turned off; `null` while enabled or when never enabled. */
-export type ReminderCloseReason = 'user' | 'unsubscribe' | 'sync-delete'
+/**
+ * Why a rule was last turned off; `null` while enabled or when never enabled. `auto`: closed by the
+ * app (an automatically enabled rule expired, or 发言后提醒引用我 was turned off); only `user`
+ * keeps a later send from enabling 引用我 again.
+ */
+export type ReminderCloseReason = 'user' | 'unsubscribe' | 'sync-delete' | 'auto'
+
+/** Who enabled a rule: the user in a menu, or the app after a confirmed send (引用我 only). */
+export type ReminderRuleSource = 'user' | 'auto'
 
 export interface ReminderRule {
   kind: ReminderKind
   enabled: boolean
   closedBy: ReminderCloseReason | null
+  /** Enabled: who enabled it; null while disabled. */
+  source: ReminderRuleSource | null
   /** Disabled: null; enabled: pending until a successful baseline read, then ready. */
   baseline: 'pending' | 'ready' | null
 }
