@@ -29,7 +29,8 @@ describe('开机自启 login item', () => {
     })
     expect(s.service.state()).toEqual({ available: true, enabled: false, needsApproval: false })
     expect(s.service.set(true)).toEqual({ applied: true, state: { available: true, enabled: true, needsApproval: false } })
-    expect(s.writes).toEqual([{ openAtLogin: true, args: [LOGIN_LAUNCH_ARG] }])
+    // The argument is stored in users' Run entries and must stay the same across versions.
+    expect(s.writes).toEqual([{ openAtLogin: true, args: ['--xidao-login-launch'] }])
   })
 
   it('reports a write the system did not take as not applied, with what the system reports', () => {
