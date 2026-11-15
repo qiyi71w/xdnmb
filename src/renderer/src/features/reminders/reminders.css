@@ -59,27 +59,33 @@
   margin-top: 12px;
 }
 
-/* 全串:3 PO:2 引用:1 — what is new in the thread: ink and weight over the quiet meta, not color. */
+/* 全串:3 PO:2 引用:1 — what is new in the thread: ink and weight over the quiet meta, not color. In
+   a column too narrow for one line it breaks only between kinds, never inside 全串:128. */
 .reminder-counts {
   color: var(--ink);
   font-weight: 600;
   word-spacing: 0.15em;
+  word-break: keep-all;
 }
 
 /* 全串、PO等待建立基线 — not counting yet: quiet ink-2 after the counts, warning ink once a read
-   failed (its reasons are the warning icon after it). */
+   failed (its reasons are the warning icon after it). Wrapped, it breaks as Chinese does without
+   leaving one character on the last line. */
 .reminder-baseline {
   color: var(--ink-2);
+  text-wrap: pretty;
 }
 
 .reminder-baseline.is-warning {
   color: var(--warn-ink);
 }
 
-/* The row's reminder state at the end of its meta: counts, baseline text, warning icon, 自动. One
-   wrapping unit that fills the rest of the meta line: short of room, it moves below No. and the reply
-   count as a whole and only then wraps inside itself, so the icon never strands at a line's start.
-   The meta stays the tip's positioning box, so the warning tip still spans the text column. */
+/* The row's reminder state at the end of its meta, as one unit that fills the rest of the meta
+   line: short of room, it moves below No. and the reply count as a whole. Inside it, the counts and
+   baseline text wrap first, keeping the warning icon after them and 自动 beside them at the right
+   end. Only where even 全串:128, the icon and 自动 cannot share a line (the narrowest column beside a
+   thumbnail) does 自动 move below, still at the right. The meta stays the tip's positioning box, so
+   the warning tip still spans the text column. */
 .reminder-row .row-meta {
   position: relative;
 }
@@ -92,8 +98,17 @@
   gap: 4px 10px;
 }
 
-/* 自动 — the 引用我 rule was enabled by the app: the neutral tag at the right end of that unit, after
-   the counts and the warning icon, never squeezing them. */
+/* Its basis of 0 lets the line break measure it at its narrowest (wrapped) width, so 自动 wraps
+   only as a last resort; growing then gives the text its full room, with the icon right after it. */
+.reminder-state {
+  display: inline-flex;
+  flex: 1 1 0;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 自动 — the 引用我 rule was enabled by the app: the neutral tag at the right end of the unit,
+   never squeezing the counts or the warning icon. */
 .reminder-auto {
   flex: none;
   margin-left: auto;
