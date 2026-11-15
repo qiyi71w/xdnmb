@@ -278,6 +278,15 @@
   object-fit: contain;
 }
 
+/* 打开系统设置 beside the 开机自启 switch while macOS waits for approval; wraps when narrow. */
+.login-item-control {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
 .zoom-controls {
   display: inline-flex;
   flex-wrap: wrap;

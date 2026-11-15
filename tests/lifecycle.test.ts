@@ -47,12 +47,12 @@ function setup(options: { closeAction?: CloseAction | 'unreadable'; notify?: (su
   const lifecycle = createLifecycle({
     window: {
       state: () => windowState,
-      open() {
+      open(show) {
         opens++
         windowState = 'hidden'
         pendingOpen = deferred<void>()
         return pendingOpen.promise.then(() => {
-          windowState = 'shown'
+          if (show) windowState = 'shown'
         })
       },
       reveal: () => {
@@ -137,6 +137,34 @@ describe('window lifecycle', () => {
     s.lifecycle.reopen()
     expect(s.windowState).toBe('shown')
     expect(s.triggers).toEqual(['cold-start', 'reopen'])
+  })
+
+  it('starts in 后台驻留 for a resident 开机自启: hidden, one cold start, and the tray opening it is a reopen', async () => {
+    const s = setup()
+    const start = s.lifecycle.start(true)
+    // macOS sends activate while launching; that is no opening by the user.
+    s.lifecycle.reopen('activate')
+    await s.showWindow()
+    await start
+    expect(s.windowState).toBe('hidden')
+    expect(s.triggers).toEqual(['cold-start'])
+
+    s.lifecycle.reopen()
+    expect(s.windowState).toBe('shown')
+    expect(s.triggers).toEqual(['cold-start', 'reopen'])
+    expect(s.opens).toBe(1)
+  })
+
+  it('shows a resident 开机自启 window that was opened explicitly while it was still starting', async () => {
+    const s = setup()
+    const start = s.lifecycle.start(true)
+    // A second launch or the tray before the hidden window is ready.
+    s.lifecycle.reopen()
+    await s.showWindow()
+    await start
+    expect(s.windowState).toBe('shown')
+    expect(s.triggers).toEqual(['cold-start', 'reopen'])
+    expect(s.opens).toBe(1)
   })
 
   it('reveals a resident window on notification click without emitting a check trigger', async () => {

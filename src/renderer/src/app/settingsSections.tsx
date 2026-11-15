@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import type { AppPlatform } from '../../../shared/api'
-import { CLOSE_ACTIONS, type CloseAction } from '../../../shared/lifecycle'
+import { CLOSE_ACTIONS, type CloseAction, type LoginItemState } from '../../../shared/lifecycle'
 import {
   resolveAppearance,
   type AppSettings,
@@ -876,10 +876,22 @@ const CLOSE_ACTION_LABEL: Record<CloseAction, string> = {
 }
 
 /**
- * 窗口 settings: what the window's close button does. A remembered 退出汐岛 still handles every
- * unsaved edit before quitting; 后台驻留 never asks anything.
+ * 窗口 settings: what the window's close button does, and 开机自启. A remembered 退出汐岛 still
+ * handles every unsaved edit before quitting; 后台驻留 never asks anything.
  */
-export function WindowSection({ settings, write }: { settings: AppSettings; write: Write }) {
+export function WindowSection({
+  settings,
+  write,
+  active,
+  onLoginItemNotApplied
+}: {
+  settings: AppSettings
+  write: Write
+  /** 设置 is shown: 开机自启 is read again from the system. */
+  active: boolean
+  /** The system did not take a 开机自启 change (the switch shows what it reports instead). */
+  onLoginItemNotApplied: () => void
+}) {
   return (
     <Section id="settings-window" title="窗口">
       <SettingRow labelId="setting-close-action" label="关闭窗口时">
@@ -890,7 +902,94 @@ export function WindowSection({ settings, write }: { settings: AppSettings; writ
           onChange={(closeAction) => write({ closeAction })}
         />
       </SettingRow>
+      <LoginItemRows settings={settings} write={write} active={active} onNotApplied={onLoginItemNotApplied} />
     </Section>
+  )
+}
+
+/**
+ * 开机时启动汐岛 is the system login item itself, read whenever 设置 is shown or the window comes
+ * back to the front (after Task Manager or System Settings); 开机启动时后台驻留 is an ordinary setting
+ * that only applies while the login item is on. Nothing shows where the system has no login items.
+ */
+function LoginItemRows({
+  settings,
+  write,
+  active,
+  onNotApplied
+}: {
+  settings: AppSettings
+  write: Write
+  active: boolean
+  onNotApplied: () => void
+}) {
+  const [state, setState] = useState<LoginItemState | null>(null)
+  const [writing, setWriting] = useState(false)
+
+  useEffect(() => {
+    if (!active) return
+    let alive = true
+    const refresh = () => {
+      window.xidao.loginItem
+        .get()
+        .then((next) => {
+          if (alive) setState(next)
+        })
+        .catch(() => undefined)
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => {
+      alive = false
+      window.removeEventListener('focus', refresh)
+    }
+  }, [active])
+
+  if (state !== null && !state.available && state.reason === 'unsupported') return null
+  const usable = state !== null && state.available
+  const enabled = usable && state.enabled
+  const toggle = () => {
+    if (!usable || writing) return
+    setWriting(true)
+    window.xidao.loginItem
+      .set({ enabled: !state.enabled })
+      .then((result) => {
+        setState(result.state)
+        if (!result.applied) onNotApplied()
+      })
+      .catch(onNotApplied)
+      .finally(() => setWriting(false))
+  }
+  const help = state === null ? undefined : !state.available ? '开发运行时不可用' : state.needsApproval ? '需要在系统设置的登录项中允许' : undefined
+
+  return (
+    <>
+      <SettingRow labelId="setting-login-item" label="开机时启动汐岛" helpId="setting-login-item-help" help={help}>
+        <span className="login-item-control">
+          {usable && state.needsApproval && (
+            <button type="button" className="btn btn-small btn-page" onClick={() => void window.xidao.loginItem.openSystemSettings().catch(() => undefined)}>
+              打开系统设置
+            </button>
+          )}
+          <Switch
+            labelledBy="setting-login-item"
+            describedBy={help === undefined ? undefined : 'setting-login-item-help'}
+            checked={enabled}
+            busy={state === null || writing}
+            disabled={state !== null && !state.available}
+            onToggle={toggle}
+          />
+        </span>
+      </SettingRow>
+      <SettingRow labelId="setting-login-resident" label="开机启动时后台驻留">
+        <Switch
+          labelledBy="setting-login-resident"
+          checked={settings.loginLaunchResident}
+          disabled={!enabled}
+          onToggle={() => write({ loginLaunchResident: !settings.loginLaunchResident })}
+        />
+      </SettingRow>
+    </>
   )
 }
 
