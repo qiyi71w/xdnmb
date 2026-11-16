@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { ImportSummary } from '../../src/shared/api'
 import {
-  canConfirm, importBusy, importConfirmText, importFlowReducer, importOutcomeText, importProblemText,
+  canConfirm, canSubmit, importBusy, importConfirmText, importFlowReducer, importOutcomeText, importProblemText,
   type ImportFlow, type ImportFlowEvent
 } from '../../src/renderer/src/features/content/importState'
 
 const run = (events: ImportFlowEvent[], from: ImportFlow = { phase: 'idle' }) => events.reduce(importFlowReducer, from)
-const summary: ImportSummary = { exportedAt: '2026-11-16T08:00:00.000Z', appVersion: '1.5.0', offlineThreads: 3, local: { history: 120, sendRecords: 7 } }
+const summary: ImportSummary = { exportedAt: '2026-11-16T08:00:00.000Z', appVersion: '1.5.0', offlineThreads: 3, secrets: false, local: { history: 120, sendRecords: 7 } }
 const ready: ImportFlowEvent = { type: 'inspected', result: { status: 'ready', summary } }
 
 describe('import flow state', () => {
@@ -72,5 +72,48 @@ describe('import flow state', () => {
     expect(importOutcomeText({ kind: 'blocked', reason: 'other' })).toBe('没有导入：汐岛没有重新启动，数据没有改动。')
     // Closing it afterwards ends the flow.
     expect(importFlowReducer(blocked, { type: 'cancel' })).toEqual({ phase: 'idle' })
+  })
+
+  it('asks for the passphrase of an encrypted file, as many times as needed, then confirms', () => {
+    const locked = run([{ type: 'inspect' }, { type: 'inspected', result: { status: 'passphrase', wrong: false } }])
+    expect(locked).toEqual({ phase: 'locked', wrong: false, busy: false, cancelling: false })
+    expect(importBusy(locked)).toBe(true)
+    expect(importFlowReducer(locked, { type: 'inspect' })).toBe(locked)
+    // 继续 needs something typed.
+    expect(canSubmit(locked, '')).toBe(false)
+    expect(canSubmit(locked, '口令')).toBe(true)
+
+    const trying = importFlowReducer(locked, { type: 'submit' })
+    expect(trying).toEqual({ phase: 'locked', wrong: false, busy: true, cancelling: false })
+    expect(canSubmit(trying, '口令')).toBe(false)
+    expect(importFlowReducer(trying, { type: 'submit' })).toBe(trying)
+    // Wrong: stays in the dialog for another try, any number of times.
+    let flow = importFlowReducer(trying, { type: 'submitted', result: { status: 'passphrase', wrong: true } })
+    expect(flow).toEqual({ phase: 'locked', wrong: true, busy: false, cancelling: false })
+    for (let attempt = 0; attempt < 3; attempt++) {
+      flow = run([{ type: 'submit' }, { type: 'submitted', result: { status: 'passphrase', wrong: true } }], flow)
+      expect(flow).toEqual({ phase: 'locked', wrong: true, busy: false, cancelling: false })
+      expect(canSubmit(flow, '再试')).toBe(true)
+    }
+    const confirming = run([{ type: 'submit' }, { type: 'submitted', result: { status: 'ready', summary: { ...summary, secrets: true } } }], flow)
+    expect(confirming).toMatchObject({ phase: 'confirming', busy: false, outcome: null })
+    expect(importConfirmText({ ...summary, secrets: true }, 't')).toContain('设置和离线副本（3 个串），以及饼干与 App UUID。')
+  })
+
+  it('refuses a damaged file or one this machine cannot protect after or before the passphrase; 取消 gives it up', () => {
+    const locked: ImportFlow = { phase: 'locked', wrong: true, busy: false, cancelling: false }
+    const corrupt = run([{ type: 'submit' }, { type: 'submitted', result: { status: 'rejected', rejection: { reason: 'corrupt' } } }], locked)
+    expect(corrupt.phase === 'refused' && importProblemText(corrupt.problem)).toBe('文件已损坏或不完整')
+    expect(run([{ type: 'submit' }, { type: 'submitted', result: null }], locked)).toMatchObject({ phase: 'refused' })
+    const unprotected = run([{ type: 'inspect' }, { type: 'inspected', result: { status: 'rejected', rejection: { reason: 'protection' } } }])
+    expect(unprotected.phase === 'refused' && importProblemText(unprotected.problem)).toBe('文件含饼干，但本机无法安全保存，不能导入')
+
+    // 取消 or Esc: right away when nothing is tried; while a try runs, it ends given up whatever it found.
+    expect(importFlowReducer(locked, { type: 'cancel' })).toEqual({ phase: 'idle' })
+    const cancelling = run([{ type: 'submit' }, { type: 'cancel' }], locked)
+    expect(cancelling).toEqual({ phase: 'locked', wrong: true, busy: true, cancelling: true })
+    expect(canSubmit(cancelling, '口令')).toBe(false)
+    expect(importFlowReducer(cancelling, { type: 'submitted', result: { status: 'ready', summary } })).toEqual({ phase: 'idle' })
+    expect(importFlowReducer(cancelling, { type: 'submitted', result: { status: 'dismissed' } })).toEqual({ phase: 'idle' })
   })
 })

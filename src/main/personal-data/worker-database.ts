@@ -41,6 +41,7 @@ export function createWorkerExportDatabase(createWorker: (options: WorkerOptions
   return {
     estimate: (databasePath) => request({ type: 'estimate', databasePath }),
     snapshot: (databasePath, workPath) => request({ type: 'snapshot', databasePath, workPath }),
+    secrets: (databasePath) => request({ type: 'secrets', databasePath }),
     trim: (workPath, options) => request({ type: 'trim', workPath, options }),
     abort
   }
@@ -52,6 +53,7 @@ export function createWorkerImportDatabase(createWorker: (options: WorkerOptions
   return {
     check: (stagingDirectory, schemaVersion) => request({ type: 'check', stagingDirectory, schemaVersion }),
     counts: (databasePath) => request({ type: 'counts', databasePath }),
+    secrets: (databasePath) => request({ type: 'secrets', databasePath }),
     stage: (stagingDirectory, databasePath, file) => request({ type: 'stage', stagingDirectory, databasePath, file }),
     abort
   }

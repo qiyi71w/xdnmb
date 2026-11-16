@@ -1,12 +1,12 @@
 import Database from 'better-sqlite3'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname, extname, join } from 'node:path'
 import { isManagedName } from '../images/files'
 import { settingKeysIn, tablesIn } from './classification'
 import { migrateDatabase } from './database'
 import { copyFileDurably, present, syncDirectory } from './durable'
-import { OFFLINE_TABLES, readCredentialSequence, recordUnsavedImage, resetRebuilt } from './export-snapshot'
+import { OFFLINE_TABLES, readCredentialSequence, recordUnsavedImage, replaceSecretValues, resetRebuilt, type SecretRows } from './export-snapshot'
 import { DRAFT_IMAGES, IMAGES, STAGED_DATABASE, STAGED_DRAFT_IMAGES, STAGED_OFFLINE_IMAGES } from './import-journal'
 import { MIGRATIONS } from './migrations'
 
@@ -26,13 +26,18 @@ import { MIGRATIONS } from './migrations'
  *
  *   1. The file's database is the base (already at this version's schema, see above).
  *   2. 目标机保留: this machine's `target-kept` tables and setting rows replace the file's.
- *   3. 秘密: the file's credentials and App UUIDs go (a file without secrets has none to keep, and
- *      its references must find nothing); this machine's 饼干凭据 are appended with new IDs after
- *      both the file's credential sequence and every ID in the staged database, so no reference in
- *      the file ever resolves to them, and the ID sequence moves past them (`CredentialIdMap`); its
- *      App UUIDs are appended. A subscription configuration whose App UUID is now missing is
- *      未配置 under a new generation; earlier generations' observations, operations and plans stay
- *      history and are never carried on.
+ *   3. 秘密: a file without secrets keeps none (anything in its secret tables goes, so none of its
+ *      references finds a credential). A file with secrets keeps its 饼干凭据 under their IDs and
+ *      its App UUIDs under their local IDs, their ciphertext replaced by this machine's protector's
+ *      (`ImportSecrets`, re-encrypted in the main process). This machine's 饼干凭据 are appended
+ *      with new IDs after both the file's credential sequence and every ID in the staged
+ *      database, so no reference in the file ever resolves to them, and the ID sequence moves past
+ *      them (`CredentialIdMap`); one identical to a file credential is not appended but maps to
+ *      the file's ID, so its references land on the file's copy. Its App UUIDs are appended, except
+ *      one identical to a file App UUID (one whose local ID the file already uses gets a new one:
+ *      nothing in the result refers to it). A subscription configuration whose App UUID is now
+ *      missing is 未配置 under a new generation; earlier generations' observations, operations and
+ *      plans stay history and are never carried on.
  *   4. 离线副本: this machine's offline copies are appended. A thread both have keeps the copy
  *      updated later (the file's on a tie) as a whole: its pages, posts and originals. Originals no
  *      copy holds any more go with their staged files. This machine's originals are copied into
@@ -48,15 +53,28 @@ import { MIGRATIONS } from './migrations'
  *   7. The result passes the foreign key and integrity checks, and every draft attachment and
  *      offline original it names is in staging with its recorded size.
  *
- * Nothing secret is decrypted: this machine's ciphertext is carried as it is.
+ * Nothing secret is decrypted here: this machine's ciphertext is carried as it is.
  */
+
+/**
+ * A file's secrets made this machine's (in the main process, which alone decrypts): the file's
+ * re-encrypted by this machine's protector, and this machine's that are identical to one of them.
+ */
+export interface ImportSecrets {
+  /** Every file 饼干凭据 and App UUID by its ID, with this machine's ciphertext of its secret. */
+  file: SecretRows
+  /** This machine's 饼干凭据 identical to a file one: its ID and stored ciphertext, and the file's ID. */
+  sameCredentials: { localId: number; ciphertext: Uint8Array; fileId: number }[]
+  /** This machine's App UUIDs identical to a file one: local ID and stored ciphertext. */
+  sameAppCredentials: { localId: string; ciphertext: Uint8Array }[]
+}
 
 /** What the export file says about itself that merging needs. */
 export interface ImportFileFacts {
   /** Upper bound of the file's 饼干凭据 ID sequence (its manifest's). */
   credentialSequence: number
-  /** Whether the file carries 饼干凭据 and App UUIDs. */
-  secrets: boolean
+  /** The file's 饼干凭据 and App UUIDs made this machine's; null: the file carries none. */
+  secrets: ImportSecrets | null
 }
 
 /**
@@ -221,26 +239,43 @@ function keepTargetItems(context: MergeContext): void {
 }
 
 /**
- * Step 3, the file's secrets. A file without secrets carries none; anything in its secret tables
- * is dropped, so that none of its references finds a credential.
+ * Step 3, the file's secrets: kept, re-encrypted for this machine, when it carries them; otherwise
+ * anything in its secret tables is dropped, so that none of its references finds a credential.
  */
-function dropFileSecrets(context: MergeContext): void {
-  if (context.file.secrets) throw new Error('secrets in the export file are not supported')
-  for (const table of tablesIn('secret')) context.staged.exec(`DELETE FROM "${table}"`)
+function protectFileSecrets(context: MergeContext): void {
+  if (context.file.secrets === null) {
+    for (const table of tablesIn('secret')) context.staged.exec(`DELETE FROM "${table}"`)
+  } else replaceSecretValues(context.staged, context.file.secrets.file)
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return Buffer.from(a).equals(Buffer.from(b))
 }
 
 /**
- * Step 3, this machine's 饼干凭据: appended in their order with IDs after the file's credential
- * sequence and every staged ID, recorded in `credentialIds`; the ID sequence moves past them.
+ * Step 3, this machine's 饼干凭据: appended in their order, after the file's in the list, with IDs
+ * after the file's credential sequence and every staged ID, recorded in `credentialIds`; the ID
+ * sequence moves past them. One identical to a file credential (unchanged since the main process
+ * compared it) is not appended: `credentialIds` maps it to the file's ID.
  */
 function appendLocalCredentials(context: MergeContext): void {
   const { staged, local, credentialIds } = context
+  const same = new Map((context.file.secrets?.sameCredentials ?? []).map((entry) => [entry.localId, entry]))
   const columns = columnsOf(staged, 'credentials').filter((column) => column !== 'id')
   const list = columns.map((column) => `"${column}"`).join(', ')
   const insert = staged.prepare(`INSERT INTO credentials (id, ${list}) VALUES (?, ${columns.map(() => '?').join(', ')})`)
+  const positionAt = columns.indexOf('position')
+  let position = count(staged, 'SELECT coalesce(max(position), 0) AS n FROM credentials')
   let next = Math.max(context.file.credentialSequence, readCredentialSequence(staged))
-  for (const [id, ...values] of local.prepare(`SELECT id, ${list} FROM credentials ORDER BY id`).raw().iterate() as Iterable<[number, ...unknown[]]>) {
+  const rows = local.prepare(`SELECT id, ciphertext, ${list} FROM credentials ORDER BY position, id`).raw().iterate() as Iterable<[number, Uint8Array, ...unknown[]]>
+  for (const [id, ciphertext, ...values] of rows) {
+    const twin = same.get(id)
+    if (twin !== undefined && sameBytes(twin.ciphertext, ciphertext)) {
+      credentialIds.set(id, twin.fileId)
+      continue
+    }
     next++
+    values[positionAt] = ++position
     insert.run(next, ...values)
     credentialIds.set(id, next)
   }
@@ -249,9 +284,21 @@ function appendLocalCredentials(context: MergeContext): void {
   }
 }
 
-/** Step 3, this machine's App UUIDs (local IDs are random UUIDs). */
+/**
+ * Step 3, this machine's App UUIDs (local IDs are random UUIDs): appended, except one identical to
+ * a file App UUID. One whose local ID the file already uses gets a new one; nothing refers to it.
+ */
 function appendLocalAppCredentials(context: MergeContext): void {
-  copyLocalRows(context, 'subscription_app_credentials')
+  const { staged, local } = context
+  const same = new Map((context.file.secrets?.sameAppCredentials ?? []).map((entry) => [entry.localId, entry.ciphertext]))
+  const taken = staged.prepare('SELECT 1 FROM subscription_app_credentials WHERE id = ?')
+  const insert = staged.prepare('INSERT INTO subscription_app_credentials (id, ciphertext) VALUES (?, ?)')
+  const rows = local.prepare<[], { id: string; ciphertext: Uint8Array }>('SELECT id, ciphertext FROM subscription_app_credentials ORDER BY id').all()
+  for (const { id, ciphertext } of rows) {
+    const twin = same.get(id)
+    if (twin !== undefined && sameBytes(twin, ciphertext)) continue
+    insert.run(taken.get(id) === undefined ? id : randomUUID(), ciphertext)
+  }
 }
 
 /**
@@ -429,7 +476,7 @@ function resetDerivedState(context: MergeContext): void {
 /** The merge, in order (see the top of this file); every step runs in one transaction. */
 const MERGE_STEPS: readonly ((context: MergeContext) => void)[] = [
   keepTargetItems,
-  dropFileSecrets,
+  protectFileSecrets,
   appendLocalCredentials,
   appendLocalAppCredentials,
   settleSubscriptionConfiguration,

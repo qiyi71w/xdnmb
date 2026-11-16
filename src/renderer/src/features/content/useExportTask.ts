@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import type { ExportOptions } from '../../../../shared/api'
 import { exportTaskReducer, isBusy, type ExportTask, type ExportTaskEvent } from './exportState'
 
 /*
@@ -32,12 +33,16 @@ export function useExportTask(): ExportTask {
 
 export const exportTask = {
   dispatch,
-  /** Save dialog, space check, start. Ignored while an export starts or runs. */
-  async start(includeOffline: boolean): Promise<void> {
-    if (isBusy(task)) return
+  /**
+   * Save dialog, space check, start. Ignored while an export starts or runs. Resolves whether the
+   * export started (the passphrase then lives only in the main process).
+   */
+  async start(options: ExportOptions): Promise<boolean> {
+    if (isBusy(task)) return false
     dispatch({ type: 'start' })
-    const result = await window.xidao.personalData.startExport({ includeOffline }).catch(() => null)
+    const result = await window.xidao.personalData.startExport(options).catch(() => null)
     dispatch({ type: 'start-result', result })
+    return result?.status === 'started'
   },
   async cancel(): Promise<void> {
     if (task.phase !== 'running' || task.cancelling) return

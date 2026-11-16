@@ -1,5 +1,5 @@
 import { parentPort } from 'node:worker_threads'
-import { readExportEstimate, takeExportSnapshot, trimExportSnapshot, type TrimOptions } from './export-snapshot'
+import { readExportEstimate, readSecretRows, takeExportSnapshot, trimExportSnapshot, type TrimOptions } from './export-snapshot'
 
 /*
  * Worker entry for 导出个人数据: one request per worker, so the main process stays responsive while
@@ -9,6 +9,7 @@ import { readExportEstimate, takeExportSnapshot, trimExportSnapshot, type TrimOp
 export type ExportWorkerRequest =
   | { type: 'estimate'; databasePath: string }
   | { type: 'snapshot'; databasePath: string; workPath: string }
+  | { type: 'secrets'; databasePath: string }
   | { type: 'trim'; workPath: string; options: TrimOptions }
 
 export type ExportWorkerResponse = { ok: true; value: unknown } | { ok: false }
@@ -21,6 +22,7 @@ port.once('message', (request: ExportWorkerRequest) => {
   try {
     const value = request.type === 'estimate' ? readExportEstimate(request.databasePath)
       : request.type === 'snapshot' ? takeExportSnapshot(request.databasePath, request.workPath)
+      : request.type === 'secrets' ? readSecretRows(request.databasePath)
       : trimExportSnapshot(request.workPath, request.options)
     response = { ok: true, value }
   } catch {

@@ -274,11 +274,21 @@ export const THREAD_READ_PURPOSES: readonly ThreadReadPurpose[] = ['display', 'l
  * Why 导出个人数据 did not start or did not finish. `space`: the target volume lacks about
  * `shortBytes`. `sending`: a post is being sent (a send whose result is unknown does not count).
  * `storage`: storage is not writable. `busy`: an export is already running. `read`: this machine's
- * data could not be read. `write`: the chosen location could not be written.
+ * data could not be read. `write`: the chosen location could not be written. `secrets`: a 饼干 or
+ * App UUID to export could not be decrypted on this machine.
  */
 export type ExportFailure =
   | { reason: 'space'; shortBytes: number }
-  | { reason: 'sending' | 'storage' | 'busy' | 'read' | 'write' }
+  | { reason: 'sending' | 'storage' | 'busy' | 'read' | 'write' | 'secrets' }
+
+/**
+ * What 导出… exports. `passphrase`: with 饼干与 App UUID, the 导出口令 (non-empty, any length) the
+ * whole file is encrypted with; null: without them, not encrypted. It only ever goes to main.
+ */
+export interface ExportOptions {
+  includeOffline: boolean
+  passphrase: string | null
+}
 
 /** A running export: bytes of the file written so far, of `totalBytes`. */
 export interface ExportRunning {
@@ -323,8 +333,9 @@ export const EXPORT_PROGRESS_CHANNEL = 'personal-data:export-progress'
  * Why 导入个人数据 refused the chosen file; nothing outside the import's staging was written, and
  * the data is unchanged. `not-export`: not an export file. `newer`: exported by a newer schema;
  * `appVersion` is the version that exported it. `corrupt`: damaged, incomplete or not importable.
+ * `protection`: the file carries 饼干 but this machine cannot protect them.
  */
-export type ImportRejection = { reason: 'not-export' | 'corrupt' } | { reason: 'newer'; appVersion: string }
+export type ImportRejection = { reason: 'not-export' | 'corrupt' | 'protection' } | { reason: 'newer'; appVersion: string }
 
 /**
  * Why a file could not be checked (as opposed to refused). `storage`: storage is not writable.
@@ -343,16 +354,21 @@ export interface ImportSummary {
   appVersion: string
   /** Threads of the offline copies in the file; 0 when it has none. */
   offlineThreads: number
+  /** Whether the file carries 饼干与 App UUID. */
+  secrets: boolean
   /** This machine's 浏览历史 and 发送记录 counts, which the import replaces. */
   local: { history: number; sendRecords: number }
 }
 
 /**
  * Result of 导入个人数据…: the open dialog, then every check. `dismissed`: the dialog was closed or
- * the check cancelled. `ready`: the file passed and waits for `confirmImport` or `cancelImport`.
+ * the check cancelled. `passphrase`: the file is encrypted and waits for `submitImportPassphrase`
+ * (`wrong`: the one given was not its passphrase) or `cancelImport`. `ready`: the file passed and
+ * waits for `confirmImport` or `cancelImport`.
  */
 export type ImportInspection =
   | { status: 'dismissed' }
+  | { status: 'passphrase'; wrong: boolean }
   | { status: 'ready'; summary: ImportSummary }
   | { status: 'rejected'; rejection: ImportRejection }
   | { status: 'failed'; failure: ImportFailure }
@@ -579,7 +595,7 @@ export interface XidaoApi {
   personalData: {
     exportEstimate(): Promise<ExportEstimate>
     /** Save dialog, disk space check, then the export runs in the background. */
-    startExport(input: { includeOffline: boolean }): Promise<ExportStartResult>
+    startExport(input: ExportOptions): Promise<ExportStartResult>
     /** Cancels the running export; its `cancelled` progress follows once the partial file is gone. */
     cancelExport(): Promise<void>
     /** Shows the last exported file in the system file manager. */
@@ -588,6 +604,8 @@ export interface XidaoApi {
     onExportProgress(listener: (progress: ExportProgress) => void): () => void
     /** Open dialog (`.xidao` listed; any file is checked by its content), then every check. */
     inspectImport(): Promise<ImportInspection>
+    /** The 导出口令 of the file waiting for one, then the rest of the check; as many tries as needed. */
+    submitImportPassphrase(input: { passphrase: string }): Promise<ImportInspection>
     /** Builds the import result from the checked file and restarts through the ordinary quit. */
     confirmImport(): Promise<ImportConfirmResult>
     /** Gives up the checked (or still checking) file; its staging is removed. */
@@ -741,6 +759,7 @@ export const IpcChannel = {
   cancelExport: 'personal-data:cancel-export',
   revealExport: 'personal-data:reveal-export',
   inspectImport: 'personal-data:inspect-import',
+  submitImportPassphrase: 'personal-data:submit-passphrase',
   confirmImport: 'personal-data:confirm-import',
   cancelImport: 'personal-data:cancel-import',
   updateGetState: 'updates:get-state',

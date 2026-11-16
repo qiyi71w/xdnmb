@@ -1079,10 +1079,12 @@ export function registerIpc({
     if (raw !== undefined) throw new InvalidRequestError()
     return personalData.estimate()
   })
+  // The 导出口令 only ever comes in (a non-empty string of any length) and is never logged.
   handle(IpcChannel.startExport, async (event, raw) => {
-    const includeOffline = searchRecord(raw, ['includeOffline']).includeOffline
+    const { includeOffline, passphrase } = searchRecord(raw, ['includeOffline', 'passphrase'])
     if (typeof includeOffline !== 'boolean') throw new InvalidRequestError()
-    return personalData.start({ includeOffline }, (defaultName) => chooseExportPath(event.sender, defaultName))
+    if (passphrase !== null && (typeof passphrase !== 'string' || passphrase.length === 0)) throw new InvalidRequestError()
+    return personalData.start({ includeOffline, passphrase }, (defaultName) => chooseExportPath(event.sender, defaultName))
   })
   handle(IpcChannel.cancelExport, async (_event, raw) => {
     if (raw !== undefined) throw new InvalidRequestError()
@@ -1096,6 +1098,11 @@ export function registerIpc({
   handle(IpcChannel.inspectImport, async (event, raw) => {
     if (raw !== undefined) throw new InvalidRequestError()
     return personalImport.inspect(() => chooseImportPath(event.sender))
+  })
+  handle(IpcChannel.submitImportPassphrase, async (_event, raw) => {
+    const { passphrase } = searchRecord(raw, ['passphrase'])
+    if (typeof passphrase !== 'string' || passphrase.length === 0) throw new InvalidRequestError()
+    return personalImport.submitPassphrase(passphrase)
   })
   handle(IpcChannel.confirmImport, async (_event, raw) => {
     if (raw !== undefined) throw new InvalidRequestError()
