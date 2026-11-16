@@ -22,7 +22,10 @@ import { importStagingDirectory } from '../src/main/storage/import-journal'
 import { checkStagedImport, readLocalCounts, stageImport } from '../src/main/storage/import-staging'
 import { MIGRATIONS } from '../src/main/storage/migrations'
 import { settleSwap } from '../src/main/storage/swap-journal'
+import { createIdentityService } from '../src/main/identity/service'
+import { draftIdentities } from './helpers/draft-identities'
 import { testProtector } from './helpers/protector'
+import { asStore } from './helpers/store'
 
 const AT = '2026-11-16T08:00:00.000Z'
 const SUPPORTED = Math.max(...MIGRATIONS.map((migration) => migration.version))
@@ -380,6 +383,37 @@ describe('importing an encrypted file', () => {
     expect(await protectorB.decrypt(after.loadSubscriptionAppCiphertext('uuid-b-own')!)).toBe(APP_UUID_B)
     // Neither a secret nor the passphrase was written anywhere in plain text.
     for (const path of files(userData)) expectNoPlainSecrets(readFileSync(path))
+  }, 60_000)
+
+  it('shows a kept draft whose 饼干 was the same as the file’s with the file’s 饼干, never as 已移除', async () => {
+    const protectorB = testProtector()
+    const { file } = await encryptedExport(testProtector())
+    const { userData, db } = await machineB(protectorB)
+    // B's other draft uses B's own 饼干, which the file does not have.
+    db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '801' }, credentialId: db.listCredentials()[0]!.id,
+      fields: { content: 'B 自己饼干的草稿', title: '', name: '', watermark: false }, attachmentId: null }, AT)
+    const service = importer(userData, protectorB)
+    expect(await service.inspect(async () => file)).toEqual({ status: 'passphrase', wrong: false })
+    expect(await service.submitPassphrase(PASSPHRASE)).toMatchObject({ status: 'ready' })
+    expect(await service.confirm()).toEqual({ status: 'restarting' })
+    db.close()
+    connections.splice(0)
+    expect(settleSwap(join(userData, 'xidao.sqlite'))).toEqual({ kind: 'import', outcome: 'completed' })
+    const after = openReadingDatabase(join(userData, 'xidao.sqlite'), MIGRATIONS, { appVersion: '1.5.0-b' })
+    connections.push(after)
+
+    // The editor continuing each draft names its 饼干: B's draft that used “B 的甲” (the same
+    // userhash as the file's 甲) now uses the file's 甲, not 已移除; B's own 饼干 is kept.
+    const expected: Array<[string, { state: string; credentialId: string; name: string }]> = [
+      ['A 的草稿', { state: 'selected', credentialId: '1', name: '甲' }],
+      ['B 的草稿', { state: 'selected', credentialId: '1', name: '甲' }],
+      ['B 自己饼干的草稿', { state: 'selected', credentialId: '3', name: 'B 自己的' }]
+    ]
+    expect(await draftIdentities(after, join(userData, 'draft-images'), protectorB)).toEqual(expected.sort(([a], [b]) => a.localeCompare(b)))
+    // The 饼干 they use is the file's 甲, readable on B: importing its userhash again finds it.
+    const identity = createIdentityService({ store: asStore(after), protector: protectorB, storageState: () => after.status.state })
+    expect(await identity.importRaw(USERHASH_1, 'AAAAAAA', null)).toMatchObject({ ok: false, failure: { reason: 'duplicate', existing: { id: '1', name: '甲' } } })
+    expect(after.listCredentials().map((credential) => credential.name)).toEqual(['甲', '乙', 'B 自己的'])
   }, 60_000)
 
   it('maps an identical local 饼干 to the file’s ID, so references to it land on the file’s copy', async () => {
