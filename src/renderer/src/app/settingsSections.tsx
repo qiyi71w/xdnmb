@@ -2,7 +2,7 @@
 // global preferences and window behavior. Global preferences go through `write` (shown at once,
 // saved by `useSettingsWriter`); the other sections keep their own APIs.
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type Ref } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import type { AppPlatform } from '../../../shared/api'
 import { BOSS_KEY_DEFAULT, bossKeyLabel, recordBossKey, type BossKeyStatus } from '../../../shared/bossKey'
 import { CLOSE_ACTIONS, type CloseAction, type LoginItemState } from '../../../shared/lifecycle'
@@ -1007,8 +1007,8 @@ const BOSS_KEY_REJECTED: Record<'key' | 'modifier' | 'app', (platform: AppPlatfo
  * 老板键: one row whose combination sits beside the switch it belongs to. The switch and the
  * combination are settings; whether the system took the combination is read whenever 设置 is
  * shown, the window comes back to the front or a saved setting comes back (each read retries a
- * refused one). Recording a combination releases the registered one so the page receives the keys;
- * it ends on Esc, on a recorded press, on leaving the field and on leaving 设置. The row's one help
+ * refused one). While recording, main releases the registered combination and hands every key press
+ * here; it ends on Esc, on a recorded press, on leaving the field and on leaving 设置. The row's one help
  * line says what the recording or the system needs; nothing shows where there is no 老板键 (Linux).
  */
 function BossKeyRow({
@@ -1068,27 +1068,28 @@ function BossKeyRow({
     []
   )
 
-  if (status === 'unsupported') return null
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-    if (!recording || event.key === 'Tab') return
-    // Nothing else (tab shortcuts, closing 设置 on Esc) acts on keys pressed for the recording.
-    event.preventDefault()
-    event.stopPropagation()
-    if (event.nativeEvent.isComposing || event.repeat) return
-    if (event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+  // While recording, main takes every key press (but Tab) before the page and the menus, and hands
+  // it over here: ⌘Q, Alt+F4 and the app's own shortcuts are refused in place instead of acting.
+  useEffect(() => {
+    if (!recording) return
+    return window.xidao.bossKey.onInput((press) => {
+      if (press.repeat) return
+      if (press.key === 'Escape' && !press.ctrlKey && !press.altKey && !press.metaKey && !press.shiftKey) {
+        record(false)
+        return
+      }
+      const result = recordBossKey(press, platform)
+      if (result.kind === 'pending') return
+      if (result.kind === 'rejected') {
+        setRejected(result.reason)
+        return
+      }
       record(false)
-      return
-    }
-    const result = recordBossKey(event, platform)
-    if (result.kind === 'pending') return
-    if (result.kind === 'rejected') {
-      setRejected(result.reason)
-      return
-    }
-    record(false)
-    if (result.accelerator !== settings.bossKey) write({ bossKey: result.accelerator })
-  }
+      if (result.accelerator !== settings.bossKey) write({ bossKey: result.accelerator })
+    })
+  }, [recording, platform, record, settings.bossKey, write])
+
+  if (status === 'unsupported') return null
 
   const help = recording
     ? rejected === null ? '按 Esc 取消' : BOSS_KEY_REJECTED[rejected](platform)
@@ -1120,7 +1121,6 @@ function BossKeyRow({
             // While recording, Space and Enter are presses to record, not a click that cancels.
             if (!recording || event.detail > 0) record(!recording)
           }}
-          onKeyDown={onKeyDown}
           onBlur={() => {
             if (recording) record(false)
           }}

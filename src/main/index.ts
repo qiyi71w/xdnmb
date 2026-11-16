@@ -32,7 +32,8 @@ import { registerIpc, type IpcRegistration } from './ipc'
 import { createLifecycle, type FinishingSummary, type Lifecycle, type MainWindowHost } from './lifecycle/controller'
 import { isProcessRunning, relaunchArguments, relaunchedAfter, takeSingleInstanceLock } from './lifecycle/relaunch'
 import { createLoginItemService, LOGIN_LAUNCH_ARG } from './loginItem'
-import { createBossKeyService, type BossKeyService } from './bossKey'
+import { createBossKeyService, recordingPress, type BossKeyService } from './bossKey'
+import { BOSS_KEY_INPUT_CHANNEL } from '../shared/bossKey'
 import { createReadingService } from './reading/service'
 import { createRequestScheduler } from './reading/scheduler'
 import type { AppStore } from './storage/contract'
@@ -208,8 +209,14 @@ function createWindow(): BrowserWindow {
     void lifecycle.closeRequested()
   })
   window.webContents.on('before-input-event', (event, input) => {
-    // While 设置 records a 老板键, Ctrl/Cmd+0 and the other zoom keys go to the page, which refuses them.
-    if (bossKey?.recording === true) return
+    // While 设置 records a 老板键 the key presses go to the recording instead (see `recordingPress`).
+    if (bossKey?.recording === true) {
+      const press = recordingPress(input)
+      if (press === null) return
+      event.preventDefault()
+      window.webContents.send(BOSS_KEY_INPUT_CHANNEL, press)
+      return
+    }
     const action = zoomActionOf(input, platform)
     if (action === null) return
     event.preventDefault()
@@ -644,12 +651,13 @@ async function start(): Promise<void> {
       searchService.resume()
       analyticsService.resume()
       void searchService.recover().catch(() => console.error('[search] index unavailable'))
+      // Before the page loads, so a 后台驻留 start leaves the Dock as early as it can.
+      showInDock(show)
       const { promise, resolve } = Promise.withResolvers<void>()
       const window = createWindow()
       windowShown = false
       attach(window)
       window.once('ready-to-show', () => {
-        showInDock(show)
         windowShown = show
         if (show) window.show()
         resolve()

@@ -1,4 +1,4 @@
-import type { BossKeyStatus } from '../shared/bossKey'
+import type { BossKeyPress, BossKeyStatus } from '../shared/bossKey'
 import type { AppSettings } from '../shared/settings'
 
 export interface BossKeyDeps {
@@ -20,8 +20,34 @@ export interface BossKeyService {
   status(): BossKeyStatus
   /** While recording a new combination the registered one is released, so pressing it reaches the page. */
   setRecording(recording: boolean): BossKeyStatus
-  /** The settings page is recording a combination: the window's own key handling stays out of its way. */
+  /** The settings page is recording a combination: the window hands its key presses over. */
   readonly recording: boolean
+}
+
+/** The parts of Electron's `before-input-event` input read while recording. */
+export interface WindowKeyInput {
+  type: string
+  key: string
+  code: string
+  isAutoRepeat: boolean
+  control: boolean
+  alt: boolean
+  shift: boolean
+  meta: boolean
+}
+
+/**
+ * A key press the window takes for the recording instead of acting on it (the page, menu shortcuts
+ * such as ⌘Q, and Alt+F4 never see it); `null` for key releases and for plain Tab / Shift+Tab, which
+ * keep moving focus.
+ */
+export function recordingPress(input: WindowKeyInput): BossKeyPress | null {
+  if (input.type !== 'keyDown') return null
+  if (input.key === 'Tab' && !input.control && !input.alt && !input.meta) return null
+  return {
+    key: input.key, code: input.code, repeat: input.isAutoRepeat,
+    ctrlKey: input.control, altKey: input.alt, shiftKey: input.shift, metaKey: input.meta
+  }
 }
 
 /**

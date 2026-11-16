@@ -62,6 +62,19 @@ export interface BossKeyInput {
 }
 
 /**
+ * Main → renderer: a key pressed in the window while a 老板键 is being recorded. Main takes every such
+ * press (but Tab) before the page and the menus see it, so ⌘Q, Alt+F4 and the app's own shortcuts are
+ * recorded (and refused) instead of acting.
+ */
+export const BOSS_KEY_INPUT_CHANNEL = 'boss-key:input'
+
+export interface BossKeyPress extends BossKeyInput {
+  /** `KeyboardEvent.key`: Esc ends the recording. */
+  key: string
+  repeat: boolean
+}
+
+/**
  * One key press while recording a 老板键.
  * - `pending`: only modifiers so far; keep listening.
  * - `rejected`: `key` — the key cannot be one (only letters, digits and F1–F12); `modifier` — needs
@@ -127,4 +140,6 @@ export interface BossKeyApi {
    * reaches the page; `false` registers it again. Leaving the page always ends a recording.
    */
   setRecording(input: { recording: boolean }): Promise<BossKeyStatus>
+  /** Key presses taken by main while recording; returns the unsubscribe function. */
+  onInput(listener: (press: BossKeyPress) => void): () => void
 }

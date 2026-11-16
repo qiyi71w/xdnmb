@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BOSS_KEY_DEFAULT, bossKeyLabel, recordBossKey, type BossKeyInput } from '../src/shared/bossKey'
 import { applySettingsPatch, DEFAULT_SETTINGS, settingsFromStored } from '../src/shared/settings'
-import { createBossKeyService } from '../src/main/bossKey'
+import { createBossKeyService, recordingPress, type WindowKeyInput } from '../src/main/bossKey'
 
 const press = (code: string, modifiers: Partial<Omit<BossKeyInput, 'code'>> = {}): BossKeyInput => ({
   code, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...modifiers
@@ -47,47 +47,73 @@ describe('老板键 recording', () => {
     }
     expect(settingsFromStored(new Map([['bossKey', 'H']])).bossKey).toBe(BOSS_KEY_DEFAULT)
   })
+
+  it('takes every key press but plain Tab from the window while recording, so menu and window shortcuts are refused instead of acting', () => {
+    const input = (key: string, code: string, modifiers: Partial<WindowKeyInput> = {}): WindowKeyInput => ({
+      type: 'keyDown', key, code, isAutoRepeat: false, control: false, alt: false, shift: false, meta: false, ...modifiers
+    })
+    const quit = recordingPress(input('q', 'KeyQ', { meta: true }))
+    expect(quit).toEqual({ key: 'q', code: 'KeyQ', repeat: false, ctrlKey: false, altKey: false, shiftKey: false, metaKey: true })
+    expect(quit === null ? null : recordBossKey(quit, 'darwin')).toEqual({ kind: 'rejected', reason: 'app' })
+    const close = recordingPress(input('F4', 'F4', { alt: true }))
+    expect(close === null ? null : recordBossKey(close, 'win32')).toEqual({ kind: 'rejected', reason: 'app' })
+    expect(recordingPress(input('Escape', 'Escape'))).toMatchObject({ key: 'Escape' })
+    expect(recordingPress(input('Tab', 'Tab'))).toBeNull()
+    expect(recordingPress(input('Tab', 'Tab', { shift: true }))).toBeNull()
+    expect(recordingPress(input('Tab', 'Tab', { control: true }))).toMatchObject({ code: 'Tab', ctrlKey: true })
+    expect(recordingPress({ ...input('q', 'KeyQ', { meta: true }), type: 'keyUp' })).toBeNull()
+  })
 })
 
 describe('老板键 registration', () => {
   function setup(platform: NodeJS.Platform = 'win32') {
     const held = new Set<string>()
-    const registered = new Set<string>()
+    /** Registered combinations and the callback each runs when pressed. */
+    const registered = new Map<string, () => void>()
+    let presses = 0
     const service = createBossKeyService({
       platform,
-      register(accelerator) {
+      register(accelerator, pressed) {
         if (held.has(accelerator)) return false
-        registered.add(accelerator)
+        registered.set(accelerator, pressed)
         return true
       },
       unregister: (accelerator) => registered.delete(accelerator),
-      pressed: () => undefined
+      pressed: () => presses++
     })
-    return { service, held, registered }
+    return {
+      service, held,
+      get registered() { return [...registered.keys()] },
+      press: (accelerator: string) => registered.get(accelerator)?.(),
+      get presses() { return presses }
+    }
   }
 
   it('registers while turned on, swaps the combination and releases it while recording', () => {
     const s = setup()
     s.service.configure({ bossKeyEnabled: false, bossKey: BOSS_KEY_DEFAULT })
+    expect(s.registered).toEqual([])
     expect(s.service.status()).toBe('off')
-    expect([...s.registered]).toEqual([])
 
+    // Registered by the settings change itself, before anything asks for the status.
     s.service.configure({ bossKeyEnabled: true, bossKey: BOSS_KEY_DEFAULT })
+    expect(s.registered).toEqual([BOSS_KEY_DEFAULT])
     expect(s.service.status()).toBe('active')
-    expect([...s.registered]).toEqual([BOSS_KEY_DEFAULT])
+    s.press(BOSS_KEY_DEFAULT)
+    expect(s.presses).toBe(1)
 
     s.service.configure({ bossKeyEnabled: true, bossKey: 'Alt+K' })
-    expect([...s.registered]).toEqual(['Alt+K'])
+    expect(s.registered).toEqual(['Alt+K'])
 
     expect(s.service.setRecording(true)).toBe('active')
     expect(s.service.recording).toBe(true)
-    expect([...s.registered]).toEqual([])
+    expect(s.registered).toEqual([])
     expect(s.service.setRecording(false)).toBe('active')
     expect(s.service.recording).toBe(false)
-    expect([...s.registered]).toEqual(['Alt+K'])
+    expect(s.registered).toEqual(['Alt+K'])
 
     s.service.configure({ bossKeyEnabled: false, bossKey: 'Alt+K' })
-    expect([...s.registered]).toEqual([])
+    expect(s.registered).toEqual([])
   })
 
   it('keeps a refused combination turned on and registers it once the other program lets go', () => {
@@ -98,7 +124,7 @@ describe('老板键 registration', () => {
     s.held.clear()
     // Asking again (设置 shown) retries.
     expect(s.service.status()).toBe('active')
-    expect([...s.registered]).toEqual([BOSS_KEY_DEFAULT])
+    expect(s.registered).toEqual([BOSS_KEY_DEFAULT])
   })
 
   it('treats a combination Electron cannot parse as refused', () => {
@@ -116,6 +142,6 @@ describe('老板键 registration', () => {
     const s = setup('linux')
     s.service.configure({ bossKeyEnabled: true, bossKey: BOSS_KEY_DEFAULT })
     expect(s.service.status()).toBe('unsupported')
-    expect([...s.registered]).toEqual([])
+    expect(s.registered).toEqual([])
   })
 })
