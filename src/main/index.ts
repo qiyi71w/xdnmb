@@ -39,7 +39,7 @@ import { createRequestScheduler } from './reading/scheduler'
 import type { AppStore } from './storage/contract'
 import { openReadingStore } from './storage/store'
 import { markUpgradeWithoutBackup } from './storage/backup'
-import { settleRestore, type RestoreOutcome } from './storage/restore-journal'
+import { settleSwap, type SwapSettlement } from './storage/swap-journal'
 import { createRestoreService } from './storage/restore-service'
 import { createUpgradeService } from './storage/upgrade'
 import createStorageWorker from './storage/worker?nodeWorker'
@@ -346,23 +346,22 @@ async function start(): Promise<void> {
   denyAll.setPermissionCheckHandler((contents, permission, _origin, details) =>
     permission === 'local-fonts' && contents === mainWindow?.webContents && details.isMainFrame && typeof details.requestingUrl === 'string' && isAppDocument(details.requestingUrl))
 
-  // A restore the previous run prepared is carried out (or abandoned) here: the lock is held, the
-  // previous process has ended, and the database is not open yet. One that cannot be settled
-  // leaves the database unopened this run; the next start continues it.
+  // A swap the previous run prepared (such as a restore) is carried out (or abandoned) here: the
+  // lock is held, the previous process has ended, and the database is not open yet. One that cannot
+  // be settled leaves the database unopened this run; the next start continues it.
   const databasePath = join(app.getPath('userData'), 'xidao.sqlite')
-  let restore: RestoreOutcome | null
+  let swap: SwapSettlement | null | undefined
   try {
-    restore = settleRestore(databasePath)
+    swap = settleSwap(databasePath)
   } catch {
-    console.error('[storage] restore not settled')
-    restore = null
+    console.error('[storage] swap not settled')
   }
-  if (restore === 'abandoned') console.error('[storage] restore abandoned')
+  if (swap?.outcome === 'abandoned') console.error(`[storage] ${swap.kind} abandoned`)
   const openedStore = await openReadingStore({
     databasePath,
     appVersion: app.getVersion(),
     createWorker: createStorageWorker,
-    skipOpen: restore === null
+    skipOpen: swap === undefined
   })
   store = openedStore
   if (openedStore.status.state !== 'ready') console.error('[storage] status', openedStore.status.state)
@@ -749,7 +748,7 @@ async function start(): Promise<void> {
       updateService.configure(saved)
       bossKeyService.configure(saved)
     }),
-    getStatus: () => ({ storage: openedStore.status, platform, restoreAbandoned: restore === 'abandoned' }),
+    getStatus: () => ({ storage: openedStore.status, platform, restoreAbandoned: swap?.kind === 'restore' && swap.outcome === 'abandoned' }),
     upgrade: createUpgradeService({
       status: () => openedStore.status,
       markWithoutBackup: (schemaVersion) => markUpgradeWithoutBackup(app.getPath('userData'), schemaVersion),

@@ -4,7 +4,8 @@ import { basename, dirname, join } from 'node:path'
 import type { RestoreInfo } from '../../shared/api'
 import { BACKUP_DATABASE, BACKUP_DRAFT_IMAGES, preUpgradeBackupDirectory, readPreUpgradeBackup, type PreUpgradeManifest } from './backup'
 import type { RestorePreparation } from './contract'
-import { discardRestoreJournal, restoreStagingDirectory, writeRestoreJournal } from './restore-journal'
+import { restoreStagingDirectory } from './restore-journal'
+import { beginSwap, discardSwapJournal, SwapPendingError, swapPending } from './swap-journal'
 import { copyFileDurably, syncFile } from './durable'
 
 /*
@@ -104,9 +105,10 @@ function filterSecrets(path: string, keys: SecretKeys | null, schemaVersion: num
 }
 
 /**
- * Stages the restore and writes the journal the next start carries out. `prepared`: the app may now
+ * Stages the restore and begins the swap the next start carries out. `prepared`: the app may now
  * restart. `not-applicable`: the data is not a newer version's, or there is no restorable backup.
  * `failed`: nothing was staged and no journal is left; the current data and files are unchanged.
+ * While another swap is pending (its journal and staged data untouched) the restore also `failed`.
  */
 export function prepareRestore(source: RestoreSource | null): RestorePreparation {
   if (source === null) return 'not-applicable'
@@ -114,10 +116,10 @@ export function prepareRestore(source: RestoreSource | null): RestorePreparation
   if (manifest === null) return 'not-applicable'
   const keys = readSecretKeys(source.current)
   const userData = dirname(source.databasePath)
+  if (swapPending(userData)) return 'failed'
   const backup = preUpgradeBackupDirectory(userData)
   const staging = restoreStagingDirectory(userData)
   try {
-    discardRestoreJournal(userData)
     rmSync(staging, { recursive: true, force: true })
     mkdirSync(join(staging, BACKUP_DRAFT_IMAGES), { recursive: true })
     for (const image of manifest.draftImages) {
@@ -130,11 +132,12 @@ export function prepareRestore(source: RestoreSource | null): RestorePreparation
     filterSecrets(database, keys, manifest.schemaVersion)
     syncFile(database)
     // Staged entries the system had not flushed by a crash only make the next start abandon.
-    writeRestoreJournal(userData, { format: 1, phase: 'prepared', databaseSize: lstatSync(database).size, draftImages: manifest.draftImages })
+    beginSwap(userData, { kind: 'restore', phase: 'prepared', databaseSize: lstatSync(database).size, draftImages: manifest.draftImages })
     return 'prepared'
-  } catch {
+  } catch (error) {
+    if (error instanceof SwapPendingError) return 'failed'
     try {
-      discardRestoreJournal(userData)
+      discardSwapJournal(userData)
       rmSync(staging, { recursive: true, force: true })
     } catch {
       // Without a journal, the next start removes the staged copy.

@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { preUpgradeBackupDirectory } from '../src/main/storage/backup'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS, type Migration } from '../src/main/storage/migrations'
-import { beforeRestoreDirectory, restoreStagingDirectory, settleRestore } from '../src/main/storage/restore-journal'
+import { beforeRestoreDirectory, restoreStagingDirectory } from '../src/main/storage/restore-journal'
+import { beginSwap, settleSwap, SwapPendingError } from '../src/main/storage/swap-journal'
 import { createSubscriptionService } from '../src/main/subscriptions/service'
 import { createRequestScheduler } from '../src/main/reading/scheduler'
 import type { SubscriptionOperation, SubscriptionPlan } from '../src/shared/subscriptions'
@@ -55,6 +56,14 @@ function open(folder: string, migrations: readonly Migration[], appVersion = NEW
   const db = openReadingDatabase(databaseOf(folder), migrations, { appVersion, now: () => now })
   connections.push(db)
   return db
+}
+
+/** Settles the swap journal as a start does, naming what happened to a restore. */
+function settleRestore(databasePath: string, options?: { step?: () => void }): 'none' | 'restored' | 'abandoned' {
+  const settled = settleSwap(databasePath, options)
+  if (settled === null) return 'none'
+  expect(settled.kind).toBe('restore')
+  return settled.outcome === 'completed' ? 'restored' : 'abandoned'
 }
 
 function close(db: ReadingDatabase): void {
@@ -462,6 +471,51 @@ describe('restore journal', () => {
     writeFileSync(join(folder, 'backups', 'restore-journal.json'), '{"format":1,"phase":')
     expect(() => settleRestore(databaseOf(folder))).toThrow()
     expect(completeIn(newer, [folder])).toBe(true)
+  })
+
+  it('refuses to begin another swap while one is pending, leaving its journal and staged data byte for byte', () => {
+    const { folder, newer, staged } = prepared()
+    const journalPath = join(folder, 'backups', 'restore-journal.json')
+    const journal = readFileSync(journalPath)
+    expect(JSON.parse(journal.toString('utf8'))).toMatchObject({ format: 1, kind: 'restore', phase: 'prepared' })
+
+    const db = open(folder, OLD)
+    expect(db.prepareRestore()).toBe('failed')
+    close(db)
+    expect(() => beginSwap(folder, { kind: 'restore', phase: 'prepared', databaseSize: 1, draftImages: [] })).toThrow(SwapPendingError)
+    expect(readFileSync(journalPath)).toEqual(journal)
+    expect(stagedFiles(folder)).toEqual(staged)
+    expect(newerFiles(folder)).toEqual(newer)
+
+    // A journal that cannot be read may be pending too.
+    const unreadable = Buffer.from('{"format":1,"phase":')
+    writeFileSync(journalPath, unreadable)
+    const again = open(folder, OLD)
+    expect(again.prepareRestore()).toBe('failed')
+    close(again)
+    expect(readFileSync(journalPath)).toEqual(unreadable)
+    expect(stagedFiles(folder)).toEqual(staged)
+
+    writeFileSync(journalPath, journal)
+    expect(settleRestore(databaseOf(folder))).toBe('restored')
+    expectRestored(folder, newer)
+  })
+
+  it('carries out a restore journal written before swaps had kinds, and never opens data under a kind it does not know', () => {
+    const { folder, newer } = prepared()
+    const journalPath = join(folder, 'backups', 'restore-journal.json')
+    const { kind, ...released } = JSON.parse(readFileSync(journalPath, 'utf8')) as Record<string, unknown>
+    expect(kind).toBe('restore')
+
+    writeFileSync(journalPath, JSON.stringify({ ...released, kind: 'later-kind', format: 2 }))
+    expect(() => settleRestore(databaseOf(folder))).toThrow()
+    writeFileSync(journalPath, JSON.stringify({ ...released, format: 2 }))
+    expect(() => settleRestore(databaseOf(folder))).toThrow()
+    expect(completeIn(newer, [folder])).toBe(true)
+
+    writeFileSync(journalPath, JSON.stringify(released))
+    expect(settleRestore(databaseOf(folder))).toBe('restored')
+    expectRestored(folder, newer)
   })
 
   // Every interruption point runs a full restore with durable writes; fsync makes this slow on macOS.

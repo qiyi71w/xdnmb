@@ -38,3 +38,24 @@ export function syncDirectory(path: string): void {
     // The files themselves were flushed.
   }
 }
+
+/** Whether anything is at `path`; throws when that cannot be told. */
+export function present(path: string): boolean {
+  try {
+    lstatSync(path)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+/** Size in bytes of the file at `path`; null when there is no file there. */
+export function sizeOf(path: string): number | null {
+  try {
+    const stat = lstatSync(path)
+    return stat.isFile() ? stat.size : null
+  } catch {
+    return null
+  }
+}
