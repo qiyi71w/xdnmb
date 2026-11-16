@@ -9,6 +9,7 @@ import { createLifecycle } from '../src/main/lifecycle/controller'
 import { settleQuitSends } from '../src/renderer/src/features/lifecycle/quitSends'
 import type { Editor } from '../src/renderer/src/features/editor/editorsState'
 import { tmpdir } from 'node:os'
+import { open } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
@@ -25,7 +26,9 @@ import { beginSwap, settleSwap } from '../src/main/storage/swap-journal'
 import { preUpgradeBackupDirectory } from '../src/main/storage/backup'
 import { createExportService } from '../src/main/personal-data/service'
 import { createImportService, type ImportDatabase } from '../src/main/personal-data/import'
-import { CONTAINER_MAGIC, CONTAINER_VERSION, ENTRY_TYPE, readContainer, type ExportManifest } from '../src/main/personal-data/container'
+import { CONTAINER_MAGIC, CONTAINER_VERSION, DATABASE_NAME, ENTRY_TYPE, readContainer, writeContainer, type ExportManifest } from '../src/main/personal-data/container'
+import { newEncryption } from '../src/main/personal-data/encryption'
+import type { SecretProtector } from '../src/main/identity/protection'
 
 const AT = '2026-11-16T08:00:00.000Z'
 const EARLIER = '2026-11-15T08:00:00.000Z'
@@ -222,14 +225,18 @@ const inProcess: ImportDatabase = {
   abort: () => undefined
 }
 
-function importer(userData: string, options: { restart?: () => Promise<QuitEnd>; limits?: { maxTotalBytes?: number; maxManifestBytes?: number } } = {}) {
+function importer(userData: string, options: {
+  restart?: () => Promise<QuitEnd>
+  limits?: { maxTotalBytes?: number; maxManifestBytes?: number }
+  protector?: SecretProtector
+} = {}) {
   const restarts: number[] = []
   const service = createImportService({
     databasePath: join(userData, 'xidao.sqlite'),
     supportedVersion: SUPPORTED,
     status: () => ({ state: 'ready', schemaVersion: SUPPORTED }),
     database: inProcess,
-    protector: testProtector(),
+    protector: options.protector ?? testProtector(),
     restart: async () => {
       restarts.push(1)
       return options.restart === undefined ? 'exiting' : options.restart()
@@ -297,6 +304,32 @@ async function prepared(): Promise<{ userData: string; current: Map<string, stri
   return { userData, current: currentData(userData), staged: tree(importStagingDirectory(userData)) }
 }
 
+/** An encrypted export file; only its plain-text header is read before the passphrase. */
+async function encryptedFile(): Promise<string> {
+  const dir = folder('xidao-import-encrypted-')
+  const source = join(dir, 'source.bin')
+  writeFileSync(source, 'database bytes')
+  const manifest: ExportManifest = {
+    containerVersion: CONTAINER_VERSION, schemaVersion: SUPPORTED, appVersion: '1.5.0', exportedAt: AT,
+    includes: { offlineCopies: false, secrets: true }, credentialSequence: 0,
+    entries: { database: { count: 1, bytes: 14 }, draftImages: { count: 0, bytes: 0 }, offlineImages: { count: 0, bytes: 0 } },
+    stats: { history: 0, sendRecords: 0, offlineThreads: 0 }
+  }
+  const { params, keys } = await newEncryption('导出口令')
+  const file = join(dir, 'encrypted.xidao')
+  const handle = await open(file, 'wx')
+  const input = await open(source, 'r')
+  try {
+    await writeContainer(handle, { manifest, sources: [{ type: ENTRY_TYPE.database, name: DATABASE_NAME, bytes: 14, handle: input }] }, {
+      signal: new AbortController().signal, onProgress: () => undefined, encryption: { params, key: keys.content }
+    })
+  } finally {
+    await handle.close()
+    await input.close()
+  }
+  return file
+}
+
 function reopen(userData: string): ReadingDatabase {
   const db = openReadingDatabase(join(userData, 'xidao.sqlite'), MIGRATIONS, { appVersion: '1.5.0-b' })
   connections.push(db)
@@ -359,6 +392,48 @@ describe('import inspection and confirmation', () => {
     expect(await service.confirm()).toEqual({ status: 'failed' })
     expect(restarts).toEqual([])
     expect(await service.inspect(async () => null)).toEqual({ status: 'dismissed' })
+  })
+
+  it('a 取消 right after the file is chosen ends the check before it reads anything', async () => {
+    const { userData } = targetMachine()
+    const outside = tree(userData)
+    const { service } = importer(userData)
+    const chosen = Promise.withResolvers<string | null>()
+    const inspection = service.inspect(() => chosen.promise)
+    // The file is chosen and 取消 arrives before the check goes on to read its header.
+    chosen.resolve(exported().file)
+    const cancelled = service.cancel()
+    expect(await inspection).toEqual({ status: 'dismissed' })
+    await cancelled
+    expect(existsSync(importStagingDirectory(userData))).toBe(false)
+    expect(tree(userData)).toEqual(outside)
+    expect(await service.confirm()).toEqual({ status: 'failed' })
+    // The next file is checked as usual.
+    expect((await service.inspect(async () => exported().file)).status).toBe('ready')
+  })
+
+  it.each([['取消'], ['a quit']] as const)('%s while this machine’s protection is checked for an encrypted file asks for no passphrase', async (how) => {
+    const { userData } = targetMachine()
+    const file = await encryptedFile()
+    const asked = Promise.withResolvers<void>()
+    const answer = Promise.withResolvers<boolean>()
+    const protector: SecretProtector = {
+      ...testProtector(),
+      isAvailable() {
+        asked.resolve()
+        return answer.promise
+      }
+    }
+    const { service } = importer(userData, { protector })
+    const inspection = service.inspect(async () => file)
+    await asked.promise
+    const ended = how === '取消' ? service.cancel() : service.stop()
+    answer.resolve(true)
+    await ended
+    expect(await inspection).toEqual({ status: 'dismissed' })
+    expect(existsSync(importStagingDirectory(userData))).toBe(false)
+    // Nothing waits for a passphrase.
+    expect(await service.submitPassphrase('anything')).toEqual({ status: 'failed', failure: { reason: 'busy' } })
   })
 
   it('merges: this machine’s cookies after the file’s sequence, file references never resolve to them, target-kept items stay', async () => {

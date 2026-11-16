@@ -21,7 +21,10 @@ export type ExportTaskEvent =
   | { type: 'start-result'; result: ExportStartResult | null }
   | { type: 'progress'; progress: ExportProgress }
   | { type: 'cancel' }
-  /** What the main process reports running now (from the estimate). */
+  /**
+   * What the main process reports running now (from the estimate). Only a window that has not
+   * heard how an export ended takes a running one up: idle, or refused as busy by one it missed.
+   */
   | { type: 'sync'; running: ExportRunning | null }
   /** A finished outcome was seen and is put away (settings left, dialog reopened). */
   | { type: 'dismiss' }
@@ -56,11 +59,13 @@ export function exportTaskReducer(task: ExportTask, event: ExportTaskEvent): Exp
     case 'cancel':
       return task.phase === 'running' && !task.cancelling ? { ...task, cancelling: true } : task
     case 'sync':
-      if (event.running !== null && !isBusy(task)) {
-        return { phase: 'running', writtenBytes: event.running.writtenBytes, totalBytes: event.running.totalBytes, cancelling: false }
+      if (event.running !== null) {
+        // A finished outcome this window heard stays: a running report can only predate it.
+        const unseen = task.phase === 'idle' || (task.phase === 'failed' && task.failure.reason === 'busy')
+        return unseen ? { phase: 'running', writtenBytes: event.running.writtenBytes, totalBytes: event.running.totalBytes, cancelling: false } : task
       }
       // Nothing runs any more: an outcome this window did not hear about.
-      return event.running === null && task.phase === 'running' ? IDLE : task
+      return task.phase === 'running' ? IDLE : task
     case 'dismiss':
       return isBusy(task) ? task : IDLE
   }
@@ -71,25 +76,43 @@ export function offlineChoiceText(offline: { threads: number; bytes: number }): 
   return `离线副本（${offline.threads} 个串，约 ${formatBytes(offline.bytes)}）`
 }
 
-/** The 饼干与 App UUID choice (off by default) and its 导出口令, typed twice. */
+/**
+ * The 饼干与 App UUID choice (off by default) and its 导出口令, typed twice. `edited`: either
+ * field has been typed in since the fields were last empty and untouched.
+ */
 export interface SecretsChoice {
   include: boolean
   passphrase: string
   confirmation: string
+  edited: boolean
 }
 
-export const NO_SECRETS: SecretsChoice = { include: false, passphrase: '', confirmation: '' }
+export const NO_SECRETS: SecretsChoice = { include: false, passphrase: '', confirmation: '', edited: false }
+
+/** Typing in a passphrase field. */
+export function editSecrets(choice: SecretsChoice, typed: { passphrase: string } | { confirmation: string }): SecretsChoice {
+  return { ...choice, ...typed, edited: true }
+}
+
+/** Once the export has the passphrase: both fields empty again, as if never typed in. */
+export function clearedSecrets(choice: SecretsChoice): SecretsChoice {
+  return { ...choice, passphrase: '', confirmation: '', edited: false }
+}
+
+export const EMPTY_PASSPHRASE_TEXT = '口令不能为空'
 
 /**
  * The passphrase fields. `ready`: 导出… may start with this choice (without secrets always; with
  * them only for a non-empty passphrase typed the same twice, of any length and strength).
- * `mismatch`: the second entry, once typed, differs; said beside it.
+ * `mismatch`: the second entry, once typed, differs; said beside it. `empty`: once a field has been
+ * typed in, the passphrase is empty; said beside the first field (not on the form just ticked).
  */
-export function secretsState(choice: SecretsChoice): { ready: boolean; mismatch: boolean } {
-  if (!choice.include) return { ready: true, mismatch: false }
+export function secretsState(choice: SecretsChoice): { ready: boolean; mismatch: boolean; empty: boolean } {
+  if (!choice.include) return { ready: true, mismatch: false, empty: false }
   return {
     ready: choice.passphrase.length > 0 && choice.passphrase === choice.confirmation,
-    mismatch: choice.confirmation.length > 0 && choice.confirmation !== choice.passphrase
+    mismatch: choice.confirmation.length > 0 && choice.confirmation !== choice.passphrase,
+    empty: choice.edited && choice.passphrase.length === 0
   }
 }
 

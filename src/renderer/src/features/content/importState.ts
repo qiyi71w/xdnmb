@@ -74,7 +74,9 @@ export function importFlowReducer(flow: ImportFlow, event: ImportFlowEvent): Imp
     case 'inspect':
       return importBusy(flow) ? flow : { phase: 'inspecting', cancelling: false }
     case 'inspected':
-      return flow.phase === 'inspecting' ? checked(event.result) : flow
+      // A check that ends after 取消 gives the file up whatever it found.
+      if (flow.phase !== 'inspecting') return flow
+      return flow.cancelling ? IDLE : checked(event.result)
     case 'submit':
       return flow.phase === 'locked' && !flow.busy && !flow.cancelling ? { ...flow, busy: true } : flow
     case 'submitted':

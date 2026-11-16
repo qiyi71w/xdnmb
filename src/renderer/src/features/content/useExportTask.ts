@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { ExportOptions } from '../../../../shared/api'
+import type { ExportEstimate, ExportOptions } from '../../../../shared/api'
 import { exportTaskReducer, isBusy, type ExportTask, type ExportTaskEvent } from './exportState'
 
 /*
@@ -10,8 +10,11 @@ import { exportTaskReducer, isBusy, type ExportTask, type ExportTaskEvent } from
 let task: ExportTask = { phase: 'idle' }
 const listeners = new Set<() => void>()
 let listening = false
+/** Outcomes heard so far; an estimate asked for before the latest one is older than it. */
+let outcomes = 0
 
 function dispatch(event: ExportTaskEvent): void {
+  if (event.type === 'progress' && event.progress.status !== 'running') outcomes++
   const next = exportTaskReducer(task, event)
   if (next === task) return
   task = next
@@ -33,6 +36,21 @@ export function useExportTask(): ExportTask {
 
 export const exportTask = {
   dispatch,
+  /**
+   * Reads the estimate; null while unknown (the IPC call failed). Also tells the task what runs
+   * now, unless an outcome was heard while it was read (what it says running has ended since).
+   */
+  async estimate(): Promise<ExportEstimate | null> {
+    const heard = outcomes
+    let estimate: ExportEstimate
+    try {
+      estimate = await window.xidao.personalData.exportEstimate()
+    } catch {
+      return null
+    }
+    if (estimate.available && outcomes === heard) dispatch({ type: 'sync', running: estimate.running })
+    return estimate
+  },
   /**
    * Save dialog, space check, start. Ignored while an export starts or runs. Resolves whether the
    * export started (the passphrase then lives only in the main process).

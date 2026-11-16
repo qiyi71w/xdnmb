@@ -137,7 +137,7 @@ export function createExportService(deps: {
     return { opened, missing }
   }
 
-  async function run(target: string, input: ExportOptions, controller: AbortController, running: ExportRunning): Promise<void> {
+  async function run(target: string, input: ExportOptions, controller: AbortController, running: ExportRunning): Promise<ExportProgress> {
     const { signal } = controller
     const { includeOffline } = input
     const stem = join(dirname(target), `.${basename(target)}.${randomBytes(6).toString('hex')}`)
@@ -228,7 +228,7 @@ export function createExportService(deps: {
     for (const handle of handles) await handle.close().catch(() => undefined)
     // The temporary files go before the outcome is told, so nothing partial outlives it.
     for (const path of [partPath, workPath, `${workPath}-journal`]) await rm(path, { force: true }).catch(() => undefined)
-    deps.publish(outcome)
+    return outcome
   }
 
   function cancel(): void {
@@ -241,19 +241,22 @@ export function createExportService(deps: {
     async estimate() {
       const state = deps.status().state
       if (state !== 'ready') return { available: false, reason: state === 'read-only' ? 'read-only' : 'unavailable' }
-      const running = job === null ? null : { ...job.running }
+      // What runs when the answer goes out, not when it was asked for: an export that ended
+      // meanwhile has told its outcome already and must not be reported running after it.
+      const runningNow = () => (job === null ? null : { ...job.running })
       try {
         const counts = await deps.database.estimate(deps.databasePath)
+        const totalBytes = (await databaseBytes()) + counts.draftImageBytes + counts.offlineBytes
         return {
           available: true,
-          running,
+          running: runningNow(),
           contents: {
             offline: counts.offlineThreads === 0 ? null : { threads: counts.offlineThreads, bytes: counts.offlineBytes },
-            totalBytes: (await databaseBytes()) + counts.draftImageBytes + counts.offlineBytes
+            totalBytes
           }
         }
       } catch {
-        return { available: true, running, contents: null }
+        return { available: true, running: runningNow(), contents: null }
       }
     },
 
@@ -294,9 +297,16 @@ export function createExportService(deps: {
         const running: ExportRunning = { status: 'running', writtenBytes: 0, totalBytes: estimated }
         const current = { controller, running, done: Promise.resolve() }
         job = current
-        current.done = run(target, input, controller, running).finally(() => {
-          if (job === current) job = null
-        })
+        current.done = (async () => {
+          let outcome: ExportProgress
+          try {
+            outcome = await run(target, input, controller, running)
+          } finally {
+            if (job === current) job = null
+          }
+          // Told only once nothing runs: an estimate answered from here on reports no export.
+          deps.publish(outcome)
+        })()
         return { status: 'started' }
       } finally {
         starting = false

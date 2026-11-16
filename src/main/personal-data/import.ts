@@ -59,7 +59,7 @@ export interface ImportService {
   submitPassphrase(passphrase: string): Promise<ImportInspection>
   /** Once per checked file; repeated while it runs, the same result. */
   confirm(): Promise<ImportConfirmResult>
-  /** Gives up a file being checked or checked; nothing while the import is being prepared or carried out. */
+  /** Gives up a file once chosen, while checked or checked; nothing while the import is being prepared or carried out. */
   cancel(): Promise<void>
   /** Quitting: stops checking or preparing and removes the staging, unless the quit is the import's own. */
   stop(): Promise<void>
@@ -100,8 +100,12 @@ export function createImportService(deps: {
   let state: State = { phase: 'idle' }
   /** The quit the confirmed import started; `stop` keeps its staging. */
   let restarting = false
-  /** The open dialog is showing. */
-  let choosing = false
+  /**
+   * The press of 导入个人数据… being answered, from the open dialog until the file waits for its
+   * passphrase or its check has ended. `cancelled`: 取消 or the quit came before it got that far,
+   * so it ends there (dismissed), never asking for a passphrase or starting the check.
+   */
+  let opening: { cancelled: boolean } | null = null
 
   const removeStaging = () => rm(staging, { recursive: true, force: true }).catch(() => undefined)
 
@@ -178,19 +182,23 @@ export function createImportService(deps: {
   }
 
   /** The header first: an encrypted file waits for its passphrase, or is refused here. */
-  async function inspectFile(path: string): Promise<ImportInspection> {
+  async function inspectFile(path: string, request: { cancelled: boolean }): Promise<ImportInspection> {
     let encryption: EncryptionParams | null
     try {
       encryption = (await readContainerHeader(path, deps.limits)).encryption
     } catch (error) {
+      if (request.cancelled) return { status: 'dismissed' }
       if (error instanceof ContainerError) {
         return { status: 'rejected', rejection: { reason: error.kind === 'not-container' ? 'not-export' : 'corrupt' } }
       }
       return { status: 'failed', failure: { reason: 'read' } }
     }
+    if (request.cancelled) return { status: 'dismissed' }
     if (encryption === null) return startCheck(path, null)
     // Only a file with secrets is encrypted; they are never kept without this machine's protection.
-    if (!(await deps.protector.isAvailable())) return { status: 'rejected', rejection: { reason: 'protection' } }
+    const protectable = await deps.protector.isAvailable()
+    if (request.cancelled) return { status: 'dismissed' }
+    if (!protectable) return { status: 'rejected', rejection: { reason: 'protection' } }
     if (state.phase !== 'idle') return { status: 'failed', failure: { reason: 'busy' } }
     state = { phase: 'locked', path, params: encryption, unlocking: false, cancelled: false }
     return { status: 'passphrase', wrong: false }
@@ -232,7 +240,7 @@ export function createImportService(deps: {
 
   return {
     async inspect(chooseFile) {
-      if (choosing || state.phase === 'inspecting' || state.phase === 'confirming' || (state.phase === 'locked' && state.unlocking)) {
+      if (opening !== null || state.phase === 'inspecting' || state.phase === 'confirming' || (state.phase === 'locked' && state.unlocking)) {
         return { status: 'failed', failure: { reason: 'busy' } }
       }
       if (deps.status().state !== 'ready') return { status: 'failed', failure: { reason: 'storage' } }
@@ -241,18 +249,19 @@ export function createImportService(deps: {
         forget()
         await removeStaging()
       }
-      // Until the file is waiting for a passphrase or being checked, another press is busy.
-      choosing = true
+      // Until the file is waiting for a passphrase or its check has ended, another press is busy.
+      const request = { cancelled: false }
+      opening = request
       try {
         const path = await chooseFile()
-        if (path === null) return { status: 'dismissed' }
+        if (path === null || request.cancelled) return { status: 'dismissed' }
         if (state.phase !== 'idle') return { status: 'failed', failure: { reason: 'busy' } }
         if (deps.status().state !== 'ready') return { status: 'failed', failure: { reason: 'storage' } }
         // The staging of a pending swap (never while the app runs normally) is not this import's to touch.
         if (swapPending(userData)) return { status: 'failed', failure: { reason: 'busy' } }
-        return await inspectFile(path)
+        return await inspectFile(path, request)
       } finally {
-        choosing = false
+        opening = null
       }
     },
 
@@ -297,6 +306,7 @@ export function createImportService(deps: {
     },
 
     async cancel() {
+      if (opening !== null) opening.cancelled = true
       if (state.phase === 'inspecting') {
         state.controller.abort()
         deps.database.abort()
@@ -312,6 +322,7 @@ export function createImportService(deps: {
 
     async stop() {
       if (restarting) return
+      if (opening !== null) opening.cancelled = true
       if (state.phase === 'inspecting') {
         state.controller.abort()
         deps.database.abort()

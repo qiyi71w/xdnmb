@@ -4,8 +4,8 @@ import { Icon } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { Modal, ModalHeader } from '../../components/Modal'
 import {
-  exportFailureText, exportPassphrase, exportPercent, exportProgressText, isBusy, NO_SECRETS, offlineChoiceText, secretsState, unavailableText,
-  type ExportTask, type SecretsChoice
+  clearedSecrets, editSecrets, EMPTY_PASSPHRASE_TEXT, exportFailureText, exportPassphrase, exportPercent, exportProgressText, isBusy, NO_SECRETS,
+  offlineChoiceText, secretsState, unavailableText, type ExportTask, type SecretsChoice
 } from './exportState'
 import { exportTask, useExportTask } from './useExportTask'
 import { formatRecordTime } from '../../lib/time'
@@ -15,17 +15,6 @@ import { importFlow, useImportFlow } from './useImportFlow'
 import './content.css'
 
 type Running = Extract<ExportTask, { phase: 'running' }>
-
-/** Reads the estimate; null while unknown (the IPC call failed). Also tells the task what runs now. */
-async function readEstimate(): Promise<ExportEstimate | null> {
-  try {
-    const estimate = await window.xidao.personalData.exportEstimate()
-    if (estimate.available) exportTask.dispatch({ type: 'sync', running: estimate.running })
-    return estimate
-  } catch {
-    return null
-  }
-}
 
 async function reveal(setMessage: (text: string | null) => void): Promise<void> {
   const result = await window.xidao.personalData.revealExport().catch(() => ({ shown: false }))
@@ -104,12 +93,13 @@ function ExportDialog({ onClose, fallbackFocus }: { onClose: () => void; fallbac
   const passphraseId = useId()
   const confirmationId = useId()
   const mismatchId = useId()
+  const emptyId = useId()
   const busy = isBusy(task)
   const passphrase = secretsState(secrets)
 
   const load = useCallback(async () => {
     setEstimate('loading')
-    setEstimate(await readEstimate())
+    setEstimate(await exportTask.estimate())
   }, [])
 
   useEffect(() => {
@@ -129,7 +119,7 @@ function ExportDialog({ onClose, fallbackFocus }: { onClose: () => void; fallbac
     else if (task.phase === 'done') void reveal(setMessage)
     else if (task.phase !== 'starting' && canExport) {
       void exportTask.start({ includeOffline: offline !== null && includeOffline, passphrase: exportPassphrase(secrets) }).then((started) => {
-        if (started) setSecrets((choice) => ({ ...choice, passphrase: '', confirmation: '' }))
+        if (started) setSecrets(clearedSecrets)
       })
     }
   }
@@ -172,8 +162,16 @@ function ExportDialog({ onClose, fallbackFocus }: { onClose: () => void; fallbac
               spellCheck={false}
               value={secrets.passphrase}
               disabled={busy}
-              onChange={(event) => setSecrets({ ...secrets, passphrase: event.target.value })}
+              aria-invalid={passphrase.empty || undefined}
+              aria-describedby={passphrase.empty ? emptyId : undefined}
+              onChange={(event) => setSecrets(editSecrets(secrets, { passphrase: event.target.value }))}
             />
+            {passphrase.empty && (
+              <p className="form-message is-error" id={emptyId}>
+                <Icon name="alert" size={14} />
+                {EMPTY_PASSPHRASE_TEXT}
+              </p>
+            )}
             <label className="field-label" htmlFor={confirmationId}>
               再次输入口令
             </label>
@@ -187,7 +185,7 @@ function ExportDialog({ onClose, fallbackFocus }: { onClose: () => void; fallbac
               disabled={busy}
               aria-invalid={passphrase.mismatch || undefined}
               aria-describedby={passphrase.mismatch ? mismatchId : undefined}
-              onChange={(event) => setSecrets({ ...secrets, confirmation: event.target.value })}
+              onChange={(event) => setSecrets(editSecrets(secrets, { confirmation: event.target.value }))}
             />
             {passphrase.mismatch && (
               <p className="form-message is-error" id={mismatchId}>
@@ -403,7 +401,7 @@ export function PersonalDataBlock({ active }: { active: boolean }) {
       return
     }
     let alive = true
-    void readEstimate().then((value) => {
+    void exportTask.estimate().then((value) => {
       if (alive) setEstimate(value)
     })
     return () => {

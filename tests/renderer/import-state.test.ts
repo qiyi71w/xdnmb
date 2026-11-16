@@ -31,6 +31,14 @@ describe('import flow state', () => {
     const cancelling = run([{ type: 'inspect' }, { type: 'cancel' }])
     expect(cancelling).toEqual({ phase: 'inspecting', cancelling: true })
     expect(importFlowReducer(cancelling, { type: 'inspected', result: { status: 'dismissed' } })).toEqual({ phase: 'idle' })
+    // An answer that comes after 取消 gives the file up whatever it found: no passphrase or confirmation dialog.
+    const late: ImportFlowEvent[] = [
+      ready,
+      { type: 'inspected', result: { status: 'passphrase', wrong: false } },
+      { type: 'inspected', result: { status: 'rejected', rejection: { reason: 'corrupt' } } },
+      { type: 'inspected', result: null }
+    ]
+    for (const event of late) expect(importFlowReducer(cancelling, event)).toEqual({ phase: 'idle' })
 
     const refused = (result: ImportFlowEvent) => {
       const flow = run([{ type: 'inspect' }, result])

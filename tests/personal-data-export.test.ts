@@ -368,6 +368,34 @@ describe('personal data export', () => {
     expect((await first).outcome?.status).toBe('done')
   })
 
+  it('an estimate answered after the export ended never reports it running, and the next export can start', async () => {
+    const { userData } = source()
+    const writing = Promise.withResolvers<void>()
+    const answer = Promise.withResolvers<void>()
+    let hold = false
+    const delayed: ExportDatabase = {
+      ...inProcess(),
+      estimate: async (path) => {
+        const counts = readExportEstimate(path)
+        if (hold) await answer.promise
+        return counts
+      },
+      snapshot: async (path, work) => { await writing.promise; return takeExportSnapshot(path, work) }
+    }
+    const h = harness(userData, { database: delayed })
+    const first = h.run(false)
+    await expect.poll(() => h.events.length).toBeGreaterThan(0)
+    // Asked while the export runs; its answer is held until the export has ended.
+    hold = true
+    const stale = h.service.estimate()
+    writing.resolve()
+    expect((await first).outcome?.status).toBe('done')
+    answer.resolve()
+    expect(await stale).toMatchObject({ available: true, running: null })
+    hold = false
+    expect((await h.run(false)).started).toEqual({ status: 'started' })
+  })
+
   it('runs the snapshot on the production worker entry and stops it on cancel', async () => {
     const { userData } = source()
     const build = folder('xidao-export-worker-')
