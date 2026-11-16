@@ -268,6 +268,55 @@ export type ThemeExportResult = { status: 'exported' } | { status: 'cancelled' }
 export type ThreadReadPurpose = 'display' | 'lookup'
 export const THREAD_READ_PURPOSES: readonly ThreadReadPurpose[] = ['display', 'lookup']
 
+/**
+ * Why 导出个人数据 did not start or did not finish. `space`: the target volume lacks about
+ * `shortBytes`. `sending`: a post is being sent (a send whose result is unknown does not count).
+ * `storage`: storage is not writable. `busy`: an export is already running. `read`: this machine's
+ * data could not be read. `write`: the chosen location could not be written.
+ */
+export type ExportFailure =
+  | { reason: 'space'; shortBytes: number }
+  | { reason: 'sending' | 'storage' | 'busy' | 'read' | 'write' }
+
+/** A running export: bytes of the file written so far, of `totalBytes`. */
+export interface ExportRunning {
+  status: 'running'
+  writtenBytes: number
+  totalBytes: number
+}
+
+/**
+ * Progress of the export, from the main process. A finished export names its file, never its
+ * folder; a cancelled or failed one has left no file behind.
+ */
+export type ExportProgress =
+  | ExportRunning
+  | { status: 'done'; fileName: string }
+  | { status: 'failed'; failure: ExportFailure }
+  | { status: 'cancelled' }
+
+/**
+ * What the export dialog shows. Unavailable unless storage is writable. `contents` is null when the
+ * sizes could not be read: `offline` is the offline copies (null: there are none), `totalBytes` the
+ * estimated file size with them. `running`: an export in progress.
+ */
+export type ExportEstimate =
+  | { available: false; reason: 'read-only' | 'unavailable' }
+  | {
+      available: true
+      contents: { offline: { threads: number; bytes: number } | null; totalBytes: number } | null
+      running: ExportRunning | null
+    }
+
+/**
+ * Result of 导出…: `started` (progress follows as `ExportProgress` events), `dismissed` (the save
+ * dialog was closed), or `failed` before anything was written.
+ */
+export type ExportStartResult = { status: 'started' } | { status: 'dismissed' } | { status: 'failed'; failure: ExportFailure }
+
+/** Main → renderer: carries an `ExportProgress`. */
+export const EXPORT_PROGRESS_CHANNEL = 'personal-data:export-progress'
+
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
   analytics: AnalyticsApi
@@ -469,6 +518,21 @@ export interface XidaoApi {
     /** 恢复并重新启动: stages the pre-upgrade backup for the next start, then restarts. */
     restoreBackupAndRestart(): Promise<RestoreResult>
   }
+  /**
+   * 导出个人数据. The renderer never sees a path: main shows the save dialog and reports only the
+   * file name.
+   */
+  personalData: {
+    exportEstimate(): Promise<ExportEstimate>
+    /** Save dialog, disk space check, then the export runs in the background. */
+    startExport(input: { includeOffline: boolean }): Promise<ExportStartResult>
+    /** Cancels the running export; its `cancelled` progress follows once the partial file is gone. */
+    cancelExport(): Promise<void>
+    /** Shows the last exported file in the system file manager. */
+    revealExport(): Promise<{ shown: boolean }>
+    /** Export progress events; returns the unsubscribe. */
+    onExportProgress(listener: (progress: ExportProgress) => void): () => void
+  }
 }
 
 /** IPC channel names. Each maps 1:1 to an XidaoApi method; there is no generic channel. */
@@ -612,6 +676,10 @@ export const IpcChannel = {
   restartToUpgradeWithoutBackup: 'app:restart-to-upgrade-without-backup',
   getRestoreInfo: 'app:get-restore-info',
   restoreBackupAndRestart: 'app:restore-backup-and-restart',
+  exportEstimate: 'personal-data:export-estimate',
+  startExport: 'personal-data:start-export',
+  cancelExport: 'personal-data:cancel-export',
+  revealExport: 'personal-data:reveal-export',
   updateGetState: 'updates:get-state',
   updateCheck: 'updates:check',
   updateDownload: 'updates:download',

@@ -45,6 +45,7 @@ import type { OnlineSearchService } from './online-search/service'
 import type { AccountService } from './account/service'
 import type { UpgradeService } from './storage/upgrade'
 import type { RestoreService } from './storage/restore-service'
+import type { ExportService } from './personal-data/service'
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
@@ -103,6 +104,10 @@ interface IpcDeps {
   chooseSavePath: (sender: WebContents, suggestedName: string, format: ImageFormat) => Promise<string | null>
   /** System open dialog for one image file; null when dismissed. */
   chooseImageFile: (sender: WebContents) => Promise<string | null>
+  /** 导出个人数据. */
+  personalData: ExportService
+  /** System save dialog for an export file, for the sender's window; null when dismissed. */
+  chooseExportPath: (sender: WebContents, defaultName: string) => Promise<string | null>
 }
 
 function record(input: unknown): Record<string, unknown> {
@@ -342,7 +347,8 @@ export interface IpcRegistration {
 
 export function registerIpc({
   reading, images, identities, account, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
-  analytics, thirdParty, announcements, updates, loginItem, bossKey, getStatus, upgrade, restore, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
+  analytics, thirdParty, announcements, updates, loginItem, bossKey, getStatus, upgrade, restore, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile,
+  personalData, chooseExportPath
 }: IpcDeps): IpcRegistration {
   const owner = (sender: WebContents): string => String(sender.id)
   const operations = new OperationRegistry()
@@ -1056,6 +1062,24 @@ export function registerIpc({
   handle(IpcChannel.restoreBackupAndRestart, async (_event, raw) => {
     if (raw !== undefined) throw new InvalidRequestError()
     return restore.restoreAndRestart()
+  })
+  // 导出个人数据: paths stay in main (the save dialog is shown here); only file names cross.
+  handle(IpcChannel.exportEstimate, async (_event, raw) => {
+    if (raw !== undefined) throw new InvalidRequestError()
+    return personalData.estimate()
+  })
+  handle(IpcChannel.startExport, async (event, raw) => {
+    const includeOffline = searchRecord(raw, ['includeOffline']).includeOffline
+    if (typeof includeOffline !== 'boolean') throw new InvalidRequestError()
+    return personalData.start({ includeOffline }, (defaultName) => chooseExportPath(event.sender, defaultName))
+  })
+  handle(IpcChannel.cancelExport, async (_event, raw) => {
+    if (raw !== undefined) throw new InvalidRequestError()
+    personalData.cancel()
+  })
+  handle(IpcChannel.revealExport, async (_event, raw) => {
+    if (raw !== undefined) throw new InvalidRequestError()
+    return { shown: await personalData.reveal() }
   })
 
   return {

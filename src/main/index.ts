@@ -13,7 +13,7 @@ import { lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
-import { LIFECYCLE_REQUEST_CHANNEL, type AppPlatform } from '../shared/api'
+import { EXPORT_PROGRESS_CHANNEL, LIFECYCLE_REQUEST_CHANNEL, type AppPlatform } from '../shared/api'
 import { IMAGE_FORMAT_EXTENSION, IMAGE_SCHEME } from '../shared/images'
 import { createContentService, type ContentService } from './content/service'
 import { createDraftService } from './drafts/service'
@@ -43,6 +43,9 @@ import { settleSwap, type SwapSettlement } from './storage/swap-journal'
 import { createRestoreService } from './storage/restore-service'
 import { createUpgradeService } from './storage/upgrade'
 import createStorageWorker from './storage/worker?nodeWorker'
+import createExportWorker from './storage/export-worker?nodeWorker'
+import { createExportService, type ExportService } from './personal-data/service'
+import { createWorkerExportDatabase } from './personal-data/worker-database'
 import { createSubscriptionService } from './subscriptions/service'
 import { createPublicationAdapter } from './publication/adapter'
 import { createPublicationService } from './publication/service'
@@ -85,6 +88,7 @@ let store: AppStore | null = null
 let storeClosed = false
 let content: ContentService | null = null
 let lifecycle: Lifecycle | null = null
+let personalData: ExportService | null = null
 /** Kept referenced for the app's lifetime: the Windows tray, the macOS menu bar icon, the Linux status icon. */
 let tray: Tray | null = null
 let search: SearchService | null = null
@@ -537,6 +541,21 @@ async function start(): Promise<void> {
   await retained.recover().catch(() => console.error('[content] recovery failed'))
   await retained.enforceQuota().catch(() => console.error('[content] cleanup failed'))
   const searchService = createSearchService({ store: openedStore, client, scheduler, enforceQuota: () => retained.enforceQuota() })
+  // 导出个人数据: quitting cancels a running export, which removes its temporary files first.
+  const exportService = createExportService({
+    databasePath: join(app.getPath('userData'), 'xidao.sqlite'),
+    draftImagesDirectory: join(app.getPath('userData'), 'draft-images'),
+    imagesDirectory: join(app.getPath('userData'), 'images'),
+    appVersion: app.getVersion(),
+    status: () => openedStore.status,
+    sending: () => publication.inFlight().length > 0,
+    database: createWorkerExportDatabase(createExportWorker),
+    publish(progress) {
+      if (mainWindow !== null && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send(EXPORT_PROGRESS_CHANNEL, progress)
+    },
+    showInFolder: (path) => shell.showItemInFolder(path)
+  })
+  personalData = exportService
   search = searchService
   // Batched worker backfill runs alongside the window; search stays unavailable until complete.
   void searchService.recover().catch(() => console.error('[search] index unavailable'))
@@ -647,6 +666,7 @@ async function start(): Promise<void> {
       updateService.resume()
       await reminders.startScheduling().catch(() => console.error('[reminders] scheduling unavailable'))
       retained.resume()
+      exportService.resume()
       searchService.resume()
       analyticsService.resume()
       void searchService.recover().catch(() => console.error('[search] index unavailable'))
@@ -695,7 +715,7 @@ async function start(): Promise<void> {
       ipc?.cancelAll()
       // Nothing is downloaded while quitting; a package that is not ready is not installed.
       updateService.stop()
-      backgroundStopped = Promise.all([retained.stop(), reminders.stop('quit'), searchService.stop(), analyticsService.stop()]).then(() => undefined)
+      backgroundStopped = Promise.all([retained.stop(), reminders.stop('quit'), searchService.stop(), analyticsService.stop(), exportService.stop()]).then(() => undefined)
       await backgroundStopped
     },
     notify: notifyUnfinished,
@@ -777,6 +797,18 @@ async function start(): Promise<void> {
       const result = window === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(window, options)
       return result.canceled ? null : (result.filePaths[0] ?? null)
     },
+    personalData: exportService,
+    async chooseExportPath(sender, defaultName) {
+      const window = BrowserWindow.fromWebContents(sender)
+      const options: Electron.SaveDialogOptions = {
+        title: '导出个人数据',
+        defaultPath: join(app.getPath('documents'), defaultName),
+        filters: [{ name: '汐岛个人数据', extensions: ['xidao'] }],
+        properties: ['createDirectory', 'showOverwriteConfirmation']
+      }
+      const result = window === null ? await dialog.showSaveDialog(options) : await dialog.showSaveDialog(window, options)
+      return result.canceled || !result.filePath ? null : result.filePath
+    },
     systemPrefersDark: () => nativeTheme.shouldUseDarkColors,
     isTrustedSender: (event: IpcMainInvokeEvent) =>
       mainWindow !== null &&
@@ -837,6 +869,7 @@ async function finishStorage(): Promise<void> {
   await announcements?.stop()
   await analytics?.stop()
   await content?.stop()
+  await personalData?.stop()
   await opened.close()
   await updates?.launchInstaller()
 }

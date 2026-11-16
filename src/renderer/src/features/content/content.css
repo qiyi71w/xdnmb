@@ -439,3 +439,55 @@
   width: 9em;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- 个人数据 (导出) ---------- */
+
+/* The import entry joins the export button in this row. */
+.personal-data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.personal-data-status {
+  display: grid;
+  gap: 6px;
+}
+
+.export-dialog {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.export-body {
+  gap: 12px;
+}
+
+.export-body > p {
+  margin: 0;
+}
+
+.export-body .choice-row {
+  margin-inline: -8px;
+}
+
+.export-note {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.export-progress {
+  display: grid;
+  gap: 4px;
+}
+
+.export-progress-text {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.personal-data .notice-inline,
+.export-body .notice-inline {
+  overflow-wrap: anywhere;
+}
