@@ -1,4 +1,4 @@
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, rm, statfs } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type {
   ImportBlock, ImportConfirmResult, ImportFailure, ImportInspection, ImportRejection, StorageStatus
@@ -28,10 +28,16 @@ import { resealForImport } from './secrets'
  *   2. Container: magic, container version, entry names and lengths, limits, the manifest
  *      (`./container`); an encrypted file's chunks are authenticated as they are read.
  *   3. The manifest's schema version: newer than this app's is refused, naming the version that
- *      exported it, before any entry is extracted.
- *   4. The staged database (`../storage/import-staging`): integrity, this version's migration
- *      chain, schema, references, and every draft attachment and offline original it names.
- *   5. What the confirmation shows: the manifest's facts and this machine's counts.
+ *      exported it, before any entry is extracted. So is a file the staging volume has no room for
+ *      (磁盘空间不足): its declared content and once more its database (SQLite's rollback journal
+ *      while it is migrated). Extraction never writes more than the manifest declares.
+ *   4. The staged database (`../storage/import-staging`): its schema objects before anything of
+ *      it runs, integrity, this version's migration chain, references, secret value sizes, and
+ *      every draft attachment and offline original it names.
+ *   5. Room for the merge, read from this machine's database only now that the file has passed:
+ *      its draft attachments and offline copies the merge copies into staging, and once more the
+ *      file's database (the merge's rollback journal); refused as 磁盘空间不足 otherwise.
+ *   6. What the confirmation shows: the manifest's facts and this machine's counts.
  *
  * Any failure removes the staging; this machine's data and the file are unchanged. The renderer
  * gets file facts and counts only, never a path or a secret. The passphrase only derives the keys;
@@ -45,6 +51,8 @@ export interface ImportDatabase {
   check(stagingDirectory: string, schemaVersion: number): Promise<void>
   /** This machine's 浏览历史 and 发送记录 counts. */
   counts(databasePath: string): Promise<{ history: number; sendRecords: number }>
+  /** Bytes this machine's draft attachments and offline copies add to the staging at most. */
+  appendedBytes(databasePath: string): Promise<number>
   /** Every secret row of the database at `databasePath` (read-only). */
   secrets(databasePath: string): Promise<SecretRows>
   /** Builds the import result in staging (`stageImport`). */
@@ -72,6 +80,11 @@ class Refused extends Error {
   }
 }
 
+/** The staging volume has no room for the file's content and the work after it. */
+class NoSpace extends Error {
+  override readonly name = 'NoSpace'
+}
+
 type State =
   | { phase: 'idle' }
   /** An encrypted file waits for its passphrase; `unlocking`: one is being tried. */
@@ -94,9 +107,19 @@ export function createImportService(deps: {
   restart: () => Promise<QuitEnd>
   /** Test seam: tighter container limits. */
   limits?: Partial<ContainerLimits>
+  /** Test seam: free bytes on the volume of a directory. */
+  availableBytes?: (directory: string) => Promise<number>
 }): ImportService {
   const userData = dirname(deps.databasePath)
   const staging = importStagingDirectory(userData)
+  const availableBytes = deps.availableBytes ?? (async (directory: string) => {
+    const volume = await statfs(directory)
+    return volume.bavail * volume.bsize
+  })
+  /** Throws `NoSpace` unless the staging volume has `bytes` free. */
+  const roomFor = async (bytes: number): Promise<void> => {
+    if (await availableBytes(staging) < bytes) throw new NoSpace()
+  }
   let state: State = { phase: 'idle' }
   /** The quit the confirmed import started; `stop` keeps its staging. */
   let restarting = false
@@ -122,6 +145,8 @@ export function createImportService(deps: {
         ...(keys === null ? {} : { contentKey: keys.content }),
         checkManifest(manifest) {
           if (manifest.schemaVersion > deps.supportedVersion) throw new Refused({ reason: 'newer', appVersion: manifest.appVersion })
+          const { database, draftImages, offlineImages } = manifest.entries
+          return roomFor(2 * database.bytes + draftImages.bytes + offlineImages.bytes)
         }
       })
       signal.throwIfAborted()
@@ -133,12 +158,16 @@ export function createImportService(deps: {
       }
       signal.throwIfAborted()
       let local: { history: number; sendRecords: number }
+      let appended: number
       try {
         local = await deps.database.counts(deps.databasePath)
+        appended = await deps.database.appendedBytes(deps.databasePath)
       } catch {
         signal.throwIfAborted()
         return { status: 'failed', failure: { reason: 'read' } }
       }
+      signal.throwIfAborted()
+      await roomFor(manifest.entries.database.bytes + appended)
       signal.throwIfAborted()
       state = { phase: 'inspected', manifest, keys }
       return {
@@ -158,7 +187,7 @@ export function createImportService(deps: {
         return { status: 'rejected', rejection: { reason: error.kind === 'not-container' ? 'not-export' : 'corrupt' } }
       }
       const code = (error as NodeJS.ErrnoException).code
-      return { status: 'failed', failure: { reason: code === 'ENOSPC' ? 'space' : 'read' } satisfies ImportFailure }
+      return { status: 'failed', failure: { reason: error instanceof NoSpace || code === 'ENOSPC' ? 'space' : 'read' } satisfies ImportFailure }
     }
   }
 

@@ -15,17 +15,21 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import type { ExportProgress, ImportInspection } from '../src/shared/api'
 import type { Post, ThreadPage } from '../src/shared/forum'
 import type { QuitEnd } from '../src/main/lifecycle/controller'
-import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
+import { migrateDatabase, openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS } from '../src/main/storage/migrations'
 import { readExportEstimate, readSecretRows, takeExportSnapshot, trimExportSnapshot } from '../src/main/storage/export-snapshot'
 import { testProtector } from './helpers/protector'
-import { checkStagedImport, readLocalCounts, stageImport } from '../src/main/storage/import-staging'
+import { draftIdentities } from './helpers/draft-identities'
+import { checkStagedImport, readLocalAppendedBytes, readLocalCounts, stageImport } from '../src/main/storage/import-staging'
 import { beforeImportDirectory, importStagingDirectory } from '../src/main/storage/import-journal'
 import { beginSwap, settleSwap } from '../src/main/storage/swap-journal'
 import { preUpgradeBackupDirectory } from '../src/main/storage/backup'
 import { createExportService } from '../src/main/personal-data/service'
 import { createImportService, type ImportDatabase } from '../src/main/personal-data/import'
-import { CONTAINER_MAGIC, CONTAINER_VERSION, ENTRY_TYPE, readContainer, type ExportManifest } from '../src/main/personal-data/container'
+import {
+  CONTAINER_MAGIC, CONTAINER_VERSION, ContainerError, ENTRY_TYPE, readContainer, type ExportManifest
+} from '../src/main/personal-data/container'
+import { tablesIn, userDataEntriesIn } from '../src/main/storage/classification'
 
 const AT = '2026-11-16T08:00:00.000Z'
 const EARLIER = '2026-11-15T08:00:00.000Z'
@@ -67,6 +71,11 @@ function raw(path: string): Database.Database {
   const db = new Database(path)
   connections.push(db)
   return db
+}
+
+/** B's run ends, as when the app quits: every connection to its database is closed, raw ones too. */
+function endRun(): void {
+  for (const connection of connections.splice(0)) connection.close()
 }
 
 /** An offline copy of `threadId` saved at `at`: a page with `reply` and the original of its image, kept as `fileName`. */
@@ -217,12 +226,17 @@ function targetMachine(): { userData: string; db: ReadingDatabase } {
 const inProcess: ImportDatabase = {
   check: async (staging, version) => checkStagedImport(staging, version),
   counts: async (path) => readLocalCounts(path),
+  appendedBytes: async (path) => readLocalAppendedBytes(path),
   secrets: async (path) => readSecretRows(path),
   stage: async (staging, path, file) => stageImport(staging, path, file),
   abort: () => undefined
 }
 
-function importer(userData: string, options: { restart?: () => Promise<QuitEnd>; limits?: { maxTotalBytes?: number; maxManifestBytes?: number } } = {}) {
+function importer(userData: string, options: {
+  restart?: () => Promise<QuitEnd>
+  limits?: { maxTotalBytes?: number; maxManifestBytes?: number }
+  availableBytes?: (directory: string) => Promise<number>
+} = {}) {
   const restarts: number[] = []
   const service = createImportService({
     databasePath: join(userData, 'xidao.sqlite'),
@@ -234,7 +248,8 @@ function importer(userData: string, options: { restart?: () => Promise<QuitEnd>;
       restarts.push(1)
       return options.restart === undefined ? 'exiting' : options.restart()
     },
-    limits: options.limits
+    limits: options.limits,
+    availableBytes: options.availableBytes
   })
   return { service, restarts }
 }
@@ -287,13 +302,12 @@ function exported(): { file: string; generation: number } {
 
 /** B has checked and confirmed A's file; its run has ended (the database closed). */
 async function prepared(): Promise<{ userData: string; current: Map<string, string>; staged: Map<string, string> }> {
-  const { userData, db } = targetMachine()
+  const { userData } = targetMachine()
   const { service } = importer(userData)
   const inspection = await service.inspect(async () => exported().file)
   expect(inspection.status).toBe('ready')
   expect(await service.confirm()).toEqual({ status: 'restarting' })
-  db.close()
-  connections.splice(0)
+  endRun()
   return { userData, current: currentData(userData), staged: tree(importStagingDirectory(userData)) }
 }
 
@@ -362,15 +376,14 @@ describe('import inspection and confirmation', () => {
   })
 
   it('merges: this machine’s cookies after the file’s sequence, file references never resolve to them, target-kept items stay', async () => {
-    const { userData, db } = targetMachine()
+    const { userData } = targetMachine()
     const { service } = importer(userData)
     expect((await service.inspect(async () => exported().file)).status).toBe('ready')
     // Repeated presses while it runs: one preparation, one restart.
     const [first, second] = await Promise.all([service.confirm(), service.confirm()])
     expect(first).toEqual({ status: 'restarting' })
     expect(second).toEqual({ status: 'restarting' })
-    db.close()
-    connections.splice(0)
+    endRun()
     // The current data as the next start finds it (closing checkpointed its log).
     const before = currentData(userData)
     expect(settleSwap(join(userData, 'xidao.sqlite'))).toEqual({ kind: 'import', outcome: 'completed' })
@@ -420,12 +433,10 @@ describe('import inspection and confirmation', () => {
     }
   })
 
-  it('records the credential ID map from this machine’s IDs to the staged ones', () => {
-    const { userData, db } = targetMachine()
+  it('numbers this machine’s cookies after the staged sequence and keeps its drafts on them', async () => {
+    const { userData } = targetMachine()
     const staging = folder('xidao-import-staging-')
-    const file = new Database(join(staging, 'xidao.sqlite'))
     // An imported database whose sequence went further than its rows (cookie 7 was removed).
-    file.close()
     const fresh = openReadingDatabase(join(staging, 'xidao.sqlite'))
     fresh.insertCredential({ name: 'x', cookieId: 'XXXXXXX', source: 'raw', importedAt: AT, ciphertext: Buffer.from('x') })
     fresh.close()
@@ -433,20 +444,32 @@ describe('import inspection and confirmation', () => {
     sql.pragma('journal_mode = DELETE')
     sql.prepare("UPDATE sqlite_sequence SET seq = 7 WHERE name = 'credentials'").run()
     sql.close()
-    const { credentialIds } = stageImport(staging, join(userData, 'xidao.sqlite'), { credentialSequence: 5, secrets: null })
-    expect([...credentialIds]).toEqual([[1, 8], [2, 9]])
-    db.close()
+    stageImport(staging, join(userData, 'xidao.sqlite'), { credentialSequence: 5, secrets: null })
+    endRun()
+
+    const staged = openReadingDatabase(join(staging, 'xidao.sqlite'))
+    connections.push(staged)
+    // The file carries no secrets: its cookie goes; B's follow the staged sequence (7), in their order.
+    expect(staged.listCredentials().map((credential) => [credential.id, credential.name])).toEqual([['8', 'B1'], ['9', 'B2']])
+    expect(Buffer.from(staged.loadCredentialCiphertext('8')!).toString()).toBe('B-COOKIE-1')
+    // B's drafts keep their cookies under the new IDs; the one whose cookie B had removed is on an ID no credential has.
+    expect(await draftIdentities(staged, join(staging, 'draft-images'), testProtector())).toEqual([
+      ['B 用已移除饼干的草稿', { state: 'missing', credentialId: '10' }],
+      ['B 的第二份草稿', { state: 'selected', credentialId: '9', name: 'B2' }],
+      ['B 的草稿', { state: 'selected', credentialId: '8', name: 'B1' }]
+    ])
+    // The next cookie added never reuses one of those IDs.
+    expect(staged.insertCredential({ name: '新', cookieId: 'EEEEEEE', source: 'raw', importedAt: AT, ciphertext: Buffer.from('new') }).id).toBe('11')
   })
 })
 
 describe('this machine’s offline copies and drafts', () => {
-  /** Imports `file` into `userData` (B, `db` its open database) through to the next start. */
-  async function imported(userData: string, db: ReadingDatabase, file: string): Promise<{ after: ReadingDatabase; sql: Database.Database }> {
+  /** Imports `file` into `userData` (B, its database open) through to the next start. */
+  async function imported(userData: string, file: string): Promise<{ after: ReadingDatabase; sql: Database.Database }> {
     const { service } = importer(userData)
     expect((await service.inspect(async () => file)).status).toBe('ready')
     expect(await service.confirm()).toEqual({ status: 'restarting' })
-    db.close()
-    connections.splice(0)
+    endRun()
     expect(settleSwap(join(userData, 'xidao.sqlite'))).toEqual({ kind: 'import', outcome: 'completed' })
     return { after: reopen(userData), sql: raw(join(userData, 'xidao.sqlite')) }
   }
@@ -456,8 +479,8 @@ describe('this machine’s offline copies and drafts', () => {
     try {
       const source = sourceMachine(keep)
       const file = await exportOf(source.userData, keep, false)
-      const { userData, db } = targetMachine()
-      const { after, sql } = await imported(userData, db, file)
+      const { userData } = targetMachine()
+      const { after, sql } = await imported(userData, file)
       expect(sql.prepare('SELECT thread_id, updated_at FROM offline_copies ORDER BY thread_id').all())
         .toEqual([{ thread_id: '500', updated_at: EARLIER }, { thread_id: '510', updated_at: LATER }, { thread_id: '600', updated_at: AT }])
       expect(sql.prepare("SELECT plain_text FROM posts WHERE id = '501'").pluck().get()).toBe('B offline reply')
@@ -472,16 +495,42 @@ describe('this machine’s offline copies and drafts', () => {
   })
 
   it('records an original or attachment whose file is gone from this machine as not kept', async () => {
-    const { userData, db } = targetMachine()
+    const { userData } = targetMachine()
     const sql = raw(join(userData, 'xidao.sqlite'))
     const name = sql.prepare<[], string>("SELECT r.file_name FROM offline_images o JOIN image_resources r ON r.id = o.resource_id WHERE o.thread_id = '600'").pluck().get()!
     rmSync(join(userData, 'images', name))
     rmSync(join(userData, 'draft-images', B_DRAFT_IMAGE))
     connections.splice(connections.indexOf(sql), 1)
     sql.close()
-    const { after } = await imported(userData, db, exported().file)
+    const { after } = await imported(userData, exported().file)
     expect(after.getOfflineCopy('600')).toMatchObject({ savedImages: 0, imageFailures: [{ postId: '601', error: { reason: 'not-stored' } }] })
     expect(after.listDrafts().find((draft) => draft.fields.content === 'B 的草稿')).toMatchObject({ credentialId: '3', attachment: null })
+  })
+
+  it('keeps this machine’s rows of every target-appended table and the files of every such entry', async () => {
+    // A file with none of them: whatever the classification puts in the class is this machine's in the result.
+    const keep: string[] = []
+    try {
+      const source = folder('xidao-import-empty-', keep)
+      for (const directory of ['images', 'draft-images']) mkdirSync(join(source, directory))
+      const empty = openReadingDatabase(join(source, 'xidao.sqlite'), MIGRATIONS, { appVersion: '1.5.0-a' })
+      empty.recordVisit('42', AT)
+      empty.close()
+      const file = await exportOf(source, keep)
+      const { userData } = targetMachine()
+      const sql = raw(join(userData, 'xidao.sqlite'))
+      const rows = (db: Database.Database) => Object.fromEntries(tablesIn('target-appended').map((table) => [table, db.prepare(`SELECT count(*) FROM "${table}"`).pluck().get()]))
+      const local = rows(sql)
+      for (const [table, count] of Object.entries(local)) expect(count, `this machine has rows in ${table}`).toBeGreaterThan(0)
+      const contents = (entry: string, root: string) => [...tree(join(root, entry)).values()].sort()
+      const localFiles = userDataEntriesIn('target-appended').map((entry) => contents(entry, userData))
+      for (const files of localFiles) expect(files).not.toEqual([])
+      const { sql: after } = await imported(userData, file)
+      expect(rows(after)).toEqual(local)
+      expect(userDataEntriesIn('target-appended').map((entry) => contents(entry, userData))).toEqual(localFiles)
+    } finally {
+      for (const path of keep) rmSync(path, { recursive: true, force: true })
+    }
   })
 })
 
@@ -504,12 +553,11 @@ describe('import versions', () => {
 
   it('migrates an older file in staging and imports it; the pre-upgrade backup goes and none is taken after', async () => {
     const { file } = await oldFile(SUPPORTED - 2)
-    const { userData, db } = targetMachine()
+    const { userData } = targetMachine()
     const { service } = importer(userData)
     expect(await service.inspect(async () => file)).toMatchObject({ status: 'ready', summary: { appVersion: '1.4.0' } })
     expect(await service.confirm()).toEqual({ status: 'restarting' })
-    db.close()
-    connections.splice(0)
+    endRun()
     const current = currentData(userData)
     expect(settleSwap(join(userData, 'xidao.sqlite'))).toEqual({ kind: 'import', outcome: 'completed' })
     expect(existsSync(preUpgradeBackupDirectory(userData))).toBe(false)
@@ -648,11 +696,77 @@ describe('untrusted files', () => {
     expect(await service.inspect(async () => file)).toEqual({ status: 'rejected', rejection: { reason: 'corrupt' } })
     expect(existsSync(importStagingDirectory(userData))).toBe(false)
   })
+
+  it('refuses a file whose secret values are beyond their limits', async () => {
+    const { userData } = targetMachine()
+    const work = folder('xidao-import-secret-')
+    const live = new Database(join(work, 'live.sqlite'))
+    migrateDatabase(live, MIGRATIONS)
+    live.prepare(`INSERT INTO credentials (name, cookie_id, source, imported_at, ciphertext, position)
+      VALUES ('x', 'XXXXXXX', 'raw', ?, ?, 1)`).run(AT, Buffer.alloc(64 * 1024 + 1, 7))
+    live.prepare('VACUUM INTO ?').run(join(work, 'xidao.sqlite'))
+    live.close()
+    const file = join(work, 'secret.xidao')
+    writeFileSync(file, container([{ type: ENTRY_TYPE.database, name: 'xidao.sqlite', bytes: readFileSync(join(work, 'xidao.sqlite')) }]))
+    const { service } = importer(userData)
+    expect(await service.inspect(async () => file)).toEqual({ status: 'rejected', rejection: { reason: 'corrupt' } })
+    expect(existsSync(importStagingDirectory(userData))).toBe(false)
+  })
+})
+
+describe('staging space', () => {
+  /** What the file needs on the staging volume to be extracted: its content and its database once more. */
+  async function extractionBytes(file: string): Promise<number> {
+    const { database, draftImages, offlineImages } = (await readContainer(file)).manifest.entries
+    return 2 * database.bytes + draftImages.bytes + offlineImages.bytes
+  }
+
+  it('refuses a file the staging volume has no room for before extracting any of it', async () => {
+    const { userData } = targetMachine()
+    const outside = tree(userData)
+    const needed = await extractionBytes(exported().file)
+    const extractedWhenAsked: boolean[] = []
+    const { service } = importer(userData, {
+      async availableBytes(directory) {
+        extractedWhenAsked.push(readdirSync(directory, { recursive: true }).some((name) => !['draft-images', 'images'].includes(String(name))))
+        return needed - 1
+      }
+    })
+    expect(await service.inspect(async () => exported().file)).toEqual({ status: 'failed', failure: { reason: 'space' } })
+    expect(extractedWhenAsked).toEqual([false])
+    expect(existsSync(importStagingDirectory(userData))).toBe(false)
+    expect(tree(userData)).toEqual(outside)
+  })
+
+  it('refuses, before the confirmation, when the merge has no room for this machine’s attachments and offline copies', async () => {
+    const { userData } = targetMachine()
+    const needed = await extractionBytes(exported().file)
+    const merge = (await readContainer(exported().file)).manifest.entries.database.bytes + readLocalAppendedBytes(join(userData, 'xidao.sqlite'))
+    for (const [room, result] of [[merge - 1, 'failed'], [merge, 'ready']] as const) {
+      const asked: number[] = []
+      const { service } = importer(userData, { availableBytes: async () => (asked.push(1) === 1 ? needed : room) })
+      expect((await service.inspect(async () => exported().file)).status).toBe(result)
+      expect(asked).toHaveLength(2)
+      expect(existsSync(importStagingDirectory(userData))).toBe(result === 'ready')
+      await service.cancel()
+    }
+  })
+
+  it('never extracts more of a kind than the manifest declares', async () => {
+    const name = `${'f'.repeat(32)}.png`
+    const file = join(folder('xidao-import-lying-'), 'lying.xidao')
+    writeFileSync(file, container([{ type: ENTRY_TYPE.database, name: 'xidao.sqlite', bytes: Buffer.from('database') },
+      { type: ENTRY_TYPE.draftImage, name, bytes: Buffer.alloc(1024 * 1024, 1) }],
+    { entries: { database: { count: 1, bytes: 8 }, draftImages: { count: 1, bytes: 10 }, offlineImages: { count: 0, bytes: 0 } } }))
+    const out = folder('xidao-import-lying-out-')
+    await expect(readContainer(file, { extractTo: out })).rejects.toEqual(new ContainerError('corrupt'))
+    expect(existsSync(join(out, 'draft-images', name))).toBe(false)
+  })
 })
 
 describe('quit called off and pending swaps', () => {
   it('removes staging and journal when the quit is called off; the data is unchanged', async () => {
-    const { userData, db } = targetMachine()
+    const { userData } = targetMachine()
     const images = tree(join(userData, 'draft-images'))
     const { service, restarts } = importer(userData, { restart: async () => 'unchecked' })
     expect((await service.inspect(async () => exported().file)).status).toBe('ready')
@@ -662,8 +776,7 @@ describe('quit called off and pending swaps', () => {
     expect(existsSync(importStagingDirectory(userData))).toBe(false)
     // Nothing staged any more: confirming again does nothing.
     expect(await service.confirm()).toEqual({ status: 'failed' })
-    db.close()
-    connections.splice(0)
+    endRun()
     const current = currentData(userData)
     expect(tree(join(userData, 'draft-images'))).toEqual(images)
     expect(settleSwap(join(userData, 'xidao.sqlite'))).toBeNull()
@@ -804,7 +917,7 @@ describe('import on the production worker entry', () => {
         }
       }
     })
-    const { userData, db } = targetMachine()
+    const { userData } = targetMachine()
     const service = createImportService({
       databasePath: join(userData, 'xidao.sqlite'),
       supportedVersion: SUPPORTED,
@@ -815,8 +928,7 @@ describe('import on the production worker entry', () => {
     })
     expect(await service.inspect(async () => exported().file)).toMatchObject({ status: 'ready', summary: { local: { history: 2, sendRecords: 1 } } })
     expect(await service.confirm()).toEqual({ status: 'restarting' })
-    db.close()
-    connections.splice(0)
+    endRun()
     const current = currentData(userData)
     expect(settleSwap(join(userData, 'xidao.sqlite'))).toEqual({ kind: 'import', outcome: 'completed' })
     expectImported(userData, current)
@@ -825,7 +937,7 @@ describe('import on the production worker entry', () => {
 
 describe('a quit stopped by a send whose state cannot be checked', () => {
   it('goes through the renderer’s quit check and the lifecycle; the import does not happen', async () => {
-    const { userData, db } = targetMachine()
+    const { userData } = targetMachine()
     // An editor whose send request failed inside the app and whose one more lookup still fails.
     let editors = [{ id: 'editor-1', publication: { phase: 'uncertain', requestId: 'request-1', checking: false } }] as unknown as Editor[]
     const rechecks: string[] = []
@@ -878,8 +990,7 @@ describe('a quit stopped by a send whose state cannot be checked', () => {
     expect(lifecycle.phase).toBe('running')
     expect(existsSync(join(userData, 'backups', 'restore-journal.json'))).toBe(false)
     expect(existsSync(importStagingDirectory(userData))).toBe(false)
-    db.close()
-    connections.splice(0)
+    endRun()
     const current = currentData(userData)
     expect(settleSwap(join(userData, 'xidao.sqlite'))).toBeNull()
     expectUnchanged(userData, current)

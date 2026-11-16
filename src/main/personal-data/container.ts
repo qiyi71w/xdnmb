@@ -2,6 +2,7 @@ import { mkdir, open, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isRecord } from '../../shared/theme'
 import { isManagedName } from '../images/files'
+import { APPENDED_FILES } from '../storage/classification'
 import {
   CHUNK_BYTES, openChunk, parseEncryptionParams, plainBytes, sealChunk, sealedBytes, TAG_BYTES, type EncryptionParams
 } from './encryption'
@@ -38,9 +39,9 @@ export type ContentEntryType = typeof ENTRY_TYPE.database | typeof ENTRY_TYPE.dr
 
 export const MANIFEST_NAME = 'manifest.json'
 export const DATABASE_NAME = 'xidao.sqlite'
-/** Where `readContainer` extracts draft images and offline originals, under its target directory. */
-export const DRAFT_IMAGES_DIRECTORY = 'draft-images'
-export const OFFLINE_IMAGES_DIRECTORY = 'images'
+/** Where `readContainer` extracts draft images and offline originals, under its target directory (`APPENDED_FILES`). */
+export const DRAFT_IMAGES_DIRECTORY = APPENDED_FILES.drafts
+export const OFFLINE_IMAGES_DIRECTORY = APPENDED_FILES['offline-copies']
 
 /** The plain-text header. `encryption`: how the content is sealed; null: not encrypted. */
 export interface ContainerHeader {
@@ -445,13 +446,15 @@ function sealedReader(file: FileHandle, start: number, size: number, key: Buffer
 /**
  * Reads and checks a container without trusting it: magic and version, header, entry order and
  * kinds, managed names (no path components), each declared length against what the file actually
- * holds, the limits, and the manifest's per-kind totals against the entries. An encrypted file
- * needs its `contentKey` (`./encryption`); every chunk is authenticated before its content is used,
- * and a plain file given a key is refused. With `extractTo`, the database is written to
- * `<extractTo>/xidao.sqlite`, draft images to `draft-images/` and offline originals to `images/`
- * under it (new files only; nothing else is written). `checkManifest` sees the manifest as soon as
- * it is read, before any content is extracted, and may throw to refuse the file. Throws
- * `ContainerError`; whether the schema version can be imported is the caller's decision.
+ * holds, the limits, and the manifest's per-kind totals against the entries: an entry beyond what
+ * the manifest declares for its kind is refused before any of it is written, so extraction never
+ * writes more than the manifest declares. An encrypted file needs its `contentKey`
+ * (`./encryption`); every chunk is authenticated before its content is used, and a plain file given
+ * a key is refused. With `extractTo`, the database is written to `<extractTo>/xidao.sqlite`, draft
+ * images to `draft-images/` and offline originals to `images/` under it (new files only; nothing
+ * else is written). `checkManifest` sees the manifest as soon as it is read, before any content is
+ * extracted, and may throw (or reject) to refuse the file. Throws `ContainerError`; whether the
+ * schema version can be imported is the caller's decision.
  */
 export async function readContainer(
   path: string,
@@ -460,7 +463,7 @@ export async function readContainer(
     extractTo?: string
     signal?: AbortSignal
     contentKey?: Buffer
-    checkManifest?: (manifest: ExportManifest) => void
+    checkManifest?: (manifest: ExportManifest) => void | Promise<void>
   } = {}
 ): Promise<ContainerContents> {
   const limits = { ...CONTAINER_LIMITS, ...options.limits }
@@ -486,6 +489,8 @@ export async function readContainer(
 
     let manifest: ExportManifest | null = null
     const entries: ContainerEntry[] = []
+    const kinds = { [ENTRY_TYPE.database]: 'database', [ENTRY_TYPE.draftImage]: 'draftImages', [ENTRY_TYPE.offlineImage]: 'offlineImages' } as const
+    const actual = { database: { count: 0, bytes: 0 }, draftImages: { count: 0, bytes: 0 }, offlineImages: { count: 0, bytes: 0 } }
     const seen = new Set<string>()
     let previous: EntryType = ENTRY_TYPE.manifest
     let total = 0
@@ -517,7 +522,7 @@ export async function readContainer(
         manifest = parseManifest(parsed)
         // Secrets travel only encrypted, and only a file with secrets is encrypted.
         if (manifest === null || manifest.includes.secrets !== (header.encryption !== null)) throw new ContainerError('corrupt')
-        options.checkManifest?.(manifest)
+        await options.checkManifest?.(manifest)
         continue
       }
       if (type === ENTRY_TYPE.end) {
@@ -534,6 +539,11 @@ export async function readContainer(
       total += bytes
       if (total > limits.maxTotalBytes) throw new ContainerError('too-large')
       if (bytes > reader.remaining()) throw new ContainerError('corrupt')
+      // Never more of a kind than the manifest declares: extraction stays within its totals.
+      const of = kinds[type as ContentEntryType]
+      actual[of].count++
+      actual[of].bytes += bytes
+      if (actual[of].count > manifest.entries[of].count || actual[of].bytes > manifest.entries[of].bytes) throw new ContainerError('corrupt')
 
       if (options.extractTo === undefined) await reader.skip(bytes)
       else {
@@ -559,11 +569,6 @@ export async function readContainer(
     }
 
     if (manifest === null || entries[0]?.type !== ENTRY_TYPE.database) throw new ContainerError('corrupt')
-    const sum = (type: ContentEntryType): EntryTotals => {
-      const of = entries.filter((entry) => entry.type === type)
-      return { count: of.length, bytes: of.reduce((bytes, entry) => bytes + entry.bytes, 0) }
-    }
-    const actual = { database: sum(ENTRY_TYPE.database), draftImages: sum(ENTRY_TYPE.draftImage), offlineImages: sum(ENTRY_TYPE.offlineImage) }
     for (const kind of ['database', 'draftImages', 'offlineImages'] as const) {
       if (actual[kind].count !== manifest.entries[kind].count || actual[kind].bytes !== manifest.entries[kind].bytes) throw new ContainerError('corrupt')
     }

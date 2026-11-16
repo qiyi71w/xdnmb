@@ -2,6 +2,7 @@ import { lstatSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { isRecord } from '../../shared/theme'
 import { isManagedName } from '../images/files'
+import { APPENDED_FILES, userDataEntriesIn } from './classification'
 import { present, sizeOf, syncDirectory } from './durable'
 import type { SwapContext, SwapKindHandler, SwapOutcome } from './swap-journal'
 
@@ -35,17 +36,18 @@ const BACKUPS = 'backups'
 const STAGING = 'import-staging'
 const BEFORE_IMPORT = 'before-import'
 const BEFORE_IMPORT_PARTIAL = 'before-import.partial'
-/** Draft attachments and images (offline originals among them) in the user data directory. */
-export const DRAFT_IMAGES = 'draft-images'
-export const IMAGES = 'images'
+/**
+ * Draft attachments, and images (offline originals among them), in the user data directory and,
+ * by the same names, in staging (`APPENDED_FILES`, the layout `readContainer` extracts to).
+ */
+export const DRAFT_IMAGES = APPENDED_FILES.drafts
+export const IMAGES = APPENDED_FILES['offline-copies']
 /** The pre-upgrade backup and its work directories (`./backup`): removed once the import is in place. */
 const PRE_UPGRADE_ENTRIES = ['pre-upgrade', 'pre-upgrade.partial', 'pre-upgrade.replaced']
 /** Every file SQLite keeps next to a database; a stray one would be applied to the wrong database. */
 const DATABASE_SUFFIXES = ['', '-wal', '-shm', '-journal']
-/** Names inside the staging directory, the layout `readContainer` extracts an export file to. */
+/** The database inside the staging directory. */
 export const STAGED_DATABASE = 'xidao.sqlite'
-export const STAGED_DRAFT_IMAGES = 'draft-images'
-export const STAGED_OFFLINE_IMAGES = 'images'
 
 /**
  * `prepared`: the import result is staged, the current data untouched. `moving-current`: the
@@ -121,8 +123,8 @@ export function preparedImportJournal(userDataDirectory: string): ImportJournal 
     kind: 'import',
     phase: 'prepared',
     databaseSize,
-    draftImages: managedFiles(join(staging, STAGED_DRAFT_IMAGES)),
-    offlineImages: totals(managedFiles(join(staging, STAGED_OFFLINE_IMAGES)))
+    draftImages: managedFiles(join(staging, DRAFT_IMAGES)),
+    offlineImages: totals(managedFiles(join(staging, IMAGES)))
   }
 }
 
@@ -159,9 +161,11 @@ function settle(context: SwapContext<ImportJournal>): SwapOutcome {
   const staging = join(backups, STAGING)
   const partial = join(backups, BEFORE_IMPORT_PARTIAL)
   const before = join(backups, BEFORE_IMPORT)
-  const currentItems = [...DATABASE_SUFFIXES.map((suffix) => databaseName + suffix), DRAFT_IMAGES]
+  // The database with its companions and the `target-appended` entries move as one; offline
+  // originals are placed among the images one by one.
+  const currentItems = [...DATABASE_SUFFIXES.map((suffix) => databaseName + suffix), ...userDataEntriesIn('target-appended')]
   /** The staged database and draft attachments: [name in staging, name in the user data directory]. */
-  const importItems: [string, string][] = [[STAGED_DATABASE, databaseName], [STAGED_DRAFT_IMAGES, DRAFT_IMAGES]]
+  const importItems: [string, string][] = [[STAGED_DATABASE, databaseName], ...userDataEntriesIn('target-appended').map((entry): [string, string] => [entry, entry])]
 
   /**
    * Whether the staged database and draft attachments are complete, each looked for in staging,
@@ -179,7 +183,7 @@ function settle(context: SwapContext<ImportJournal>): SwapOutcome {
 
   /** Whether every staged offline original is still in staging (none has been placed before `placing-originals`). */
   const originalsStaged = (): boolean => {
-    const staged = totals(managedFiles(join(staging, STAGED_OFFLINE_IMAGES)))
+    const staged = totals(managedFiles(join(staging, IMAGES)))
     return staged.count === journal.offlineImages.count && staged.bytes === journal.offlineImages.bytes
   }
 
@@ -270,8 +274,8 @@ function settle(context: SwapContext<ImportJournal>): SwapOutcome {
     // copy in staging is the same file.
     const images = join(userData, IMAGES)
     mkdirSync(images, { recursive: true })
-    for (const { name } of managedFiles(join(staging, STAGED_OFFLINE_IMAGES))) {
-      renameSync(join(staging, STAGED_OFFLINE_IMAGES, name), join(images, name))
+    for (const { name } of managedFiles(join(staging, IMAGES))) {
+      renameSync(join(staging, IMAGES, name), join(images, name))
       step()
     }
     syncDirectory(images)

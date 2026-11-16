@@ -1,6 +1,6 @@
 import { parentPort } from 'node:worker_threads'
 import { readSecretRows } from './export-snapshot'
-import { checkStagedImport, readLocalCounts, stageImport, type ImportFileFacts } from './import-staging'
+import { checkStagedImport, readLocalAppendedBytes, readLocalCounts, stageImport, type ImportFileFacts } from './import-staging'
 
 /*
  * Worker entry for 导入个人数据: one request per worker, so the main process stays responsive while
@@ -10,6 +10,7 @@ import { checkStagedImport, readLocalCounts, stageImport, type ImportFileFacts }
 export type ImportWorkerRequest =
   | { type: 'check'; stagingDirectory: string; schemaVersion: number }
   | { type: 'counts'; databasePath: string }
+  | { type: 'appended-bytes'; databasePath: string }
   | { type: 'secrets'; databasePath: string }
   | { type: 'stage'; stagingDirectory: string; databasePath: string; file: ImportFileFacts }
 
@@ -23,6 +24,7 @@ port.once('message', (request: ImportWorkerRequest) => {
   try {
     const value = request.type === 'check' ? checkStagedImport(request.stagingDirectory, request.schemaVersion)
       : request.type === 'counts' ? readLocalCounts(request.databasePath)
+      : request.type === 'appended-bytes' ? readLocalAppendedBytes(request.databasePath)
       : request.type === 'secrets' ? readSecretRows(request.databasePath)
       : stageImport(request.stagingDirectory, request.databasePath, request.file)
     response = { ok: true, value }

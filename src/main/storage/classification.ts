@@ -10,7 +10,8 @@ import type { AppSettings } from '../../shared/settings'
  * - `overwrite` (随文件覆盖): exported; an import replaces the target's with the file's.
  * - `target-kept` (目标机保留): not exported; an import keeps the target's.
  * - `target-appended` (目标机保留并追加): exported (offline copies optionally); an import keeps the
- *   target's and adds the file's.
+ *   target's and adds the file's. Each part (`AppendedPart`) has its own import merge and keeps its
+ *   files in its own place (`APPENDED_FILES`).
  * - `secret` (秘密): exported only when chosen, under the export passphrase; an import re-encrypts the
  *   file's with the target's system protection and keeps the target's.
  * - `not-exported` (不导出): not exported; the target rebuilds it or starts from its initial state.
@@ -28,13 +29,19 @@ export type DataClass = (typeof DATA_CLASSES)[number]
  */
 export type NotExportedPart = 'cache' | 'rebuilt'
 
+/** The parts of `target-appended`: 离线副本 and 草稿, each merged as a whole on import. */
+export const APPENDED_PARTS = ['offline-copies', 'drafts'] as const
+export type AppendedPart = (typeof APPENDED_PARTS)[number]
+
 export type Classification =
-  | { class: Exclude<DataClass, 'not-exported'> }
+  | { class: Exclude<DataClass, 'not-exported' | 'target-appended'> }
+  | { class: 'target-appended'; part: AppendedPart }
   | { class: 'not-exported'; part: NotExportedPart }
 
 const overwrite = { class: 'overwrite' } as const
 const targetKept = { class: 'target-kept' } as const
-const targetAppended = { class: 'target-appended' } as const
+const offlineCopies = { class: 'target-appended', part: 'offline-copies' } as const
+const drafts = { class: 'target-appended', part: 'drafts' } as const
 const secret = { class: 'secret' } as const
 const cache = { class: 'not-exported', part: 'cache' } as const
 const rebuilt = { class: 'not-exported', part: 'rebuilt' } as const
@@ -88,12 +95,12 @@ export const TABLES: Readonly<Record<string, Classification | typeof BY_SETTING_
   // 官网账号会话
   account_session: targetKept,
   // 离线副本（含其页、发言、原图）；草稿与草稿附图
-  offline_copies: targetAppended,
-  offline_pages: targetAppended,
-  offline_page_posts: targetAppended,
-  offline_images: targetAppended,
-  drafts: targetAppended,
-  draft_attachments: targetAppended,
+  offline_copies: offlineCopies,
+  offline_pages: offlineCopies,
+  offline_page_posts: offlineCopies,
+  offline_images: offlineCopies,
+  drafts,
+  draft_attachments: drafts,
   // 饼干凭据；App UUID
   credentials: secret,
   subscription_app_credentials: secret,
@@ -168,7 +175,7 @@ export const OTHER_SETTING_CLASSES: Readonly<Record<string, SettingClass>> = {
 export const USER_DATA_ENTRIES: Readonly<Record<string, Classification | typeof BY_TABLE>> = {
   // With its -wal, -shm and -journal files.
   'xidao.sqlite': BY_TABLE,
-  'draft-images': targetAppended,
+  'draft-images': drafts,
   // Cached forum images; originals offline copies hold go with the offline copies.
   images: cache,
   'clipboard-images': rebuilt,
@@ -178,6 +185,16 @@ export const USER_DATA_ENTRIES: Readonly<Record<string, Classification | typeof 
   'update-on-start.json': targetKept,
   'update-launched.json': targetKept,
   'update-state.json': targetKept
+}
+
+/**
+ * The user data directory that keeps each `target-appended` part's files, by the same name in an
+ * export file and the import staging: draft attachments in their own entry (moved with the
+ * database by an import), offline copies' originals among the cached images.
+ */
+export const APPENDED_FILES: { readonly [P in AppendedPart]: string } = {
+  'offline-copies': 'images',
+  drafts: 'draft-images'
 }
 
 /** The class of a setting key (an `AppSettings` key or another `settings` row); null when unclassified. */
@@ -193,18 +210,18 @@ export function settingKeysIn(dataClass: SettingClass): string[] {
     .map(([key]) => key)
 }
 
-function namesIn(entries: Readonly<Record<string, { class: string; part?: NotExportedPart }>>, dataClass: DataClass, part?: NotExportedPart): string[] {
+function namesIn(entries: Readonly<Record<string, { class: string; part?: string }>>, dataClass: DataClass, part?: string): string[] {
   return Object.entries(entries)
     .filter(([, value]) => value.class === dataClass && (part === undefined || value.part === part))
     .map(([name]) => name)
 }
 
-/** Tables of one class (of one part of `not-exported` when given). `settings` is in none: see `settingKeysIn`. */
-export function tablesIn(dataClass: DataClass, part?: NotExportedPart): string[] {
+/** Tables of one class (of one part of `not-exported` or `target-appended` when given). `settings` is in none: see `settingKeysIn`. */
+export function tablesIn(dataClass: DataClass, part?: NotExportedPart | AppendedPart): string[] {
   return namesIn(TABLES, dataClass, part)
 }
 
-/** User data entries of one class (of one part of `not-exported` when given). The database is in none: see `tablesIn`. */
-export function userDataEntriesIn(dataClass: DataClass, part?: NotExportedPart): string[] {
+/** User data entries of one class (of one part when given). The database is in none: see `tablesIn`. */
+export function userDataEntriesIn(dataClass: DataClass, part?: NotExportedPart | AppendedPart): string[] {
   return namesIn(USER_DATA_ENTRIES, dataClass, part)
 }

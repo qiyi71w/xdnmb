@@ -14,7 +14,7 @@ import { preUpgradeBackupDirectory } from '../src/main/storage/backup'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { readSecretRows } from '../src/main/storage/export-snapshot'
 import { beforeImportDirectory } from '../src/main/storage/import-journal'
-import { checkStagedImport, readLocalCounts, stageImport } from '../src/main/storage/import-staging'
+import { checkStagedImport, readLocalAppendedBytes, readLocalCounts, stageImport } from '../src/main/storage/import-staging'
 import { MIGRATIONS } from '../src/main/storage/migrations'
 import { settleSwap } from '../src/main/storage/swap-journal'
 import { parseWorkspace } from '../src/renderer/src/features/tabs/workspaceSnapshot'
@@ -54,6 +54,7 @@ function sha(path: string): string {
 const inProcess: ImportDatabase = {
   check: async (staging, version) => checkStagedImport(staging, version),
   counts: async (path) => readLocalCounts(path),
+  appendedBytes: async (path) => readLocalAppendedBytes(path),
   secrets: async (path) => readSecretRows(path),
   stage: async (staging, path, file) => stageImport(staging, path, file),
   abort: () => undefined

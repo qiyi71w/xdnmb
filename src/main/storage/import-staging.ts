@@ -3,11 +3,14 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname, extname, join } from 'node:path'
 import { isManagedName } from '../images/files'
-import { settingKeysIn, tablesIn } from './classification'
+import { APPENDED_PARTS, settingKeysIn, tablesIn, type AppendedPart } from './classification'
 import { migrateDatabase } from './database'
 import { copyFileDurably, present, syncDirectory } from './durable'
-import { OFFLINE_TABLES, readCredentialSequence, recordUnsavedImage, replaceSecretValues, resetRebuilt, type SecretRows } from './export-snapshot'
-import { DRAFT_IMAGES, IMAGES, STAGED_DATABASE, STAGED_DRAFT_IMAGES, STAGED_OFFLINE_IMAGES } from './import-journal'
+import {
+  checkSecretSizes, columnsOf, readCredentialSequence, readExportEstimate, recordUnsavedImage, referencingFirst, replaceSecretValues,
+  resetRebuilt, type SecretRows
+} from './export-snapshot'
+import { DRAFT_IMAGES, IMAGES, STAGED_DATABASE } from './import-journal'
 import { MIGRATIONS } from './migrations'
 
 /*
@@ -15,11 +18,14 @@ import { MIGRATIONS } from './migrations'
  * The export file's content is extracted into the import staging directory (`./import-journal`)
  * and only ever changed there; this machine's database is only read.
  *
- * Checking (before the confirmation): the staged database is the file's own schema version, passes
+ * Checking (before the confirmation): the staged database is the file's own schema version and
+ * every schema object in it (type, name, table and SQL) is exactly what a new install has at that
+ * version, compared before SQLite runs anything of the file's (integrity check, migrations and every
+ * query could run a CHECK, trigger, view, default or generated column it defines); then it passes
  * SQLite's integrity check, takes this version's migration chain (an older file is migrated here,
- * in staging), then has exactly the tables, columns and indexes a fresh install has, no dangling
- * reference, and every draft attachment and offline original it names among the extracted files
- * with its recorded size.
+ * in staging), then has exactly this version's schema objects, no dangling reference, secret
+ * values within `SECRET_LIMITS`, and every draft attachment and offline original it names among
+ * the extracted files with its recorded size. Staging has the user data directory's layout.
  *
  * Merging (after the confirmation), on the checked database, with this machine's database read in
  * one read transaction; the steps (`MERGE_STEPS`) follow the 数据归类 in `./classification`:
@@ -38,19 +44,21 @@ import { MIGRATIONS } from './migrations'
  *      nothing in the result refers to it). A subscription configuration whose App UUID is now
  *      missing is 未配置 under a new generation; earlier generations' observations, operations and
  *      plans stay history and are never carried on.
- *   4. 离线副本: this machine's offline copies are appended. A thread both have keeps the copy
- *      updated later (the file's on a tie) as a whole: its pages, posts and originals. Originals no
- *      copy holds any more go with their staged files. This machine's originals are copied into
- *      staging under new image record IDs (a free managed name when theirs is taken); an original
- *      the file already has for the same address is shared. One whose file is gone from this
- *      machine is 图片未保存 in its copy, as an export records it.
- *   5. 草稿: this machine's drafts and their attachments are appended under new IDs, attachments
+ *   4. 目标机保留并追加, one merge for each part (`APPENDED_MERGES`), the tables of a part being
+ *      those the classification puts in it:
+ *      离线副本: this machine's offline copies are appended. A thread both have keeps the copy
+ *      updated later (the file's on a tie) as a whole: its rows in every offline copy table, its
+ *      posts and originals. Originals no copy holds any more go with their staged files. This
+ *      machine's originals are copied into staging under new image record IDs (a free managed name
+ *      when theirs is taken); an original the file already has for the same address is shared. One
+ *      whose file is gone from this machine is 图片未保存 in its copy, as an export records it.
+ *      草稿: this machine's drafts and their attachments are appended under new IDs, attachments
  *      copied into staging (a free managed name when theirs is taken; one whose file is gone leaves
  *      its draft without it). Their 饼干 references go through `CredentialIdMap`, so they keep this
  *      machine's cookies; a reference to a cookie already removed here stays 已移除 (an ID no
  *      credential has or will get). The file's drafts are as they were.
- *   6. 不导出 derived state goes back to its initial state; the app rebuilds it at the next start.
- *   7. The result passes the foreign key and integrity checks, and every draft attachment and
+ *   5. 不导出 derived state goes back to its initial state; the app rebuilds it at the next start.
+ *   6. The result passes the foreign key and integrity checks, and every draft attachment and
  *      offline original it names is in staging with its recorded size.
  *
  * Nothing secret is decrypted here: this machine's ciphertext is carried as it is.
@@ -118,31 +126,33 @@ function sizeOf(path: string): number | null {
   }
 }
 
-/** Tables, columns and indexes: what every migration path of this version converges to. */
-function shapeOf(db: Database.Database): string {
-  const objects = db.prepare<[], { type: string; name: string }>(
-    "SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+/** Every schema object as SQLite keeps it: type, name, table and the SQL that defines it. */
+function schemaOf(db: Database.Database): string {
+  const objects = db.prepare<[], { type: string; name: string; tbl_name: string; sql: string | null }>(
+    'SELECT type, name, tbl_name, sql FROM sqlite_master'
   ).all()
-  return JSON.stringify(objects.map((object) => ({
-    ...object,
-    columns: object.type === 'table' ? db.pragma(`table_info("${object.name}")`) : null,
-    indexes: object.type === 'table' ? db.pragma(`index_list("${object.name}")`) : null
-  })))
+  return JSON.stringify(objects.map((object) => [object.type, object.name, object.tbl_name, object.sql]).sort())
 }
 
-let freshShape: string | null = null
+const newInstallSchemas = new Map<number, string | null>()
 
-function currentShape(): string {
-  if (freshShape === null) {
+/**
+ * The schema objects a new install has at `version` (this version's migrations up to it), which an
+ * install upgraded from any earlier version has too; null when no migration reaches exactly it.
+ */
+function newInstallSchema(version: number): string | null {
+  let schema = newInstallSchemas.get(version)
+  if (schema === undefined) {
     const fresh = new Database(':memory:')
     try {
-      migrateDatabase(fresh, MIGRATIONS)
-      freshShape = shapeOf(fresh)
+      const reached = migrateDatabase(fresh, MIGRATIONS.filter((migration) => migration.version <= version))
+      schema = reached === version ? schemaOf(fresh) : null
     } finally {
       fresh.close()
     }
+    newInstallSchemas.set(version, schema)
   }
-  return freshShape
+  return schema
 }
 
 function openStaged(stagingDirectory: string): Database.Database {
@@ -172,8 +182,8 @@ function filesComplete(db: Database.Database, directory: string, sql: string): b
 
 /** Every draft attachment and offline original the staged database names is in staging. */
 function stagedFilesComplete(db: Database.Database, stagingDirectory: string): boolean {
-  return filesComplete(db, join(stagingDirectory, STAGED_DRAFT_IMAGES), 'SELECT file_name AS name, bytes FROM draft_attachments')
-    && filesComplete(db, join(stagingDirectory, STAGED_OFFLINE_IMAGES), `SELECT r.file_name AS name, r.bytes FROM image_resources r
+  return filesComplete(db, join(stagingDirectory, DRAFT_IMAGES), 'SELECT file_name AS name, bytes FROM draft_attachments')
+    && filesComplete(db, join(stagingDirectory, IMAGES), `SELECT r.file_name AS name, r.bytes FROM image_resources r
       WHERE EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)`)
 }
 
@@ -190,10 +200,13 @@ export function checkStagedImport(stagingDirectory: string, schemaVersion: numbe
   }
   try {
     if (Number(db.pragma('user_version', { simple: true })) !== schemaVersion) throw new ImportCheckError('schema version differs from the manifest')
+    // Before anything that could run SQL of the file's own (see the top of this file).
+    if (schemaOf(db) !== newInstallSchema(schemaVersion)) throw new ImportCheckError('unexpected schema')
     if (db.pragma('integrity_check', { simple: true }) !== 'ok') throw new ImportCheckError('integrity check failed')
-    migrateDatabase(db, MIGRATIONS)
-    if (shapeOf(db) !== currentShape()) throw new ImportCheckError('unexpected schema')
+    const version = migrateDatabase(db, MIGRATIONS)
+    if (schemaOf(db) !== newInstallSchema(version)) throw new ImportCheckError('unexpected schema after migration')
     if (!verified(db)) throw new ImportCheckError('migrated database failed verification')
+    checkSecretSizes(db)
     if (!stagedFilesComplete(db, stagingDirectory)) throw new ImportCheckError('files missing')
   } catch (error) {
     throw error instanceof ImportCheckError ? error : new ImportCheckError('staged database not importable', { cause: error })
@@ -215,8 +228,10 @@ export function readLocalCounts(databasePath: string): { history: number; sendRe
   }
 }
 
-function columnsOf(db: Database.Database, table: string): string[] {
-  return (db.pragma(`table_info("${table}")`) as { name: string }[]).map((column) => column.name)
+/** Bytes this machine's 目标机保留并追加 data adds to staging at most: its draft attachments and offline copies. */
+export function readLocalAppendedBytes(databasePath: string): number {
+  const { offlineBytes, draftImageBytes } = readExportEstimate(databasePath)
+  return offlineBytes + draftImageBytes
 }
 
 /** Copies this machine's rows of `table` (both databases have this version's schema) into staging. */
@@ -352,7 +367,7 @@ interface ResourceRow {
   [column: string]: unknown
 }
 
-/** Step 4, one of this machine's offline copies the staged database does not have (any more). */
+/** Step 4, 离线副本: one of this machine's offline copies the staged database does not have (any more). */
 function appendLocalOfflineCopy(context: MergeContext, threadId: string): void {
   const { staged, local, files } = context
   // Its posts, as this machine has them; their search-derived size starts afresh with the index.
@@ -366,7 +381,10 @@ function appendLocalOfflineCopy(context: MergeContext, threadId: string): void {
     row[derived] = 0
     upsertPost.run(row)
   }
-  for (const table of ['offline_copies', 'offline_pages', 'offline_page_posts']) copyLocalRows(context, table, 'WHERE thread_id = ?', [threadId])
+  // Its rows in every offline copy table, parents first; its originals' with their image records below.
+  for (const table of referencingFirst(staged, tablesIn('target-appended', 'offline-copies')).reverse()) {
+    if (table !== 'offline_images') copyLocalRows(context, table, 'WHERE thread_id = ?', [threadId])
+  }
 
   const resourceColumns = columnsOf(staged, 'image_resources').filter((column) => column !== 'id')
   const insertResource = staged.prepare(`INSERT INTO image_resources (${quoted(resourceColumns)}) VALUES (${marks(resourceColumns)})`)
@@ -397,7 +415,7 @@ function appendLocalOfflineCopy(context: MergeContext, threadId: string): void {
   }
 }
 
-/** Step 4: 离线副本 (see the top of this file). */
+/** Step 4, 离线副本 (see the top of this file). */
 function retainLocalOfflineCopies(context: MergeContext): void {
   const { staged, local } = context
   const stagedCopy = staged.prepare<[string], { updated_at: string }>('SELECT updated_at FROM offline_copies WHERE thread_id = ?')
@@ -407,7 +425,9 @@ function retainLocalOfflineCopies(context: MergeContext): void {
     const theirs = stagedCopy.get(copy.thread_id)
     if (theirs !== undefined) {
       if (later.get(copy.updated_at, theirs.updated_at)?.later !== 1) continue
-      for (const table of OFFLINE_TABLES) staged.prepare(`DELETE FROM "${table}" WHERE thread_id = ?`).run(copy.thread_id)
+      for (const table of referencingFirst(staged, tablesIn('target-appended', 'offline-copies'))) {
+        staged.prepare(`DELETE FROM "${table}" WHERE thread_id = ?`).run(copy.thread_id)
+      }
     }
     kept.push(copy.thread_id)
   }
@@ -425,7 +445,7 @@ interface AttachmentRow {
   [column: string]: unknown
 }
 
-/** Step 5: 草稿 (see the top of this file). */
+/** Step 4, 草稿 (see the top of this file). */
 function retainLocalDrafts(context: MergeContext): void {
   const { staged, local, files, credentialIds } = context
   const attachmentColumns = columnsOf(staged, 'draft_attachments').filter((column) => column !== 'id')
@@ -468,9 +488,15 @@ function retainLocalDrafts(context: MergeContext): void {
   advanceSequence(staged, 'drafts', draftId)
 }
 
-/** Step 6: 不导出 derived state starts afresh. */
+/** Step 5: 不导出 derived state starts afresh. */
 function resetDerivedState(context: MergeContext): void {
   resetRebuilt(context.staged)
+}
+
+/** Step 4: the merge of each `target-appended` part, covering the tables the classification puts in it. */
+const APPENDED_MERGES: { readonly [P in AppendedPart]: (context: MergeContext) => void } = {
+  'offline-copies': retainLocalOfflineCopies,
+  drafts: retainLocalDrafts
 }
 
 /** The merge, in order (see the top of this file); every step runs in one transaction. */
@@ -480,8 +506,7 @@ const MERGE_STEPS: readonly ((context: MergeContext) => void)[] = [
   appendLocalCredentials,
   appendLocalAppCredentials,
   settleSubscriptionConfiguration,
-  retainLocalOfflineCopies,
-  retainLocalDrafts,
+  ...APPENDED_PARTS.map((part) => APPENDED_MERGES[part]),
   resetDerivedState
 ]
 
@@ -501,7 +526,7 @@ export function stageImport(stagingDirectory: string, localDatabasePath: string,
     const userData = dirname(localDatabasePath)
     const files = {
       local: { draftImages: join(userData, DRAFT_IMAGES), images: join(userData, IMAGES) },
-      staged: { draftImages: join(stagingDirectory, STAGED_DRAFT_IMAGES), images: join(stagingDirectory, STAGED_OFFLINE_IMAGES) }
+      staged: { draftImages: join(stagingDirectory, DRAFT_IMAGES), images: join(stagingDirectory, IMAGES) }
     }
     mkdirSync(files.staged.draftImages, { recursive: true })
     mkdirSync(files.staged.images, { recursive: true })

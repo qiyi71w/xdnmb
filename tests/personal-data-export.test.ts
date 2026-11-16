@@ -19,6 +19,7 @@ import { createExportService, exportFileName, type ExportDatabase, type ExportSe
 import {
   CONTAINER_MAGIC, ContainerError, DATABASE_NAME, ENTRY_TYPE, readContainer, type ContainerContents
 } from '../src/main/personal-data/container'
+import { tablesIn } from '../src/main/storage/classification'
 
 const AT = '2026-11-16T08:00:00.000Z'
 const COOKIE = 'CIPHERTEXT-COOKIE-MARKER'
@@ -237,6 +238,19 @@ describe('personal data export', () => {
     connections.push(reopened)
     expect(reopened.status).toEqual({ state: 'ready', schemaVersion: 29 })
     expect(reopened.listDrafts()).toMatchObject([{ fields: { content: '草稿正文' } }])
+  })
+
+  it('trims every ordinary cache table by the cache-clearing rules', async () => {
+    const { userData, raw } = source()
+    // Cache nothing protects in every table the classification puts there (a directory and a list page here).
+    raw.prepare("INSERT INTO directory_snapshot (singleton, directory_json, fetched_at) VALUES (1, '[]', ?)").run(AT)
+    raw.prepare("INSERT INTO feed_pages (feed_kind, feed_id, page, fetched_at, summaries_json, skipped_items) VALUES ('forum', '4', 1, ?, '[]', 0)").run(AT)
+    const before = Object.fromEntries(tablesIn('not-exported', 'cache').map((table) => [table, count(raw, table)]))
+    for (const [table, rows] of Object.entries(before)) expect(rows, `the source has cache in ${table}`).toBeGreaterThan(0)
+    const h = harness(userData)
+    expect((await h.run(false)).outcome?.status).toBe('done')
+    const { db } = await extract(join(h.target, readdirSync(h.target)[0]!))
+    for (const [table, rows] of Object.entries(before)) expect(count(db, table), table).toBeLessThan(rows)
   })
 
   it('takes offline copies with their originals, no thumbnails, and records a lost original as not saved', async () => {
