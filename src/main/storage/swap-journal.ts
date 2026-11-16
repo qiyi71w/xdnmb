@@ -2,6 +2,7 @@ import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync }
 import { basename, dirname, join } from 'node:path'
 import { isRecord } from '../../shared/theme'
 import { syncDirectory, syncFile } from './durable'
+import { IMPORT_SWAP, type ImportJournal } from './import-journal'
 import { RESTORE_SWAP, type RestoreJournal } from './restore-journal'
 
 /*
@@ -12,7 +13,8 @@ import { RESTORE_SWAP, type RestoreJournal } from './restore-journal'
  * exists where the journal's phase says. A swap whose staged data is missing or incomplete is
  * abandoned and the current data is opened as it was.
  *
- * Each kind of swap (恢复升级前备份 in `./restore-journal`) has its own staging, phases and settling;
+ * Each kind of swap (恢复升级前备份 in `./restore-journal`, 导入个人数据 in `./import-journal`) has
+ * its own staging, phases and settling;
  * this module owns what they share: the one journal file, at most one pending swap, and settling
  * whichever kind is pending. A kind is added to `SwapJournal` and `KINDS` (a missing handler is a
  * type error).
@@ -28,7 +30,7 @@ const JOURNAL = 'restore-journal.json'
 const MAX_JOURNAL_BYTES = 16 * 1024 * 1024
 
 /** A pending swap: its kind, its phase and what the kind records to check its staged data. */
-export type SwapJournal = RestoreJournal
+export type SwapJournal = RestoreJournal | ImportJournal
 export type SwapKind = SwapJournal['kind']
 type JournalOf<K extends SwapKind> = Extract<SwapJournal, { kind: K }>
 
@@ -68,7 +70,8 @@ export interface SwapKindHandler<J extends SwapJournal> {
 }
 
 const KINDS: { [K in SwapKind]: SwapKindHandler<JournalOf<K>> } = {
-  restore: RESTORE_SWAP
+  restore: RESTORE_SWAP,
+  import: IMPORT_SWAP
 }
 
 /** Another swap is pending (or may be: its journal cannot be read); nothing was changed. */

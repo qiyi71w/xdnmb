@@ -44,8 +44,11 @@ import { createRestoreService } from './storage/restore-service'
 import { createUpgradeService } from './storage/upgrade'
 import createStorageWorker from './storage/worker?nodeWorker'
 import createExportWorker from './storage/export-worker?nodeWorker'
+import createImportWorker from './storage/import-worker?nodeWorker'
+import { MIGRATIONS } from './storage/migrations'
 import { createExportService, type ExportService } from './personal-data/service'
-import { createWorkerExportDatabase } from './personal-data/worker-database'
+import { createImportService, type ImportService } from './personal-data/import'
+import { createWorkerExportDatabase, createWorkerImportDatabase } from './personal-data/worker-database'
 import { createSubscriptionService } from './subscriptions/service'
 import { createPublicationAdapter } from './publication/adapter'
 import { createPublicationService } from './publication/service'
@@ -89,6 +92,7 @@ let storeClosed = false
 let content: ContentService | null = null
 let lifecycle: Lifecycle | null = null
 let personalData: ExportService | null = null
+let personalImport: ImportService | null = null
 /** Kept referenced for the app's lifetime: the Windows tray, the macOS menu bar icon, the Linux status icon. */
 let tray: Tray | null = null
 let search: SearchService | null = null
@@ -556,6 +560,15 @@ async function start(): Promise<void> {
     showInFolder: (path) => shell.showItemInFolder(path)
   })
   personalData = exportService
+  // 导入个人数据: the restart it needs goes through the ordinary quit (see `confirmImport`).
+  const importService = createImportService({
+    databasePath: join(app.getPath('userData'), 'xidao.sqlite'),
+    supportedVersion: MIGRATIONS.reduce((highest, migration) => Math.max(highest, migration.version), 0),
+    status: () => openedStore.status,
+    database: createWorkerImportDatabase(createImportWorker),
+    restart: () => lifecycle?.requestQuit('restart') ?? Promise.resolve('not-started')
+  })
+  personalImport = importService
   search = searchService
   // Batched worker backfill runs alongside the window; search stays unavailable until complete.
   void searchService.recover().catch(() => console.error('[search] index unavailable'))
@@ -715,7 +728,9 @@ async function start(): Promise<void> {
       ipc?.cancelAll()
       // Nothing is downloaded while quitting; a package that is not ready is not installed.
       updateService.stop()
-      backgroundStopped = Promise.all([retained.stop(), reminders.stop('quit'), searchService.stop(), analyticsService.stop(), exportService.stop()]).then(() => undefined)
+      backgroundStopped = Promise.all([
+        retained.stop(), reminders.stop('quit'), searchService.stop(), analyticsService.stop(), exportService.stop(), importService.stop()
+      ]).then(() => undefined)
       await backgroundStopped
     },
     notify: notifyUnfinished,
@@ -768,7 +783,12 @@ async function start(): Promise<void> {
       updateService.configure(saved)
       bossKeyService.configure(saved)
     }),
-    getStatus: () => ({ storage: openedStore.status, platform, restoreAbandoned: swap?.kind === 'restore' && swap.outcome === 'abandoned' }),
+    getStatus: () => ({
+      storage: openedStore.status,
+      platform,
+      restoreAbandoned: swap?.kind === 'restore' && swap.outcome === 'abandoned',
+      importAbandoned: swap?.kind === 'import' && swap.outcome === 'abandoned'
+    }),
     upgrade: createUpgradeService({
       status: () => openedStore.status,
       markWithoutBackup: (schemaVersion) => markUpgradeWithoutBackup(app.getPath('userData'), schemaVersion),
@@ -808,6 +828,19 @@ async function start(): Promise<void> {
       }
       const result = window === null ? await dialog.showSaveDialog(options) : await dialog.showSaveDialog(window, options)
       return result.canceled || !result.filePath ? null : result.filePath
+    },
+    personalImport: importService,
+    async chooseImportPath(sender) {
+      const window = BrowserWindow.fromWebContents(sender)
+      // Only export files are listed; whatever is chosen is still checked by its content.
+      const options: Electron.OpenDialogOptions = {
+        title: '导入个人数据',
+        defaultPath: app.getPath('documents'),
+        filters: [{ name: '汐岛个人数据', extensions: ['xidao'] }],
+        properties: ['openFile']
+      }
+      const result = window === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(window, options)
+      return result.canceled ? null : (result.filePaths[0] ?? null)
     },
     systemPrefersDark: () => nativeTheme.shouldUseDarkColors,
     isTrustedSender: (event: IpcMainInvokeEvent) =>
@@ -870,6 +903,7 @@ async function finishStorage(): Promise<void> {
   await analytics?.stop()
   await content?.stop()
   await personalData?.stop()
+  await personalImport?.stop()
   await opened.close()
   await updates?.launchInstaller()
 }

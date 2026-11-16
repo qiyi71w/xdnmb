@@ -440,9 +440,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- 个人数据 (导出) ---------- */
+/* ---------- 个人数据 (导出、导入) ---------- */
 
-/* The import entry joins the export button in this row. */
 .personal-data-actions {
   display: flex;
   flex-wrap: wrap;
@@ -454,16 +453,28 @@
   gap: 6px;
 }
 
-.export-dialog {
+.export-dialog,
+.import-dialog {
   width: min(480px, calc(100vw - 32px));
 }
 
-.export-body {
+.export-body,
+.import-body {
   gap: 12px;
 }
 
-.export-body > p {
+.export-body > p,
+.import-body > p {
   margin: 0;
+}
+
+/* A two-line outcome keeps its icon on the first line. */
+.import-outcome {
+  align-items: flex-start;
+}
+
+.import-outcome .icon {
+  margin-top: 3px;
 }
 
 .export-body .choice-row {

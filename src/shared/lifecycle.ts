@@ -46,6 +46,14 @@ export type LaunchNoticesResult = { ok: true; attempts: PublicationAttempt[] } |
  */
 export type UnstoredResults = { attempts: PublicationAttempt[] }
 
+/**
+ * Why the renderer called a quit off. `unchecked`: a send's state could not be checked.
+ * `drafts`: drafts could not be saved and the user stayed. `workspace`: the workspace could not be
+ * saved and the user stayed.
+ */
+export type QuitCallOff = 'unchecked' | 'drafts' | 'workspace'
+export const QUIT_CALL_OFFS: readonly QuitCallOff[] = ['unchecked', 'drafts', 'workspace']
+
 export interface LifecycleApi {
   /** Receives main-process requests; returns the unsubscribe function. */
   onRequest(listener: (request: LifecycleRequest) => void): () => void
@@ -55,8 +63,8 @@ export interface LifecycleApi {
   requestQuit(): Promise<void>
   /** While a quit is being handled: shows the window (also when resident) so its questions can be answered. */
   presentQuit(): Promise<void>
-  /** The quit was cancelled or could not save; the app keeps running unchanged. */
-  cancelQuit(): Promise<void>
+  /** The quit was cancelled or could not save (`reason`); the app keeps running unchanged. */
+  cancelQuit(input: { reason: QuitCallOff }): Promise<void>
   /**
    * The unsaved editors and the workspace were handled: the window closes and the main
    * process finishes sends that already started, then exits. Opening the app again before that

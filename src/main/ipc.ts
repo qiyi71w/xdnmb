@@ -18,7 +18,7 @@ import {
 import type { ReadingAnchor } from '../shared/reading'
 import type { ContentService } from './content/service'
 import { OFFLINE_CHANGED_CHANNEL } from '../shared/content'
-import { MAX_WORKSPACE_LENGTH } from '../shared/lifecycle'
+import { MAX_WORKSPACE_LENGTH, QUIT_CALL_OFFS, type QuitCallOff } from '../shared/lifecycle'
 import type { DraftService } from './drafts/service'
 import type { IdentityService } from './identity/service'
 import type { ImageService } from './images/service'
@@ -46,6 +46,7 @@ import type { AccountService } from './account/service'
 import type { UpgradeService } from './storage/upgrade'
 import type { RestoreService } from './storage/restore-service'
 import type { ExportService } from './personal-data/service'
+import type { ImportService } from './personal-data/import'
 
 const OPERATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 const FORUM_ID = /^\d{1,20}$/
@@ -108,6 +109,10 @@ interface IpcDeps {
   personalData: ExportService
   /** System save dialog for an export file, for the sender's window; null when dismissed. */
   chooseExportPath: (sender: WebContents, defaultName: string) => Promise<string | null>
+  /** 导入个人数据. */
+  personalImport: ImportService
+  /** System open dialog for an export file, for the sender's window; null when dismissed. */
+  chooseImportPath: (sender: WebContents) => Promise<string | null>
 }
 
 function record(input: unknown): Record<string, unknown> {
@@ -348,7 +353,7 @@ export interface IpcRegistration {
 export function registerIpc({
   reading, images, identities, account, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
   analytics, thirdParty, announcements, updates, loginItem, bossKey, getStatus, upgrade, restore, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile,
-  personalData, chooseExportPath
+  personalData, chooseExportPath, personalImport, chooseImportPath
 }: IpcDeps): IpcRegistration {
   const owner = (sender: WebContents): string => String(sender.id)
   const operations = new OperationRegistry()
@@ -972,9 +977,15 @@ export function registerIpc({
   // Window lifecycle. The serialized workspace is opaque here; the renderer validates it on load.
   handle(IpcChannel.lifecycleReside, async () => lifecycle.reside())
   // A renderer quit is always an ordinary quit; only `updates.installAndRestart` quits for installing.
-  handle(IpcChannel.lifecycleRequestQuit, async () => lifecycle.requestQuit('quit'))
+  handle(IpcChannel.lifecycleRequestQuit, async () => {
+    void lifecycle.requestQuit('quit')
+  })
   handle(IpcChannel.lifecyclePresentQuit, async () => lifecycle.presentQuit())
-  handle(IpcChannel.lifecycleCancelQuit, async () => lifecycle.cancelQuit())
+  handle(IpcChannel.lifecycleCancelQuit, async (_event, raw) => {
+    const reason = searchRecord(raw, ['reason']).reason
+    if (!QUIT_CALL_OFFS.includes(reason as QuitCallOff)) throw new InvalidRequestError()
+    lifecycle.cancelQuit(reason as QuitCallOff)
+  })
   handle(IpcChannel.lifecycleCompleteQuit, async (_event, raw) => {
     const saved = record(raw).saved
     if (typeof saved !== 'boolean') throw new InvalidRequestError()
@@ -1080,6 +1091,19 @@ export function registerIpc({
   handle(IpcChannel.revealExport, async (_event, raw) => {
     if (raw !== undefined) throw new InvalidRequestError()
     return { shown: await personalData.reveal() }
+  })
+  // 导入个人数据: the open dialog is shown here and the chosen path never leaves main.
+  handle(IpcChannel.inspectImport, async (event, raw) => {
+    if (raw !== undefined) throw new InvalidRequestError()
+    return personalImport.inspect(() => chooseImportPath(event.sender))
+  })
+  handle(IpcChannel.confirmImport, async (_event, raw) => {
+    if (raw !== undefined) throw new InvalidRequestError()
+    return personalImport.confirm()
+  })
+  handle(IpcChannel.cancelImport, async (_event, raw) => {
+    if (raw !== undefined) throw new InvalidRequestError()
+    await personalImport.cancel()
   })
 
   return {

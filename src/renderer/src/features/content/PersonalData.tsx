@@ -7,6 +7,10 @@ import {
   exportFailureText, exportPercent, exportProgressText, isBusy, offlineChoiceText, unavailableText, type ExportTask
 } from './exportState'
 import { exportTask, useExportTask } from './useExportTask'
+import { formatRecordTime } from '../../lib/time'
+import { useStayOpen } from '../lifecycle/QuitDialogs'
+import { canConfirm, importBusy, importConfirmText, importOutcomeText, importProblemText, type ImportFlow } from './importState'
+import { importFlow, useImportFlow } from './useImportFlow'
 import './content.css'
 
 type Running = Extract<ExportTask, { phase: 'running' }>
@@ -186,22 +190,78 @@ function ExportDialog({ onClose, fallbackFocus }: { onClose: () => void; fallbac
 }
 
 /**
- * The 个人数据 part of 存储与缓存: 导出个人数据… (import joins this row), the reason it is
- * unavailable, and a running or finished export once its dialog is closed. A finished result
- * clears when 设置 is left; a failure stays until replaced.
+ * 导入个人数据？: what the checked file holds and what this machine keeps. Focus starts on 取消;
+ * 取消 and Esc give the file up, but not while 导入并重新启动 runs. Once prepared, the quit takes
+ * over; when it is called off, or preparing fails, this stays open saying nothing changed.
+ */
+function ImportConfirmDialog({ flow, fallbackFocus }: {
+  flow: Extract<ImportFlow, { phase: 'confirming' }>
+  fallbackFocus: () => HTMLElement | null
+}) {
+  const titleId = useId()
+  const stay = useStayOpen()
+  const close = () => {
+    if (flow.busy) stay.reopenIfClosed()
+    else void importFlow.cancel()
+  }
+  const unavailable = !canConfirm(flow)
+  return (
+    <Modal key={stay.key} className="import-dialog" labelledBy={titleId} onClose={close} fallbackFocus={fallbackFocus}>
+      <header className="modal-header">
+        <h2 className="modal-title" id={titleId}>
+          导入个人数据？
+        </h2>
+      </header>
+      <div className="modal-body import-body" ref={stay.ref}>
+        <p>{importConfirmText(flow.summary, formatRecordTime(flow.summary.exportedAt))}</p>
+        <p>当前数据会另存为导入前数据。汐岛将重新启动。</p>
+        {flow.outcome !== null && (
+          <p className="notice-inline is-warning import-outcome" role="alert">
+            <Icon name="alert" size={14} />
+            <span>{importOutcomeText(flow.outcome)}</span>
+          </p>
+        )}
+      </div>
+      <div className="modal-actions">
+        <button type="button" className="btn" aria-disabled={flow.busy || undefined} onClick={close}>
+          {flow.outcome === null ? '取消' : '关闭'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          aria-disabled={unavailable || undefined}
+          aria-busy={flow.busy || undefined}
+          onClick={() => void importFlow.confirm()}
+        >
+          {flow.busy ? '正在准备导入…' : '导入并重新启动'}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * The 个人数据 part of 存储与缓存: 导出个人数据… and 导入个人数据…, the reason they are unavailable,
+ * a running or finished export once its dialog is closed, a file being checked, and why a file was
+ * refused. A finished export and a refusal clear when 设置 is left; an export failure stays until
+ * replaced.
  */
 export function PersonalDataBlock({ active }: { active: boolean }) {
   const task = useExportTask()
+  const flow = useImportFlow()
   const [estimate, setEstimate] = useState<ExportEstimate | null>(null)
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const exportRef = useRef<HTMLButtonElement>(null)
+  const importRef = useRef<HTMLButtonElement>(null)
   const actionFocused = useRef(false)
+  const cancelFocused = useRef(false)
   const reasonId = useId()
 
   useEffect(() => {
     if (!active) {
       if (task.phase === 'done' || task.phase === 'cancelled') exportTask.dispatch({ type: 'dismiss' })
+      importFlow.dispatch({ type: 'dismiss' })
       setMessage(null)
       return
     }
@@ -224,8 +284,19 @@ export function PersonalDataBlock({ active }: { active: boolean }) {
     }
   }, [hasAction])
 
+  // The check's 取消 goes away with the check: focus goes back to 导入个人数据… unless the
+  // confirmation opens and takes it.
+  const checking = flow.phase === 'inspecting'
+  useLayoutEffect(() => {
+    if (!checking && cancelFocused.current) {
+      cancelFocused.current = false
+      if (flow.phase !== 'confirming') importRef.current?.focus()
+    }
+  }, [checking, flow.phase])
+
   const reason = unavailableText(estimate)
   const closeDialog = useCallback(() => setOpen(false), [])
+  const importUnavailable = reason !== null || importBusy(flow)
 
   return (
     <div className="usage-block personal-data">
@@ -246,6 +317,23 @@ export function PersonalDataBlock({ active }: { active: boolean }) {
         >
           <Icon name="download" />
           导出个人数据…
+        </button>
+        <button
+          ref={importRef}
+          type="button"
+          className="btn btn-page"
+          aria-haspopup="dialog"
+          aria-disabled={importUnavailable || undefined}
+          aria-busy={checking || undefined}
+          aria-describedby={reason !== null ? reasonId : undefined}
+          onClick={() => {
+            if (importUnavailable) return
+            importFlow.dispatch({ type: 'dismiss' })
+            void importFlow.inspect()
+          }}
+        >
+          <Icon name="upload" />
+          导入个人数据…
         </button>
       </div>
       {reason !== null && (
@@ -285,7 +373,36 @@ export function PersonalDataBlock({ active }: { active: boolean }) {
           )}
         </div>
       )}
+      {flow.phase === 'inspecting' && (
+        <div className="personal-data-status">
+          <p className="notice-inline" role="status">
+            {flow.cancelling ? '正在取消…' : '正在检查文件…'}
+          </p>
+          <div>
+            <button
+              type="button"
+              className="btn btn-small btn-page"
+              aria-disabled={flow.cancelling || undefined}
+              onFocus={() => { cancelFocused.current = true }}
+              onBlur={(event) => {
+                if (event.relatedTarget !== null) cancelFocused.current = false
+              }}
+              onClick={() => void importFlow.cancel()}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+      {flow.phase === 'refused' && (
+        <p className="form-message is-error personal-data-status" role="alert">
+          <Icon name="alert" size={14} />
+          {importProblemText(flow.problem)}
+          <KaomojiDecor state="failure" />
+        </p>
+      )}
       {open && <ExportDialog onClose={closeDialog} fallbackFocus={() => exportRef.current} />}
+      {flow.phase === 'confirming' && <ImportConfirmDialog flow={flow} fallbackFocus={() => importRef.current} />}
     </div>
   )
 }

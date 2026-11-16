@@ -47,6 +47,12 @@ const PATHS = {
       <path d="M5 19.5h14" />
     </>
   ),
+  upload: (
+    <>
+      <path d="M12 15V4.5M7.5 9 12 4.5 16.5 9" />
+      <path d="M5 19.5h14" />
+    </>
+  ),
   sidebar: (
     <>
       <rect x="3.5" y="5" width="17" height="14" rx="2.5" />

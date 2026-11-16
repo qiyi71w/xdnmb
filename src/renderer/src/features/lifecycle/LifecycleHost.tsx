@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { AppPlatform } from '../../../../shared/api'
 import type { EditorId } from '../../../../shared/drafts'
-import type { LifecycleRequest } from '../../../../shared/lifecycle'
+import type { LifecycleRequest, QuitCallOff } from '../../../../shared/lifecycle'
 import type { PublicationAttempt } from '../../../../shared/publication'
 import type { AppSettings } from '../../../../shared/settings'
 import { matchShortcut } from '../../app/shortcuts'
-import type { Editor } from '../editor/editorsState'
 import { DraftSaveFailedDialog } from '../editor/DraftSaveFailedDialog'
 import type { SaveFailure } from '../editor/useEditorsStore'
 import { useEditorWorkspace } from '../editor/workspace'
 import { serializeWorkspace, type Workspace } from '../tabs/workspaceSnapshot'
 import { CloseChoiceDialog, type CloseChoice } from './CloseChoiceDialog'
 import { QuitUncheckedDialog, QuitWorkingDialog, UnstoredResultsDialog, WorkspaceSaveFailedDialog, type QuitWork } from './QuitDialogs'
+import { settleQuitSends } from './quitSends'
 
 /** What the running quit is asking; `null` while it works without asking. */
 type QuitQuestion =
@@ -20,17 +20,6 @@ type QuitQuestion =
   | { kind: 'save-failed'; saving: boolean }
 
 type Answer = 'continue' | 'cancel'
-
-/** A send that settles by itself: its request, a PO answer, or a lookup of an uncertain request is running. */
-function settling(editor: Editor): boolean {
-  const publication = editor.publication
-  if (publication === null) return false
-  return (
-    publication.phase === 'submitting' ||
-    (publication.phase === 'prompt' && publication.resolving) ||
-    (publication.phase === 'uncertain' && publication.checking)
-  )
-}
 
 function ignore(): undefined {
   return undefined
@@ -136,40 +125,25 @@ export function LifecycleHost({
    * Cancels open PO questions and waits until no send is settling by itself; uncertain requests are
    * looked up once more. `false`: some send is still uncertain.
    */
-  const settle = useCallback(async (): Promise<boolean> => {
-    const rechecked = new Set<EditorId>()
-    for (;;) {
-      const editors = store.current().editors
-      const prompts = editors.filter((editor) => editor.publication?.phase === 'prompt' && !editor.publication.resolving)
-      if (prompts.length > 0) {
-        await Promise.all(prompts.map((editor) => store.resolvePrompt(editor.id, { kind: 'cancel' })))
-        await flush()
-        continue
-      }
-      if (editors.some(settling)) {
-        await nextChange()
-        continue
-      }
-      const unchecked = editors.filter(
-        (editor) => editor.publication?.phase === 'uncertain' && !editor.publication.checking && !rechecked.has(editor.id)
-      )
-      if (unchecked.length > 0) {
-        for (const editor of unchecked) rechecked.add(editor.id)
-        await Promise.all(unchecked.map((editor) => store.recheck(editor.id)))
-        await flush()
-        continue
-      }
-      return !editors.some((editor) => editor.publication?.phase === 'uncertain')
-    }
-  }, [store, flush, nextChange])
+  const settle = useCallback(
+    (): Promise<boolean> =>
+      settleQuitSends({
+        current: () => store.current().editors,
+        cancelPrompt: (editorId) => store.resolvePrompt(editorId, { kind: 'cancel' }),
+        recheck: (editorId) => store.recheck(editorId),
+        flush,
+        nextChange
+      }),
+    [store, flush, nextChange]
+  )
 
   const quit = useCallback(async () => {
     quitting.current = true
     presented.current = false
     let completed = false
-    const cancel = () => {
+    const cancel = (reason: QuitCallOff) => {
       setQuestion(null)
-      void window.xidao.lifecycle.cancelQuit().catch(ignore)
+      void window.xidao.lifecycle.cancelQuit({ reason }).catch(ignore)
     }
     try {
       // In one commit: competing dialogs close and the working dialog takes the focus.
@@ -183,7 +157,7 @@ export function LifecycleHost({
 
       if (!(await settle())) {
         await ask({ kind: 'unchecked' })
-        cancel()
+        cancel('unchecked')
         return
       }
 
@@ -192,7 +166,7 @@ export function LifecycleHost({
         const choice = await ask({ kind: 'drafts-failed', failures })
         setQuestion(null)
         if (choice === 'cancel') {
-          cancel()
+          cancel('drafts')
           return
         }
       }
@@ -217,7 +191,7 @@ export function LifecycleHost({
         // can change that: quit, leaving the workspace saved before as it is.
         if (workspaceSaved || !writable) break
         if ((await ask({ kind: 'save-failed', saving: false })) === 'cancel') {
-          cancel()
+          cancel('workspace')
           return
         }
         setQuestion({ kind: 'save-failed', saving: true })

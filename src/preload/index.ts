@@ -256,7 +256,7 @@ const api: XidaoApi = {
     reside: () => ipcRenderer.invoke(IpcChannel.lifecycleReside),
     requestQuit: () => ipcRenderer.invoke(IpcChannel.lifecycleRequestQuit),
     presentQuit: () => ipcRenderer.invoke(IpcChannel.lifecyclePresentQuit),
-    cancelQuit: () => ipcRenderer.invoke(IpcChannel.lifecycleCancelQuit),
+    cancelQuit: (input) => ipcRenderer.invoke(IpcChannel.lifecycleCancelQuit, input),
     completeQuit: (input) => ipcRenderer.invoke(IpcChannel.lifecycleCompleteQuit, input),
     loadWorkspace: () => ipcRenderer.invoke(IpcChannel.loadWorkspace),
     saveWorkspace: (input) => ipcRenderer.invoke(IpcChannel.saveWorkspace, input),
@@ -309,7 +309,10 @@ const api: XidaoApi = {
       const handler = (_event: IpcRendererEvent, progress: ExportProgress) => listener(progress)
       ipcRenderer.on(EXPORT_PROGRESS_CHANNEL, handler)
       return () => { ipcRenderer.removeListener(EXPORT_PROGRESS_CHANNEL, handler) }
-    }
+    },
+    inspectImport: () => ipcRenderer.invoke(IpcChannel.inspectImport),
+    confirmImport: () => ipcRenderer.invoke(IpcChannel.confirmImport),
+    cancelImport: () => ipcRenderer.invoke(IpcChannel.cancelImport)
   }
 }
 

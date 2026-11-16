@@ -261,12 +261,18 @@ function extractPath(directory: string, type: ContentEntryType, name: string): s
  * kinds, managed names (no path components), each declared length against what the file actually
  * holds, the limits, and the manifest's per-kind totals against the entries. With `extractTo`, the
  * database is written to `<extractTo>/xidao.sqlite`, draft images to `draft-images/` and offline
- * originals to `images/` under it (new files only; nothing else is written). Throws `ContainerError`;
- * whether the schema version can be imported is the caller's decision.
+ * originals to `images/` under it (new files only; nothing else is written). `checkManifest` sees
+ * the manifest as soon as it is read, before any content is extracted, and may throw to refuse the
+ * file. Throws `ContainerError`; whether the schema version can be imported is the caller's decision.
  */
 export async function readContainer(
   path: string,
-  options: { limits?: Partial<ContainerLimits>; extractTo?: string; signal?: AbortSignal } = {}
+  options: {
+    limits?: Partial<ContainerLimits>
+    extractTo?: string
+    signal?: AbortSignal
+    checkManifest?: (manifest: ExportManifest) => void
+  } = {}
 ): Promise<ContainerContents> {
   const limits = { ...CONTAINER_LIMITS, ...options.limits }
   const file = await open(path, 'r')
@@ -332,6 +338,7 @@ export async function readContainer(
         }
         manifest = parseManifest(parsed)
         if (manifest === null) throw new ContainerError('corrupt')
+        options.checkManifest?.(manifest)
         continue
       }
       if (type === ENTRY_TYPE.end) {

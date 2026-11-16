@@ -15,7 +15,7 @@ import type {
 import type { ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
 import type { SubscriptionsApi } from './subscriptions'
 import type { PublicationApi } from './publication'
-import type { LifecycleApi, LoginItemApi } from './lifecycle'
+import type { LifecycleApi, LoginItemApi, QuitCallOff } from './lifecycle'
 import type { BossKeyApi } from './bossKey'
 import type { RemindersApi } from './reminders'
 import type { AppSettings, ZoomAction, ZoomState } from './settings'
@@ -229,6 +229,8 @@ export interface AppStatus {
   platform: AppPlatform
   /** This start found a prepared restore it could not carry out and opened the data as it was. */
   restoreAbandoned: boolean
+  /** This start found a prepared import it could not carry out and opened the data as it was. */
+  importAbandoned: boolean
 }
 
 /**
@@ -316,6 +318,58 @@ export type ExportStartResult = { status: 'started' } | { status: 'dismissed' } 
 
 /** Main → renderer: carries an `ExportProgress`. */
 export const EXPORT_PROGRESS_CHANNEL = 'personal-data:export-progress'
+
+/**
+ * Why 导入个人数据 refused the chosen file; nothing outside the import's staging was written, and
+ * the data is unchanged. `not-export`: not an export file. `newer`: exported by a newer schema;
+ * `appVersion` is the version that exported it. `corrupt`: damaged, incomplete or not importable.
+ */
+export type ImportRejection = { reason: 'not-export' | 'corrupt' } | { reason: 'newer'; appVersion: string }
+
+/**
+ * Why a file could not be checked (as opposed to refused). `storage`: storage is not writable.
+ * `busy`: an import is already being checked or carried out, or another data swap is pending.
+ * `read`: the file or this machine's data could not be read. `space`: the disk is full.
+ */
+export interface ImportFailure {
+  reason: 'storage' | 'busy' | 'read' | 'space'
+}
+
+/** What the import confirmation shows: the file's origin and contents, and what this machine loses. */
+export interface ImportSummary {
+  /** ISO 8601, UTC. */
+  exportedAt: string
+  /** Version of the app that exported the file. */
+  appVersion: string
+  /** Threads of the offline copies in the file; 0 when it has none. */
+  offlineThreads: number
+  /** This machine's 浏览历史 and 发送记录 counts, which the import replaces. */
+  local: { history: number; sendRecords: number }
+}
+
+/**
+ * Result of 导入个人数据…: the open dialog, then every check. `dismissed`: the dialog was closed or
+ * the check cancelled. `ready`: the file passed and waits for `confirmImport` or `cancelImport`.
+ */
+export type ImportInspection =
+  | { status: 'dismissed' }
+  | { status: 'ready'; summary: ImportSummary }
+  | { status: 'rejected'; rejection: ImportRejection }
+  | { status: 'failed'; failure: ImportFailure }
+
+/**
+ * Why the restart an import needs did not happen, so the import did not either (its staging and
+ * journal are gone). The renderer's own reasons (`QuitCallOff`), or `other` (the quit ended in the
+ * main process, or another quit was already running).
+ */
+export type ImportBlock = QuitCallOff | 'other'
+
+/**
+ * Result of 导入并重新启动. `restarting`: the import is prepared and the app is quitting through the
+ * ordinary quit; the next start swaps the data. `failed`: the import could not be prepared; the
+ * data is unchanged. `blocked`: the quit was called off; the data is unchanged.
+ */
+export type ImportConfirmResult = { status: 'restarting' } | { status: 'failed' } | { status: 'blocked'; reason: ImportBlock }
 
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
@@ -519,8 +573,8 @@ export interface XidaoApi {
     restoreBackupAndRestart(): Promise<RestoreResult>
   }
   /**
-   * 导出个人数据. The renderer never sees a path: main shows the save dialog and reports only the
-   * file name.
+   * 导出／导入个人数据. The renderer never sees a path: main shows the save and open dialogs and
+   * reports only file names.
    */
   personalData: {
     exportEstimate(): Promise<ExportEstimate>
@@ -532,6 +586,12 @@ export interface XidaoApi {
     revealExport(): Promise<{ shown: boolean }>
     /** Export progress events; returns the unsubscribe. */
     onExportProgress(listener: (progress: ExportProgress) => void): () => void
+    /** Open dialog (`.xidao` listed; any file is checked by its content), then every check. */
+    inspectImport(): Promise<ImportInspection>
+    /** Builds the import result from the checked file and restarts through the ordinary quit. */
+    confirmImport(): Promise<ImportConfirmResult>
+    /** Gives up the checked (or still checking) file; its staging is removed. */
+    cancelImport(): Promise<void>
   }
 }
 
@@ -680,6 +740,9 @@ export const IpcChannel = {
   startExport: 'personal-data:start-export',
   cancelExport: 'personal-data:cancel-export',
   revealExport: 'personal-data:reveal-export',
+  inspectImport: 'personal-data:inspect-import',
+  confirmImport: 'personal-data:confirm-import',
+  cancelImport: 'personal-data:cancel-import',
   updateGetState: 'updates:get-state',
   updateCheck: 'updates:check',
   updateDownload: 'updates:download',

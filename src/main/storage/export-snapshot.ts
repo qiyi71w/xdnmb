@@ -121,7 +121,11 @@ export function takeExportSnapshot(databasePath: string, workPath: string): Snap
   }
 }
 
-function resetRebuilt(db: Database.Database): void {
+/**
+ * Puts the `not-exported` derived state (`rebuilt`) back to its initial state; the app rebuilds it
+ * as it does for a new install (search index backfill, image holders, reminder checker).
+ */
+export function resetRebuilt(db: Database.Database): void {
   // Table order matters for the search index: removing sources removes their documents and text index rows.
   const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE name = ? AND type = 'table'")
   for (const table of tablesIn('not-exported', 'rebuilt')) {
@@ -132,7 +136,8 @@ function resetRebuilt(db: Database.Database): void {
   for (const table of CLOCKED_TABLES) db.exec(`UPDATE "${table}" SET last_used = 0`)
 }
 
-function readCredentialSequence(db: Database.Database): number {
+/** Upper bound of the 饼干凭据 ID sequence: what AUTOINCREMENT has handed out, or the highest ID. */
+export function readCredentialSequence(db: Database.Database): number {
   const sequence = db.prepare<[], { seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'credentials'").get()?.seq ?? 0
   return Math.max(Number(sequence), count(db, 'SELECT coalesce(max(id), 0) AS n FROM credentials'))
 }

@@ -1,39 +1,58 @@
 import type { Worker, WorkerOptions } from 'node:worker_threads'
 import type { ExportWorkerRequest, ExportWorkerResponse } from '../storage/export-worker'
+import type { ImportWorkerRequest, ImportWorkerResponse } from '../storage/import-worker'
+import type { ImportDatabase } from './import'
 import type { ExportDatabase } from './service'
 
 /**
- * `ExportDatabase` on worker threads (`../storage/export-worker`): one worker per request, so a
- * long copy never blocks the main process, and `abort` ends every running one.
+ * One request per worker, so long SQLite work never blocks the main process; `abort` ends every
+ * running one (its promise rejects).
  */
-export function createWorkerExportDatabase(createWorker: (options: WorkerOptions) => Worker): ExportDatabase {
+function workerRequests<Request>(createWorker: (options: WorkerOptions) => Worker) {
   const active = new Set<Worker>()
-
-  function request<T>(message: ExportWorkerRequest): Promise<T> {
-    const { promise, resolve, reject } = Promise.withResolvers<T>()
-    const worker = createWorker({})
-    active.add(worker)
-    let answered = false
-    worker.once('message', (response: ExportWorkerResponse) => {
-      answered = true
-      if (response.ok) resolve(response.value as T)
-      else reject(new Error('export snapshot failed'))
-    })
-    worker.once('error', () => reject(new Error('export snapshot failed')))
-    worker.once('exit', () => {
-      active.delete(worker)
-      if (!answered) reject(new Error('export snapshot stopped'))
-    })
-    worker.postMessage(message)
-    return promise
+  return {
+    request<T>(message: Request): Promise<T> {
+      const { promise, resolve, reject } = Promise.withResolvers<T>()
+      const worker = createWorker({})
+      active.add(worker)
+      let answered = false
+      worker.once('message', (response: ExportWorkerResponse | ImportWorkerResponse) => {
+        answered = true
+        if (response.ok) resolve(response.value as T)
+        else reject(new Error('worker request failed'))
+      })
+      worker.once('error', () => reject(new Error('worker request failed')))
+      worker.once('exit', () => {
+        active.delete(worker)
+        if (!answered) reject(new Error('worker request stopped'))
+      })
+      worker.postMessage(message)
+      return promise
+    },
+    abort() {
+      for (const worker of active) void worker.terminate()
+    }
   }
+}
 
+/** `ExportDatabase` on worker threads (`../storage/export-worker`). */
+export function createWorkerExportDatabase(createWorker: (options: WorkerOptions) => Worker): ExportDatabase {
+  const { request, abort } = workerRequests<ExportWorkerRequest>(createWorker)
   return {
     estimate: (databasePath) => request({ type: 'estimate', databasePath }),
     snapshot: (databasePath, workPath) => request({ type: 'snapshot', databasePath, workPath }),
     trim: (workPath, options) => request({ type: 'trim', workPath, options }),
-    abort() {
-      for (const worker of active) void worker.terminate()
-    }
+    abort
+  }
+}
+
+/** `ImportDatabase` on worker threads (`../storage/import-worker`). */
+export function createWorkerImportDatabase(createWorker: (options: WorkerOptions) => Worker): ImportDatabase {
+  const { request, abort } = workerRequests<ImportWorkerRequest>(createWorker)
+  return {
+    check: (stagingDirectory, schemaVersion) => request({ type: 'check', stagingDirectory, schemaVersion }),
+    counts: (databasePath) => request({ type: 'counts', databasePath }),
+    stage: (stagingDirectory, databasePath, file) => request({ type: 'stage', stagingDirectory, databasePath, file }),
+    abort
   }
 }
