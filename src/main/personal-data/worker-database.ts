@@ -53,6 +53,7 @@ export function createWorkerImportDatabase(createWorker: (options: WorkerOptions
   return {
     check: (stagingDirectory, schemaVersion) => request({ type: 'check', stagingDirectory, schemaVersion }),
     counts: (databasePath) => request({ type: 'counts', databasePath }),
+    appendedBytes: (databasePath) => request({ type: 'appended-bytes', databasePath }),
     secrets: (databasePath) => request({ type: 'secrets', databasePath }),
     stage: (stagingDirectory, databasePath, file) => request({ type: 'stage', stagingDirectory, databasePath, file }),
     abort

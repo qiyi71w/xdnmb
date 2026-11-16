@@ -5,7 +5,8 @@ import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { markUpgradeWithoutBackup } from '../src/main/storage/backup'
 import {
-  APP_SETTING_CLASSES, DATA_CLASSES, OTHER_SETTING_CLASSES, settingClass, settingKeysIn, TABLES, tablesIn, USER_DATA_ENTRIES, userDataEntriesIn
+  APP_SETTING_CLASSES, APPENDED_FILES, APPENDED_PARTS, DATA_CLASSES, OTHER_SETTING_CLASSES, settingClass, settingKeysIn, TABLES, tablesIn,
+  USER_DATA_ENTRIES, userDataEntriesIn
 } from '../src/main/storage/classification'
 import { openReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS, type Migration } from '../src/main/storage/migrations'
@@ -92,6 +93,8 @@ describe('tables', () => {
     expect(tablesIn('target-kept')).toEqual(['account_session'])
     expect(tablesIn('not-exported', 'cache').sort()).toEqual(['directory_snapshot', 'feed_pages', 'image_resources', 'posts', 'thread_pages', 'thread_reply_counts'])
     expect([...tablesIn('not-exported', 'cache'), ...tablesIn('not-exported', 'rebuilt')].sort()).toEqual(tablesIn('not-exported').sort())
+    expect(APPENDED_PARTS.flatMap((part) => tablesIn('target-appended', part)).sort()).toEqual(tablesIn('target-appended').sort())
+    for (const part of APPENDED_PARTS) expect(tablesIn('target-appended', part), part).not.toEqual([])
   })
 })
 
@@ -144,6 +147,13 @@ describe('user data', () => {
     const listed = DATA_CLASSES.flatMap((dataClass) => userDataEntriesIn(dataClass))
     expect(new Set(listed).size).toBe(listed.length)
     expect(listed.sort()).toEqual(Object.keys(USER_DATA_ENTRIES).filter((name) => name !== 'xidao.sqlite').sort())
-    expect(userDataEntriesIn('target-appended')).toEqual(['draft-images'])
+  })
+
+  it('keeps each target-appended part’s files where export, import staging and the swap look for them', () => {
+    // Every part's files are in an entry of the user data directory; an entry of the class itself
+    // is a part's own (the swap moves it with the database), so no such entry goes unhandled.
+    for (const part of APPENDED_PARTS) expect(Object.keys(USER_DATA_ENTRIES), part).toContain(APPENDED_FILES[part])
+    expect(userDataEntriesIn('target-appended').sort())
+      .toEqual(APPENDED_PARTS.filter((part) => USER_DATA_ENTRIES[APPENDED_FILES[part]]?.class === 'target-appended').map((part) => APPENDED_FILES[part]).sort())
   })
 })

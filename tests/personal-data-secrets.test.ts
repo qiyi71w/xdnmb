@@ -19,7 +19,7 @@ import type { SecretProtector } from '../src/main/identity/protection'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { readExportEstimate, readSecretRows, takeExportSnapshot, trimExportSnapshot } from '../src/main/storage/export-snapshot'
 import { importStagingDirectory } from '../src/main/storage/import-journal'
-import { checkStagedImport, readLocalCounts, stageImport } from '../src/main/storage/import-staging'
+import { checkStagedImport, readLocalAppendedBytes, readLocalCounts, stageImport } from '../src/main/storage/import-staging'
 import { MIGRATIONS } from '../src/main/storage/migrations'
 import { settleSwap } from '../src/main/storage/swap-journal'
 import { createIdentityService } from '../src/main/identity/service'
@@ -153,6 +153,7 @@ async function machineB(protector: SecretProtector): Promise<{ userData: string;
 const inProcess: ImportDatabase = {
   check: async (staging, version) => checkStagedImport(staging, version),
   counts: async (path) => readLocalCounts(path),
+  appendedBytes: async (path) => readLocalAppendedBytes(path),
   secrets: async (path) => readSecretRows(path),
   stage: async (staging, path, file) => stageImport(staging, path, file),
   abort: () => undefined
@@ -416,7 +417,7 @@ describe('importing an encrypted file', () => {
     expect(after.listCredentials().map((credential) => credential.name)).toEqual(['甲', '乙', 'B 自己的'])
   }, 60_000)
 
-  it('maps an identical local 饼干 to the file’s ID, so references to it land on the file’s copy', async () => {
+  it('does not append a local 饼干 or App UUID identical to the file’s, so references to it land on the file’s copy', async () => {
     const protectorB = testProtector()
     const { file } = await encryptedExport(testProtector())
     const { userData } = await machineB(protectorB)
@@ -427,10 +428,20 @@ describe('importing an encrypted file', () => {
     checkStagedImport(staging, manifest.schemaVersion)
     const local = join(userData, 'xidao.sqlite')
     const secrets = await resealForImport(readSecretRows(join(staging, DATABASE_NAME)), readSecretRows(local), protectorB, keys.secrets)
-    expect(secrets.sameCredentials.map(({ localId, fileId }) => [localId, fileId])).toEqual([[2, 1]])
-    expect(secrets.sameAppCredentials.map(({ localId }) => localId)).toEqual(['uuid-b-same'])
-    const { credentialIds } = stageImport(staging, local, { credentialSequence: manifest.credentialSequence, secrets })
-    expect([...credentialIds]).toEqual([[1, 3], [2, 1]])
+    stageImport(staging, local, { credentialSequence: manifest.credentialSequence, secrets })
+
+    const staged = openReadingDatabase(join(staging, DATABASE_NAME), MIGRATIONS)
+    connections.push(staged)
+    // The file's 饼干 under their IDs, then only B's own: its 甲 (the same userhash) is the file's.
+    expect(staged.listCredentials().map((credential) => [credential.id, credential.name])).toEqual([['1', '甲'], ['2', '乙'], ['3', 'B 自己的']])
+    expect(await Promise.all(staged.loadCredentialCiphertexts().map((entry) => protectorB.decrypt(entry.ciphertext)))).toEqual([USERHASH_1, USERHASH_2, USERHASH_B])
+    expect(staged.listSubscriptionAppCredentials().sort()).toEqual(['uuid-a', 'uuid-b-own'])
+    // B's draft on its 甲 continues on the file's 甲.
+    expect(await draftIdentities(staged, join(staging, 'draft-images'), protectorB)).toEqual([
+      ['A 的草稿', { state: 'selected', credentialId: '1', name: '甲' }],
+      ['B 的草稿', { state: 'selected', credentialId: '1', name: '甲' }]
+    ])
+    expect(staged.insertCredential({ name: '新', cookieId: 'EEEEEEE', source: 'raw', importedAt: AT, ciphertext: await protectorB.encrypt('new') }).id).toBe('4')
   }, 60_000)
 
   it('refuses a file with secrets when this machine cannot protect them, before asking or writing anything', async () => {

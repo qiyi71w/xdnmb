@@ -16,8 +16,8 @@ import { RetainedContentDatabase } from './retained'
  *   the export carries secrets: then every 饼干凭据 and App UUID keeps its row, its ciphertext
  *   replaced by the value sealed for the file (`SecretRows`; sealed in the main process, so the
  *   copy never holds a secret in plain text nor this machine's ciphertext).
- * - Without offline copies, the offline copies and the relations protecting their content are
- *   removed first, so what only they protected is trimmed with the rest of the cache.
+ * - Without offline copies, the offline copies' tables (`target-appended` part `offline-copies`) are
+ *   emptied first, so what only they protected is trimmed with the rest of the cache.
  * - The ordinary cache (`not-exported` `cache`) is then trimmed by the rules of 清理普通缓存
  *   (`RetainedContentDatabase.evictContentBatch`): what personal records protect stays.
  *
@@ -67,6 +67,13 @@ export interface SecretRows {
 /** The `secret` tables whose rows travel with an export carrying secrets; any other is emptied. */
 export const CARRIED_SECRET_TABLES: readonly string[] = ['credentials', 'subscription_app_credentials']
 
+/**
+ * Bounds on the carried secret tables, checked with SQL before any ciphertext is read. A real value
+ * (a protected or sealed userhash or App UUID) is well under a kilobyte, and a machine has a few
+ * dozen at most; a database beyond these is not one the app wrote.
+ */
+export const SECRET_LIMITS = { maxRows: 10_000, maxValueBytes: 64 * 1024, maxTotalBytes: 4 * 1024 * 1024 } as const
+
 export interface TrimResult extends SnapshotFiles {
   schemaVersion: number
   /** Upper bound of the 饼干凭据 ID sequence, recorded even though the credentials are not exported. */
@@ -80,11 +87,24 @@ const INITIAL_STATE: Readonly<Record<string, string>> = {
   content_clock: 'UPDATE content_clock SET tick = 0'
 }
 
-/** Rows ordered by the content clock: with the clock back at 0 they restart from 0. */
-const CLOCKED_TABLES = ['posts', 'thread_pages', 'feed_pages', 'directory_snapshot', 'image_resources']
+/** The column names of `table`, in order. */
+export function columnsOf(db: Database.Database, table: string): string[] {
+  return (db.pragma(`table_info("${table}")`) as { name: string }[]).map((column) => column.name)
+}
 
-/** The offline copy tables, in an order their foreign keys allow deleting; each has `thread_id`. */
-export const OFFLINE_TABLES = ['offline_images', 'offline_page_posts', 'offline_pages', 'offline_copies']
+/** `tables` in an order deleting their rows allows: each before those of them it references. */
+export function referencingFirst(db: Database.Database, tables: readonly string[]): string[] {
+  const references = new Map(tables.map((table) => [table, (db.pragma(`foreign_key_list("${table}")`) as { table: string }[])
+    .map((key) => key.table).filter((other) => other !== table && tables.includes(other))]))
+  const ordered: string[] = []
+  while (ordered.length < tables.length) {
+    const next = tables.find((table) => !ordered.includes(table)
+      && tables.every((other) => other === table || ordered.includes(other) || !references.get(other)!.includes(table)))
+    if (next === undefined) throw new Error('tables reference each other in a cycle')
+    ordered.push(next)
+  }
+  return ordered
+}
 
 function openReadOnly(path: string): Database.Database {
   return new Database(path, { readonly: true, fileMustExist: true, timeout: 5000 })
@@ -151,7 +171,10 @@ export function resetRebuilt(db: Database.Database): void {
     if (exists.get(table) === undefined) continue
     db.exec(INITIAL_STATE[table] ?? `DELETE FROM "${table}"`)
   }
-  for (const table of CLOCKED_TABLES) db.exec(`UPDATE "${table}" SET last_used = 0`)
+  // Rows ordered by the content clock (ordinary cache with `last_used`): with it back at 0 they restart from 0.
+  for (const table of tablesIn('not-exported', 'cache')) {
+    if (columnsOf(db, table).includes('last_used')) db.exec(`UPDATE "${table}" SET last_used = 0`)
+  }
 }
 
 /** Upper bound of the 饼干凭据 ID sequence: what AUTOINCREMENT has handed out, or the highest ID. */
@@ -160,14 +183,38 @@ export function readCredentialSequence(db: Database.Database): number {
   return Math.max(Number(sequence), count(db, 'SELECT coalesce(max(id), 0) AS n FROM credentials'))
 }
 
-/** Reads every secret row of the database at `databasePath` (read-only). */
+/**
+ * Throws when the carried secret tables of `db` are beyond `SECRET_LIMITS` or hold a value that is
+ * not a BLOB. Only counts, types and lengths are read: no value is loaded.
+ */
+export function checkSecretSizes(db: Database.Database): void {
+  let rows = 0
+  let total = 0
+  for (const table of CARRIED_SECRET_TABLES) {
+    // typeof() and length() of a BLOB column read the record header, not the value.
+    const size = db.prepare<[], { rows: number; other: number }>(`SELECT count(*) AS rows,
+      count(*) FILTER (WHERE typeof(ciphertext) <> 'blob') AS other FROM "${table}"`).get()!
+    if (size.other > 0) throw new Error('secret value of another type')
+    const lengths = db.prepare<[], { largest: number; total: number }>(`SELECT coalesce(max(length(ciphertext)), 0) AS largest,
+      coalesce(sum(length(ciphertext)), 0) AS total FROM "${table}"`).get()!
+    rows += size.rows
+    total += lengths.total
+    if (lengths.largest > SECRET_LIMITS.maxValueBytes) throw new Error('secret value too large')
+  }
+  if (rows > SECRET_LIMITS.maxRows || total > SECRET_LIMITS.maxTotalBytes) throw new Error('secret values too large')
+}
+
+/** Reads every secret row of the database at `databasePath` (read-only); throws beyond `SECRET_LIMITS`. */
 export function readSecretRows(databasePath: string): SecretRows {
   const db = openReadOnly(databasePath)
   try {
-    return db.transaction(() => ({
-      credentials: db.prepare<[], { id: number; value: Uint8Array }>('SELECT id, ciphertext AS value FROM credentials ORDER BY id').all(),
-      appCredentials: db.prepare<[], { id: string; value: Uint8Array }>('SELECT id, ciphertext AS value FROM subscription_app_credentials ORDER BY id').all()
-    }))()
+    return db.transaction(() => {
+      checkSecretSizes(db)
+      return {
+        credentials: db.prepare<[], { id: number; value: Uint8Array }>('SELECT id, ciphertext AS value FROM credentials ORDER BY id').all(),
+        appCredentials: db.prepare<[], { id: string; value: Uint8Array }>('SELECT id, ciphertext AS value FROM subscription_app_credentials ORDER BY id').all()
+      }
+    })()
   } finally {
     db.close()
   }
@@ -245,7 +292,7 @@ export function trimExportSnapshot(workPath: string, options: TrimOptions): Trim
       const sequence = readCredentialSequence(db)
       removeUnexported(db, options.secrets)
       if (options.includeOffline) recordUnsavedOriginals(db, options.missingOfflineImages)
-      else for (const table of OFFLINE_TABLES) db.exec(`DELETE FROM "${table}"`)
+      else for (const table of referencingFirst(db, tablesIn('target-appended', 'offline-copies'))) db.exec(`DELETE FROM "${table}"`)
       dropDraftImages(db, options.missingDraftImages)
       return sequence
     }).immediate()
