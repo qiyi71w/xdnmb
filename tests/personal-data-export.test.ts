@@ -13,7 +13,8 @@ import type { ExportProgress, StorageStatus } from '../src/shared/api'
 import type { Post, ThreadPage } from '../src/shared/forum'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS } from '../src/main/storage/migrations'
-import { readExportEstimate, takeExportSnapshot, trimExportSnapshot } from '../src/main/storage/export-snapshot'
+import { readExportEstimate, readSecretRows, takeExportSnapshot, trimExportSnapshot } from '../src/main/storage/export-snapshot'
+import { testProtector } from './helpers/protector'
 import { createExportService, exportFileName, type ExportDatabase, type ExportService } from '../src/main/personal-data/service'
 import {
   CONTAINER_MAGIC, ContainerError, DATABASE_NAME, ENTRY_TYPE, readContainer, type ContainerContents
@@ -123,6 +124,7 @@ function inProcess(afterSnapshot?: () => void): ExportDatabase & { aborted: numb
       afterSnapshot?.()
       return files
     },
+    secrets: async (path) => readSecretRows(path),
     trim: async (work, options) => trimExportSnapshot(work, options),
     abort() { this.aborted++ }
   }
@@ -147,6 +149,7 @@ function harness(userData: string, options: {
     status: options.status ?? (() => ({ state: 'ready', schemaVersion: 29 })),
     sending: options.sending ?? (() => false),
     database: options.database ?? inProcess(),
+    protector: testProtector(),
     publish(progress) {
       events.push(progress)
       options.onProgress?.(progress, service)
@@ -161,7 +164,7 @@ function harness(userData: string, options: {
   const run = async (includeOffline: boolean) => {
     const { promise, resolve } = Promise.withResolvers<ExportProgress>()
     finish = resolve
-    const started = await service.start({ includeOffline }, async (name) => join(target, name))
+    const started = await service.start({ includeOffline, passphrase: null }, async (name) => join(target, name))
     return { started, outcome: started.status === 'started' ? await promise : null }
   }
   return { service, events, target, run, shown }
@@ -349,7 +352,7 @@ describe('personal data export', () => {
     await stopped
     expect((await run).outcome).toEqual({ status: 'cancelled' })
     expect(readdirSync(quitting.target)).toEqual([])
-    expect(await quitting.service.start({ includeOffline: true }, async () => join(quitting.target, 'x.xidao'))).toEqual({ status: 'failed', failure: { reason: 'busy' } })
+    expect(await quitting.service.start({ includeOffline: true, passphrase: null }, async () => join(quitting.target, 'x.xidao'))).toEqual({ status: 'failed', failure: { reason: 'busy' } })
   })
 
   it('refuses a second export while one runs', async () => {
@@ -360,7 +363,7 @@ describe('personal data export', () => {
     const first = h.run(false)
     await expect.poll(() => h.events.length).toBeGreaterThan(0)
     expect(await h.service.estimate()).toMatchObject({ available: true, running: { status: 'running', writtenBytes: 0 } })
-    expect(await h.service.start({ includeOffline: false }, async () => join(h.target, 'x.xidao'))).toEqual({ status: 'failed', failure: { reason: 'busy' } })
+    expect(await h.service.start({ includeOffline: false, passphrase: null }, async () => join(h.target, 'x.xidao'))).toEqual({ status: 'failed', failure: { reason: 'busy' } })
     gate.resolve()
     expect((await first).outcome?.status).toBe('done')
   })

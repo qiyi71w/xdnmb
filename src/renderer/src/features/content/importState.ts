@@ -15,6 +15,11 @@ export type ImportFlow =
   | { phase: 'idle' }
   /** 导入个人数据… pressed: the open dialog, then the file check. */
   | { phase: 'inspecting'; cancelling: boolean }
+  /**
+   * 输入导出口令: the file is encrypted. `wrong`: the last passphrase was not the file's (any number
+   * of tries). `busy`: one is being tried, then the rest of the check runs.
+   */
+  | { phase: 'locked'; wrong: boolean; busy: boolean; cancelling: boolean }
   /** The file was refused or could not be checked. */
   | { phase: 'refused'; problem: { rejection: ImportRejection } | { failure: ImportFailure } }
   /** The confirmation. `busy`: 导入并重新启动 is running (the quit takes over once prepared). */
@@ -24,7 +29,11 @@ export type ImportFlowEvent =
   | { type: 'inspect' }
   /** `null`: the request itself failed. */
   | { type: 'inspected'; result: ImportInspection | null }
-  /** 取消 or Esc in the confirmation, or 取消 while the file is checked. */
+  /** 继续 in 输入导出口令. */
+  | { type: 'submit' }
+  /** `null`: the request itself failed. */
+  | { type: 'submitted'; result: ImportInspection | null }
+  /** 取消 or Esc in the confirmation or 输入导出口令, or 取消 while the file is checked. */
   | { type: 'cancel' }
   | { type: 'confirm' }
   | { type: 'confirmed'; result: ImportConfirmResult | null }
@@ -35,7 +44,7 @@ const IDLE: ImportFlow = { phase: 'idle' }
 
 /** Whether a press of 导入个人数据… is ignored now. */
 export function importBusy(flow: ImportFlow): boolean {
-  return flow.phase === 'inspecting' || flow.phase === 'confirming'
+  return flow.phase === 'inspecting' || flow.phase === 'locked' || flow.phase === 'confirming'
 }
 
 /** Whether 导入并重新启动 can run: once per checked file, never after it failed or was blocked. */
@@ -43,20 +52,38 @@ export function canConfirm(flow: ImportFlow): boolean {
   return flow.phase === 'confirming' && !flow.busy && flow.outcome === null
 }
 
+/** Whether 继续 can try `passphrase`: a non-empty one, while none is being tried. */
+export function canSubmit(flow: ImportFlow, passphrase: string): boolean {
+  return flow.phase === 'locked' && !flow.busy && !flow.cancelling && passphrase.length > 0
+}
+
+/** Where a check's answer leads; `null`: the request itself failed. */
+function checked(result: ImportInspection | null): ImportFlow {
+  if (result === null) return { phase: 'refused', problem: { failure: { reason: 'read' } } }
+  switch (result.status) {
+    case 'dismissed': return IDLE
+    case 'passphrase': return { phase: 'locked', wrong: result.wrong, busy: false, cancelling: false }
+    case 'ready': return { phase: 'confirming', summary: result.summary, busy: false, outcome: null }
+    case 'rejected': return { phase: 'refused', problem: { rejection: result.rejection } }
+    case 'failed': return { phase: 'refused', problem: { failure: result.failure } }
+  }
+}
+
 export function importFlowReducer(flow: ImportFlow, event: ImportFlowEvent): ImportFlow {
   switch (event.type) {
     case 'inspect':
       return importBusy(flow) ? flow : { phase: 'inspecting', cancelling: false }
-    case 'inspected': {
-      if (flow.phase !== 'inspecting') return flow
-      const result = event.result
-      if (result === null) return { phase: 'refused', problem: { failure: { reason: 'read' } } }
-      if (result.status === 'dismissed') return IDLE
-      if (result.status === 'ready') return { phase: 'confirming', summary: result.summary, busy: false, outcome: null }
-      return { phase: 'refused', problem: result.status === 'rejected' ? { rejection: result.rejection } : { failure: result.failure } }
-    }
+    case 'inspected':
+      return flow.phase === 'inspecting' ? checked(event.result) : flow
+    case 'submit':
+      return flow.phase === 'locked' && !flow.busy && !flow.cancelling ? { ...flow, busy: true } : flow
+    case 'submitted':
+      // A try that ends after 取消 gives the file up whatever it found.
+      if (flow.phase !== 'locked' || !flow.busy) return flow
+      return flow.cancelling ? IDLE : checked(event.result)
     case 'cancel':
       if (flow.phase === 'inspecting') return flow.cancelling ? flow : { ...flow, cancelling: true }
+      if (flow.phase === 'locked') return flow.busy ? { ...flow, cancelling: true } : IDLE
       return flow.phase === 'confirming' && !flow.busy ? IDLE : flow
     case 'confirm':
       return canConfirm(flow) && flow.phase === 'confirming' ? { ...flow, busy: true } : flow
@@ -77,6 +104,7 @@ export function importRejectionText(rejection: ImportRejection): string {
     case 'not-export': return '这不是汐岛导出的文件'
     case 'newer': return `此文件来自汐岛 ${rejection.appVersion}，请先升级到该版本或更高版本`
     case 'corrupt': return '文件已损坏或不完整'
+    case 'protection': return '文件含饼干，但本机无法安全保存，不能导入'
   }
 }
 
@@ -106,9 +134,10 @@ export function importOutcomeText(outcome: ImportOutcome): string {
 
 /** What the file contains, as the confirmation lists it. */
 export function importCategoriesText(summary: ImportSummary): string {
-  return summary.offlineThreads > 0
+  const records = summary.offlineThreads > 0
     ? `浏览历史、阅读位置、草稿、发送记录、屏蔽、饼干颜色、提醒、设置和离线副本（${summary.offlineThreads} 个串）`
     : '浏览历史、阅读位置、草稿、发送记录、屏蔽、饼干颜色、提醒和设置'
+  return summary.secrets ? `${records}，以及饼干与 App UUID` : records
 }
 
 /** The confirmation's body; `exportedAt` already formatted for display. */

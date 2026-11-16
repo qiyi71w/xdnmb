@@ -71,6 +71,33 @@ export function offlineChoiceText(offline: { threads: number; bytes: number }): 
   return `离线副本（${offline.threads} 个串，约 ${formatBytes(offline.bytes)}）`
 }
 
+/** The 饼干与 App UUID choice (off by default) and its 导出口令, typed twice. */
+export interface SecretsChoice {
+  include: boolean
+  passphrase: string
+  confirmation: string
+}
+
+export const NO_SECRETS: SecretsChoice = { include: false, passphrase: '', confirmation: '' }
+
+/**
+ * The passphrase fields. `ready`: 导出… may start with this choice (without secrets always; with
+ * them only for a non-empty passphrase typed the same twice, of any length and strength).
+ * `mismatch`: the second entry, once typed, differs; said beside it.
+ */
+export function secretsState(choice: SecretsChoice): { ready: boolean; mismatch: boolean } {
+  if (!choice.include) return { ready: true, mismatch: false }
+  return {
+    ready: choice.passphrase.length > 0 && choice.passphrase === choice.confirmation,
+    mismatch: choice.confirmation.length > 0 && choice.confirmation !== choice.passphrase
+  }
+}
+
+/** What 导出… sends for this choice: the passphrase, or null without secrets. */
+export function exportPassphrase(choice: SecretsChoice): string | null {
+  return choice.include ? choice.passphrase : null
+}
+
 /** Why the entry is unavailable; null when exporting is possible. */
 export function unavailableText(estimate: ExportEstimate | null): string | null {
   if (estimate === null || estimate.available) return null
@@ -85,6 +112,7 @@ export function exportFailureText(failure: ExportFailure): string {
     case 'busy': return '导出失败：已有导出正在进行'
     case 'read': return '导出失败：读取本机数据时出错'
     case 'write': return '导出失败：无法写入所选位置'
+    case 'secrets': return '导出失败：本机的饼干或 App UUID 无法解密'
   }
 }
 

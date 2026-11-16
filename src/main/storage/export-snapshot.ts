@@ -11,8 +11,11 @@ import { RetainedContentDatabase } from './retained'
  *
  * - `not-exported` derived state (`rebuilt`) goes back to its initial state: search index, image
  *   holders, readers and content clock, the reminder checker.
- * - `target-kept` tables and setting rows, and `secret` tables, are emptied (the credential ID
- *   sequence stays in `sqlite_sequence` and is reported for the manifest).
+ * - `target-kept` tables and setting rows are emptied. `secret` tables are emptied too (the
+ *   credential ID sequence stays in `sqlite_sequence` and is reported for the manifest), unless
+ *   the export carries secrets: then every 饼干凭据 and App UUID keeps its row, its ciphertext
+ *   replaced by the value sealed for the file (`SecretRows`; sealed in the main process, so the
+ *   copy never holds a secret in plain text nor this machine's ciphertext).
  * - Without offline copies, the offline copies and the relations protecting their content are
  *   removed first, so what only they protected is trimmed with the rest of the cache.
  * - The ordinary cache (`not-exported` `cache`) is then trimmed by the rules of 清理普通缓存
@@ -47,7 +50,22 @@ export interface TrimOptions {
   missingOfflineImages: readonly number[]
   /** Draft attachments whose files could not be read: their drafts and send records keep no attachment. */
   missingDraftImages: readonly number[]
+  /** The secrets sealed for the file, one for every secret row of the snapshot; null: none exported. */
+  secrets: SecretRows | null
 }
+
+/**
+ * The secret tables' rows by key, with what their ciphertext column holds: this machine's protector
+ * ciphertext in its database, a value sealed under the export's secret key in an export file, or the
+ * importing machine's ciphertext once re-encrypted.
+ */
+export interface SecretRows {
+  credentials: { id: number; value: Uint8Array }[]
+  appCredentials: { id: string; value: Uint8Array }[]
+}
+
+/** The `secret` tables whose rows travel with an export carrying secrets; any other is emptied. */
+export const CARRIED_SECRET_TABLES: readonly string[] = ['credentials', 'subscription_app_credentials']
 
 export interface TrimResult extends SnapshotFiles {
   schemaVersion: number
@@ -142,8 +160,45 @@ export function readCredentialSequence(db: Database.Database): number {
   return Math.max(Number(sequence), count(db, 'SELECT coalesce(max(id), 0) AS n FROM credentials'))
 }
 
-function removeUnexported(db: Database.Database): void {
-  for (const table of [...tablesIn('target-kept'), ...tablesIn('secret')]) db.exec(`DELETE FROM "${table}"`)
+/** Reads every secret row of the database at `databasePath` (read-only). */
+export function readSecretRows(databasePath: string): SecretRows {
+  const db = openReadOnly(databasePath)
+  try {
+    return db.transaction(() => ({
+      credentials: db.prepare<[], { id: number; value: Uint8Array }>('SELECT id, ciphertext AS value FROM credentials ORDER BY id').all(),
+      appCredentials: db.prepare<[], { id: string; value: Uint8Array }>('SELECT id, ciphertext AS value FROM subscription_app_credentials ORDER BY id').all()
+    }))()
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * Replaces the ciphertext of every secret row with `rows` (one for each row, by key) and empties
+ * the other `secret` tables. Throws when `rows` and the tables do not match one to one.
+ */
+export function replaceSecretValues(db: Database.Database, rows: SecretRows): void {
+  for (const table of tablesIn('secret')) {
+    if (!CARRIED_SECRET_TABLES.includes(table)) db.exec(`DELETE FROM "${table}"`)
+  }
+  const credential = db.prepare('UPDATE credentials SET ciphertext = ? WHERE id = ?')
+  for (const row of rows.credentials) {
+    if (credential.run(Buffer.from(row.value), row.id).changes !== 1) throw new Error('secret rows do not match')
+  }
+  const appCredential = db.prepare('UPDATE subscription_app_credentials SET ciphertext = ? WHERE id = ?')
+  for (const row of rows.appCredentials) {
+    if (appCredential.run(Buffer.from(row.value), row.id).changes !== 1) throw new Error('secret rows do not match')
+  }
+  if (count(db, 'SELECT count(*) AS n FROM credentials') !== new Set(rows.credentials.map((row) => row.id)).size
+    || count(db, 'SELECT count(*) AS n FROM subscription_app_credentials') !== new Set(rows.appCredentials.map((row) => row.id)).size) {
+    throw new Error('secret rows do not match')
+  }
+}
+
+function removeUnexported(db: Database.Database, secrets: SecretRows | null): void {
+  for (const table of tablesIn('target-kept')) db.exec(`DELETE FROM "${table}"`)
+  if (secrets === null) for (const table of tablesIn('secret')) db.exec(`DELETE FROM "${table}"`)
+  else replaceSecretValues(db, secrets)
   const remove = db.prepare('DELETE FROM settings WHERE key = ?')
   for (const { key } of db.prepare<[], { key: string }>('SELECT key FROM settings').all()) {
     if (settingClass(key) !== 'overwrite') remove.run(key)
@@ -187,7 +242,7 @@ export function trimExportSnapshot(workPath: string, options: TrimOptions): Trim
     const credentialSequence = db.transaction(() => {
       resetRebuilt(db)
       const sequence = readCredentialSequence(db)
-      removeUnexported(db)
+      removeUnexported(db, options.secrets)
       if (options.includeOffline) recordUnsavedOriginals(db, options.missingOfflineImages)
       else for (const table of OFFLINE_TABLES) db.exec(`DELETE FROM "${table}"`)
       dropDraftImages(db, options.missingDraftImages)

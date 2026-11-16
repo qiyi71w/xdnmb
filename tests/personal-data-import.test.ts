@@ -17,7 +17,8 @@ import type { Post, ThreadPage } from '../src/shared/forum'
 import type { QuitEnd } from '../src/main/lifecycle/controller'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { MIGRATIONS } from '../src/main/storage/migrations'
-import { readExportEstimate, takeExportSnapshot, trimExportSnapshot } from '../src/main/storage/export-snapshot'
+import { readExportEstimate, readSecretRows, takeExportSnapshot, trimExportSnapshot } from '../src/main/storage/export-snapshot'
+import { testProtector } from './helpers/protector'
 import { checkStagedImport, readLocalCounts, stageImport } from '../src/main/storage/import-staging'
 import { beforeImportDirectory, importStagingDirectory } from '../src/main/storage/import-journal'
 import { beginSwap, settleSwap } from '../src/main/storage/swap-journal'
@@ -132,16 +133,18 @@ async function exportOf(userData: string, keep: string[]): Promise<string> {
     database: {
       estimate: async (path) => readExportEstimate(path),
       snapshot: async (path, work) => takeExportSnapshot(path, work),
+      secrets: async (path) => readSecretRows(path),
       trim: async (work, options) => trimExportSnapshot(work, options),
       abort: () => undefined
     },
+    protector: testProtector(),
     publish(progress) {
       if (progress.status !== 'running') resolve(progress)
     },
     showInFolder: () => undefined,
     freeBytes: async () => 1024 ** 4
   })
-  expect(await service.start({ includeOffline: true }, async (name) => join(target, name))).toEqual({ status: 'started' })
+  expect(await service.start({ includeOffline: true, passphrase: null }, async (name) => join(target, name))).toEqual({ status: 'started' })
   const outcome = await promise
   if (outcome.status !== 'done') throw new Error(`export ${outcome.status}`)
   return join(target, outcome.fileName)
@@ -183,6 +186,7 @@ function targetMachine(): { userData: string; db: ReadingDatabase } {
 const inProcess: ImportDatabase = {
   check: async (staging, version) => checkStagedImport(staging, version),
   counts: async (path) => readLocalCounts(path),
+  secrets: async (path) => readSecretRows(path),
   stage: async (staging, path, file) => stageImport(staging, path, file),
   abort: () => undefined
 }
@@ -194,6 +198,7 @@ function importer(userData: string, options: { restart?: () => Promise<QuitEnd>;
     supportedVersion: SUPPORTED,
     status: () => ({ state: 'ready', schemaVersion: SUPPORTED }),
     database: inProcess,
+    protector: testProtector(),
     restart: async () => {
       restarts.push(1)
       return options.restart === undefined ? 'exiting' : options.restart()
@@ -298,7 +303,7 @@ describe('import inspection and confirmation', () => {
     const inspection = await service.inspect(async () => exported().file)
     expect(inspection).toEqual({
       status: 'ready',
-      summary: { exportedAt: expect.any(String), appVersion: '1.5.0-a', offlineThreads: 1, local: { history: 2, sendRecords: 1 } }
+      summary: { exportedAt: expect.any(String), appVersion: '1.5.0-a', offlineThreads: 1, secrets: false, local: { history: 2, sendRecords: 1 } }
     })
     expect(JSON.stringify(inspection)).not.toContain(exported().file)
     expect(existsSync(importStagingDirectory(userData))).toBe(true)
@@ -367,7 +372,7 @@ describe('import inspection and confirmation', () => {
     sql.pragma('journal_mode = DELETE')
     sql.prepare("UPDATE sqlite_sequence SET seq = 7 WHERE name = 'credentials'").run()
     sql.close()
-    const { credentialIds } = stageImport(staging, join(userData, 'xidao.sqlite'), { credentialSequence: 5, secrets: false })
+    const { credentialIds } = stageImport(staging, join(userData, 'xidao.sqlite'), { credentialSequence: 5, secrets: null })
     expect([...credentialIds]).toEqual([[1, 8], [2, 9]])
     db.close()
   })
@@ -698,6 +703,7 @@ describe('import on the production worker entry', () => {
       supportedVersion: SUPPORTED,
       status: () => ({ state: 'ready', schemaVersion: SUPPORTED }),
       database: createWorkerImportDatabase((options) => new Worker(pathToFileURL(join(build, 'import.mjs')), options)),
+      protector: testProtector(),
       restart: async () => 'exiting'
     })
     expect(await service.inspect(async () => exported().file)).toMatchObject({ status: 'ready', summary: { local: { history: 2, sendRecords: 1 } } })
@@ -756,6 +762,7 @@ describe('a quit stopped by a send whose state cannot be checked', () => {
       supportedVersion: SUPPORTED,
       status: () => ({ state: 'ready', schemaVersion: SUPPORTED }),
       database: inProcess,
+      protector: testProtector(),
       restart: () => lifecycle.requestQuit('restart')
     })
     expect((await service.inspect(async () => exported().file)).status).toBe('ready')

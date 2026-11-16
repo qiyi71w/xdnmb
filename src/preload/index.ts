@@ -311,6 +311,7 @@ const api: XidaoApi = {
       return () => { ipcRenderer.removeListener(EXPORT_PROGRESS_CHANNEL, handler) }
     },
     inspectImport: () => ipcRenderer.invoke(IpcChannel.inspectImport),
+    submitImportPassphrase: (input) => ipcRenderer.invoke(IpcChannel.submitImportPassphrase, input),
     confirmImport: () => ipcRenderer.invoke(IpcChannel.confirmImport),
     cancelImport: () => ipcRenderer.invoke(IpcChannel.cancelImport)
   }

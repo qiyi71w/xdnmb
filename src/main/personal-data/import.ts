@@ -1,13 +1,17 @@
 import { mkdir, rm } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import type {
   ImportBlock, ImportConfirmResult, ImportFailure, ImportInspection, ImportRejection, StorageStatus
 } from '../../shared/api'
+import type { SecretProtector } from '../identity/protection'
 import type { QuitEnd } from '../lifecycle/controller'
-import { importStagingDirectory, preparedImportJournal } from '../storage/import-journal'
+import type { SecretRows } from '../storage/export-snapshot'
+import { importStagingDirectory, preparedImportJournal, STAGED_DATABASE } from '../storage/import-journal'
 import type { CredentialIdMap, ImportFileFacts } from '../storage/import-staging'
 import { beginSwap, discardSwapJournal, swapPending } from '../storage/swap-journal'
-import { ContainerError, readContainer, type ContainerLimits, type ExportManifest } from './container'
+import { ContainerError, readContainer, readContainerHeader, type ContainerLimits, type ExportManifest } from './container'
+import { unlockEncryption, wipeKeys, type EncryptionParams, type ExportKeys } from './encryption'
+import { resealForImport } from './secrets'
 
 /*
  * 导入个人数据 (see docs/development.md): the open dialog, every check of the chosen file before the
@@ -18,17 +22,21 @@ import { ContainerError, readContainer, type ContainerLimits, type ExportManifes
  * (`backups/import-staging/`), and this machine's database is only read until the next start.
  * Inspection, in order:
  *
- *   1. Container: magic, container version, header, entry names and lengths, limits, the manifest
- *      (`./container`). Where 05 adds encryption, an encrypted header asks for the passphrase here
- *      and the entries are decrypted as they are read; until then such a file is refused.
- *   2. The manifest's schema version: newer than this app's is refused, naming the version that
+ *   1. The plain-text header. An encrypted file carries 饼干与 App UUID: it is refused when this
+ *      machine cannot protect them (never kept in plain text), else it waits for its 导出口令,
+ *      as many tries as needed (`./encryption`: a wrong one is told apart before any content).
+ *   2. Container: magic, container version, entry names and lengths, limits, the manifest
+ *      (`./container`); an encrypted file's chunks are authenticated as they are read.
+ *   3. The manifest's schema version: newer than this app's is refused, naming the version that
  *      exported it, before any entry is extracted.
- *   3. The staged database (`../storage/import-staging`): integrity, this version's migration
+ *   4. The staged database (`../storage/import-staging`): integrity, this version's migration
  *      chain, schema, references, and every draft attachment and offline original it names.
- *   4. What the confirmation shows: the manifest's facts and this machine's counts.
+ *   5. What the confirmation shows: the manifest's facts and this machine's counts.
  *
  * Any failure removes the staging; this machine's data and the file are unchanged. The renderer
- * gets file facts and counts only, never a path.
+ * gets file facts and counts only, never a path or a secret. The passphrase only derives the keys;
+ * the file's secret key stays in memory until the import is prepared or given up, when the file's
+ * secrets are opened with it and encrypted by this machine's protector (`./secrets`).
  */
 
 /** The SQLite work, off the main thread in the app. `abort` ends whatever runs; its promise rejects. */
@@ -37,6 +45,8 @@ export interface ImportDatabase {
   check(stagingDirectory: string, schemaVersion: number): Promise<void>
   /** This machine's 浏览历史 and 发送记录 counts. */
   counts(databasePath: string): Promise<{ history: number; sendRecords: number }>
+  /** Every secret row of the database at `databasePath` (read-only). */
+  secrets(databasePath: string): Promise<SecretRows>
   /** Builds the import result in staging (`stageImport`). */
   stage(stagingDirectory: string, databasePath: string, file: ImportFileFacts): Promise<{ credentialIds: CredentialIdMap }>
   abort(): void
@@ -45,6 +55,8 @@ export interface ImportDatabase {
 export interface ImportService {
   /** `chooseFile` shows the open dialog; null when dismissed. */
   inspect(chooseFile: () => Promise<string | null>): Promise<ImportInspection>
+  /** The 导出口令 for the file waiting for one, then the rest of the check. */
+  submitPassphrase(passphrase: string): Promise<ImportInspection>
   /** Once per checked file; repeated while it runs, the same result. */
   confirm(): Promise<ImportConfirmResult>
   /** Gives up a file being checked or checked; nothing while the import is being prepared or carried out. */
@@ -62,8 +74,10 @@ class Refused extends Error {
 
 type State =
   | { phase: 'idle' }
-  | { phase: 'inspecting'; controller: AbortController; done: Promise<ImportInspection> }
-  | { phase: 'inspected'; manifest: ExportManifest }
+  /** An encrypted file waits for its passphrase; `unlocking`: one is being tried. */
+  | { phase: 'locked'; path: string; params: EncryptionParams; unlocking: boolean; cancelled: boolean }
+  | { phase: 'inspecting'; controller: AbortController; done: Promise<ImportInspection>; keys: ExportKeys | null }
+  | { phase: 'inspected'; manifest: ExportManifest; keys: ExportKeys | null }
   | { phase: 'confirming'; done: Promise<ImportConfirmResult> }
 
 const BLOCKS: Readonly<Partial<Record<QuitEnd, ImportBlock>>> = { unchecked: 'unchecked', drafts: 'drafts', workspace: 'workspace' }
@@ -74,6 +88,8 @@ export function createImportService(deps: {
   supportedVersion: number
   status: () => StorageStatus
   database: ImportDatabase
+  /** This machine's secret protection (keeps the secrets a file carries). */
+  protector: SecretProtector
   /** Quits through the lifecycle to start again (`requestQuit('restart')`); settles with how the quit ended. */
   restart: () => Promise<QuitEnd>
   /** Test seam: tighter container limits. */
@@ -89,21 +105,25 @@ export function createImportService(deps: {
 
   const removeStaging = () => rm(staging, { recursive: true, force: true }).catch(() => undefined)
 
-  async function check(path: string, signal: AbortSignal): Promise<ImportInspection> {
+  /** Leaves `state` for idle, wiping the keys it held. */
+  function forget(): void {
+    if ((state.phase === 'inspecting' || state.phase === 'inspected') && state.keys !== null) wipeKeys(state.keys)
+    state = { phase: 'idle' }
+  }
+
+  async function check(path: string, signal: AbortSignal, keys: ExportKeys | null): Promise<ImportInspection> {
     await rm(staging, { recursive: true, force: true })
     await mkdir(staging, { recursive: true })
     try {
-      const { header, manifest } = await readContainer(path, {
+      const { manifest } = await readContainer(path, {
         extractTo: staging,
         limits: deps.limits,
         signal,
+        ...(keys === null ? {} : { contentKey: keys.content }),
         checkManifest(manifest) {
           if (manifest.schemaVersion > deps.supportedVersion) throw new Refused({ reason: 'newer', appVersion: manifest.appVersion })
-          // Secrets travel only encrypted, which this version does not read.
-          if (manifest.includes.secrets) throw new ContainerError('unsupported')
         }
       })
-      if (header.encryption !== null) throw new ContainerError('unsupported')
       signal.throwIfAborted()
       try {
         await deps.database.check(staging, manifest.schemaVersion)
@@ -120,10 +140,16 @@ export function createImportService(deps: {
         return { status: 'failed', failure: { reason: 'read' } }
       }
       signal.throwIfAborted()
-      state = { phase: 'inspected', manifest }
+      state = { phase: 'inspected', manifest, keys }
       return {
         status: 'ready',
-        summary: { exportedAt: manifest.exportedAt, appVersion: manifest.appVersion, offlineThreads: manifest.stats.offlineThreads, local }
+        summary: {
+          exportedAt: manifest.exportedAt,
+          appVersion: manifest.appVersion,
+          offlineThreads: manifest.stats.offlineThreads,
+          secrets: manifest.includes.secrets,
+          local
+        }
       }
     } catch (error) {
       if (signal.aborted) return { status: 'dismissed' }
@@ -136,24 +162,58 @@ export function createImportService(deps: {
     }
   }
 
-  async function inspectFile(path: string, controller: AbortController): Promise<ImportInspection> {
-    const result = await check(path, controller.signal).catch((): ImportInspection => ({ status: 'failed', failure: { reason: 'read' } }))
-    if (result.status !== 'ready') {
-      await removeStaging()
-      state = { phase: 'idle' }
-    }
-    return result
+  function startCheck(path: string, keys: ExportKeys | null): Promise<ImportInspection> {
+    const controller = new AbortController()
+    const done = (async () => {
+      const result = await check(path, controller.signal, keys).catch((): ImportInspection => ({ status: 'failed', failure: { reason: 'read' } }))
+      if (result.status !== 'ready') {
+        await removeStaging()
+        if (keys !== null) wipeKeys(keys)
+        state = { phase: 'idle' }
+      }
+      return result
+    })()
+    state = { phase: 'inspecting', controller, done, keys }
+    return done
   }
 
-  async function prepare(manifest: ExportManifest): Promise<ImportConfirmResult> {
+  /** The header first: an encrypted file waits for its passphrase, or is refused here. */
+  async function inspectFile(path: string): Promise<ImportInspection> {
+    let encryption: EncryptionParams | null
     try {
-      await deps.database.stage(staging, deps.databasePath, { credentialSequence: manifest.credentialSequence, secrets: manifest.includes.secrets })
+      encryption = (await readContainerHeader(path, deps.limits)).encryption
+    } catch (error) {
+      if (error instanceof ContainerError) {
+        return { status: 'rejected', rejection: { reason: error.kind === 'not-container' ? 'not-export' : 'corrupt' } }
+      }
+      return { status: 'failed', failure: { reason: 'read' } }
+    }
+    if (encryption === null) return startCheck(path, null)
+    // Only a file with secrets is encrypted; they are never kept without this machine's protection.
+    if (!(await deps.protector.isAvailable())) return { status: 'rejected', rejection: { reason: 'protection' } }
+    if (state.phase !== 'idle') return { status: 'failed', failure: { reason: 'busy' } }
+    state = { phase: 'locked', path, params: encryption, unlocking: false, cancelled: false }
+    return { status: 'passphrase', wrong: false }
+  }
+
+  async function prepare(manifest: ExportManifest, keys: ExportKeys | null): Promise<ImportConfirmResult> {
+    try {
+      let secrets: ImportFileFacts['secrets'] = null
+      if (manifest.includes.secrets) {
+        if (keys === null) throw new Error('secrets without their key')
+        const file = await deps.database.secrets(join(staging, STAGED_DATABASE))
+        const local = await deps.database.secrets(deps.databasePath)
+        secrets = await resealForImport(file, local, deps.protector, keys.secrets)
+      }
+      await deps.database.stage(staging, deps.databasePath, { credentialSequence: manifest.credentialSequence, secrets })
       // Rejected while another swap (a restore) is pending, leaving that one as it is.
       beginSwap(userData, preparedImportJournal(userData))
     } catch {
       await removeStaging()
       state = { phase: 'idle' }
       return { status: 'failed' }
+    } finally {
+      if (keys !== null) wipeKeys(keys)
     }
     restarting = true
     const end = await deps.restart()
@@ -172,35 +232,66 @@ export function createImportService(deps: {
 
   return {
     async inspect(chooseFile) {
-      if (choosing || state.phase === 'inspecting' || state.phase === 'confirming') return { status: 'failed', failure: { reason: 'busy' } }
+      if (choosing || state.phase === 'inspecting' || state.phase === 'confirming' || (state.phase === 'locked' && state.unlocking)) {
+        return { status: 'failed', failure: { reason: 'busy' } }
+      }
       if (deps.status().state !== 'ready') return { status: 'failed', failure: { reason: 'storage' } }
-      // A file checked before and not confirmed is given up for the new choice.
-      if (state.phase === 'inspected') {
-        state = { phase: 'idle' }
+      // A file checked before and not confirmed (or still locked) is given up for the new choice.
+      if (state.phase === 'inspected' || state.phase === 'locked') {
+        forget()
         await removeStaging()
       }
+      // Until the file is waiting for a passphrase or being checked, another press is busy.
       choosing = true
-      let path: string | null
       try {
-        path = await chooseFile()
+        const path = await chooseFile()
+        if (path === null) return { status: 'dismissed' }
+        if (state.phase !== 'idle') return { status: 'failed', failure: { reason: 'busy' } }
+        if (deps.status().state !== 'ready') return { status: 'failed', failure: { reason: 'storage' } }
+        // The staging of a pending swap (never while the app runs normally) is not this import's to touch.
+        if (swapPending(userData)) return { status: 'failed', failure: { reason: 'busy' } }
+        return await inspectFile(path)
       } finally {
         choosing = false
       }
-      if (path === null) return { status: 'dismissed' }
-      if (state.phase !== 'idle') return { status: 'failed', failure: { reason: 'busy' } }
-      if (deps.status().state !== 'ready') return { status: 'failed', failure: { reason: 'storage' } }
-      // The staging of a pending swap (never while the app runs normally) is not this import's to touch.
-      if (swapPending(userData)) return { status: 'failed', failure: { reason: 'busy' } }
-      const controller = new AbortController()
-      const done = inspectFile(path, controller)
-      state = { phase: 'inspecting', controller, done }
-      return done
+    },
+
+    async submitPassphrase(passphrase) {
+      const locked = state
+      if (locked.phase !== 'locked' || locked.unlocking) return { status: 'failed', failure: { reason: 'busy' } }
+      if (deps.status().state !== 'ready') {
+        state = { phase: 'idle' }
+        return { status: 'failed', failure: { reason: 'storage' } }
+      }
+      locked.unlocking = true
+      let keys: ExportKeys | null
+      try {
+        keys = await unlockEncryption(passphrase, locked.params)
+      } catch {
+        keys = null
+        if (!locked.cancelled) state = { phase: 'idle' }
+        return locked.cancelled ? { status: 'dismissed' } : { status: 'failed', failure: { reason: 'read' } }
+      } finally {
+        locked.unlocking = false
+      }
+      if (locked.cancelled || state !== locked) {
+        if (keys !== null) wipeKeys(keys)
+        return { status: 'dismissed' }
+      }
+      if (keys === null) return { status: 'passphrase', wrong: true }
+      if (swapPending(userData)) {
+        wipeKeys(keys)
+        state = { phase: 'idle' }
+        return { status: 'failed', failure: { reason: 'busy' } }
+      }
+      state = { phase: 'idle' }
+      return startCheck(locked.path, keys)
     },
 
     confirm() {
       if (state.phase === 'confirming') return state.done
       if (state.phase !== 'inspected' || deps.status().state !== 'ready') return Promise.resolve({ status: 'failed' })
-      const done = prepare(state.manifest)
+      const done = prepare(state.manifest, state.keys)
       state = { phase: 'confirming', done }
       return done
     },
@@ -210,8 +301,11 @@ export function createImportService(deps: {
         state.controller.abort()
         deps.database.abort()
         await state.done
-      } else if (state.phase === 'inspected') {
+      } else if (state.phase === 'locked') {
+        state.cancelled = true
         state = { phase: 'idle' }
+      } else if (state.phase === 'inspected') {
+        forget()
         await removeStaging()
       }
     },
@@ -225,8 +319,11 @@ export function createImportService(deps: {
       } else if (state.phase === 'confirming') {
         deps.database.abort()
         await state.done
-      } else if (state.phase === 'inspected') {
+      } else if (state.phase === 'locked') {
+        state.cancelled = true
         state = { phase: 'idle' }
+      } else if (state.phase === 'inspected') {
+        forget()
         await removeStaging()
       }
     }

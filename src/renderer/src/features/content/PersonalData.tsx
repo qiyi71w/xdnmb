@@ -4,12 +4,13 @@ import { Icon } from '../../components/Icon'
 import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { Modal, ModalHeader } from '../../components/Modal'
 import {
-  exportFailureText, exportPercent, exportProgressText, isBusy, offlineChoiceText, unavailableText, type ExportTask
+  exportFailureText, exportPassphrase, exportPercent, exportProgressText, isBusy, NO_SECRETS, offlineChoiceText, secretsState, unavailableText,
+  type ExportTask, type SecretsChoice
 } from './exportState'
 import { exportTask, useExportTask } from './useExportTask'
 import { formatRecordTime } from '../../lib/time'
 import { useStayOpen } from '../lifecycle/QuitDialogs'
-import { canConfirm, importBusy, importConfirmText, importOutcomeText, importProblemText, type ImportFlow } from './importState'
+import { canConfirm, canSubmit, importBusy, importConfirmText, importOutcomeText, importProblemText, type ImportFlow } from './importState'
 import { importFlow, useImportFlow } from './useImportFlow'
 import './content.css'
 
@@ -88,8 +89,9 @@ function ExportOutcome({ task }: { task: ExportTask }) {
 }
 
 /**
- * 导出个人数据: what goes into the file, the 离线副本 choice, and the export itself. It may be
- * closed while the export runs; the progress stays in 存储与缓存.
+ * 导出个人数据: what goes into the file, the 离线副本 and 饼干与 App UUID choices (the latter with
+ * its 导出口令, typed twice), and the export itself. It may be closed while the export runs; the
+ * progress stays in 存储与缓存. The passphrase is cleared here once the export has it.
  */
 function ExportDialog({ onClose, fallbackFocus }: { onClose: () => void; fallbackFocus: () => HTMLElement | null }) {
   const titleId = useId()
@@ -97,8 +99,13 @@ function ExportDialog({ onClose, fallbackFocus }: { onClose: () => void; fallbac
   const task = useExportTask()
   const [estimate, setEstimate] = useState<ExportEstimate | null | 'loading'>('loading')
   const [includeOffline, setIncludeOffline] = useState(true)
+  const [secrets, setSecrets] = useState<SecretsChoice>(NO_SECRETS)
   const [message, setMessage] = useState<string | null>(null)
+  const passphraseId = useId()
+  const confirmationId = useId()
+  const mismatchId = useId()
   const busy = isBusy(task)
+  const passphrase = secretsState(secrets)
 
   const load = useCallback(async () => {
     setEstimate('loading')
@@ -114,13 +121,17 @@ function ExportDialog({ onClose, fallbackFocus }: { onClose: () => void; fallbac
 
   const ready = estimate !== 'loading' && estimate !== null && estimate.available ? estimate : null
   const offline = ready?.contents?.offline ?? null
-  const canExport = ready !== null && ready.contents !== null
+  const canExport = ready !== null && ready.contents !== null && passphrase.ready
 
   const primary = () => {
     setMessage(null)
     if (task.phase === 'running') void exportTask.cancel()
     else if (task.phase === 'done') void reveal(setMessage)
-    else if (task.phase !== 'starting' && canExport) void exportTask.start(offline !== null && includeOffline)
+    else if (task.phase !== 'starting' && canExport) {
+      void exportTask.start({ includeOffline: offline !== null && includeOffline, passphrase: exportPassphrase(secrets) }).then((started) => {
+        if (started) setSecrets((choice) => ({ ...choice, passphrase: '', confirmation: '' }))
+      })
+    }
   }
 
   const label = task.phase === 'running' ? (task.cancelling ? '正在取消…' : '取消导出')
@@ -139,7 +150,56 @@ function ExportDialog({ onClose, fallbackFocus }: { onClose: () => void; fallbac
             <span className="choice-title">{offlineChoiceText(offline)}</span>
           </label>
         )}
-        <p className="export-note">文件不加密，含浏览历史、草稿与发送记录。</p>
+        <label className="choice-row">
+          <input
+            type="checkbox"
+            checked={secrets.include}
+            disabled={busy}
+            onChange={(event) => setSecrets({ ...secrets, include: event.target.checked })}
+          />
+          <span className="choice-title">饼干与 App UUID</span>
+        </label>
+        {secrets.include ? (
+          <div className="export-passphrase">
+            <label className="field-label" htmlFor={passphraseId}>
+              导出口令
+            </label>
+            <input
+              id={passphraseId}
+              className="text-input"
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+              value={secrets.passphrase}
+              disabled={busy}
+              onChange={(event) => setSecrets({ ...secrets, passphrase: event.target.value })}
+            />
+            <label className="field-label" htmlFor={confirmationId}>
+              再次输入口令
+            </label>
+            <input
+              id={confirmationId}
+              className="text-input"
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+              value={secrets.confirmation}
+              disabled={busy}
+              aria-invalid={passphrase.mismatch || undefined}
+              aria-describedby={passphrase.mismatch ? mismatchId : undefined}
+              onChange={(event) => setSecrets({ ...secrets, confirmation: event.target.value })}
+            />
+            {passphrase.mismatch && (
+              <p className="form-message is-error" id={mismatchId}>
+                <Icon name="alert" size={14} />
+                两次输入的口令不一致
+              </p>
+            )}
+            <p className="export-note">忘记口令将无法导入此文件。</p>
+          </div>
+        ) : (
+          <p className="export-note">文件不加密，含浏览历史、草稿与发送记录。</p>
+        )}
         {(estimate === null || ready?.contents === null) && (
           <div className="notice notice-error" role="alert">
             <Icon name="alert" className="notice-icon" />
@@ -236,6 +296,83 @@ function ImportConfirmDialog({ flow, fallbackFocus }: {
           {flow.busy ? '正在准备导入…' : '导入并重新启动'}
         </button>
       </div>
+    </Modal>
+  )
+}
+
+/**
+ * 输入导出口令: the chosen file is encrypted. 继续 tries the passphrase (Enter too); a wrong one
+ * stays selected under “口令不正确” to be typed over, as many times as needed. 取消 and Esc give
+ * the file up, also while a passphrase is tried or the file then checked.
+ */
+function ImportPassphraseDialog({ flow, fallbackFocus }: {
+  flow: Extract<ImportFlow, { phase: 'locked' }>
+  fallbackFocus: () => HTMLElement | null
+}) {
+  const titleId = useId()
+  const messageId = useId()
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [passphrase, setPassphrase] = useState('')
+  const close = () => void importFlow.cancel()
+  const wrong = flow.wrong && !flow.busy
+
+  // After the dialog has opened (its own layout effect), and again after each wrong try.
+  useEffect(() => {
+    if (flow.busy) return
+    inputRef.current?.focus()
+    if (flow.wrong) inputRef.current?.select()
+  }, [flow.busy, flow.wrong])
+
+  return (
+    <Modal className="import-dialog" labelledBy={titleId} onClose={close} fallbackFocus={fallbackFocus}>
+      <form
+        className="modal-form"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault()
+          void importFlow.submitPassphrase(passphrase)
+        }}
+      >
+        <header className="modal-header">
+          <h2 className="modal-title" id={titleId}>
+            输入导出口令
+          </h2>
+        </header>
+        <div className="modal-body import-body">
+          <input
+            ref={inputRef}
+            className="text-input"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={passphrase}
+            readOnly={flow.busy}
+            aria-labelledby={titleId}
+            aria-invalid={wrong || undefined}
+            aria-describedby={wrong ? messageId : undefined}
+            onChange={(event) => setPassphrase(event.target.value)}
+          />
+          {wrong && (
+            <p className="form-message is-error" id={messageId} role="alert">
+              <Icon name="alert" size={14} />
+              口令不正确
+            </p>
+          )}
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="btn" aria-disabled={flow.cancelling || undefined} onClick={close}>
+            取消
+          </button>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            aria-disabled={!canSubmit(flow, passphrase) || undefined}
+            aria-busy={flow.busy || undefined}
+          >
+            {flow.busy ? '正在检查…' : '继续'}
+          </button>
+        </div>
+      </form>
     </Modal>
   )
 }
@@ -402,6 +539,7 @@ export function PersonalDataBlock({ active }: { active: boolean }) {
         </p>
       )}
       {open && <ExportDialog onClose={closeDialog} fallbackFocus={() => exportRef.current} />}
+      {flow.phase === 'locked' && <ImportPassphraseDialog flow={flow} fallbackFocus={() => importRef.current} />}
       {flow.phase === 'confirming' && <ImportConfirmDialog flow={flow} fallbackFocus={() => importRef.current} />}
     </div>
   )

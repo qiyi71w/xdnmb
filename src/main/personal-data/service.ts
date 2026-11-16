@@ -1,24 +1,36 @@
 import { randomBytes } from 'node:crypto'
 import { lstat, open, rename, rm, stat, statfs, type FileHandle } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import type { ExportEstimate, ExportFailure, ExportProgress, ExportRunning, ExportStartResult, StorageStatus } from '../../shared/api'
-import type { ExportEstimateCounts, SnapshotFile, SnapshotFiles, TrimOptions, TrimResult } from '../storage/export-snapshot'
+import type {
+  ExportEstimate, ExportFailure, ExportOptions, ExportProgress, ExportRunning, ExportStartResult, StorageStatus
+} from '../../shared/api'
+import type { SecretProtector } from '../identity/protection'
+import type { ExportEstimateCounts, SecretRows, SnapshotFile, SnapshotFiles, TrimOptions, TrimResult } from '../storage/export-snapshot'
 import { syncDirectory } from '../storage/durable'
 import {
   containerBytes, CONTAINER_VERSION, DATABASE_NAME, ENTRY_TYPE, SourceReadError, writeContainer, type ContainerSource, type ExportManifest
 } from './container'
+import { newEncryption, sealedBytes, wipeKeys, type EncryptionParams, type ExportKeys } from './encryption'
+import { sealForExport, SecretsUnreadableError } from './secrets'
 
 /*
  * 导出个人数据: save dialog, disk space check, a consistent snapshot trimmed for export (on a worker,
  * see `../storage/export-snapshot`), then the container written to a temporary file beside the
  * target and renamed into place once complete. A cancel, a failure or quitting the app removes the
  * temporary files, so no partial export file is ever left. The renderer gets file names only.
+ *
+ * With 饼干与 App UUID, the 导出口令 derives the file's keys (`./encryption`) and is dropped; the
+ * snapshot's secrets are decrypted here, sealed for the file (`./secrets`) before the trimmed copy
+ * is written, and the whole file is encrypted. The passphrase and keys stay in this process's
+ * memory, never on disk or in a log.
  */
 
 /** The snapshot work, off the main thread in the app. `abort` ends whatever runs; its promise rejects. */
 export interface ExportDatabase {
   estimate(databasePath: string): Promise<ExportEstimateCounts>
   snapshot(databasePath: string, workPath: string): Promise<SnapshotFiles>
+  /** Every secret row of the database at `databasePath` (read-only). */
+  secrets(databasePath: string): Promise<SecretRows>
   trim(workPath: string, options: TrimOptions): Promise<TrimResult>
   abort(): void
 }
@@ -26,7 +38,7 @@ export interface ExportDatabase {
 export interface ExportService {
   estimate(): Promise<ExportEstimate>
   /** `chooseTarget` shows the save dialog with the default file name; null when dismissed. */
-  start(input: { includeOffline: boolean }, chooseTarget: (defaultName: string) => Promise<string | null>): Promise<ExportStartResult>
+  start(input: ExportOptions, chooseTarget: (defaultName: string) => Promise<string | null>): Promise<ExportStartResult>
   cancel(): void
   /** Shows the last exported file in its folder; false when there is none any more. */
   reveal(): Promise<boolean>
@@ -62,6 +74,8 @@ export function createExportService(deps: {
   /** A post is being sent now (a send whose result is unknown is not). */
   sending: () => boolean
   database: ExportDatabase
+  /** This machine's secret protection (decrypts the secrets an export carries). */
+  protector: SecretProtector
   publish: (progress: ExportProgress) => void
   showInFolder: (path: string) => void
   /** Bytes available to this user on the volume holding `directory`. */
@@ -123,12 +137,14 @@ export function createExportService(deps: {
     return { opened, missing }
   }
 
-  async function run(target: string, includeOffline: boolean, controller: AbortController, running: ExportRunning): Promise<void> {
+  async function run(target: string, input: ExportOptions, controller: AbortController, running: ExportRunning): Promise<void> {
     const { signal } = controller
+    const { includeOffline } = input
     const stem = join(dirname(target), `.${basename(target)}.${randomBytes(6).toString('hex')}`)
     const workPath = `${stem}.db.part`
     const partPath = `${stem}.part`
     const handles: FileHandle[] = []
+    let encryption: { params: EncryptionParams; keys: ExportKeys } | null = null
     let writing = false
     let lastSent = 0
     const send = (progress: ExportRunning, force: boolean) => {
@@ -145,12 +161,17 @@ export function createExportService(deps: {
     let outcome: ExportProgress
     try {
       send({ status: 'running', writtenBytes: 0, totalBytes: running.totalBytes }, true)
+      if (input.passphrase !== null) encryption = await newEncryption(input.passphrase)
+      check()
       const files = await deps.database.snapshot(deps.databasePath, workPath)
       check()
       const drafts = await openAll(deps.draftImagesDirectory, files.draftImages, handles)
       const originals = includeOffline ? await openAll(deps.imagesDirectory, files.offlineImages, handles) : { opened: new Map(), missing: [] }
       check()
-      const trimmed = await deps.database.trim(workPath, { includeOffline, missingOfflineImages: originals.missing, missingDraftImages: drafts.missing })
+      // Sealed here, before the trimmed copy is written: it never holds a secret in plain text.
+      const secrets = encryption === null ? null : await sealForExport(await deps.database.secrets(workPath), deps.protector, encryption.keys.secrets)
+      check()
+      const trimmed = await deps.database.trim(workPath, { includeOffline, missingOfflineImages: originals.missing, missingDraftImages: drafts.missing, secrets })
       check()
       const database = await open(workPath, 'r')
       handles.push(database)
@@ -173,19 +194,20 @@ export function createExportService(deps: {
         schemaVersion: trimmed.schemaVersion,
         appVersion: deps.appVersion,
         exportedAt: now().toISOString(),
-        includes: { offlineCopies: includeOffline, secrets: false },
+        includes: { offlineCopies: includeOffline, secrets: encryption !== null },
         credentialSequence: trimmed.credentialSequence,
         entries: { database: totals(ENTRY_TYPE.database), draftImages: totals(ENTRY_TYPE.draftImage), offlineImages: totals(ENTRY_TYPE.offlineImage) },
         stats: trimmed.stats
       }
-      const totalBytes = containerBytes(manifest, sources)
+      const totalBytes = containerBytes(manifest, sources, encryption?.params ?? null)
       send({ status: 'running', writtenBytes: 0, totalBytes }, true)
       writing = true
       const file = await createFile(partPath)
       try {
         await writeContainer(file, { manifest, sources }, {
           signal,
-          onProgress: (writtenBytes) => send({ status: 'running', writtenBytes, totalBytes }, writtenBytes === totalBytes)
+          onProgress: (writtenBytes) => send({ status: 'running', writtenBytes, totalBytes }, writtenBytes === totalBytes),
+          ...(encryption === null ? {} : { encryption: { params: encryption.params, key: encryption.keys.content } })
         })
       } finally {
         await file.close()
@@ -199,8 +221,10 @@ export function createExportService(deps: {
       if (signal.aborted || error instanceof Cancelled) outcome = { status: 'cancelled' }
       else if ((error as NodeJS.ErrnoException).code === 'ENOSPC') {
         outcome = { status: 'failed', failure: { reason: 'space', shortBytes: Math.max(1, running.totalBytes - running.writtenBytes) } }
-      } else outcome = { status: 'failed', failure: { reason: writing && !(error instanceof SourceReadError) ? 'write' : 'read' } }
+      } else if (error instanceof SecretsUnreadableError) outcome = { status: 'failed', failure: { reason: 'secrets' } }
+      else outcome = { status: 'failed', failure: { reason: writing && !(error instanceof SourceReadError) ? 'write' : 'read' } }
     }
+    if (encryption !== null) wipeKeys(encryption.keys)
     for (const handle of handles) await handle.close().catch(() => undefined)
     // The temporary files go before the outcome is told, so nothing partial outlives it.
     for (const path of [partPath, workPath, `${workPath}-journal`]) await rm(path, { force: true }).catch(() => undefined)
@@ -233,7 +257,8 @@ export function createExportService(deps: {
       }
     },
 
-    async start({ includeOffline }, chooseTarget) {
+    async start(input, chooseTarget) {
+      const { includeOffline } = input
       if (starting) return failed({ reason: 'busy' })
       const refused = refusal()
       if (refused !== null) return failed(refused)
@@ -249,7 +274,9 @@ export function createExportService(deps: {
         try {
           const counts = await deps.database.estimate(deps.databasePath)
           snapshotBytes = await databaseBytes()
-          estimated = snapshotBytes + counts.draftImageBytes + (includeOffline ? counts.offlineBytes : 0)
+          const plain = snapshotBytes + counts.draftImageBytes + (includeOffline ? counts.offlineBytes : 0)
+          // Sealing adds a tag to each chunk.
+          estimated = input.passphrase === null ? plain : sealedBytes(plain)
         } catch {
           return failed({ reason: 'read' })
         }
@@ -267,7 +294,7 @@ export function createExportService(deps: {
         const running: ExportRunning = { status: 'running', writtenBytes: 0, totalBytes: estimated }
         const current = { controller, running, done: Promise.resolve() }
         job = current
-        current.done = run(target, includeOffline, controller, running).finally(() => {
+        current.done = run(target, input, controller, running).finally(() => {
           if (job === current) job = null
         })
         return { status: 'started' }

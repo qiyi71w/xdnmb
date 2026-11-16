@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  exportFailureText, exportPercent, exportProgressText, exportTaskReducer, offlineChoiceText, unavailableText,
-  type ExportTask, type ExportTaskEvent
+  exportFailureText, exportPassphrase, exportPercent, exportProgressText, exportTaskReducer, NO_SECRETS, offlineChoiceText, secretsState,
+  unavailableText, type ExportTask, type ExportTaskEvent
 } from '../../src/renderer/src/features/content/exportState'
 
 const run = (events: ExportTaskEvent[], from: ExportTask = { phase: 'idle' }) => events.reduce(exportTaskReducer, from)
@@ -69,5 +69,28 @@ describe('export dialog state', () => {
     expect(exportTaskReducer(done, { type: 'sync', running: null })).toBe(done)
     expect(exportTaskReducer({ phase: 'starting' }, { type: 'sync', running: null })).toEqual({ phase: 'starting' })
     expect(exportTaskReducer({ phase: 'starting' }, { type: 'dismiss' })).toEqual({ phase: 'starting' })
+  })
+
+  it('takes 饼干与 App UUID only with a non-empty passphrase typed the same twice', () => {
+    // Off by default: no passphrase, nothing to check, the file is not encrypted.
+    expect(NO_SECRETS.include).toBe(false)
+    expect(secretsState(NO_SECRETS)).toEqual({ ready: true, mismatch: false })
+    expect(exportPassphrase({ ...NO_SECRETS, passphrase: 'left over' })).toBeNull()
+
+    const checked = { ...NO_SECRETS, include: true }
+    // Empty: 导出… is unavailable, with nothing to say yet.
+    expect(secretsState(checked)).toEqual({ ready: false, mismatch: false })
+    expect(secretsState({ ...checked, passphrase: 'abc' })).toEqual({ ready: false, mismatch: false })
+    // Different: said beside the second field once it is typed.
+    expect(secretsState({ ...checked, passphrase: 'abc', confirmation: 'abd' })).toEqual({ ready: false, mismatch: true })
+    expect(secretsState({ ...checked, passphrase: '', confirmation: 'abc' })).toEqual({ ready: false, mismatch: true })
+    // Any length or strength, as typed (no trimming).
+    const long = '长'.repeat(10_000)
+    for (const passphrase of ['1', ' ', long, ' 有空格 ']) {
+      expect(secretsState({ include: true, passphrase, confirmation: passphrase })).toEqual({ ready: true, mismatch: false })
+      expect(exportPassphrase({ include: true, passphrase, confirmation: passphrase })).toBe(passphrase)
+    }
+    expect(secretsState({ ...checked, passphrase: 'a ', confirmation: 'a' }).ready).toBe(false)
+    expect(exportFailureText({ reason: 'secrets' })).toBe('导出失败：本机的饼干或 App UUID 无法解密')
   })
 })

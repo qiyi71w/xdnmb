@@ -1,13 +1,16 @@
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IpcMainInvokeEvent } from 'electron'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IpcChannel, type ExportProgress } from '../src/shared/api'
 import { registerIpc } from '../src/main/ipc'
+import { readContainer, readContainerHeader } from '../src/main/personal-data/container'
+import { unlockEncryption } from '../src/main/personal-data/encryption'
 import { createExportService, type ExportService } from '../src/main/personal-data/service'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
-import { readExportEstimate, takeExportSnapshot, trimExportSnapshot } from '../src/main/storage/export-snapshot'
+import { readExportEstimate, readSecretRows, takeExportSnapshot, trimExportSnapshot } from '../src/main/storage/export-snapshot'
+import { testProtector } from './helpers/protector'
 
 const electron = vi.hoisted(() => ({ handlers: new Map<string, (event: unknown, input?: unknown) => unknown>() }))
 vi.mock('electron', () => ({
@@ -42,9 +45,11 @@ beforeEach(() => {
     database: {
       estimate: async (path) => readExportEstimate(path),
       snapshot: async (path, work) => takeExportSnapshot(path, work),
+      secrets: async (path) => readSecretRows(path),
       trim: async (work, options) => trimExportSnapshot(work, options),
       abort: () => undefined
     },
+    protector: testProtector(),
     publish(progress) {
       events.push(progress)
       if (progress.status !== 'running') finished.resolve(progress)
@@ -80,7 +85,7 @@ describe('personal data export operations', () => {
   it('exports through the save dialog in main and returns no path', async () => {
     const estimate = await call(IpcChannel.exportEstimate, trusted)
     expect(estimate).toMatchObject({ available: true, running: null, contents: { offline: null } })
-    const started = await call(IpcChannel.startExport, trusted, { includeOffline: true })
+    const started = await call(IpcChannel.startExport, trusted, { includeOffline: true, passphrase: null })
     expect(started).toEqual({ status: 'started' })
     const outcome = await finished.promise
     expect(outcome).toEqual({ status: 'done', fileName: dialogs[0] })
@@ -93,14 +98,47 @@ describe('personal data export operations', () => {
   it('rejects other callers and invalid arguments without starting anything', async () => {
     const channels = [IpcChannel.exportEstimate, IpcChannel.startExport, IpcChannel.cancelExport, IpcChannel.revealExport]
     for (const channel of channels) await expect(call(channel, untrusted)).rejects.toThrow('invalid request')
-    await expect(call(IpcChannel.startExport, untrusted, { includeOffline: true })).rejects.toThrow('invalid request')
+    await expect(call(IpcChannel.startExport, untrusted, { includeOffline: true, passphrase: null })).rejects.toThrow('invalid request')
     for (const channel of [IpcChannel.exportEstimate, IpcChannel.cancelExport, IpcChannel.revealExport]) {
       for (const input of [null, {}, { path: '/tmp/elsewhere' }, 'x', 1]) await expect(call(channel, trusted, input)).rejects.toThrow('invalid request')
     }
-    for (const input of [undefined, null, {}, { includeOffline: 'yes' }, { includeOffline: true, path: '/tmp/x.xidao' }, { includeOffline: true, passphrase: 'p' }, [true]]) {
+    for (const input of [
+      undefined, null, {}, { includeOffline: 'yes', passphrase: null }, { includeOffline: true, passphrase: null, path: '/tmp/x.xidao' },
+      { includeOffline: true }, { includeOffline: true, passphrase: '' }, { includeOffline: true, passphrase: 1 },
+      { includeOffline: true, passphrase: ['p'] }, { includeOffline: true, passphrase: 'p', confirmation: 'q' }, [true]
+    ]) {
       await expect(call(IpcChannel.startExport, trusted, input)).rejects.toThrow('invalid request')
     }
     expect(dialogs).toEqual([])
     expect(events).toEqual([])
+  })
+
+  it('takes the passphrase one way: never returned, logged or written anywhere but as the file key', async () => {
+    const passphrase = `口令-PASSPHRASE-${'長'.repeat(5000)}`
+    const logged: unknown[] = []
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { logged.push(...args) }))
+    let started: unknown
+    try {
+      started = await call(IpcChannel.startExport, trusted, { includeOffline: false, passphrase })
+      expect(started).toEqual({ status: 'started' })
+      expect(await finished.promise).toMatchObject({ status: 'done' })
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+    const file = join(root, dialogs[0]!)
+    const header = await readContainerHeader(file)
+    const keys = await unlockEncryption(passphrase, header.encryption!)
+    expect(keys).not.toBeNull()
+    await expect(readContainer(file, { contentKey: keys!.content })).resolves.toMatchObject({ manifest: { includes: { secrets: true } } })
+    // Every result, event, log line and file this export touched.
+    const texts = [JSON.stringify([started, ...events]), ...logged.map((entry) => String(entry))]
+    for (const name of readdirSync(root)) {
+      if (statSync(join(root, name)).isFile()) texts.push(readFileSync(join(root, name)).toString('latin1'))
+    }
+    for (const encoding of ['utf8', 'utf16le'] as const) {
+      const needle = Buffer.from('PASSPHRASE', encoding).toString('latin1')
+      for (const text of texts) expect(text.includes(needle) || text.includes('PASSPHRASE')).toBe(false)
+    }
   })
 })

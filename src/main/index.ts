@@ -554,6 +554,7 @@ async function start(): Promise<void> {
     status: () => openedStore.status,
     sending: () => publication.inFlight().length > 0,
     database: createWorkerExportDatabase(createExportWorker),
+    protector,
     publish(progress) {
       if (mainWindow !== null && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send(EXPORT_PROGRESS_CHANNEL, progress)
     },
@@ -566,6 +567,7 @@ async function start(): Promise<void> {
     supportedVersion: MIGRATIONS.reduce((highest, migration) => Math.max(highest, migration.version), 0),
     status: () => openedStore.status,
     database: createWorkerImportDatabase(createImportWorker),
+    protector,
     restart: () => lifecycle?.requestQuit('restart') ?? Promise.resolve('not-started')
   })
   personalImport = importService

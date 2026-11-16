@@ -18,16 +18,24 @@ const CHOSEN = '/home/someone/Documents/汐岛个人数据-2026-11-16.xidao'
 let calls: string[]
 let cancelled: QuitCallOff[]
 let chosen: Array<string | null>
+let passphrases: string[]
 
 beforeEach(() => {
   calls = []
   cancelled = []
   chosen = []
+  passphrases = []
   const service: ImportService = {
     async inspect(chooseFile) {
       calls.push('inspect')
       chosen.push(await chooseFile())
-      return { status: 'ready', summary: { exportedAt: '2026-11-16T08:00:00.000Z', appVersion: '1.5.0', offlineThreads: 0, local: { history: 3, sendRecords: 1 } } }
+      return { status: 'passphrase', wrong: false }
+    },
+    async submitPassphrase(passphrase) {
+      calls.push('passphrase')
+      passphrases.push(passphrase)
+      if (passphrase !== '对的口令') return { status: 'passphrase', wrong: true }
+      return { status: 'ready', summary: { exportedAt: '2026-11-16T08:00:00.000Z', appVersion: '1.5.0', offlineThreads: 0, secrets: true, local: { history: 3, sendRecords: 1 } } }
     },
     async confirm() {
       calls.push('confirm')
@@ -61,14 +69,21 @@ function call(channel: string, sender: unknown, ...input: unknown[]): Promise<un
 }
 
 describe('personal data import operations', () => {
-  it('shows the open dialog in main and returns no path', async () => {
+  it('shows the open dialog in main and returns no path, then takes the passphrase one way', async () => {
     const inspection = await call(IpcChannel.inspectImport, trusted) as ImportInspection
-    expect(inspection.status).toBe('ready')
+    expect(inspection).toEqual({ status: 'passphrase', wrong: false })
     expect(chosen).toEqual([CHOSEN])
-    expect(JSON.stringify(inspection)).not.toContain('Documents')
+    expect(await call(IpcChannel.submitImportPassphrase, trusted, { passphrase: '错的口令' })).toEqual({ status: 'passphrase', wrong: true })
+    const ready = await call(IpcChannel.submitImportPassphrase, trusted, { passphrase: '对的口令' }) as ImportInspection
+    expect(ready.status).toBe('ready')
+    for (const result of [inspection, ready]) {
+      expect(JSON.stringify(result)).not.toContain('Documents')
+      expect(JSON.stringify(result)).not.toContain('口令')
+    }
     expect(await call(IpcChannel.confirmImport, trusted)).toEqual({ status: 'blocked', reason: 'unchecked' })
     expect(await call(IpcChannel.cancelImport, trusted)).toBeUndefined()
-    expect(calls).toEqual(['inspect', 'confirm', 'cancel'])
+    expect(calls).toEqual(['inspect', 'passphrase', 'passphrase', 'confirm', 'cancel'])
+    expect(passphrases).toEqual(['错的口令', '对的口令'])
   })
 
   it('rejects other callers and any argument without doing anything', async () => {
@@ -77,6 +92,10 @@ describe('personal data import operations', () => {
       for (const input of [null, {}, { path: '/tmp/x.xidao' }, { passphrase: 'p' }, 'x', 1]) {
         await expect(call(channel, trusted, input)).rejects.toThrow('invalid request')
       }
+    }
+    await expect(call(IpcChannel.submitImportPassphrase, untrusted, { passphrase: 'p' })).rejects.toThrow('invalid request')
+    for (const input of [undefined, null, {}, { passphrase: '' }, { passphrase: 1 }, { passphrase: ['p'] }, { passphrase: 'p', path: '/tmp/x' }, 'p']) {
+      await expect(call(IpcChannel.submitImportPassphrase, trusted, input)).rejects.toThrow('invalid request')
     }
     expect(calls).toEqual([])
     expect(chosen).toEqual([])
