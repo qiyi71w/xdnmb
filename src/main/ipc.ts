@@ -32,6 +32,7 @@ import type { SubscriptionService } from './subscriptions/service'
 import type { PublicationService } from './publication/service'
 import type { Lifecycle } from './lifecycle/controller'
 import type { LoginItemService } from './loginItem'
+import type { BossKeyService } from './bossKey'
 import type { UpdateService } from './updates/service'
 import { REMINDER_CLEAR_SOURCES, REMINDERS_CHANGED_CHANNEL, type ReminderClearSource } from '../shared/reminders'
 import type { ReminderService } from './reminders/service'
@@ -87,6 +88,7 @@ interface IpcDeps {
   lifecycle: Pick<Lifecycle, 'reside' | 'requestQuit' | 'presentQuit' | 'cancelQuit' | 'completeQuit'>
   updates: UpdateService
   loginItem: Pick<LoginItemService, 'state' | 'set' | 'openSystemSettings'>
+  bossKey: Pick<BossKeyService, 'status' | 'setRecording'>
   settings: SettingsService
   getStatus: () => AppStatus
   /** 重新启动重试 / 不备份升级 after a failed pre-upgrade backup. */
@@ -340,7 +342,7 @@ export interface IpcRegistration {
 
 export function registerIpc({
   reading, images, identities, account, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
-  analytics, thirdParty, announcements, updates, loginItem, getStatus, upgrade, restore, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
+  analytics, thirdParty, announcements, updates, loginItem, bossKey, getStatus, upgrade, restore, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile
 }: IpcDeps): IpcRegistration {
   const owner = (sender: WebContents): string => String(sender.id)
   const operations = new OperationRegistry()
@@ -1009,6 +1011,14 @@ export function registerIpc({
     return loginItem.set(input.enabled)
   })
   handle(IpcChannel.loginItemOpenSystemSettings, async () => loginItem.openSystemSettings())
+
+  // 老板键: the combination itself is a setting; only its registration status and recording are here.
+  handle(IpcChannel.bossKeyGet, async () => bossKey.status())
+  handle(IpcChannel.bossKeySetRecording, async (_event, raw) => {
+    const input = record(raw)
+    if (Object.keys(input).length !== 1 || typeof input.recording !== 'boolean') throw new InvalidRequestError()
+    return bossKey.setRecording(input.recording)
+  })
 
   // Software updates: no input names a URL, path or version to fetch; the source is fixed.
   handle(IpcChannel.updateGetState, async () => updates.state())

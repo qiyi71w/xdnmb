@@ -7,6 +7,7 @@ import { PUBLICATION_CHANGED_CHANNEL, PUBLICATION_FAILURE_CHANNEL, PUBLICATION_O
 import type { ThreadId } from '../shared/forum'
 import { UPDATE_STATE_CHANNEL, type UpdateState } from '../shared/updates'
 import { THIRD_PARTY_CHANGED_CHANNEL } from '../shared/third-party'
+import { BOSS_KEY_INPUT_CHANNEL, type BossKeyPress } from '../shared/bossKey'
 
 // A notification can create a window before React has mounted its listener. Keep the intent in
 // preload, not an arbitrary timeout, until a subscriber can open the in-app list.
@@ -268,6 +269,15 @@ const api: XidaoApi = {
     get: () => ipcRenderer.invoke(IpcChannel.loginItemGet),
     set: (input) => ipcRenderer.invoke(IpcChannel.loginItemSet, input),
     openSystemSettings: () => ipcRenderer.invoke(IpcChannel.loginItemOpenSystemSettings)
+  },
+  bossKey: {
+    get: () => ipcRenderer.invoke(IpcChannel.bossKeyGet),
+    setRecording: (input) => ipcRenderer.invoke(IpcChannel.bossKeySetRecording, input),
+    onInput(listener) {
+      const handler = (_event: IpcRendererEvent, press: BossKeyPress) => listener(press)
+      ipcRenderer.on(BOSS_KEY_INPUT_CHANNEL, handler)
+      return () => { ipcRenderer.removeListener(BOSS_KEY_INPUT_CHANNEL, handler) }
+    }
   },
   updates: {
     getState: () => ipcRenderer.invoke(IpcChannel.updateGetState),

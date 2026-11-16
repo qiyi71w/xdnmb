@@ -1,5 +1,6 @@
 // Global preferences: one source of validation for IPC updates, stored rows and theme imports.
 import { CLOSE_ACTIONS, type CloseAction } from './lifecycle'
+import { BOSS_KEY_DEFAULT, isBossKey } from './bossKey'
 import type { SubscriptionArrangement, SubscriptionSource } from './subscriptions'
 import { UPDATE_NETWORKS, type UpdateNetwork } from './updates'
 import {
@@ -132,6 +133,10 @@ export interface AppSettings {
    * it. Belongs to this device only, like 开机自启 itself.
    */
   loginLaunchResident: boolean
+  /** 老板键 is registered with the system. Belongs to this device only. */
+  bossKeyEnabled: boolean
+  /** The 老板键 combination, an accelerator in the form `isBossKey` accepts; kept while turned off. */
+  bossKey: string
   colorScheme: ColorScheme
   customThemeEnabled: boolean
   /** The user's custom theme; `null` until one is created or imported. Kept when another scheme is chosen. */
@@ -185,6 +190,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   newTabSplitDefault: true,
   closeAction: 'ask',
   loginLaunchResident: false,
+  bossKeyEnabled: false,
+  bossKey: BOSS_KEY_DEFAULT,
   colorScheme: 'system',
   customThemeEnabled: false,
   customTheme: null,
@@ -214,6 +221,8 @@ export const SETTING_KEYS = [
   'newTabSplitDefault',
   'closeAction',
   'loginLaunchResident',
+  'bossKeyEnabled',
+  'bossKey',
   'colorScheme',
   'customThemeEnabled',
   'customTheme',
@@ -415,6 +424,7 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
     case 'updateAutoInstall':
     case 'updateAutoDownload':
     case 'loginLaunchResident':
+    case 'bossKeyEnabled':
       parsed = typeof value === 'boolean' ? { ok: true, value } : { ok: false, issues: [{ kind: 'field', field: key, problem: 'type' }] }
       break
     case 'imageMaskStrength':
@@ -426,6 +436,13 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
       break
     case 'closeAction':
       parsed = choice(value, CLOSE_ACTIONS, key)
+      break
+    case 'bossKey':
+      parsed = typeof value !== 'string'
+        ? { ok: false, issues: [{ kind: 'field', field: key, problem: 'type' }] }
+        : isBossKey(value)
+          ? { ok: true, value }
+          : { ok: false, issues: [{ kind: 'field', field: key, problem: 'range' }] }
       break
     case 'colorScheme':
       parsed = choice(value, COLOR_SCHEMES, key)

@@ -24,7 +24,7 @@ function sendAttempt(id: string, state: PublicationState, createdAt: string): Pu
 
 /** Controlled window, clock, timers, notification and in-flight sends around the real controller. */
 function setup(options: { closeAction?: CloseAction | 'unreadable'; notify?: (summary: FinishingSummary) => void } = {}) {
-  let windowState: 'none' | 'hidden' | 'shown' = 'none'
+  let windowState: 'none' | 'hidden' | 'minimized' | 'shown' = 'none'
   let pendingOpen: ReturnType<typeof deferred<void>> | null = null
   const sent: LifecycleRequest[] = []
   const triggers: LaunchTrigger[] = []
@@ -101,6 +101,7 @@ function setup(options: { closeAction?: CloseAction | 'unreadable'; notify?: (su
     lifecycle, sent, triggers, sleeps, notified, unattended, abandoned, runs, unstored, exitReasons, relaunches,
     setStorageUp(up: boolean) { storageUp = up },
     get windowState() { return windowState },
+    minimize() { windowState = 'minimized' },
     get opens() { return opens },
     get exits() { return exitReasons.length },
     get stops() { return stops },
@@ -165,6 +166,51 @@ describe('window lifecycle', () => {
     expect(s.windowState).toBe('shown')
     expect(s.triggers).toEqual(['cold-start', 'reopen'])
     expect(s.opens).toBe(1)
+  })
+
+  it('老板键 hides a shown window and opens a hidden or minimized one as an explicit reopen; the tray restoring a minimized one is not', async () => {
+    const s = setup()
+    await s.started()
+    s.lifecycle.toggleResident()
+    expect(s.windowState).toBe('hidden')
+    expect(s.triggers).toEqual(['cold-start'])
+    s.lifecycle.toggleResident()
+    expect(s.windowState).toBe('shown')
+    expect(s.triggers).toEqual(['cold-start', 'reopen'])
+
+    s.minimize()
+    s.lifecycle.toggleResident()
+    expect(s.windowState).toBe('shown')
+    expect(s.triggers).toEqual(['cold-start', 'reopen', 'reopen'])
+
+    s.minimize()
+    s.lifecycle.reopen()
+    expect(s.windowState).toBe('shown')
+    expect(s.triggers).toEqual(['cold-start', 'reopen', 'reopen'])
+  })
+
+  it('老板键 hides the window while a quit asks about drafts, and the quit goes on', async () => {
+    const s = setup()
+    await s.started()
+    s.lifecycle.requestQuit()
+    s.lifecycle.toggleResident()
+    expect(s.windowState).toBe('hidden')
+    expect(s.lifecycle.phase).toBe('quitting')
+    s.lifecycle.toggleResident()
+    expect(s.windowState).toBe('shown')
+    s.lifecycle.completeQuit(true)
+    await flush()
+    expect(s.lifecycle.phase).toBe('exiting')
+  })
+
+  it('老板键 during a resident 开机自启 start shows the window once it is ready', async () => {
+    const s = setup()
+    const start = s.lifecycle.start(true)
+    s.lifecycle.toggleResident()
+    await s.showWindow()
+    await start
+    expect(s.windowState).toBe('shown')
+    expect(s.triggers).toEqual(['cold-start', 'reopen'])
   })
 
   it('reveals a resident window on notification click without emitting a check trigger', async () => {

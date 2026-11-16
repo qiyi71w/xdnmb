@@ -16,6 +16,7 @@ import type { ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
 import type { SubscriptionsApi } from './subscriptions'
 import type { PublicationApi } from './publication'
 import type { LifecycleApi, LoginItemApi } from './lifecycle'
+import type { BossKeyApi } from './bossKey'
 import type { RemindersApi } from './reminders'
 import type { AppSettings, ZoomAction, ZoomState } from './settings'
 import type { AppearanceIssue } from './theme'
@@ -448,6 +449,8 @@ export interface XidaoApi {
   lifecycle: LifecycleApi
   /** 开机自启: the system login item, read and written as the system reports it. */
   loginItem: LoginItemApi
+  /** 老板键: whether the system accepted the combination, and pausing it while a new one is recorded. */
+  bossKey: BossKeyApi
   /** Thread reminders, bounded catch-up checks and reminder notifications. */
   reminders: RemindersApi
   /** About and software updates (fixed GitHub Releases source; see `shared/updates.ts`). */
@@ -594,6 +597,8 @@ export const IpcChannel = {
   loginItemGet: 'login-item:get',
   loginItemSet: 'login-item:set',
   loginItemOpenSystemSettings: 'login-item:open-system-settings',
+  bossKeyGet: 'boss-key:get',
+  bossKeySetRecording: 'boss-key:set-recording',
   reminderGetRules: 'reminders:get-rules',
   reminderSetRule: 'reminders:set-rule',
   reminderOverview: 'reminders:overview',
