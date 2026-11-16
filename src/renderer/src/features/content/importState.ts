@@ -115,5 +115,5 @@ export function importCategoriesText(summary: ImportSummary): string {
 export function importConfirmText(summary: ImportSummary, exportedAt: string): string {
   return `文件导出于 ${exportedAt}，来自汐岛 ${summary.appVersion}，包含${importCategoriesText(summary)}。` +
     `导入后，本机的浏览历史（${summary.local.history} 条）、发送记录（${summary.local.sendRecords} 条）和其他个人数据、设置将被替换；` +
-    '本机的饼干、App UUID 和官网登录会保留。'
+    '本机的饼干、App UUID、官网登录、离线副本和草稿会保留。'
 }

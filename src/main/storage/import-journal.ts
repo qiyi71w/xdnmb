@@ -35,8 +35,9 @@ const BACKUPS = 'backups'
 const STAGING = 'import-staging'
 const BEFORE_IMPORT = 'before-import'
 const BEFORE_IMPORT_PARTIAL = 'before-import.partial'
-const DRAFT_IMAGES = 'draft-images'
-const IMAGES = 'images'
+/** Draft attachments and images (offline originals among them) in the user data directory. */
+export const DRAFT_IMAGES = 'draft-images'
+export const IMAGES = 'images'
 /** The pre-upgrade backup and its work directories (`./backup`): removed once the import is in place. */
 const PRE_UPGRADE_ENTRIES = ['pre-upgrade', 'pre-upgrade.partial', 'pre-upgrade.replaced']
 /** Every file SQLite keeps next to a database; a stray one would be applied to the wrong database. */
@@ -264,8 +265,9 @@ function settle(context: SwapContext<ImportJournal>): SwapOutcome {
   }
 
   if (journal.phase === 'placing-originals') {
-    // The import is in place: from here it only completes. A cached image of the same managed name
-    // is replaced (the import result does not record it).
+    // The import is in place: from here it only completes. An image of the same managed name is
+    // replaced: a cached one the import result does not record, or this machine's own original whose
+    // copy in staging is the same file.
     const images = join(userData, IMAGES)
     mkdirSync(images, { recursive: true })
     for (const { name } of managedFiles(join(staging, STAGED_OFFLINE_IMAGES))) {

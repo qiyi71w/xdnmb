@@ -21,7 +21,7 @@ describe('import flow state', () => {
     expect(canConfirm(confirming)).toBe(true)
     expect(importConfirmText(summary, '2026-11-16 16:00:00')).toBe(
       '文件导出于 2026-11-16 16:00:00，来自汐岛 1.5.0，包含浏览历史、阅读位置、草稿、发送记录、屏蔽、饼干颜色、提醒、设置和离线副本（3 个串）。' +
-      '导入后，本机的浏览历史（120 条）、发送记录（7 条）和其他个人数据、设置将被替换；本机的饼干、App UUID 和官网登录会保留。'
+      '导入后，本机的浏览历史（120 条）、发送记录（7 条）和其他个人数据、设置将被替换；本机的饼干、App UUID、官网登录、离线副本和草稿会保留。'
     )
     expect(importConfirmText({ ...summary, offlineThreads: 0 }, 't')).toContain('包含浏览历史、阅读位置、草稿、发送记录、屏蔽、饼干颜色、提醒和设置。')
   })

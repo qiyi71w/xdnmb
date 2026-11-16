@@ -1,11 +1,13 @@
 import Database from 'better-sqlite3'
-import { lstatSync } from 'node:fs'
-import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { lstatSync, mkdirSync, rmSync } from 'node:fs'
+import { dirname, extname, join } from 'node:path'
 import { isManagedName } from '../images/files'
 import { settingKeysIn, tablesIn } from './classification'
 import { migrateDatabase } from './database'
-import { readCredentialSequence, resetRebuilt } from './export-snapshot'
-import { STAGED_DATABASE, STAGED_DRAFT_IMAGES, STAGED_OFFLINE_IMAGES } from './import-journal'
+import { copyFileDurably, present, syncDirectory } from './durable'
+import { OFFLINE_TABLES, readCredentialSequence, recordUnsavedImage, resetRebuilt } from './export-snapshot'
+import { DRAFT_IMAGES, IMAGES, STAGED_DATABASE, STAGED_DRAFT_IMAGES, STAGED_OFFLINE_IMAGES } from './import-journal'
 import { MIGRATIONS } from './migrations'
 
 /*
@@ -31,10 +33,20 @@ import { MIGRATIONS } from './migrations'
  *      App UUIDs are appended. A subscription configuration whose App UUID is now missing is
  *      未配置 under a new generation; earlier generations' observations, operations and plans stay
  *      history and are never carried on.
- *   4. (Offline copies: the file's replace this machine's.)
- *   5. (Drafts: the file's replace this machine's.)
+ *   4. 离线副本: this machine's offline copies are appended. A thread both have keeps the copy
+ *      updated later (the file's on a tie) as a whole: its pages, posts and originals. Originals no
+ *      copy holds any more go with their staged files. This machine's originals are copied into
+ *      staging under new image record IDs (a free managed name when theirs is taken); an original
+ *      the file already has for the same address is shared. One whose file is gone from this
+ *      machine is 图片未保存 in its copy, as an export records it.
+ *   5. 草稿: this machine's drafts and their attachments are appended under new IDs, attachments
+ *      copied into staging (a free managed name when theirs is taken; one whose file is gone leaves
+ *      its draft without it). Their 饼干 references go through `CredentialIdMap`, so they keep this
+ *      machine's cookies; a reference to a cookie already removed here stays 已移除 (an ID no
+ *      credential has or will get). The file's drafts are as they were.
  *   6. 不导出 derived state goes back to its initial state; the app rebuilds it at the next start.
- *   7. The result passes the foreign key and integrity checks.
+ *   7. The result passes the foreign key and integrity checks, and every draft attachment and
+ *      offline original it names is in staging with its recorded size.
  *
  * Nothing secret is decrypted: this machine's ciphertext is carried as it is.
  */
@@ -64,6 +76,15 @@ interface MergeContext {
   local: Database.Database
   file: ImportFileFacts
   credentialIds: CredentialIdMap
+  /** Draft attachments and offline originals: this machine's directories (read) and staging's. */
+  files: { local: ImageDirectories; staged: ImageDirectories }
+  /** Staged files the result no longer names, removed once it is in place in staging. */
+  unnamed: string[]
+}
+
+interface ImageDirectories {
+  draftImages: string
+  images: string
 }
 
 function count(db: Database.Database, sql: string): number {
@@ -131,6 +152,13 @@ function filesComplete(db: Database.Database, directory: string, sql: string): b
   return true
 }
 
+/** Every draft attachment and offline original the staged database names is in staging. */
+function stagedFilesComplete(db: Database.Database, stagingDirectory: string): boolean {
+  return filesComplete(db, join(stagingDirectory, STAGED_DRAFT_IMAGES), 'SELECT file_name AS name, bytes FROM draft_attachments')
+    && filesComplete(db, join(stagingDirectory, STAGED_OFFLINE_IMAGES), `SELECT r.file_name AS name, r.bytes FROM image_resources r
+      WHERE EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)`)
+}
+
 /**
  * Checks the extracted database at `schemaVersion` (the manifest's) and migrates it to this
  * version in staging. Throws `ImportCheckError` when it cannot be imported.
@@ -148,10 +176,7 @@ export function checkStagedImport(stagingDirectory: string, schemaVersion: numbe
     migrateDatabase(db, MIGRATIONS)
     if (shapeOf(db) !== currentShape()) throw new ImportCheckError('unexpected schema')
     if (!verified(db)) throw new ImportCheckError('migrated database failed verification')
-    const complete = filesComplete(db, join(stagingDirectory, STAGED_DRAFT_IMAGES), 'SELECT file_name AS name, bytes FROM draft_attachments')
-      && filesComplete(db, join(stagingDirectory, STAGED_OFFLINE_IMAGES), `SELECT r.file_name AS name, r.bytes FROM image_resources r
-        WHERE EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id)`)
-    if (!complete) throw new ImportCheckError('files missing')
+    if (!stagedFilesComplete(db, stagingDirectory)) throw new ImportCheckError('files missing')
   } catch (error) {
     throw error instanceof ImportCheckError ? error : new ImportCheckError('staged database not importable', { cause: error })
   } finally {
@@ -239,6 +264,163 @@ function settleSubscriptionConfiguration(context: MergeContext): void {
     WHERE app_credential_id IS NOT NULL AND app_credential_id NOT IN (SELECT id FROM subscription_app_credentials)`)
 }
 
+function quoted(columns: string[]): string {
+  return columns.map((column) => `"${column}"`).join(', ')
+}
+
+function marks(columns: unknown[]): string {
+  return columns.map(() => '?').join(', ')
+}
+
+/** The highest ID `table` (AUTOINCREMENT) has handed out or holds. */
+function sequenceOf(db: Database.Database, table: string): number {
+  const sequence = db.prepare<[string], { seq: number }>('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table)?.seq ?? 0
+  return Math.max(Number(sequence), count(db, `SELECT coalesce(max(id), 0) AS n FROM "${table}"`))
+}
+
+/** Moves `table`'s ID sequence to at least `value`, so AUTOINCREMENT never hands out an ID up to it. */
+function advanceSequence(db: Database.Database, table: string, value: number): void {
+  if (db.prepare('UPDATE sqlite_sequence SET seq = max(seq, ?) WHERE name = ?').run(value, table).changes === 0) {
+    db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, value)
+  }
+}
+
+/**
+ * A managed name for a copy of `name` in the staging `directory`: `name` itself unless a file there
+ * or a row of `table` has it, otherwise a new one with its extension.
+ */
+function freeName(db: Database.Database, table: string, directory: string, name: string): string {
+  const taken = db.prepare(`SELECT 1 FROM "${table}" WHERE file_name = ?`)
+  let candidate = name
+  while (taken.get(candidate) !== undefined || present(join(directory, candidate))) candidate = `${randomBytes(16).toString('hex')}${extname(name)}`
+  return candidate
+}
+
+interface ResourceRow {
+  id: number
+  kind: string
+  source_url: string
+  file_name: string
+  bytes: number
+  [column: string]: unknown
+}
+
+/** Step 4, one of this machine's offline copies the staged database does not have (any more). */
+function appendLocalOfflineCopy(context: MergeContext, threadId: string): void {
+  const { staged, local, files } = context
+  // Its posts, as this machine has them; their search-derived size starts afresh with the index.
+  const postColumns = columnsOf(staged, 'posts')
+  const derived = postColumns.indexOf('derived_bytes')
+  const upsertPost = staged.prepare(`INSERT INTO posts (${quoted(postColumns)}) VALUES (${marks(postColumns)})
+    ON CONFLICT(id) DO UPDATE SET ${postColumns.filter((column) => column !== 'id').map((column) => `"${column}" = excluded."${column}"`).join(', ')}`)
+  const posts = local.prepare(`SELECT ${quoted(postColumns)} FROM posts WHERE id IN (SELECT head_id FROM offline_pages WHERE thread_id = @thread
+    UNION SELECT post_id FROM offline_page_posts WHERE thread_id = @thread UNION SELECT post_id FROM offline_images WHERE thread_id = @thread)`)
+  for (const row of posts.raw().iterate({ thread: threadId }) as Iterable<unknown[]>) {
+    row[derived] = 0
+    upsertPost.run(row)
+  }
+  for (const table of ['offline_copies', 'offline_pages', 'offline_page_posts']) copyLocalRows(context, table, 'WHERE thread_id = ?', [threadId])
+
+  const resourceColumns = columnsOf(staged, 'image_resources').filter((column) => column !== 'id')
+  const insertResource = staged.prepare(`INSERT INTO image_resources (${quoted(resourceColumns)}) VALUES (${marks(resourceColumns)})`)
+  const sameSource = staged.prepare<[string, string], { id: number }>('SELECT id FROM image_resources WHERE kind = ? AND source_url = ?')
+  const resourceIds = new Map<number, number>()
+  const resources = local.prepare<[string], ResourceRow>(`SELECT id, ${quoted(resourceColumns)} FROM image_resources
+    WHERE id IN (SELECT resource_id FROM offline_images WHERE thread_id = ?) ORDER BY id`).all(threadId)
+  for (const resource of resources) {
+    const shared = sameSource.get(resource.kind, resource.source_url)
+    if (shared !== undefined) {
+      resourceIds.set(resource.id, shared.id)
+      continue
+    }
+    // Gone from this machine (or not the size its row records): 图片未保存 below.
+    if (!isManagedName(resource.file_name) || sizeOf(join(files.local.images, resource.file_name)) !== resource.bytes) continue
+    const name = freeName(staged, 'image_resources', files.staged.images, resource.file_name)
+    copyFileDurably(join(files.local.images, resource.file_name), join(files.staged.images, name))
+    const values = resourceColumns.map((column) => (column === 'file_name' ? name : resource[column]))
+    resourceIds.set(resource.id, Number(insertResource.run(values).lastInsertRowid))
+  }
+
+  const insertImage = staged.prepare('INSERT INTO offline_images (thread_id, post_id, resource_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING')
+  const images = local.prepare<[string], { post_id: string; resource_id: number }>('SELECT post_id, resource_id FROM offline_images WHERE thread_id = ?').all(threadId)
+  for (const image of images) {
+    const id = resourceIds.get(image.resource_id)
+    if (id === undefined) recordUnsavedImage(staged, threadId, image.post_id)
+    else insertImage.run(threadId, image.post_id, id)
+  }
+}
+
+/** Step 4: 离线副本 (see the top of this file). */
+function retainLocalOfflineCopies(context: MergeContext): void {
+  const { staged, local } = context
+  const stagedCopy = staged.prepare<[string], { updated_at: string }>('SELECT updated_at FROM offline_copies WHERE thread_id = ?')
+  const later = staged.prepare<[string, string], { later: number | null }>('SELECT julianday(?) > julianday(?) AS later')
+  const kept: string[] = []
+  for (const copy of local.prepare<[], { thread_id: string; updated_at: string }>('SELECT thread_id, updated_at FROM offline_copies ORDER BY thread_id').all()) {
+    const theirs = stagedCopy.get(copy.thread_id)
+    if (theirs !== undefined) {
+      if (later.get(copy.updated_at, theirs.updated_at)?.later !== 1) continue
+      for (const table of OFFLINE_TABLES) staged.prepare(`DELETE FROM "${table}" WHERE thread_id = ?`).run(copy.thread_id)
+    }
+    kept.push(copy.thread_id)
+  }
+  // Originals no copy holds any more (those of a copy replaced above) go, with their staged files.
+  const unheld = staged.prepare<[], string>(`DELETE FROM image_resources
+    WHERE NOT EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = image_resources.id) RETURNING file_name`).pluck().all()
+  for (const name of unheld) if (isManagedName(name)) context.unnamed.push(join(context.files.staged.images, name))
+  for (const threadId of kept) appendLocalOfflineCopy(context, threadId)
+}
+
+interface AttachmentRow {
+  id: number
+  file_name: string
+  bytes: number
+  [column: string]: unknown
+}
+
+/** Step 5: 草稿 (see the top of this file). */
+function retainLocalDrafts(context: MergeContext): void {
+  const { staged, local, files, credentialIds } = context
+  const attachmentColumns = columnsOf(staged, 'draft_attachments').filter((column) => column !== 'id')
+  const insertAttachment = staged.prepare(`INSERT INTO draft_attachments (id, ${quoted(attachmentColumns)}) VALUES (?, ${marks(attachmentColumns)})`)
+  const attachmentIds = new Map<number, number>()
+  let attachmentId = sequenceOf(staged, 'draft_attachments')
+  const attachments = local.prepare<[], AttachmentRow>(`SELECT id, ${quoted(attachmentColumns)} FROM draft_attachments
+    WHERE id IN (SELECT attachment_id FROM drafts) ORDER BY id`).all()
+  for (const attachment of attachments) {
+    // Gone from this machine: its draft keeps no attachment.
+    if (!isManagedName(attachment.file_name) || sizeOf(join(files.local.draftImages, attachment.file_name)) !== attachment.bytes) continue
+    const name = freeName(staged, 'draft_attachments', files.staged.draftImages, attachment.file_name)
+    copyFileDurably(join(files.local.draftImages, attachment.file_name), join(files.staged.draftImages, name))
+    insertAttachment.run(++attachmentId, ...attachmentColumns.map((column) => (column === 'file_name' ? name : attachment[column])))
+    attachmentIds.set(attachment.id, attachmentId)
+  }
+  advanceSequence(staged, 'draft_attachments', attachmentId)
+
+  let removedCredential: number | null = null
+  const credentialOf = (id: number | null): number | null => {
+    if (id === null) return null
+    const mapped = credentialIds.get(id)
+    if (mapped !== undefined) return mapped
+    if (removedCredential === null) {
+      removedCredential = readCredentialSequence(staged) + 1
+      advanceSequence(staged, 'credentials', removedCredential)
+    }
+    return removedCredential
+  }
+  const draftColumns = columnsOf(staged, 'drafts').filter((column) => column !== 'id')
+  const insertDraft = staged.prepare(`INSERT INTO drafts (id, ${quoted(draftColumns)}) VALUES (?, ${marks(draftColumns)})`)
+  let draftId = sequenceOf(staged, 'drafts')
+  for (const draft of local.prepare<[], Record<string, unknown>>(`SELECT ${quoted(draftColumns)} FROM drafts ORDER BY id`).all()) {
+    insertDraft.run(++draftId, ...draftColumns.map((column) => {
+      if (column === 'credential_id') return credentialOf(draft.credential_id as number | null)
+      if (column === 'attachment_id') return draft.attachment_id === null ? null : attachmentIds.get(draft.attachment_id as number) ?? null
+      return draft[column]
+    }))
+  }
+  advanceSequence(staged, 'drafts', draftId)
+}
+
 /** Step 6: 不导出 derived state starts afresh. */
 function resetDerivedState(context: MergeContext): void {
   resetRebuilt(context.staged)
@@ -251,13 +433,16 @@ const MERGE_STEPS: readonly ((context: MergeContext) => void)[] = [
   appendLocalCredentials,
   appendLocalAppCredentials,
   settleSubscriptionConfiguration,
+  retainLocalOfflineCopies,
+  retainLocalDrafts,
   resetDerivedState
 ]
 
 /**
  * Builds the import result in staging from the checked file database and this machine's database
- * at `localDatabasePath` (only read). Throws, the staged database unchanged, when a step fails or
- * the result does not pass its checks.
+ * at `localDatabasePath` (only read), with its draft attachments and offline originals copied from
+ * beside it. Throws when a step fails or the result does not pass its checks; the staging is then
+ * the caller's to remove.
  */
 export function stageImport(stagingDirectory: string, localDatabasePath: string, file: ImportFileFacts): { credentialIds: CredentialIdMap } {
   const staged = openStaged(stagingDirectory)
@@ -266,14 +451,24 @@ export function stageImport(stagingDirectory: string, localDatabasePath: string,
     const supported = MIGRATIONS.reduce((highest, migration) => Math.max(highest, migration.version), 0)
     if (Number(staged.pragma('user_version', { simple: true })) !== supported) throw new Error('staged database not checked')
     local = new Database(localDatabasePath, { readonly: true, fileMustExist: true, timeout: 5000 })
-    const context: MergeContext = { staged, local, file, credentialIds: new Map() }
+    const userData = dirname(localDatabasePath)
+    const files = {
+      local: { draftImages: join(userData, DRAFT_IMAGES), images: join(userData, IMAGES) },
+      staged: { draftImages: join(stagingDirectory, STAGED_DRAFT_IMAGES), images: join(stagingDirectory, STAGED_OFFLINE_IMAGES) }
+    }
+    mkdirSync(files.staged.draftImages, { recursive: true })
+    mkdirSync(files.staged.images, { recursive: true })
+    const context: MergeContext = { staged, local, file, credentialIds: new Map(), files, unnamed: [] }
     // One read transaction: this machine's rows are from one moment.
     local.transaction(() => {
       staged.transaction(() => {
         for (const step of MERGE_STEPS) step(context)
       }).immediate()
     })()
-    if (!verified(staged)) throw new Error('staged import failed verification')
+    if (!verified(staged) || !stagedFilesComplete(staged, stagingDirectory)) throw new Error('staged import failed verification')
+    for (const path of context.unnamed) rmSync(path, { force: true })
+    syncDirectory(files.staged.draftImages)
+    syncDirectory(files.staged.images)
     return { credentialIds: context.credentialIds }
   } finally {
     local?.close()

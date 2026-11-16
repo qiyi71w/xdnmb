@@ -27,10 +27,15 @@ import { createImportService, type ImportDatabase } from '../src/main/personal-d
 import { CONTAINER_MAGIC, CONTAINER_VERSION, ENTRY_TYPE, readContainer, type ExportManifest } from '../src/main/personal-data/container'
 
 const AT = '2026-11-16T08:00:00.000Z'
+const EARLIER = '2026-11-15T08:00:00.000Z'
+const LATER = '2026-11-17T08:00:00.000Z'
 const SUPPORTED = Math.max(...MIGRATIONS.map((migration) => migration.version))
 const A_DRAFT_IMAGE = `${'d'.repeat(32)}.png`
 const A_ORIGINAL = `${'a'.repeat(32)}.jpg`
+const A_ORIGINAL_510 = `${'b'.repeat(32)}.jpg`
 const B_DRAFT_IMAGE = `${'e'.repeat(32)}.png`
+const B_ORIGINAL_500 = `${'c'.repeat(32)}.jpg`
+const B_ORIGINAL_510 = `${'1'.repeat(32)}.jpg`
 const B_SESSION = 'B-SESSION-CIPHERTEXT'
 const B_ANALYTICS = 'B-ANALYTICS-INSTANCE'
 
@@ -63,6 +68,17 @@ function raw(path: string): Database.Database {
   return db
 }
 
+/** An offline copy of `threadId` saved at `at`: a page with `reply` and the original of its image, kept as `fileName`. */
+function offlineCopy(db: ReadingDatabase, userData: string, threadId: string, at: string, reply: Post, fileName: string, bytes: string): void {
+  db.beginOfflineCopy(threadId, true, at)
+  db.saveOfflinePage(page(threadId, post(threadId, `${threadId} head`), [reply]), at)
+  writeFileSync(join(userData, 'images', fileName), bytes)
+  db.commitImageResource({ kind: 'original', sourceUrl: `https://image.nmb.best/image/${reply.image!.path}${reply.image!.ext}`,
+    fileName, bytes: Buffer.byteLength(bytes), format: 'jpeg', width: 1, height: 1, fetchedAt: at }, [])
+  db.holdOfflineImage(threadId, reply.id)
+  db.updateOfflineCopy(threadId, { state: 'stopped', failedPage: null, error: null, imageFailures: [] }, at)
+}
+
 function attempt(db: Database.Database, requestId: string, credentialId: number): void {
   db.prepare(`INSERT INTO publication_attempts (request_id, editor_id, payload_json, credential_id, forum_id, state, created_at, updated_at)
     VALUES (?, 'editor', '{}', ?, '4', 'failed', ?, ?)`).run(requestId, credentialId, AT, AT)
@@ -70,8 +86,8 @@ function attempt(db: Database.Database, requestId: string, credentialId: number)
 
 /**
  * The source machine A: history, a draft with an attachment using cookie 1 (cookie 2 was removed, so
- * the sequence is at 2), an offline copy with an original, roles and a thread's cookie choice, a send
- * record, an App UUID, a reminder rule, settings and a workspace.
+ * the sequence is at 2), offline copies with originals (500 and 510, both saved at `AT`), roles and a
+ * thread's cookie choice, a send record, an App UUID, a reminder rule, settings and a workspace.
  */
 function sourceMachine(keep: string[]): { userData: string; generation: number } {
   const userData = folder('xidao-import-a-', keep)
@@ -90,6 +106,7 @@ function sourceMachine(keep: string[]): { userData: string; generation: number }
     db.updateOfflineCopy('500', { state: 'stopped', failedPage: null, error: null, imageFailures: [] }, AT)
     const cookie = db.insertCredential({ name: '甲', cookieId: 'AAAAAAA', source: 'raw', importedAt: AT, ciphertext: Buffer.from('A-COOKIE') }).id
     db.insertCredential({ name: '乙', cookieId: 'BBBBBBB', source: 'raw', importedAt: AT, ciphertext: Buffer.from('A-COOKIE-2') })
+    offlineCopy(db, userData, '510', AT, post('511', 'A 510 reply', 'a510'), A_ORIGINAL_510, 'A 510 original')
     db.deleteCredential('2')
     writeFileSync(join(userData, 'draft-images', A_DRAFT_IMAGE), 'A draft image')
     const attachment = db.insertDraftAttachment({ fileName: A_DRAFT_IMAGE, format: 'png', bytes: 13, width: 1, height: 1, originalName: 'a.png', createdAt: AT })
@@ -119,7 +136,7 @@ function sourceMachine(keep: string[]): { userData: string; generation: number }
 }
 
 /** Exports `userData` the way the app does (in this process) and returns the file. */
-async function exportOf(userData: string, keep: string[]): Promise<string> {
+async function exportOf(userData: string, keep: string[], includeOffline = true): Promise<string> {
   const target = folder('xidao-import-file-', keep)
   const { promise, resolve } = Promise.withResolvers<ExportProgress>()
   const service = createExportService({
@@ -141,16 +158,18 @@ async function exportOf(userData: string, keep: string[]): Promise<string> {
     showInFolder: () => undefined,
     freeBytes: async () => 1024 ** 4
   })
-  expect(await service.start({ includeOffline: true }, async (name) => join(target, name))).toEqual({ status: 'started' })
+  expect(await service.start({ includeOffline }, async (name) => join(target, name))).toEqual({ status: 'started' })
   const outcome = await promise
   if (outcome.status !== 'done') throw new Error(`export ${outcome.status}`)
   return join(target, outcome.fileName)
 }
 
 /**
- * The target machine B, open as in the running app: two cookies, an App UUID, an account session, its
- * own settings of this device, an analytics instance, a draft with an attachment, history, a send
- * record, a pre-upgrade backup and an earlier 导入前数据.
+ * The target machine B, open as in the running app: two cookies (a third was removed), an App UUID,
+ * an account session, its own settings of this device, an analytics instance, drafts (one with an
+ * attachment named like A's, one using the removed cookie), offline copies (500 older than A's, 510
+ * newer than A's, 600 only here, its original named like A's of 510), history, a send record, a
+ * pre-upgrade backup and an earlier 导入前数据.
  */
 function targetMachine(): { userData: string; db: ReadingDatabase } {
   const userData = folder('xidao-import-b-')
@@ -164,6 +183,18 @@ function targetMachine(): { userData: string; db: ReadingDatabase } {
   const attachment = db.insertDraftAttachment({ fileName: B_DRAFT_IMAGE, format: 'png', bytes: 19, width: 1, height: 1, originalName: 'b.png', createdAt: AT })
   db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '800' }, credentialId: first,
     fields: { content: 'B 的草稿', title: '', name: '', watermark: false }, attachmentId: attachment.id }, AT)
+  const second = db.listCredentials()[1]!.id
+  const removed = db.insertCredential({ name: 'B3', cookieId: 'FFFFFFF', source: 'raw', importedAt: AT, ciphertext: Buffer.from('B-COOKIE-3') }).id
+  db.deleteCredential(removed)
+  writeFileSync(join(userData, 'draft-images', A_DRAFT_IMAGE), 'B second draft image')
+  const named = db.insertDraftAttachment({ fileName: A_DRAFT_IMAGE, format: 'png', bytes: 20, width: 1, height: 1, originalName: 'b2.png', createdAt: AT })
+  db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '801' }, credentialId: second,
+    fields: { content: 'B 的第二份草稿', title: '', name: '', watermark: false }, attachmentId: named.id }, AT)
+  db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: '802' }, credentialId: removed,
+    fields: { content: 'B 用已移除饼干的草稿', title: '', name: '', watermark: false }, attachmentId: null }, AT)
+  offlineCopy(db, userData, '500', EARLIER, post('501', 'B offline reply', 'kept'), B_ORIGINAL_500, 'B 500 original')
+  offlineCopy(db, userData, '510', LATER, post('511', 'B 510 reply', 'a510'), B_ORIGINAL_510, 'B 510 original')
+  offlineCopy(db, userData, '600', AT, post('601', 'B 600 reply', 'b600'), A_ORIGINAL_510, 'B 600 original')
   db.setSubscriptionAppCredential('uuid-b', Buffer.from('B-APP-UUID'))
   db.saveAccountSession({ ciphertext: Buffer.from(B_SESSION), expiresAt: '2099-01-01T00:00:00.000Z' })
   db.recordVisit('900', AT)
@@ -276,11 +307,27 @@ function expectImported(userData: string, current: Map<string, string>): void {
   expect(existsSync(preUpgradeBackupDirectory(userData))).toBe(false)
   expect(readFileSync(join(userData, 'images', A_ORIGINAL), 'utf8')).toBe('A original bytes')
   expect(readFileSync(join(userData, 'draft-images', A_DRAFT_IMAGE), 'utf8')).toBe('A draft image')
+  // 导入前数据 holds this machine's attachments as they were.
+  expect(readFileSync(join(beforeImportDirectory(userData), 'draft-images', A_DRAFT_IMAGE), 'utf8')).toBe('B second draft image')
+  expect(readFileSync(join(beforeImportDirectory(userData), 'draft-images', B_DRAFT_IMAGE), 'utf8')).toBe('B draft image bytes')
   const db = reopen(userData)
   expect(db.loadWorkspace()).toBe('workspace-A')
   expect(db.listCredentials().map((credential) => credential.name)).toEqual(['B1', 'B2'])
   // Opening the imported data takes no new pre-upgrade backup: it is at this version already.
   expect(existsSync(preUpgradeBackupDirectory(userData))).toBe(false)
+  // Each copy's originals and each draft's attachment are there once, readable.
+  const sql = raw(join(userData, 'xidao.sqlite'))
+  const originals = sql.prepare<[], { thread: string; name: string }>(`SELECT o.thread_id AS thread, r.file_name AS name
+    FROM offline_images o JOIN image_resources r ON r.id = o.resource_id ORDER BY o.thread_id`).all()
+  expect(originals.map((row) => [row.thread, readFileSync(join(userData, 'images', row.name), 'utf8')]))
+    .toEqual([['500', 'A original bytes'], ['510', 'B 510 original'], ['600', 'B 600 original']])
+  expect(sql.prepare('SELECT count(*) FROM image_resources').pluck().get()).toBe(3)
+  const attachments = sql.prepare<[], { content: string; name: string }>(`SELECT d.content, a.file_name AS name
+    FROM drafts d JOIN draft_attachments a ON a.id = d.attachment_id ORDER BY d.id`).all()
+  expect(attachments.map((row) => [row.content, readFileSync(join(userData, 'draft-images', row.name), 'utf8')]))
+    .toEqual([['A 的草稿', 'A draft image'], ['B 的草稿', 'B draft image bytes'], ['B 的第二份草稿', 'B second draft image']])
+  expect(readdirSync(join(userData, 'draft-images')).sort()).toEqual(attachments.map((row) => row.name).sort())
+  expect(sql.prepare('SELECT count(*) FROM draft_attachments').pluck().get()).toBe(3)
 }
 
 function expectUnchanged(userData: string, current: Map<string, string>): void {
@@ -298,7 +345,7 @@ describe('import inspection and confirmation', () => {
     const inspection = await service.inspect(async () => exported().file)
     expect(inspection).toEqual({
       status: 'ready',
-      summary: { exportedAt: expect.any(String), appVersion: '1.5.0-a', offlineThreads: 1, local: { history: 2, sendRecords: 1 } }
+      summary: { exportedAt: expect.any(String), appVersion: '1.5.0-a', offlineThreads: 2, local: { history: 2, sendRecords: 1 } }
     })
     expect(JSON.stringify(inspection)).not.toContain(exported().file)
     expect(existsSync(importStagingDirectory(userData))).toBe(true)
@@ -331,8 +378,12 @@ describe('import inspection and confirmation', () => {
     // The file's references (cookie 1) find nothing: 已移除, never one of B's.
     expect(after.loadRoleSelections()).toEqual({ 'default-post': { state: 'missing', credentialId: '1' }, 'web-sync': { state: 'missing', credentialId: '1' } })
     expect(after.getThreadPostIdentity('700')).toEqual({ state: 'missing', credentialId: '1' })
-    expect(after.listDrafts().map((draft) => [draft.fields.content, draft.credentialId, draft.attachment?.fileName])).toEqual([['A 的草稿', '1', A_DRAFT_IMAGE]])
-    expect(after.insertCredential({ name: '新', cookieId: 'EEEEEEE', source: 'raw', importedAt: AT, ciphertext: Buffer.from('new') }).id).toBe('5')
+    // Every draft is here: A's with its reference to A's cookie 1 (已移除), B's on B's cookies under
+    // their new IDs, and B's draft whose cookie B had removed on an ID no credential has.
+    expect(after.listDrafts().map((draft) => [draft.fields.content, draft.credentialId, draft.attachment?.fileName === undefined]))
+      .toEqual([['B 用已移除饼干的草稿', '5', true], ['B 的第二份草稿', '4', false], ['B 的草稿', '3', false], ['A 的草稿', '1', false]])
+    expect(after.listDrafts().find((draft) => draft.fields.content === 'B 的第二份草稿')!.attachment!.fileName).not.toBe(A_DRAFT_IMAGE)
+    expect(after.insertCredential({ name: '新', cookieId: 'EEEEEEE', source: 'raw', importedAt: AT, ciphertext: Buffer.from('new') }).id).toBe('6')
 
     const sql = raw(join(userData, 'xidao.sqlite'))
     expect(sql.prepare('SELECT request_id, credential_id FROM publication_attempts').all()).toEqual([{ request_id: 'a-send', credential_id: 1 }])
@@ -351,7 +402,17 @@ describe('import inspection and confirmation', () => {
     expect(sql.prepare('SELECT count(*) FROM reminder_checker').pluck().get()).toBe(0)
     expect(sql.prepare('SELECT ready FROM search_state').pluck().get()).toBe(0)
     expect(sql.prepare('SELECT count(*) FROM search_documents').pluck().get()).toBe(0)
-    expect(sql.prepare('SELECT thread_id FROM offline_copies').pluck().all()).toEqual(['500'])
+    // Offline copies: 500 is A's (later), 510 B's (later), 600 only B's; each as a whole.
+    expect(sql.prepare('SELECT thread_id FROM offline_copies ORDER BY thread_id').pluck().all()).toEqual(['500', '510', '600'])
+    expect(sql.prepare("SELECT id, plain_text FROM posts WHERE id IN ('501', '511', '601') ORDER BY id").all())
+      .toEqual([{ id: '501', plain_text: 'A offline reply' }, { id: '511', plain_text: 'B 510 reply' }, { id: '601', plain_text: 'B 600 reply' }])
+    expect(sql.prepare('SELECT updated_at FROM offline_copies ORDER BY thread_id').pluck().all()).toEqual([AT, LATER, AT])
+    expect(sql.prepare("SELECT count(*) FROM offline_copies WHERE image_failures_json <> '[]'").pluck().get()).toBe(0)
+    for (const thread of ['500', '510', '600']) {
+      const copy = after.getOfflineCopy(thread)!
+      expect(copy, thread).toMatchObject({ savedImages: 1, pages: [1] })
+      expect(after.loadThreadPage(thread, 'all', 1)?.value.replies.map((reply) => reply.id), thread).toEqual([`${Number(thread) + 1}`])
+    }
   })
 
   it('records the credential ID map from this machine’s IDs to the staged ones', () => {
@@ -370,6 +431,52 @@ describe('import inspection and confirmation', () => {
     const { credentialIds } = stageImport(staging, join(userData, 'xidao.sqlite'), { credentialSequence: 5, secrets: false })
     expect([...credentialIds]).toEqual([[1, 8], [2, 9]])
     db.close()
+  })
+})
+
+describe('this machine’s offline copies and drafts', () => {
+  /** Imports `file` into `userData` (B, `db` its open database) through to the next start. */
+  async function imported(userData: string, db: ReadingDatabase, file: string): Promise<{ after: ReadingDatabase; sql: Database.Database }> {
+    const { service } = importer(userData)
+    expect((await service.inspect(async () => file)).status).toBe('ready')
+    expect(await service.confirm()).toEqual({ status: 'restarting' })
+    db.close()
+    connections.splice(0)
+    expect(settleSwap(join(userData, 'xidao.sqlite'))).toEqual({ kind: 'import', outcome: 'completed' })
+    return { after: reopen(userData), sql: raw(join(userData, 'xidao.sqlite')) }
+  }
+
+  it('keeps every copy of this machine when the file has none', async () => {
+    const keep: string[] = []
+    try {
+      const source = sourceMachine(keep)
+      const file = await exportOf(source.userData, keep, false)
+      const { userData, db } = targetMachine()
+      const { after, sql } = await imported(userData, db, file)
+      expect(sql.prepare('SELECT thread_id, updated_at FROM offline_copies ORDER BY thread_id').all())
+        .toEqual([{ thread_id: '500', updated_at: EARLIER }, { thread_id: '510', updated_at: LATER }, { thread_id: '600', updated_at: AT }])
+      expect(sql.prepare("SELECT plain_text FROM posts WHERE id = '501'").pluck().get()).toBe('B offline reply')
+      const originals = sql.prepare<[], { thread: string; name: string }>(`SELECT o.thread_id AS thread, r.file_name AS name
+        FROM offline_images o JOIN image_resources r ON r.id = o.resource_id ORDER BY o.thread_id`).all()
+      expect(originals.map((row) => [row.thread, readFileSync(join(userData, 'images', row.name), 'utf8')]))
+        .toEqual([['500', 'B 500 original'], ['510', 'B 510 original'], ['600', 'B 600 original']])
+      expect(after.getOfflineCopy('500')).toMatchObject({ savedImages: 1, imageFailures: [] })
+    } finally {
+      for (const path of keep) rmSync(path, { recursive: true, force: true })
+    }
+  })
+
+  it('records an original or attachment whose file is gone from this machine as not kept', async () => {
+    const { userData, db } = targetMachine()
+    const sql = raw(join(userData, 'xidao.sqlite'))
+    const name = sql.prepare<[], string>("SELECT r.file_name FROM offline_images o JOIN image_resources r ON r.id = o.resource_id WHERE o.thread_id = '600'").pluck().get()!
+    rmSync(join(userData, 'images', name))
+    rmSync(join(userData, 'draft-images', B_DRAFT_IMAGE))
+    connections.splice(connections.indexOf(sql), 1)
+    sql.close()
+    const { after } = await imported(userData, db, exported().file)
+    expect(after.getOfflineCopy('600')).toMatchObject({ savedImages: 0, imageFailures: [{ postId: '601', error: { reason: 'not-stored' } }] })
+    expect(after.listDrafts().find((draft) => draft.fields.content === 'B 的草稿')).toMatchObject({ credentialId: '3', attachment: null })
   })
 })
 

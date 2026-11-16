@@ -65,8 +65,8 @@ const INITIAL_STATE: Readonly<Record<string, string>> = {
 /** Rows ordered by the content clock: with the clock back at 0 they restart from 0. */
 const CLOCKED_TABLES = ['posts', 'thread_pages', 'feed_pages', 'directory_snapshot', 'image_resources']
 
-/** The offline copy tables, in an order their foreign keys allow deleting. */
-const OFFLINE_TABLES = ['offline_images', 'offline_page_posts', 'offline_pages', 'offline_copies']
+/** The offline copy tables, in an order their foreign keys allow deleting; each has `thread_id`. */
+export const OFFLINE_TABLES = ['offline_images', 'offline_page_posts', 'offline_pages', 'offline_copies']
 
 function openReadOnly(path: string): Database.Database {
   return new Database(path, { readonly: true, fileMustExist: true, timeout: 5000 })
@@ -150,18 +150,19 @@ function removeUnexported(db: Database.Database): void {
   }
 }
 
+/** Records 图片未保存 for the image of `postId` in the offline copy of `threadId` (none: nothing). */
+export function recordUnsavedImage(db: Database.Database, threadId: string, postId: string): void {
+  const row = db.prepare<[string], { image_failures_json: string }>('SELECT image_failures_json FROM offline_copies WHERE thread_id = ?').get(threadId)
+  if (row === undefined) return
+  const list = (JSON.parse(row.image_failures_json) as OfflineCopy['imageFailures']).filter((item) => item.postId !== postId)
+  list.push({ postId, error: { reason: 'not-stored' } })
+  db.prepare('UPDATE offline_copies SET image_failures_json = ? WHERE thread_id = ?').run(JSON.stringify(list), threadId)
+}
+
 function recordUnsavedOriginals(db: Database.Database, resourceIds: readonly number[]): void {
   const holders = db.prepare<[number], { thread_id: string; post_id: string }>('SELECT thread_id, post_id FROM offline_images WHERE resource_id = ?')
-  const failures = db.prepare<[string], { image_failures_json: string }>('SELECT image_failures_json FROM offline_copies WHERE thread_id = ?')
-  const update = db.prepare('UPDATE offline_copies SET image_failures_json = ? WHERE thread_id = ?')
   for (const resourceId of resourceIds) {
-    for (const { thread_id: threadId, post_id: postId } of holders.all(resourceId)) {
-      const row = failures.get(threadId)
-      if (row === undefined) continue
-      const list = (JSON.parse(row.image_failures_json) as OfflineCopy['imageFailures']).filter((item) => item.postId !== postId)
-      list.push({ postId, error: { reason: 'not-stored' } })
-      update.run(JSON.stringify(list), threadId)
-    }
+    for (const { thread_id: threadId, post_id: postId } of holders.all(resourceId)) recordUnsavedImage(db, threadId, postId)
     db.prepare('DELETE FROM offline_images WHERE resource_id = ?').run(resourceId)
   }
 }
