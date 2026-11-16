@@ -2,8 +2,9 @@
 // global preferences and window behavior. Global preferences go through `write` (shown at once,
 // saved by `useSettingsWriter`); the other sections keep their own APIs.
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type Ref } from 'react'
 import type { AppPlatform } from '../../../shared/api'
+import { BOSS_KEY_DEFAULT, bossKeyLabel, recordBossKey, type BossKeyStatus } from '../../../shared/bossKey'
 import { CLOSE_ACTIONS, type CloseAction, type LoginItemState } from '../../../shared/lifecycle'
 import {
   resolveAppearance,
@@ -876,19 +877,21 @@ const CLOSE_ACTION_LABEL: Record<CloseAction, string> = {
 }
 
 /**
- * 窗口 settings: what the window's close button does, and 开机自启. A remembered 退出汐岛 still
- * handles every unsaved edit before quitting; 后台驻留 never asks anything.
+ * 窗口 settings: what the window's close button does, 开机自启 and the 老板键. A remembered 退出汐岛
+ * still handles every unsaved edit before quitting; 后台驻留 never asks anything.
  */
 export function WindowSection({
   settings,
   write,
   active,
+  platform,
   onLoginItemNotApplied
 }: {
   settings: AppSettings
   write: Write
-  /** 设置 is shown: 开机自启 is read again from the system. */
+  /** 设置 is shown: 开机自启 and the 老板键 status are read again from the system. */
   active: boolean
+  platform: AppPlatform | null
   /** The system did not take a 开机自启 change (the switch shows what it reports instead). */
   onLoginItemNotApplied: () => void
 }) {
@@ -903,6 +906,7 @@ export function WindowSection({
         />
       </SettingRow>
       <LoginItemRows settings={settings} write={write} active={active} onNotApplied={onLoginItemNotApplied} />
+      {platform !== null && platform !== 'linux' && <BossKeyRow settings={settings} write={write} active={active} platform={platform} />}
     </Section>
   )
 }
@@ -990,6 +994,148 @@ function LoginItemRows({
         />
       </SettingRow>
     </>
+  )
+}
+
+const BOSS_KEY_REJECTED: Record<'key' | 'modifier' | 'app', (platform: AppPlatform) => string> = {
+  key: () => '只能以字母、数字或 F1–F12 结尾',
+  modifier: (platform) => (platform === 'darwin' ? '需要包含 ⌃、⌥ 或 ⌘' : '需要包含 Ctrl、Alt 或 Win'),
+  app: () => '汐岛已在使用这个组合键'
+}
+
+/**
+ * 老板键: one row whose combination sits beside the switch it belongs to. The switch and the
+ * combination are settings; whether the system took the combination is read whenever 设置 is
+ * shown, the window comes back to the front or a saved setting comes back (each read retries a
+ * refused one). Recording a combination releases the registered one so the page receives the keys;
+ * it ends on Esc, on a recorded press, on leaving the field and on leaving 设置. The row's one help
+ * line says what the recording or the system needs; nothing shows where there is no 老板键 (Linux).
+ */
+function BossKeyRow({
+  settings,
+  write,
+  active,
+  platform
+}: {
+  settings: AppSettings
+  write: Write
+  active: boolean
+  platform: AppPlatform
+}) {
+  const [status, setStatus] = useState<BossKeyStatus | null>(null)
+  const [recording, setRecording] = useState(false)
+  const [rejected, setRejected] = useState<'key' | 'modifier' | 'app' | null>(null)
+
+  // `settings` is replaced by every reply from main, so a change is read back once it is in effect.
+  useEffect(() => {
+    if (!active) return
+    let alive = true
+    const refresh = () => {
+      window.xidao.bossKey
+        .get()
+        .then((next) => {
+          if (alive) setStatus(next)
+        })
+        .catch(() => undefined)
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => {
+      alive = false
+      window.removeEventListener('focus', refresh)
+    }
+  }, [active, settings])
+
+  const recordingNow = useRef(false)
+  const record = useCallback((next: boolean) => {
+    recordingNow.current = next
+    setRecording(next)
+    setRejected(null)
+    window.xidao.bossKey
+      .setRecording({ recording: next })
+      .then(setStatus)
+      .catch(() => undefined)
+  }, [])
+
+  // Leaving 设置 (or the page) ends a recording, so the combination is registered again.
+  useEffect(() => {
+    if (recording && !active) record(false)
+  }, [recording, active, record])
+  useEffect(
+    () => () => {
+      if (recordingNow.current) void window.xidao.bossKey.setRecording({ recording: false }).catch(() => undefined)
+    },
+    []
+  )
+
+  if (status === 'unsupported') return null
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (!recording || event.key === 'Tab') return
+    // Nothing else (tab shortcuts, closing 设置 on Esc) acts on keys pressed for the recording.
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.nativeEvent.isComposing || event.repeat) return
+    if (event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+      record(false)
+      return
+    }
+    const result = recordBossKey(event, platform)
+    if (result.kind === 'pending') return
+    if (result.kind === 'rejected') {
+      setRejected(result.reason)
+      return
+    }
+    record(false)
+    if (result.accelerator !== settings.bossKey) write({ bossKey: result.accelerator })
+  }
+
+  const help = recording
+    ? rejected === null ? '按 Esc 取消' : BOSS_KEY_REJECTED[rejected](platform)
+    : settings.bossKeyEnabled && status === 'unavailable' ? '未生效，组合键可能已被其他程序占用' : undefined
+  const describedBy = help === undefined ? undefined : 'setting-boss-key-help'
+  const combination = bossKeyLabel(settings.bossKey, platform)
+
+  return (
+    <SettingRow
+      labelId="setting-boss-key"
+      label="老板键"
+      helpId="setting-boss-key-help"
+      help={help === undefined ? undefined : <span aria-live="polite">{help}</span>}
+    >
+      <span className="boss-key-control">
+        {!recording && settings.bossKey !== BOSS_KEY_DEFAULT && (
+          <button type="button" className="btn btn-small btn-quiet" onClick={() => write({ bossKey: BOSS_KEY_DEFAULT })}>
+            恢复默认
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn boss-key-field"
+          aria-label={recording ? '按下新的老板键组合键' : `更改老板键组合键，当前为 ${combination}`}
+          aria-describedby={describedBy}
+          aria-pressed={recording}
+          title={recording ? undefined : '更改组合键'}
+          onClick={(event) => {
+            // While recording, Space and Enter are presses to record, not a click that cancels.
+            if (!recording || event.detail > 0) record(!recording)
+          }}
+          onKeyDown={onKeyDown}
+          onBlur={() => {
+            if (recording) record(false)
+          }}
+        >
+          {recording ? '按下新的组合键' : combination}
+        </button>
+        <Switch
+          labelledBy="setting-boss-key"
+          describedBy={describedBy}
+          checked={settings.bossKeyEnabled}
+          busy={status === null}
+          onToggle={() => write({ bossKeyEnabled: !settings.bossKeyEnabled })}
+        />
+      </span>
+    </SettingRow>
   )
 }
 

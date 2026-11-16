@@ -5,7 +5,7 @@ import { analyticsOrigin, createAnalyticsTransport } from './analytics/transport
 import { ANNOUNCEMENT_URL, MAX_ANNOUNCEMENT_LENGTH } from '../shared/announcements'
 import { createAnnouncementService, type AnnouncementService } from './announcements/service'
 import {
-  app, BaseWindow, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, powerMonitor, protocol, session, shell, Tray,
+  app, BaseWindow, BrowserWindow, dialog, globalShortcut, Menu, nativeImage, nativeTheme, Notification, powerMonitor, protocol, session, shell, Tray,
   type IpcMainInvokeEvent, type MenuItemConstructorOptions
 } from 'electron'
 import { createReadStream } from 'node:fs'
@@ -32,6 +32,7 @@ import { registerIpc, type IpcRegistration } from './ipc'
 import { createLifecycle, type FinishingSummary, type Lifecycle, type MainWindowHost } from './lifecycle/controller'
 import { isProcessRunning, relaunchArguments, relaunchedAfter, takeSingleInstanceLock } from './lifecycle/relaunch'
 import { createLoginItemService, LOGIN_LAUNCH_ARG } from './loginItem'
+import { createBossKeyService, type BossKeyService } from './bossKey'
 import { createReadingService } from './reading/service'
 import { createRequestScheduler } from './reading/scheduler'
 import type { AppStore } from './storage/contract'
@@ -48,6 +49,8 @@ import { createFailureNotifier } from './publication/failureNotifier'
 import { PUBLICATION_CHANGED_CHANNEL, PUBLICATION_FAILURE_CHANNEL, PUBLICATION_OPEN_DRAFT_CHANNEL } from '../shared/publication'
 import appIconPng from '../../resources/icons/xidao-icon-512.png?asset'
 import appIconIco from '../../resources/icons/xidao-icon.ico?asset'
+import trayTemplatePng from '../../resources/icons/tray-template.png?asset'
+import trayTemplate2xPng from '../../resources/icons/tray-template@2x.png?asset'
 import { UPDATE_STATE_CHANNEL } from '../shared/updates'
 import { createUpdateEngine, updateAvailability } from './updates/engine'
 import { createInstallMarkerStore, createPendingInstallStore, createRecordStore, removeFile, runWindowsInstaller, runWindowsInstallerAndWait, sha512OfFile } from './updates/files'
@@ -81,13 +84,14 @@ let store: AppStore | null = null
 let storeClosed = false
 let content: ContentService | null = null
 let lifecycle: Lifecycle | null = null
-/** Kept referenced for the app's lifetime (Windows/Linux). */
+/** Kept referenced for the app's lifetime: the Windows tray, the macOS menu bar icon, the Linux status icon. */
 let tray: Tray | null = null
 let search: SearchService | null = null
 let updates: UpdateService | null = null
 let announcements: AnnouncementService | null = null
 let analytics: AnalyticsService | null = null
 let thirdParty: ThirdPartyService | null = null
+let bossKey: BossKeyService | null = null
 /**
  * Windows: a hidden window that exists for the whole run, so a shutdown, restart or log-off is noticed
  * even after the main window has closed while a quit finishes (the system asks every top-level window).
@@ -120,7 +124,8 @@ app.on('second-instance', () => {
   if (lifecycle === null) openedBeforeLifecycle = true
   else lifecycle.reopen()
 })
-// macOS Dock. Also fires during launch; the lifecycle ignores it until the first window is ready.
+// macOS: opening the app again (Finder, Launchpad, Spotlight, the Dock while the window shows). Also
+// fires during launch; the lifecycle ignores it until the first window is ready.
 app.on('activate', () => lifecycle?.reopen('activate'))
 
 app.on('web-contents-created', (_event, contents) => {
@@ -203,6 +208,8 @@ function createWindow(): BrowserWindow {
     void lifecycle.closeRequested()
   })
   window.webContents.on('before-input-event', (event, input) => {
+    // While 设置 records a 老板键, Ctrl/Cmd+0 and the other zoom keys go to the page, which refuses them.
+    if (bossKey?.recording === true) return
     const action = zoomActionOf(input, platform)
     if (action === null) return
     event.preventDefault()
@@ -213,17 +220,41 @@ function createWindow(): BrowserWindow {
   return window
 }
 
-/** Tray icon: the multi-size ICO on Windows; elsewhere 16 px with a 2× representation from the app icon. */
+/**
+ * Tray icon: the multi-size ICO on Windows; on macOS a template image (black shapes the menu bar
+ * tints for light and dark); on Linux 16 px with a 2× representation from the app icon.
+ */
 function trayImage(): Electron.NativeImage {
   if (platform === 'win32') return nativeImage.createFromPath(appIconIco)
-  const source = nativeImage.createFromPath(appIconPng)
   const image = nativeImage.createEmpty()
+  if (platform === 'darwin') {
+    for (const [scaleFactor, path] of [[1, trayTemplatePng], [2, trayTemplate2xPng]] as const) {
+      image.addRepresentation({ scaleFactor, buffer: nativeImage.createFromPath(path).toPNG() })
+    }
+    image.setTemplateImage(true)
+    return image
+  }
+  const source = nativeImage.createFromPath(appIconPng)
   if (source.isEmpty()) return image
   for (const scaleFactor of [1, 2]) {
     const size = 16 * scaleFactor
     image.addRepresentation({ scaleFactor, buffer: source.resize({ width: size, height: size, quality: 'best' }).toPNG() })
   }
   return image
+}
+
+/**
+ * macOS 后台驻留 leaves no Dock icon and gives the menu bar back to the previous app (⌘Tab no longer
+ * lists 汐岛); showing the window brings the icon back. Nothing changes elsewhere.
+ */
+function showInDock(shown: boolean): void {
+  if (platform !== 'darwin' || app.dock === undefined) return
+  if (shown) {
+    void app.dock.show().catch(() => console.error('[window] dock icon not shown'))
+  } else {
+    app.hide()
+    app.dock.hide()
+  }
 }
 
 /** Best effort: the launch notices are already stored, so an unavailable notification loses nothing. */
@@ -518,15 +549,29 @@ async function start(): Promise<void> {
   let ipc: IpcRegistration | null = null
   let backgroundStopped = Promise.resolve()
 
-  /** Wires a new main window: its reads stop when it navigates away or closes. */
+  const bossKeyService = createBossKeyService({
+    platform: process.platform,
+    register: (accelerator, pressed) => globalShortcut.register(accelerator, pressed),
+    unregister: (accelerator) => globalShortcut.unregister(accelerator),
+    pressed: () => lifecycle?.toggleResident()
+  })
+  bossKey = bossKeyService
+
+  /**
+   * Wires a new main window: its reads stop when it navigates away or closes, and a 老板键 recording
+   * it started ends with it (the combination is registered again).
+   */
   const attach = (window: BrowserWindow) => {
     mainWindow = window
     const contents = window.webContents
     contents.on('did-start-navigation', (details) => {
-      if (details.isMainFrame && !details.isSameDocument) ipc?.cancelAllFor(contents)
+      if (!details.isMainFrame || details.isSameDocument) return
+      ipc?.cancelAllFor(contents)
+      bossKeyService.setRecording(false)
     })
     window.on('closed', () => {
       ipc?.cancelAllFor(contents)
+      bossKeyService.setRecording(false)
       if (mainWindow === window) mainWindow = null
     })
     // Failures whose system notification did not show are owed an in-app notice once the window is shown.
@@ -579,8 +624,18 @@ async function start(): Promise<void> {
     write: (openAtLogin, args) => app.setLoginItemSettings({ openAtLogin, args: [...args], enabled: true }),
     openExternal: (url) => shell.openExternal(url)
   })
+  /**
+   * Whether the app has shown the main window (and not hidden it since). Kept here rather than read
+   * from `isVisible()`, which on macOS also turns false for a window that is merely covered.
+   */
+  let windowShown = false
   const host: MainWindowHost = {
-    state: () => (mainWindow === null ? 'none' : mainWindow.isVisible() ? 'shown' : 'hidden'),
+    state() {
+      if (mainWindow === null) return 'none'
+      // macOS ⌘H (应用菜单 › 隐藏汐岛) hides the whole app without the app hiding the window.
+      if (!windowShown || (platform === 'darwin' && app.isHidden())) return 'hidden'
+      return mainWindow.isMinimized() ? 'minimized' : 'shown'
+    },
     open: async (show) => {
       await backgroundStopped
       updateService.resume()
@@ -591,8 +646,11 @@ async function start(): Promise<void> {
       void searchService.recover().catch(() => console.error('[search] index unavailable'))
       const { promise, resolve } = Promise.withResolvers<void>()
       const window = createWindow()
+      windowShown = false
       attach(window)
       window.once('ready-to-show', () => {
+        showInDock(show)
+        windowShown = show
         if (show) window.show()
         resolve()
       })
@@ -600,11 +658,20 @@ async function start(): Promise<void> {
     },
     reveal() {
       if (mainWindow === null) return
+      showInDock(true)
+      windowShown = true
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.show()
       mainWindow.focus()
+      // A 老板键 press arrives while another app is in front; the user asked for this window.
+      if (platform === 'darwin') app.focus({ steal: true })
     },
-    hide: () => mainWindow?.hide(),
+    hide() {
+      if (mainWindow === null) return
+      windowShown = false
+      mainWindow.hide()
+      showInDock(false)
+    },
     destroy() {
       const window = mainWindow
       mainWindow = null
@@ -665,12 +732,14 @@ async function start(): Promise<void> {
     lifecycle: controller,
     updates: updateService,
     loginItem,
+    bossKey: bossKeyService,
     search: searchService,
     onlineSearch,
     store: openedStore,
     settings: createSettingsService(openedStore, (saved) => {
       reminders.configure(saved)
       updateService.configure(saved)
+      bossKeyService.configure(saved)
     }),
     getStatus: () => ({ storage: openedStore.status, platform, restoreAbandoned: restore === 'abandoned' }),
     upgrade: createUpgradeService({
@@ -710,17 +779,19 @@ async function start(): Promise<void> {
       isAppDocument(event.senderFrame.url)
   })
 
-  // Windows tray / Linux status icon; macOS reopens from the Dock.
-  if (platform !== 'darwin') {
-    tray = new Tray(trayImage())
-    tray.setToolTip('汐岛')
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: '打开汐岛', click: () => controller.reopen() },
-      { type: 'separator' },
-      { label: '退出汐岛', click: () => controller.requestQuit() }
-    ]))
-    tray.on('click', () => controller.reopen())
-  }
+  // Windows tray / macOS menu bar icon / Linux status icon. On macOS any click opens the menu, as a
+  // menu bar icon does; elsewhere a click opens the window and the menu is on right-click.
+  tray = new Tray(trayImage())
+  tray.setToolTip('汐岛')
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '打开汐岛', click: () => controller.reopen() },
+    { type: 'separator' },
+    { label: '退出汐岛', click: () => controller.requestQuit() }
+  ]))
+  if (platform !== 'darwin') tray.on('click', () => controller.reopen())
+
+  // 老板键 works from the start, also while a 开机自启 starts in 后台驻留.
+  bossKeyService.configure(await openedStore.loadSettings().catch(() => DEFAULT_SETTINGS))
 
   // 开机启动时后台驻留: only a start by 开机自启, and only with storage ready; a storage problem
   // needs the window, and the setting cannot be read without it.
@@ -763,9 +834,13 @@ async function finishStorage(): Promise<void> {
   await updates?.launchInstaller()
 }
 
-// Quits that bypass the lifecycle's exit still close storage before the process ends.
+// Quits that bypass the lifecycle's exit still close storage before the process ends. The 老板键 is
+// released at the last quit step, so it still opens the window while sends are finishing.
 app.on('will-quit', (event) => {
-  if (!store || storeClosed) return
+  if (!store || storeClosed) {
+    globalShortcut.unregisterAll()
+    return
+  }
   event.preventDefault()
   void finishStorage().finally(() => app.quit())
 })

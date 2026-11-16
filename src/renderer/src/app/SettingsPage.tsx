@@ -522,7 +522,7 @@ function SectionBody({ id, settings, write, adopt, platform, identities, subscri
     case 'publication':
       return <PublicationSection />
     case 'window':
-      return <WindowSection settings={settings} write={write} active={active} onLoginItemNotApplied={onLoginItemNotApplied} />
+      return <WindowSection settings={settings} write={write} active={active} platform={platform} onLoginItemNotApplied={onLoginItemNotApplied} />
     case 'cache':
       return <CacheSection active={active} />
     case 'announcements':

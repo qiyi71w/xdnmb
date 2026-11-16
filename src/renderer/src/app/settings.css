@@ -278,13 +278,27 @@
   object-fit: contain;
 }
 
-/* 打开系统设置 beside the 开机自启 switch while macOS waits for approval; wraps when narrow. */
-.login-item-control {
+/* 打开系统设置 beside the 开机自启 switch while macOS waits for approval; the 老板键 combination
+   (and 恢复默认) before the 老板键 switch it belongs to. Both wrap when narrow. */
+.login-item-control,
+.boss-key-control {
   display: inline-flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
   gap: 8px;
+}
+
+.boss-key-field {
+  min-width: 9.5em;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.boss-key-field[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--ink-2);
 }
 
 .zoom-controls {

@@ -20,15 +20,19 @@ export type LifecyclePhase = 'starting' | 'running' | 'quitting' | 'finishing' |
 
 /** The one main window, as the controller needs it. */
 export interface MainWindowHost {
-  /** `hidden`: exists but not shown (resident, or created and not shown yet). Minimized counts as shown. */
-  state(): 'none' | 'hidden' | 'shown'
+  /**
+   * `hidden`: exists but not shown (resident, or created and not shown yet). `minimized`: shown but
+   * minimized; only the 老板键 tells it apart from `shown`, everything else treats it as shown.
+   */
+  state(): 'none' | 'hidden' | 'minimized' | 'shown'
   /**
    * Creates the window; resolves once it is shown. `show: false` (后台驻留 from the start) resolves
    * once it is ready to show and leaves it hidden.
    */
   open(show: boolean): Promise<void>
-  /** Shows, restores and focuses the existing window. */
+  /** Shows, restores and focuses the existing window (macOS: the Dock icon comes back). */
   reveal(): void
+  /** 后台驻留 (macOS: the Dock icon goes too, and the menu bar goes back to the previous app). */
   hide(): void
   /** Closes the front end at once (no close event). */
   destroy(): void
@@ -106,6 +110,11 @@ export interface Lifecycle {
    * of a resident start once it is ready.
    */
   reopen(source?: 'explicit' | 'activate'): void
+  /**
+   * 老板键: a window on screen (also unfocused or covered) goes to 后台驻留, also while a quit is
+   * asking about drafts (the quit goes on); a hidden or minimized one opens as an explicit reopen.
+   */
+  toggleResident(): void
   /** Notification clicks reveal/create a window without starting another check. */
   revealWithoutTrigger(): Promise<void>
   /**
@@ -207,6 +216,32 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
     else window.send({ kind: 'quit' })
   }
 
+  function reopen(source: 'explicit' | 'activate' = 'explicit'): void {
+    if (phase === 'starting') {
+      // Kept for after the start: a resident start would otherwise stay hidden. macOS also
+      // sends `activate` while launching, which is no opening by the user.
+      if (source === 'explicit') openedWhileStarting = true
+      return
+    }
+    if (phase === 'finishing') {
+      // Opening again before the process ended: no exit; results now only update their records.
+      stopFinishing('reopen')
+      return
+    }
+    if (phase === 'quitting') {
+      if (window.state() !== 'none') window.reveal()
+      return
+    }
+    if (phase !== 'running' || opening) return
+    const state = window.state()
+    if (state === 'none') {
+      void openWindow('reopen')
+      return
+    }
+    window.reveal()
+    if (state === 'hidden') deps.onTrigger('reopen')
+  }
+
   return {
     get phase() {
       return phase
@@ -268,31 +303,21 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       void finish()
     },
 
-    reopen(source = 'explicit') {
-      if (phase === 'starting') {
-        // Kept for after the start: a resident start would otherwise stay hidden. macOS also
-        // sends `activate` while launching, which is no opening by the user.
-        if (source === 'explicit') openedWhileStarting = true
-        return
-      }
-      if (phase === 'finishing') {
-        // Opening again before the process ended: no exit; results now only update their records.
-        stopFinishing('reopen')
-        return
-      }
-      if (phase === 'quitting') {
-        if (window.state() !== 'none') window.reveal()
-        return
-      }
-      if (phase !== 'running' || opening) return
+    reopen,
+
+    toggleResident() {
       const state = window.state()
-      if (state === 'none') {
-        void openWindow('reopen')
-        return
+      if (state === 'shown' && (phase === 'running' || phase === 'quitting')) {
+        window.hide()
+      } else if (state === 'minimized' && phase === 'running' && !opening) {
+        // Unlike the tray restoring a minimized window, the 老板键 bringing it back is an explicit opening.
+        window.reveal()
+        deps.onTrigger('reopen')
+      } else {
+        reopen()
       }
-      window.reveal()
-      if (state === 'hidden') deps.onTrigger('reopen')
     },
+
     async revealWithoutTrigger() {
       if (phase === 'exiting') return
       if (phase === 'finishing') {

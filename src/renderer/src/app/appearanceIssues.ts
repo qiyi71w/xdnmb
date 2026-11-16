@@ -26,6 +26,8 @@ const FIELD_LABELS: Record<string, string> = {
   newTabSplitDefault: '新标签默认开启分栏',
   closeAction: '关闭窗口时的操作',
   loginLaunchResident: '开机启动时后台驻留',
+  bossKeyEnabled: '老板键',
+  bossKey: '老板键组合键',
   rail: '图标栏设置',
   'rail.order': '图标栏顺序',
   'rail.hidden': '隐藏的功能',

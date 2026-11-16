@@ -269,6 +269,10 @@ const api: XidaoApi = {
     set: (input) => ipcRenderer.invoke(IpcChannel.loginItemSet, input),
     openSystemSettings: () => ipcRenderer.invoke(IpcChannel.loginItemOpenSystemSettings)
   },
+  bossKey: {
+    get: () => ipcRenderer.invoke(IpcChannel.bossKeyGet),
+    setRecording: (input) => ipcRenderer.invoke(IpcChannel.bossKeySetRecording, input)
+  },
   updates: {
     getState: () => ipcRenderer.invoke(IpcChannel.updateGetState),
     onState(listener) {
