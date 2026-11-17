@@ -1,4 +1,4 @@
-import { mkdir, rm, statfs } from 'node:fs/promises'
+import { mkdir, rm, stat, statfs } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type {
   ImportBlock, ImportConfirmResult, ImportFailure, ImportInspection, ImportRejection, StorageStatus
@@ -7,7 +7,7 @@ import type { SecretProtector } from '../identity/protection'
 import type { QuitEnd } from '../lifecycle/controller'
 import type { SecretRows } from '../storage/export-snapshot'
 import { importStagingDirectory, preparedImportJournal, STAGED_DATABASE } from '../storage/import-journal'
-import type { CredentialIdMap, ImportFileFacts } from '../storage/import-staging'
+import type { CredentialIdMap, ImportFileFacts, LocalMergeSize } from '../storage/import-staging'
 import { beginSwap, discardSwapJournal, swapPending } from '../storage/swap-journal'
 import { ContainerError, readContainer, readContainerHeader, type ContainerLimits, type ExportManifest } from './container'
 import { unlockEncryption, wipeKeys, type EncryptionParams, type ExportKeys } from './encryption'
@@ -29,14 +29,15 @@ import { resealForImport } from './secrets'
  *      (`./container`); an encrypted file's chunks are authenticated as they are read.
  *   3. The manifest's schema version: newer than this app's is refused, naming the version that
  *      exported it, before any entry is extracted. So is a file the staging volume has no room for
- *      (磁盘空间不足): its declared content and once more its database (SQLite's rollback journal
- *      while it is migrated). Extraction never writes more than the manifest declares.
+ *      (磁盘空间不足): its declared content, each entry a file (`allocated`), and SQLite's
+ *      rollback journal of its database while it is migrated (`journalBytes`). Extraction never
+ *      writes more, or more entries, than the manifest declares.
  *   4. The staged database (`../storage/import-staging`): its schema objects before anything of
  *      it runs, integrity, this version's migration chain, references, secret value sizes, and
  *      every draft attachment and offline original it names.
  *   5. Room for the merge, read from this machine's database only now that the file has passed:
- *      its draft attachments and offline copies the merge copies into staging, and once more the
- *      file's database (the merge's rollback journal); refused as 磁盘空间不足 otherwise.
+ *      the files and rows the merge copies from it into staging (`LocalMergeSize`) and the merge's
+ *      rollback journal of the staged database; refused as 磁盘空间不足 otherwise.
  *   6. What the confirmation shows: the manifest's facts and this machine's counts.
  *
  * Any failure removes the staging; this machine's data and the file are unchanged. The renderer
@@ -51,8 +52,8 @@ export interface ImportDatabase {
   check(stagingDirectory: string, schemaVersion: number): Promise<void>
   /** This machine's 浏览历史 and 发送记录 counts. */
   counts(databasePath: string): Promise<{ history: number; sendRecords: number }>
-  /** Bytes this machine's draft attachments and offline copies add to the staging at most. */
-  appendedBytes(databasePath: string): Promise<number>
+  /** What the merge copies from this machine's database and files into staging at most. */
+  appendedBytes(databasePath: string): Promise<LocalMergeSize>
   /** Every secret row of the database at `databasePath` (read-only). */
   secrets(databasePath: string): Promise<SecretRows>
   /** Builds the import result in staging (`stageImport`). */
@@ -85,6 +86,24 @@ class NoSpace extends Error {
   override readonly name = 'NoSpace'
 }
 
+/** Assumed when the staging volume does not tell its block size. */
+const DEFAULT_BLOCK_SIZE = 4096
+/** The largest directory entry a file name takes (ext4's 8-byte header and a 255-byte name, 4-byte aligned). */
+const DIRECTORY_ENTRY_BYTES = 264
+/** SQLite's smallest page and the largest sector its journal header is padded to. */
+const MIN_PAGE_BYTES = 512
+const MAX_SECTOR_BYTES = 65536
+
+/** At most what `files` files of `bytes` in all take on a volume of `blockSize` blocks: each a block more, and its directory entry. */
+function allocated(bytes: number, files: number, blockSize: number): number {
+  return bytes + files * (blockSize + DIRECTORY_ENTRY_BYTES)
+}
+
+/** At most the size of SQLite's rollback journal for a database of `bytes`: each page with its number and checksum, and the header. */
+function journalBytes(bytes: number): number {
+  return bytes + Math.ceil(bytes / MIN_PAGE_BYTES) * 8 + MAX_SECTOR_BYTES
+}
+
 type State =
   | { phase: 'idle' }
   /** An encrypted file waits for its passphrase; `unlocking`: one is being tried. */
@@ -107,18 +126,19 @@ export function createImportService(deps: {
   restart: () => Promise<QuitEnd>
   /** Test seam: tighter container limits. */
   limits?: Partial<ContainerLimits>
-  /** Test seam: free bytes on the volume of a directory. */
-  availableBytes?: (directory: string) => Promise<number>
+  /** Test seam: free bytes and block size of the volume of a directory. */
+  volume?: (directory: string) => Promise<{ available: number; blockSize: number }>
 }): ImportService {
   const userData = dirname(deps.databasePath)
   const staging = importStagingDirectory(userData)
-  const availableBytes = deps.availableBytes ?? (async (directory: string) => {
-    const volume = await statfs(directory)
-    return volume.bavail * volume.bsize
+  const volume = deps.volume ?? (async (directory: string) => {
+    const info = await statfs(directory)
+    return { available: info.bavail * info.bsize, blockSize: info.bsize > 0 ? info.bsize : DEFAULT_BLOCK_SIZE }
   })
-  /** Throws `NoSpace` unless the staging volume has `bytes` free. */
-  const roomFor = async (bytes: number): Promise<void> => {
-    if (await availableBytes(staging) < bytes) throw new NoSpace()
+  /** Throws `NoSpace` unless the staging volume has the bytes `needed` gives for its block size free. */
+  const roomFor = async (needed: (blockSize: number) => number): Promise<void> => {
+    const { available, blockSize } = await volume(staging)
+    if (available < needed(blockSize)) throw new NoSpace()
   }
   let state: State = { phase: 'idle' }
   /** The quit the confirmed import started; `stop` keeps its staging. */
@@ -150,7 +170,8 @@ export function createImportService(deps: {
         checkManifest(manifest) {
           if (manifest.schemaVersion > deps.supportedVersion) throw new Refused({ reason: 'newer', appVersion: manifest.appVersion })
           const { database, draftImages, offlineImages } = manifest.entries
-          return roomFor(2 * database.bytes + draftImages.bytes + offlineImages.bytes)
+          return roomFor((block) => allocated(database.bytes, database.count, block) + allocated(journalBytes(database.bytes), 1, block)
+            + allocated(draftImages.bytes, draftImages.count, block) + allocated(offlineImages.bytes, offlineImages.count, block))
         }
       })
       signal.throwIfAborted()
@@ -162,16 +183,20 @@ export function createImportService(deps: {
       }
       signal.throwIfAborted()
       let local: { history: number; sendRecords: number }
-      let appended: number
+      let merged: LocalMergeSize
       try {
         local = await deps.database.counts(deps.databasePath)
-        appended = await deps.database.appendedBytes(deps.databasePath)
+        merged = await deps.database.appendedBytes(deps.databasePath)
       } catch {
         signal.throwIfAborted()
         return { status: 'failed', failure: { reason: 'read' } }
       }
       signal.throwIfAborted()
-      await roomFor(manifest.entries.database.bytes + appended)
+      // The staged database as checked (migrated): the merge adds its rows to it and journals its pages.
+      const database = (await stat(join(staging, STAGED_DATABASE))).size
+      signal.throwIfAborted()
+      await roomFor((block) => allocated(merged.fileBytes, merged.files, block) + allocated(merged.rowBytes, 1, block)
+        + allocated(journalBytes(database), 1, block))
       signal.throwIfAborted()
       state = { phase: 'inspected', manifest, keys }
       return {

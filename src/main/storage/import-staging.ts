@@ -7,7 +7,7 @@ import { APPENDED_PARTS, settingKeysIn, tablesIn, type AppendedPart } from './cl
 import { migrateDatabase } from './database'
 import { copyFileDurably, present, syncDirectory } from './durable'
 import {
-  checkSecretSizes, columnsOf, readCredentialSequence, readExportEstimate, recordUnsavedImage, referencingFirst, replaceSecretValues,
+  checkSecretSizes, columnsOf, readCredentialSequence, recordUnsavedImage, referencingFirst, replaceSecretValues,
   resetRebuilt, type SecretRows
 } from './export-snapshot'
 import { DRAFT_IMAGES, IMAGES, STAGED_DATABASE } from './import-journal'
@@ -228,10 +228,51 @@ export function readLocalCounts(databasePath: string): { history: number; sendRe
   }
 }
 
-/** Bytes this machine's 目标机保留并追加 data adds to staging at most: its draft attachments and offline copies. */
-export function readLocalAppendedBytes(databasePath: string): number {
-  const { offlineBytes, draftImageBytes } = readExportEstimate(databasePath)
-  return offlineBytes + draftImageBytes
+/**
+ * What the merge (`stageImport`) copies from this machine into staging at most: its draft
+ * attachments and offline originals (`files` of `fileBytes` in all), and `rowBytes`, the bytes its
+ * rows take in the staged database (`rowBytesAtMost`): the 目标机保留 tables and setting rows, the
+ * secret tables, every 目标机保留并追加 table, and the posts and image records of its offline copies.
+ */
+export interface LocalMergeSize {
+  files: number
+  fileBytes: number
+  rowBytes: number
+}
+
+/**
+ * At most the bytes the rows of `table` that `where` selects take in a database with this schema:
+ * each value as many bytes as its text form or blob (never fewer than SQLite stores, but for a
+ * real's 8, allowed for with each value's header of at most 9 bytes) plus the row's cell header and
+ * pointer, once in the table and once more in each of its indexes, on pages at least half full.
+ */
+function rowBytesAtMost(db: Database.Database, table: string, where = '', params: unknown[] = []): number {
+  const columns = columnsOf(db, table)
+  const indexes = (db.pragma(`index_list("${table}")`) as unknown[]).length
+  const values = columns.map((column) => `coalesce(length(CAST("${column}" AS BLOB)), 0)`).join(' + ')
+  const { bytes, rows } = db.prepare<unknown[], { bytes: number; rows: number }>(
+    `SELECT coalesce(sum(${values}), 0) AS bytes, count(*) AS rows FROM "${table}" ${where}`).get(...params)!
+  return 2 * (1 + indexes) * (bytes + rows * (18 * columns.length + 32))
+}
+
+/** `LocalMergeSize` of this machine's database, read in one read transaction. */
+export function readLocalAppendedBytes(databasePath: string): LocalMergeSize {
+  const db = new Database(databasePath, { readonly: true, fileMustExist: true, timeout: 5000 })
+  try {
+    return db.transaction(() => {
+      const files = db.prepare<[], { files: number; bytes: number }>(`SELECT count(*) AS files, coalesce(sum(bytes), 0) AS bytes FROM (
+        SELECT bytes FROM draft_attachments
+        UNION ALL SELECT bytes FROM image_resources r WHERE EXISTS(SELECT 1 FROM offline_images o WHERE o.resource_id = r.id))`).get()!
+      let rowBytes = rowBytesAtMost(db, 'settings', 'WHERE key IN (SELECT value FROM json_each(?))', [JSON.stringify(settingKeysIn('target-kept'))])
+        + rowBytesAtMost(db, 'posts', `WHERE id IN (SELECT head_id FROM offline_pages UNION SELECT post_id FROM offline_page_posts
+          UNION SELECT post_id FROM offline_images)`)
+        + rowBytesAtMost(db, 'image_resources', 'WHERE id IN (SELECT resource_id FROM offline_images)')
+      for (const table of [...tablesIn('target-kept'), ...tablesIn('secret'), ...tablesIn('target-appended')]) rowBytes += rowBytesAtMost(db, table)
+      return { files: files.files, fileBytes: files.bytes, rowBytes }
+    })()
+  } finally {
+    db.close()
+  }
 }
 
 /** Copies this machine's rows of `table` (both databases have this version's schema) into staging. */

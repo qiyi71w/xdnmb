@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statfsSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Worker } from 'node:worker_threads'
@@ -239,7 +239,7 @@ function importer(userData: string, options: {
   restart?: () => Promise<QuitEnd>
   limits?: { maxTotalBytes?: number; maxManifestBytes?: number }
   protector?: SecretProtector
-  availableBytes?: (directory: string) => Promise<number>
+  volume?: (directory: string) => Promise<{ available: number; blockSize: number }>
 } = {}) {
   const restarts: number[] = []
   const service = createImportService({
@@ -253,7 +253,7 @@ function importer(userData: string, options: {
       return options.restart === undefined ? 'exiting' : options.restart()
     },
     limits: options.limits,
-    availableBytes: options.availableBytes
+    volume: options.volume
   })
   return { service, restarts }
 }
@@ -787,41 +787,123 @@ describe('untrusted files', () => {
 })
 
 describe('staging space', () => {
-  /** What the file needs on the staging volume to be extracted: its content and its database once more. */
-  async function extractionBytes(file: string): Promise<number> {
-    const { database, draftImages, offlineImages } = (await readContainer(file)).manifest.entries
-    return 2 * database.bytes + draftImages.bytes + offlineImages.bytes
+  const blockSize = statfsSync(tmpdir()).bsize
+  const plenty = { available: 1024 ** 5, blockSize }
+
+  /** What the files and directories under `root` actually take on their volume: their allocated blocks. */
+  function allocatedUnder(root: string): number {
+    return readdirSync(root, { recursive: true }).reduce((sum, name) => sum + lstatSync(join(root, String(name))).blocks * 512, 0)
   }
 
-  it('refuses a file the staging volume has no room for before extracting any of it', async () => {
+  /** A source machine with `count` drafts, each with a one-byte attachment, exported. */
+  async function manySmallImages(count: number): Promise<string> {
+    const userData = folder('xidao-import-small-images-')
+    mkdirSync(join(userData, 'images'))
+    mkdirSync(join(userData, 'draft-images'))
+    const db = openReadingDatabase(join(userData, 'xidao.sqlite'), MIGRATIONS, { appVersion: '1.5.0-a' })
+    try {
+      for (let i = 0; i < count; i++) {
+        const name = `${i.toString(16).padStart(32, '0')}.png`
+        writeFileSync(join(userData, 'draft-images', name), 'x')
+        const attachment = db.insertDraftAttachment({ fileName: name, format: 'png', bytes: 1, width: 1, height: 1, originalName: 'a.png', createdAt: AT })
+        db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: String(1000 + i) }, credentialId: null,
+          fields: { content: '', title: '', name: '', watermark: false }, attachmentId: attachment.id }, AT)
+      }
+    } finally {
+      db.close()
+    }
+    return exportOf(userData, folders)
+  }
+
+  /** A target machine with `count` image-less drafts of long text and nothing else of its own. */
+  function draftTextMachine(count: number): string {
+    const userData = folder('xidao-import-draft-text-')
+    mkdirSync(join(userData, 'images'))
+    mkdirSync(join(userData, 'draft-images'))
+    const db = openReadingDatabase(join(userData, 'xidao.sqlite'), MIGRATIONS, { appVersion: '1.5.0-b' })
+    connections.push(db)
+    for (let i = 0; i < count; i++) {
+      db.saveDraft({ draftId: null, target: { kind: 'reply', threadId: String(1000 + i) }, credentialId: null,
+        fields: { content: `${i} `.padEnd(2000, '草'), title: '', name: '', watermark: false }, attachmentId: null }, AT)
+    }
+    return userData
+  }
+
+  it('refuses, before extracting any of it, a file of many small images the volume has no room for once each takes its blocks', async () => {
+    const file = await manySmallImages(300)
+    // What extracting it actually takes on this volume, with room enough.
+    const roomy = targetMachine().userData
+    const { service: measuring } = importer(roomy, { volume: async () => plenty })
+    expect((await measuring.inspect(async () => file)).status).toBe('ready')
+    const extracted = allocatedUnder(importStagingDirectory(roomy))
+    await measuring.cancel()
+    // A budget of the content's bytes (at most the file's own size, twice) would not notice.
+    expect(extracted).toBeGreaterThan(2 * statSync(file).size)
+
     const { userData } = targetMachine()
     const outside = tree(userData)
-    const needed = await extractionBytes(exported().file)
     const extractedWhenAsked: boolean[] = []
     const { service } = importer(userData, {
-      async availableBytes(directory) {
+      async volume(directory) {
         extractedWhenAsked.push(readdirSync(directory, { recursive: true }).some((name) => !['draft-images', 'images'].includes(String(name))))
-        return needed - 1
+        return { available: extracted - 1, blockSize }
       }
     })
-    expect(await service.inspect(async () => exported().file)).toEqual({ status: 'failed', failure: { reason: 'space' } })
+    expect(await service.inspect(async () => file)).toEqual({ status: 'failed', failure: { reason: 'space' } })
     expect(extractedWhenAsked).toEqual([false])
     expect(existsSync(importStagingDirectory(userData))).toBe(false)
     expect(tree(userData)).toEqual(outside)
   })
 
-  it('refuses, before the confirmation, when the merge has no room for this machine’s attachments and offline copies', async () => {
+  it('refuses, before the confirmation, when the merge has no room for this machine’s draft text', async () => {
+    // What the merge actually adds to staging on this volume, with room enough.
+    const roomy = draftTextMachine(400)
+    const { service: measuring } = importer(roomy, { volume: async () => plenty })
+    expect((await measuring.inspect(async () => exported().file)).status).toBe('ready')
+    const checked = allocatedUnder(importStagingDirectory(roomy))
+    expect(await measuring.confirm()).toEqual({ status: 'restarting' })
+    const added = allocatedUnder(importStagingDirectory(roomy)) - checked
+    // Far more than the file's database, the room the merge was given before for image-less local data.
+    expect(added).toBeGreaterThan(2 * (await readContainer(exported().file)).manifest.entries.database.bytes)
+
+    const userData = draftTextMachine(400)
+    const asked: number[] = []
+    const { service } = importer(userData, { volume: async () => (asked.push(1) === 1 ? plenty : { available: added - 1, blockSize }) })
+    expect(await service.inspect(async () => exported().file)).toEqual({ status: 'failed', failure: { reason: 'space' } })
+    expect(asked).toHaveLength(2)
+    expect(existsSync(importStagingDirectory(userData))).toBe(false)
+  })
+
+  it.each([[1], [2]])('ends dismissed, without staging, when cancelled during space check %i', async (which) => {
     const { userData } = targetMachine()
-    const needed = await extractionBytes(exported().file)
-    const merge = (await readContainer(exported().file)).manifest.entries.database.bytes + readLocalAppendedBytes(join(userData, 'xidao.sqlite'))
-    for (const [room, result] of [[merge - 1, 'failed'], [merge, 'ready']] as const) {
-      const asked: number[] = []
-      const { service } = importer(userData, { availableBytes: async () => (asked.push(1) === 1 ? needed : room) })
-      expect((await service.inspect(async () => exported().file)).status).toBe(result)
-      expect(asked).toHaveLength(2)
-      expect(existsSync(importStagingDirectory(userData))).toBe(result === 'ready')
-      await service.cancel()
-    }
+    const { promise: asked, resolve: ask } = Promise.withResolvers<void>()
+    const { promise: answer, resolve: answerWith } = Promise.withResolvers<{ available: number; blockSize: number }>()
+    let calls = 0
+    const { service } = importer(userData, {
+      volume: async () => {
+        if (++calls !== which) return plenty
+        ask()
+        return answer
+      }
+    })
+    const inspection = service.inspect(async () => exported().file)
+    await asked
+    const cancelled = service.cancel()
+    answerWith(plenty)
+    await cancelled
+    expect(await inspection).toEqual({ status: 'dismissed' })
+    expect(existsSync(importStagingDirectory(userData))).toBe(false)
+  })
+
+  it('never extracts more entries of a kind than the manifest declares', async () => {
+    const names = [`${'1'.repeat(32)}.png`, `${'2'.repeat(32)}.png`]
+    const file = join(folder('xidao-import-lying-'), 'lying.xidao')
+    writeFileSync(file, container([{ type: ENTRY_TYPE.database, name: 'xidao.sqlite', bytes: Buffer.from('database') },
+      ...names.map((name) => ({ type: ENTRY_TYPE.draftImage, name, bytes: Buffer.from('x') }))],
+    { entries: { database: { count: 1, bytes: 8 }, draftImages: { count: 1, bytes: 2 }, offlineImages: { count: 0, bytes: 0 } } }))
+    const out = folder('xidao-import-lying-out-')
+    await expect(readContainer(file, { extractTo: out })).rejects.toEqual(new ContainerError('corrupt'))
+    expect(existsSync(join(out, 'draft-images', names[1]!))).toBe(false)
   })
 
   it('never extracts more of a kind than the manifest declares', async () => {
