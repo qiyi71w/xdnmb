@@ -6,7 +6,6 @@ export type SettingsSectionId =
   | 'reading'
   | 'density'
   | 'zoom'
-  | 'theme'
   | 'features'
   | 'boards'
   | 'tabs'

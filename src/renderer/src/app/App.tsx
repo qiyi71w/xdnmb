@@ -1533,6 +1533,8 @@ export function App() {
                           platform={platform}
                           status={settingsWriter.status}
                           write={writeSettings}
+                          commit={settingsWriter.commit}
+                          latest={latestSettings}
                           adopt={settingsWriter.adopt}
                           directory={dirData}
                           target={settingsTarget}

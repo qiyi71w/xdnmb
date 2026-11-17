@@ -13,7 +13,6 @@ import {
   ReminderSection,
   SettingsStatusNotices,
   TabsSection,
-  ThemeSection,
   WindowSection,
   ZoomSection,
   type Write
@@ -39,7 +38,7 @@ import '../features/directory/shell.css'
 
 type SectionId = SettingsSectionId
 
-// Daily reading adjustments come first; making a theme comes after them.
+// Daily reading adjustments come first; the theme list and its editor sit in 外观.
 const CATEGORIES: readonly { id: string; title: string; sections: readonly { id: SectionId; title: string }[] }[] = [
   {
     id: 'display',
@@ -48,8 +47,7 @@ const CATEGORIES: readonly { id: string; title: string; sections: readonly { id:
       { id: 'appearance', title: '外观' },
       { id: 'reading', title: '阅读' },
       { id: 'density', title: '密度与动态' },
-      { id: 'zoom', title: '界面缩放' },
-      { id: 'theme', title: '自定义主题' }
+      { id: 'zoom', title: '界面缩放' }
     ]
   },
   {
@@ -99,6 +97,10 @@ export interface SettingsPageProps {
   platform: AppPlatform | null
   status: SettingsWriteStatus
   write: Write
+  /** Sends a change now and shows it once saved (theme list operations); resolves whether it was saved. */
+  commit: (patch: Partial<AppSettings>) => Promise<boolean>
+  /** The settings including changes not yet sent or answered. */
+  latest: () => AppSettings
   adopt: (settings: AppSettings) => void
   directory: BoardDirectory | null
   /**
@@ -491,12 +493,10 @@ function SectionJump({
 
 // ---------- Sections ----------
 
-function SectionBody({ id, settings, write, adopt, platform, identities, subscriptions, directory, active, onLoginItemNotApplied }: SettingsPageProps & { id: SectionId }) {
+function SectionBody({ id, settings, write, commit, latest, adopt, platform, identities, subscriptions, directory, active, onLoginItemNotApplied }: SettingsPageProps & { id: SectionId }) {
   switch (id) {
     case 'appearance':
-      return <AppearanceSection settings={settings} write={write} />
-    case 'theme':
-      return <ThemeSection settings={settings} write={write} adopt={adopt} shown={active} />
+      return <AppearanceSection settings={settings} write={write} commit={commit} latest={latest} adopt={adopt} shown={active} />
     case 'reading':
       return <ReadingSection settings={settings} write={write} />
     case 'density':

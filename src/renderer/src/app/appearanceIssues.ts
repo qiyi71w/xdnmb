@@ -1,5 +1,6 @@
 // Plain-Chinese descriptions of appearance issues (theme editor, theme import, refused settings).
 import { THEME_LIMITS, type AppearanceIssue } from '../../../shared/theme'
+import { MAX_CUSTOM_THEMES } from '../../../shared/themeList'
 
 const FIELD_LABELS: Record<string, string> = {
   name: '主题名称',
@@ -18,6 +19,9 @@ const FIELD_LABELS: Record<string, string> = {
   colorScheme: '配色',
   customTheme: '自定义主题',
   customThemeEnabled: '自定义主题',
+  customThemeList: '主题列表',
+  'customThemeList.others': '自定义主题',
+  'customThemeList.currentIndex': '当前主题的位置',
   reading: '阅读参数',
   imageMaskEnabled: '图片遮罩',
   imageMaskStrength: '模糊强度',
@@ -43,9 +47,12 @@ const FIELD_LABELS: Record<string, string> = {
   subscriptionArrangement: '订阅排列'
 }
 
-/** Field path relative to the theme / reading object (`customTheme.colors.text` → `colors.text`). */
+/**
+ * Field path relative to the theme / reading object (`customTheme.colors.text` → `colors.text`,
+ * `customThemeList.others.2.name` → `name`).
+ */
 function relativeField(field: string): string {
-  return field.replace(/^(customTheme|reading)\./, '')
+  return field.replace(/^(customTheme|reading|customThemeList\.others\.\d+)\./, '')
 }
 
 function rangeText(field: string): string {
@@ -67,6 +74,8 @@ function rangeText(field: string): string {
       return `须为 ${THEME_LIMITS.readingWidth.min}–${THEME_LIMITS.readingWidth.max} 的整数`
     case 'imageMaskStrength':
       return '须为 0–100 的整数'
+    case 'customThemeList.others':
+      return `最多 ${MAX_CUSTOM_THEMES} 个`
     default:
       return '超出允许范围'
   }
@@ -94,6 +103,8 @@ export function describeIssue(issue: AppearanceIssue): string {
           return `不认识的字段“${issue.field}”`
         case 'unavailable':
           return field === 'customThemeEnabled' ? '请先创建或导入主题' : `${label}当前不可用`
+        case 'duplicate':
+          return '已有同名主题'
       }
     }
   }

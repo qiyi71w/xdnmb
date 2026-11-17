@@ -139,6 +139,7 @@ export const APP_SETTING_CLASSES: { readonly [K in keyof AppSettings]-?: Setting
   colorScheme: 'overwrite',
   customThemeEnabled: 'overwrite',
   customTheme: 'overwrite',
+  customThemeList: 'overwrite',
   reading: 'overwrite',
   imageMaskEnabled: 'overwrite',
   imageMaskStrength: 'overwrite',

@@ -19,6 +19,7 @@ import {
   type ReadingParams,
   type SchemeBase
 } from './theme'
+import { EMPTY_THEME_LIST, parseThemeList, themeListFromStored, themeListIssues, type CustomThemeList } from './themeList'
 
 /** `system` follows the operating system's light/dark preference. */
 export type ColorScheme = 'system' | 'light' | 'dark'
@@ -138,9 +139,15 @@ export interface AppSettings {
   /** The 老板键 combination, an accelerator in the form `isBossKey` accepts; kept while turned off. */
   bossKey: string
   colorScheme: ColorScheme
+  /** The current custom theme is in use (otherwise 汐岛 is). */
   customThemeEnabled: boolean
-  /** The user's custom theme; `null` until one is created or imported. Kept when another scheme is chosen. */
+  /**
+   * The current custom theme: the one in use, or the last one used before switching to 汐岛; `null`
+   * until one is created or imported. Versions that know a single theme read and write only this one.
+   */
   customTheme: CustomTheme | null
+  /** The other custom themes and the current one's place among them (src/shared/themeList.ts). */
+  customThemeList: CustomThemeList
   /** Post text font, size and preferred width; apply under every scheme. */
   reading: ReadingParams
   /** Cover reading thumbnails until explicitly revealed during the current page visit. */
@@ -195,6 +202,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   colorScheme: 'system',
   customThemeEnabled: false,
   customTheme: null,
+  customThemeList: EMPTY_THEME_LIST,
   reading: DEFAULT_READING,
   imageMaskEnabled: false,
   imageMaskStrength: 100,
@@ -226,6 +234,7 @@ export const SETTING_KEYS = [
   'colorScheme',
   'customThemeEnabled',
   'customTheme',
+  'customThemeList',
   'reading',
   'imageMaskEnabled',
   'imageMaskStrength',
@@ -450,6 +459,9 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
     case 'customTheme':
       parsed = value === null ? { ok: true, value: null } : parseCustomTheme(value, key)
       break
+    case 'customThemeList':
+      parsed = parseThemeList(value, key)
+      break
     case 'reading':
       parsed = parseReadingParams(value, key)
       break
@@ -492,11 +504,16 @@ export function parseSetting<K extends keyof AppSettings>(key: K, value: unknown
   return parsed as Parsed<AppSettings[K]>
 }
 
-/** The custom scheme needs a custom theme; anything else is consistent. */
-function consistencyIssues(settings: AppSettings): AppearanceIssue[] {
+/** The custom scheme needs a custom theme. */
+function enabledIssues(settings: AppSettings): AppearanceIssue[] {
   return settings.customThemeEnabled && settings.customTheme === null
     ? [{ kind: 'field', field: 'customThemeEnabled', problem: 'unavailable' }]
     : []
+}
+
+/** The custom scheme needs a custom theme, and the theme list keeps its invariants. */
+function consistencyIssues(settings: AppSettings): AppearanceIssue[] {
+  return [...enabledIssues(settings), ...themeListIssues(settings)]
 }
 
 /**
@@ -523,13 +540,14 @@ export function applySettingsPatch(current: AppSettings, patch: unknown): Parsed
 
 /**
  * Settings from stored values. A missing or no longer valid value falls back to its default (the
- * custom and recent kaomoji lists drop only their invalid entries), and a custom scheme whose theme
- * is unusable falls back to `system`; the stored rows are not rewritten.
+ * custom and recent kaomoji lists drop only their invalid entries, the theme list falls back part by
+ * part), and a custom scheme whose theme is unusable falls back to `system`; the stored rows are not
+ * rewritten.
  */
 export function settingsFromStored(stored: ReadonlyMap<string, unknown>): AppSettings {
   const settings: AppSettings = { ...DEFAULT_SETTINGS }
   for (const key of SETTING_KEYS) {
-    if (!stored.has(key)) continue
+    if (!stored.has(key) || key === 'customThemeList') continue
     const value = stored.get(key)
     const parsed =
       key === 'customKaomoji' ? storedKaomoji(value, key) : key === 'recentKaomoji' ? storedRecentKaomoji(value, key) : parseSetting(key, value)
@@ -540,7 +558,11 @@ export function settingsFromStored(stored: ReadonlyMap<string, unknown>): AppSet
     settings.colorScheme = isRecord(oldTheme) && (oldTheme.base === 'light' || oldTheme.base === 'dark') ? oldTheme.base : 'system'
     settings.customThemeEnabled = true
   }
-  if (consistencyIssues(settings).length > 0) settings.customThemeEnabled = false
+  if (enabledIssues(settings).length > 0) settings.customThemeEnabled = false
+  // A theme promoted to current is not in use: it was not before either.
+  const { customTheme, customThemeList } = themeListFromStored(settings.customTheme, stored.get('customThemeList'))
+  settings.customTheme = customTheme
+  settings.customThemeList = customThemeList
   return settings
 }
 

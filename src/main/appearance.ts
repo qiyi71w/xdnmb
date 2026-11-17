@@ -5,6 +5,7 @@ import { open, writeFile } from 'node:fs/promises'
 import type { SettingsUpdateResult, ThemeExportResult, ThemeImportResult } from '../shared/api'
 import { applySettingsPatch, DEFAULT_SETTINGS, type AppSettings } from '../shared/settings'
 import { MAX_THEME_FILE_BYTES, parseThemeDocument, serializeThemeDocument, themeDocument, themeFromBuiltin } from '../shared/theme'
+import { importTheme } from '../shared/themeList'
 import type { ReadingStore } from './storage/contract'
 
 export type SettingsStore = Pick<ReadingStore, 'loadSettings' | 'saveSettings'>
@@ -88,8 +89,11 @@ export function createSettingsService(store: SettingsStore, onSaved?: (settings:
         if (parsed === null) return { status: 'rejected', issues: [{ kind: 'syntax' }] }
         if (!parsed.ok) return { status: 'rejected', issues: parsed.issues }
         const current = await load()
-        const next: AppSettings = { ...current, customTheme: parsed.theme, reading: parsed.reading, customThemeEnabled: true }
-        return (await save(next)) ? { status: 'imported', settings: next } : { status: 'failed', reason: 'not-saved' }
+        // The file's theme replaces the current one, renamed when another custom theme has its name.
+        const listed = importTheme(current, parsed.theme)
+        const next = listed.ok ? applySettingsPatch(current, { ...listed.patch, reading: parsed.reading }) : null
+        if (next === null || !next.ok) return { status: 'rejected', issues: next?.issues ?? [] }
+        return (await save(next.value)) ? { status: 'imported', settings: next.value } : { status: 'failed', reason: 'not-saved' }
       }),
 
     exportTheme: (path, systemDark) =>

@@ -88,18 +88,100 @@
   color: var(--ink-2);
 }
 
-/* 自定义主题: the editor, the 保存 row and the import / export row are three groups, a little
-   further apart than the rows inside the editor. */
+/* 主题: the name on the left and, beside it, the radio list with 新建主题 and the theme file buttons
+   under it. Rows are quiet like the buttons: no edge at rest, the hover layer under the pointer; the
+   one in use is the checked radio and a bold name, never the color alone. The ring goes on the whole
+   row, not the small radio. The list grows with the themes; it has no scrolling of its own. */
+.theme-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px 16px;
+}
+
+/* Lines up with the first row's name. */
+.theme-row-label {
+  padding-top: 6px;
+}
+
+.theme-row-control {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.theme-list {
+  display: grid;
+  gap: 2px;
+}
+
+.theme-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 4px 11px;
+  border-radius: var(--radius-m);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease-out);
+}
+
+.theme-choice:hover {
+  background: var(--hover);
+}
+
+.theme-choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.theme-choice input {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: inherit;
+}
+
+.theme-choice input:focus-visible {
+  outline: none;
+}
+
+.theme-choice-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.theme-choice.is-selected .theme-choice-name {
+  font-weight: 600;
+}
+
+/* The editor of the theme in use, under a soft line; collapsed until opened. Inside it, the editor
+   and the 保存 row are two groups, a little further apart than the rows inside the editor. */
+.theme-editor-block {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.theme-editor-title {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+  color: var(--ink);
+}
+
 .theme-body:not([hidden]) {
   display: grid;
   gap: 20px;
 }
 
-.theme-empty,
 .theme-editor {
   display: grid;
   gap: 12px;
-  justify-items: start;
 }
 
 .theme-editor {

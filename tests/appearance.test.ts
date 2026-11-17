@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSettingsService, type SettingsStore } from '../src/main/appearance'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { applySettingsPatch, DEFAULT_SETTINGS, nextZoomFactor, resolveAppearance, settingsFromStored, type AppSettings } from '../src/shared/settings'
+import { customThemes } from '../src/shared/themeList'
 import { COOKIE_COLORS } from '../src/shared/cookieColors'
 import {
   cookieColorToken,
@@ -512,6 +513,21 @@ describe('settings service with real storage', () => {
     writeFileSync(file, serializeThemeDocument(themeDocument(pale, DEFAULT_SETTINGS.reading)))
     expect(await service.importTheme(file)).toMatchObject({ status: 'imported' })
     expect(db.loadSettings()).toMatchObject({ customThemeEnabled: true, customTheme: pale })
+  })
+
+  it('numbers an imported theme whose name another custom theme has, shortening a long name, and keeps the others', async () => {
+    const dir = folder()
+    const db = open(join(dir, 'a.sqlite'))
+    const service = createSettingsService(storeOf(db))
+    const long = '长'.repeat(40)
+    const blue = { ...sepia, name: '青瓷' }
+    await service.update({ customTheme: sepia, customThemeEnabled: true, customThemeList: { others: [blue, { ...sepia, name: long }], currentIndex: 1 } })
+    const file = join(dir, 'theme.json')
+    for (const [name, adopted] of [['青瓷', '青瓷 2'], ['汐岛', '汐岛 2'], [long, `${'长'.repeat(38)} 2`], ['旧纸', '旧纸']] as const) {
+      writeFileSync(file, serializeThemeDocument(themeDocument({ ...sepia, name }, DEFAULT_SETTINGS.reading)))
+      expect(await service.importTheme(file)).toMatchObject({ status: 'imported', settings: { customThemeEnabled: true, customTheme: { name: adopted } } })
+      expect(customThemes(db.loadSettings()).map((theme) => theme.name)).toEqual(['青瓷', adopted, long])
+    }
   })
 
   it('exports a seed of the built-in scheme in effect when there is no custom theme', async () => {
