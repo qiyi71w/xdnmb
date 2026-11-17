@@ -8,14 +8,18 @@ import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/d
 import { applySettingsPatch, DEFAULT_SETTINGS, settingsFromStored, type AppSettings } from '../src/shared/settings'
 import { parseCustomTheme, themeFromBuiltin, type CustomTheme } from '../src/shared/theme'
 import {
+  copyTheme,
   createTheme,
   customThemes,
+  deleteTheme,
   importTheme,
   MAX_CUSTOM_THEMES,
+  restoreTheme,
   saveCurrentTheme,
   selectBuiltinTheme,
   selectCustomTheme,
   uniqueThemeName,
+  type DeletedTheme,
   type ThemeListResult
 } from '../src/shared/themeList'
 
@@ -155,6 +159,128 @@ describe('theme list rules', () => {
     expect(parseCustomTheme(imported.customTheme).ok).toBe(true)
   })
 
+  it('copies a theme as “<name> 副本” at the end and uses it, numbering repeated copies', () => {
+    const copied = applied(library, copyTheme(library, '青瓷', 'light'))
+    expect(names(copied)).toEqual(['青瓷', '夜航', '纸白', '青瓷 副本'])
+    expect(copied.customTheme).toEqual({ ...a, name: '青瓷 副本' })
+    expect(copied.customThemeEnabled).toBe(true)
+    const again = applied(copied, copyTheme(copied, '青瓷', 'light'))
+    expect(names(again).at(-1)).toBe('青瓷 副本 2')
+    expect(names(applied(again, copyTheme(again, '青瓷 副本', 'light'))).at(-1)).toBe('青瓷 副本 副本')
+    // A copy of the theme not in use (汐岛 in use) is used.
+    const builtin = applied(library, selectBuiltinTheme())
+    expect(applied(builtin, copyTheme(builtin, '纸白', 'light'))).toMatchObject({ customTheme: { ...c, name: '纸白 副本' }, customThemeEnabled: true })
+    expect(copyTheme(library, '不存在', 'light')).toEqual({ ok: false, reason: 'not-found' })
+  })
+
+  it('copies 汐岛 as a new theme named 汐岛 副本', () => {
+    const copied = applied(library, copyTheme(library, '汐岛', 'dark'))
+    expect(copied.customTheme).toEqual({ ...themeFromBuiltin('dark'), name: '汐岛 副本' })
+    expect(names(applied(copied, copyTheme(copied, '汐岛', 'dark'))).at(-1)).toBe('汐岛 副本 2')
+    expect(applied(DEFAULT_SETTINGS, copyTheme(DEFAULT_SETTINGS, '汐岛', 'light'))).toMatchObject({
+      customTheme: { ...themeFromBuiltin('light'), name: '汐岛 副本' }, customThemeEnabled: true, customThemeList: { others: [], currentIndex: 0 }
+    })
+  })
+
+  it('shortens the original name of a copy, keeping 副本 and the number within 40 characters', () => {
+    const long = '长'.repeat(40)
+    const settings = { ...DEFAULT_SETTINGS, customTheme: theme(long), customThemeEnabled: true }
+    const first = applied(settings, copyTheme(settings, long, 'light'))
+    expect(first.customTheme?.name).toBe(`${'长'.repeat(37)} 副本`)
+    const second = applied(first, copyTheme(first, long, 'light'))
+    expect(second.customTheme?.name).toBe(`${'长'.repeat(35)} 副本 2`)
+    expect([...second.customTheme!.name]).toHaveLength(40)
+  })
+
+  it(`refuses copies past ${MAX_CUSTOM_THEMES} themes, 汐岛 included`, () => {
+    const full = many(MAX_CUSTOM_THEMES)
+    expect(copyTheme(full, '主题 1', 'light')).toEqual({ ok: false, reason: 'full' })
+    expect(copyTheme(full, '汐岛', 'light')).toEqual({ ok: false, reason: 'full' })
+  })
+
+  it('deletes a theme not in use without changing what is in use', () => {
+    for (const settings of [library, applied(library, selectBuiltinTheme())]) {
+      const before = deleteTheme(settings, '青瓷')
+      expect(before).toEqual({ ok: true, deleted: { theme: a, index: 0, inUse: false }, patch: { customThemeList: { others: [c], currentIndex: 0 } } })
+      expect(applied(settings, before)).toMatchObject({ customTheme: b, customThemeEnabled: settings.customThemeEnabled })
+      const after = applied(settings, deleteTheme(settings, '纸白'))
+      expect(names(after)).toEqual(['青瓷', '夜航'])
+      expect(after).toMatchObject({ customTheme: b, customThemeEnabled: settings.customThemeEnabled, customThemeList: { others: [a], currentIndex: 1 } })
+    }
+    expect(deleteTheme(library, '不存在')).toEqual({ ok: false, reason: 'not-found' })
+    expect(deleteTheme(library, '汐岛')).toEqual({ ok: false, reason: 'not-found' })
+  })
+
+  it('deleting the theme in use goes back to 汐岛 and makes the next (else the previous) theme current, out of use', () => {
+    const result = deleteTheme(library, '夜航')
+    expect(result).toMatchObject({ ok: true, deleted: { theme: b, index: 1, inUse: true } })
+    const next = applied(library, result)
+    expect(next).toMatchObject({ customTheme: c, customThemeEnabled: false, customThemeList: { others: [a], currentIndex: 1 } })
+    expect(names(next)).toEqual(['青瓷', '纸白'])
+    // The last one: the previous theme.
+    const last = applied(next, selectCustomTheme(next, '纸白'))
+    const previous = applied(last, deleteTheme(last, '纸白'))
+    expect(previous).toMatchObject({ customTheme: a, customThemeEnabled: false, customThemeList: { others: [], currentIndex: 0 } })
+    // The only one: no current theme.
+    expect(applied(previous, deleteTheme(previous, '青瓷'))).toMatchObject({ customTheme: null, customThemeEnabled: false, customThemeList: { others: [], currentIndex: 0 } })
+    // The current theme while 汐岛 is in use: the same promotion, nothing put in use.
+    const builtin = applied(library, selectBuiltinTheme())
+    expect(deleteTheme(builtin, '夜航')).toMatchObject({ deleted: { inUse: false } })
+    expect(applied(builtin, deleteTheme(builtin, '夜航'))).toMatchObject({ customTheme: c, customThemeEnabled: false })
+  })
+
+  it('restores a deleted theme at its place and its use', () => {
+    const undo = (settings: AppSettings, name: string) => {
+      const result = deleteTheme(settings, name)
+      if (!result.ok) throw new Error(result.reason)
+      const deletedFrom = applied(settings, result)
+      return applied(deletedFrom, restoreTheme(deletedFrom, result.deleted))
+    }
+    // In use: back in use, at its place.
+    expect(undo(library, '夜航')).toEqual(library)
+    // Not in use: back at its place; what is in use stays.
+    expect(undo(library, '青瓷')).toEqual(library)
+    expect(undo(library, '纸白')).toEqual(library)
+    const builtin = applied(library, selectBuiltinTheme())
+    for (const name of ['青瓷', '纸白']) expect(undo(builtin, name)).toEqual(builtin)
+    // The current theme deleted while 汐岛 was in use: 汐岛 stays in use.
+    const restored = undo(builtin, '夜航')
+    expect(names(restored)).toEqual(['青瓷', '夜航', '纸白'])
+    expect(restored.customThemeEnabled).toBe(false)
+    // The only theme: it is the current one again.
+    const single = { ...DEFAULT_SETTINGS, customTheme: a, customThemeEnabled: true }
+    expect(undo(single, '青瓷')).toEqual(single)
+    // Things changed since: in use again even after another theme was chosen; past the end it goes last.
+    const deleted: DeletedTheme = { theme: b, index: 1, inUse: true }
+    const back = applied(single, restoreTheme(single, deleted))
+    expect(names(back)).toEqual(['青瓷', '夜航'])
+    expect(back).toMatchObject({ customTheme: b, customThemeEnabled: true, customThemeList: { others: [a], currentIndex: 1 } })
+    expect(applied(DEFAULT_SETTINGS, restoreTheme(DEFAULT_SETTINGS, { theme: c, index: 2, inUse: false }))).toMatchObject({
+      customTheme: c, customThemeEnabled: false, customThemeList: { others: [], currentIndex: 0 }
+    })
+  })
+
+  it('numbers a restored theme whose name was taken since', () => {
+    const result = deleteTheme(library, '青瓷')
+    if (!result.ok) throw new Error(result.reason)
+    const deletedFrom = applied(library, result)
+    const renamed = applied(deletedFrom, saveCurrentTheme(deletedFrom, { ...b, name: '青瓷' }))
+    const restored = applied(renamed, restoreTheme(renamed, result.deleted))
+    expect(names(restored)).toEqual(['青瓷 2', '青瓷', '纸白'])
+    expect(restored.customThemeList.others[0]).toEqual({ ...a, name: '青瓷 2' })
+  })
+
+  it(`refuses restoring when the list already has ${MAX_CUSTOM_THEMES} themes`, () => {
+    const full = many(MAX_CUSTOM_THEMES)
+    const result = deleteTheme(full, '主题 2')
+    if (!result.ok) throw new Error(result.reason)
+    const deletedFrom = applied(full, result)
+    const refilled = applied(deletedFrom, createTheme(deletedFrom, 'light'))
+    expect(customThemes(refilled)).toHaveLength(MAX_CUSTOM_THEMES)
+    expect(restoreTheme(refilled, result.deleted)).toEqual({ ok: false, reason: 'full' })
+    expect(applied(deletedFrom, restoreTheme(deletedFrom, result.deleted))).toEqual(full)
+  })
+
   it('writes every operation as one settings update', async () => {
     const db = open(join(folder(), 'a.sqlite'))
     const store = countingStore(db)
@@ -165,6 +291,11 @@ describe('theme list rules', () => {
       () => selectBuiltinTheme(),
       (current) => createTheme(current, 'light'),
       (current) => saveCurrentTheme(current, { ...current.customTheme!, name: '晨雾' }),
+      (current) => selectCustomTheme(current, '夜航'),
+      (current) => copyTheme(current, '晨雾', 'light'),
+      (current) => deleteTheme(current, '晨雾 副本'),
+      (current) => restoreTheme(current, { theme: { ...b, name: '晨雾 副本' }, index: 4, inUse: true }),
+      (current) => deleteTheme(current, '晨雾 副本'),
       (current) => selectCustomTheme(current, '夜航')
     ]
     for (const step of steps) {

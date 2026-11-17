@@ -89,9 +89,10 @@
 }
 
 /* 主题: the name on the left and, beside it, the radio list with 新建主题 and the theme file buttons
-   under it. Rows are quiet like the buttons: no edge at rest, the hover layer under the pointer; the
-   one in use is the checked radio and a bold name, never the color alone. The ring goes on the whole
-   row, not the small radio. The list grows with the themes; it has no scrolling of its own. */
+   under it. Rows are quiet like the buttons: no edge at rest, the hover layer under the pointer (and
+   while the row's menu is open); the one in use is the checked radio and a bold name, never the color
+   alone. The radio's ring goes on the whole row, not the small radio. Each row ends with its ⋯ menu
+   button. The list grows with the themes; it has no scrolling of its own. */
 .theme-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -118,22 +119,34 @@
 .theme-choice {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 4px;
   min-height: 32px;
-  padding: 4px 11px;
+  padding: 1px 1px 1px 11px;
   border-radius: var(--radius-m);
   color: var(--ink);
-  cursor: pointer;
   transition: background-color 0.15s var(--ease-out);
 }
 
-.theme-choice:hover {
+.theme-choice:hover,
+.theme-choice.is-menu-open {
   background: var(--hover);
 }
 
 .theme-choice:has(input:focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+/* The radio and the name: the whole row but its ⋯ button chooses the theme. */
+.theme-choice-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  align-self: stretch;
+  padding: 3px 0;
+  cursor: pointer;
 }
 
 .theme-choice input {

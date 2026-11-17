@@ -65,12 +65,17 @@ function fitName(base: string, suffix: string): string {
  * taken. The original part is shortened when the result would pass the name length limit.
  */
 export function uniqueThemeName(name: string, taken: Iterable<string>): string {
+  return uniqueLabelledName(name, '', taken)
+}
+
+/** `uniqueThemeName` of `name` followed by `label` (as in “青瓷 副本”, “青瓷 副本 2”); only `name` is shortened. */
+function uniqueLabelledName(name: string, label: string, taken: Iterable<string>): string {
   const used = new Set([BUILTIN_THEME_NAME])
   for (const other of taken) used.add(nameKey(other))
-  const plain = fitName(name, '')
+  const plain = fitName(name, label)
   if (!used.has(plain)) return plain
   for (let number = 2; ; number++) {
-    const candidate = fitName(name, ` ${number}`)
+    const candidate = fitName(name, `${label} ${number}`)
     if (!used.has(candidate)) return candidate
   }
 }
@@ -113,6 +118,87 @@ function append(all: readonly CustomTheme[], theme: CustomTheme): ThemeListResul
 export function createTheme(settings: ThemeListSettings, scheme: SchemeBase): ThemeListResult {
   const all = customThemes(settings)
   return append(all, { ...themeFromBuiltin(scheme), name: uniqueThemeName(NEW_THEME_NAME, all.map((theme) => theme.name)) })
+}
+
+/**
+ * A copy of the theme named `name`, named “<name> 副本”, added last and used. A copy of 汐岛 is a new
+ * theme (`scheme` as in `createTheme`) named 汐岛 副本.
+ */
+export function copyTheme(settings: ThemeListSettings, name: string, scheme: SchemeBase): ThemeListResult {
+  const key = nameKey(name)
+  const all = customThemes(settings)
+  const source = key === BUILTIN_THEME_NAME ? themeFromBuiltin(scheme) : all.find((theme) => theme.name === key)
+  if (source === undefined) return { ok: false, reason: 'not-found' }
+  return append(all, { ...source, name: uniqueLabelledName(key, ' 副本', all.map((theme) => theme.name)) })
+}
+
+/** A theme `deleteTheme` took out of the list, with what `restoreTheme` needs to put it back. */
+export interface DeletedTheme {
+  theme: CustomTheme
+  /** Its place in the whole list. */
+  index: number
+  /** It was the theme in use. */
+  inUse: boolean
+}
+
+export type DeleteThemeResult = { ok: true; patch: ThemeListPatch; deleted: DeletedTheme } | { ok: false; reason: 'not-found' }
+
+/**
+ * Deletes the theme named `name`. Deleting the current theme leaves 汐岛 in use when it was in use;
+ * the theme after it (else the one before it) becomes the current theme, out of use. Deleting
+ * another theme keeps what is in use.
+ */
+export function deleteTheme(settings: ThemeListSettings, name: string): DeleteThemeResult {
+  const key = nameKey(name)
+  const all = customThemes(settings)
+  const index = all.findIndex((theme) => theme.name === key)
+  if (index < 0) return { ok: false, reason: 'not-found' }
+  const theme = all[index]!
+  const { others, currentIndex } = settings.customThemeList
+  if (settings.customTheme?.name !== key) {
+    return {
+      ok: true,
+      deleted: { theme, index, inUse: false },
+      patch: { customThemeList: { others: others.filter((other) => other !== theme), currentIndex: index < currentIndex ? currentIndex - 1 : currentIndex } }
+    }
+  }
+  const rest = all.filter((_, at) => at !== index)
+  const promoted = Math.min(index, rest.length - 1)
+  return {
+    ok: true,
+    deleted: { theme, index, inUse: settings.customThemeEnabled },
+    patch:
+      promoted < 0
+        ? { customTheme: null, customThemeEnabled: false, customThemeList: EMPTY_THEME_LIST }
+        : {
+            customTheme: rest[promoted]!,
+            customThemeEnabled: false,
+            customThemeList: { others: rest.filter((_, at) => at !== promoted), currentIndex: promoted }
+          }
+  }
+}
+
+/**
+ * Puts a deleted theme back at its place (the end, when the list is shorter now) and uses it again
+ * when it was in use; otherwise what is in use stays. A name taken since gets a number. Refused
+ * when the list is full.
+ */
+export function restoreTheme(settings: ThemeListSettings, deleted: DeletedTheme): { ok: true; patch: ThemeListPatch } | { ok: false; reason: 'full' } {
+  const all = customThemes(settings)
+  if (all.length >= MAX_CUSTOM_THEMES) return { ok: false, reason: 'full' }
+  const theme = { ...deleted.theme, name: uniqueThemeName(deleted.theme.name, all.map((other) => other.name)) }
+  const index = Math.min(deleted.index, all.length)
+  const restored = [...all.slice(0, index), theme, ...all.slice(index)]
+  const kept = settings.customTheme
+  const current = deleted.inUse || kept === null ? index : restored.findIndex((other) => other !== theme && other.name === kept.name)
+  return {
+    ok: true,
+    patch: {
+      customTheme: restored[current]!,
+      customThemeEnabled: deleted.inUse || settings.customThemeEnabled,
+      customThemeList: { others: restored.filter((_, at) => at !== current), currentIndex: current }
+    }
+  }
 }
 
 /** Saves edits of the current theme (which is then in use). Renaming it to a taken name is refused. */

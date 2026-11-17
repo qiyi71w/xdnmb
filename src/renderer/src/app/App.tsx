@@ -11,6 +11,7 @@ import { BoardPanelEmptyPage, BoardPanelTitle, RailNavigation } from '../feature
 import type { FeatureHost, NavProps, PageOpening } from '../features/directory/navParts'
 import { RAIL_WIDTH } from '../features/directory/Rail'
 import { SettingsPage, type SettingsTarget } from './SettingsPage'
+import { ThemeDeletedNotice } from './ThemeDeletedNotice'
 import {
   closeBoardPanel,
   ListHostContext,
@@ -92,6 +93,7 @@ import { isEditableTarget, matchShortcut, shortcutLabel, type ShortcutAction } f
 import { composeTargetsOf, TabView } from './TabView'
 import { TopBar } from './TopBar'
 import { useSettingsWriter } from './useSettingsWriter'
+import { useThemeListOperations } from './useThemeListOperations'
 import { StorageBanner } from '../features/storage/StorageBanner'
 import './layout.css'
 
@@ -158,6 +160,7 @@ export function App() {
   useAppearance(settings)
   const settingsWriter = useSettingsWriter(settings, setSettings)
   const { write: writeSettings, latest: latestSettings } = settingsWriter
+  const themeList = useThemeListOperations(settingsWriter.commit, latestSettings)
   const settingsAccess = useMemo<SettingsAccess>(
     () => ({ settings, latest: latestSettings, write: writeSettings, notSaved: settingsWriter.status.notSaved }),
     [settings, latestSettings, writeSettings, settingsWriter.status.notSaved]
@@ -1533,8 +1536,7 @@ export function App() {
                           platform={platform}
                           status={settingsWriter.status}
                           write={writeSettings}
-                          commit={settingsWriter.commit}
-                          latest={latestSettings}
+                          themeList={themeList}
                           adopt={settingsWriter.adopt}
                           directory={dirData}
                           target={settingsTarget}
@@ -1560,6 +1562,7 @@ export function App() {
                 />
                 <LaunchNotices openDraft={openFailedDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
                 <DraftDeletedNotices onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
+                <ThemeDeletedNotice operations={themeList} fallbackFocus={activeTabFocus} />
                 <UpdateNotice fallbackFocus={activeTabFocus} />
                 <BottomNotice
                   open={loginItemNotApplied}

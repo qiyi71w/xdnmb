@@ -2,7 +2,7 @@
 // global preferences and window behavior. Global preferences go through `write` (shown at once,
 // saved by `useSettingsWriter`); the other sections keep their own APIs.
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react'
 import type { AppPlatform } from '../../../shared/api'
 import { BOSS_KEY_DEFAULT, bossKeyLabel, recordBossKey, type BossKeyStatus } from '../../../shared/bossKey'
 import { CLOSE_ACTIONS, type CloseAction, type LoginItemState } from '../../../shared/lifecycle'
@@ -27,6 +27,7 @@ import {
 } from '../../../shared/theme'
 import {
   BUILTIN_THEME_NAME,
+  copyTheme,
   createTheme,
   customThemes,
   MAX_CUSTOM_THEMES,
@@ -37,6 +38,7 @@ import {
   type ThemeListResult
 } from '../../../shared/themeList'
 import imageMaskSample from '../../../../resources/image-mask-preview.png'
+import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../components/ContextMenu'
 import { Icon } from '../components/Icon'
 import { KaomojiDecor } from '../components/KaomojiDecor'
 import { ImageMaskCover } from '../features/image/imageMask'
@@ -44,6 +46,7 @@ import { previewTheme, systemPrefersDark, systemReducesMotion } from '../lib/use
 import { useClearOnLeave } from '../lib/useClearOnLeave'
 import { describeIssues, invalidFields } from './appearanceIssues'
 import type { SettingsWriteStatus } from './useSettingsWriter'
+import type { ThemeListOperations } from './useThemeListOperations'
 import './settings.css'
 
 declare global {
@@ -263,15 +266,13 @@ export function Switch({
 export function AppearanceSection({
   settings,
   write,
-  commit,
-  latest,
+  themeList,
   adopt,
   shown
 }: {
   settings: AppSettings
   write: Write
-  commit: (patch: Partial<AppSettings>) => Promise<boolean>
-  latest: () => AppSettings
+  themeList: ThemeListOperations
   adopt: (settings: AppSettings) => void
   /** 设置 is the active tab. */
   shown: boolean
@@ -290,7 +291,7 @@ export function AppearanceSection({
           onChange={(colorScheme) => write({ colorScheme })}
         />
       </SettingRow>
-      <ThemeList settings={settings} commit={commit} latest={latest} adopt={adopt} shown={shown} />
+      <ThemeList settings={settings} themeList={themeList} adopt={adopt} shown={shown} />
     </Section>
   )
 }
@@ -366,24 +367,27 @@ function ThemeField({
   )
 }
 
+/** Why 新建主题 and 复制 are unavailable at the limit. */
+const THEMES_FULL_TEXT = `已有 ${MAX_CUSTOM_THEMES} 个自定义主题，删除一个后才能再添加`
+
 /**
  * 主题: 汐岛 and the custom themes as a radio list; choosing one uses it at once (saved without
- * 保存). Under it 新建主题 and the theme file buttons, then the collapsed editor of the custom theme in
- * use (none while 汐岛 is). Valid edits preview in this renderer at once; only 保存 writes settings.
- * 放弃修改, leaving 设置 (another tab shown, or 设置 closed), or the theme in use changing (another one
- * chosen, 汐岛 included) drops the unsaved edits and restores the saved appearance; a choice that was
- * not saved changes nothing.
+ * 保存). Each row ends with a ⋯ button opening the row's menu, which a right-click, the ContextMenu
+ * key or Shift+F10 on the row opens too: 复制 (汐岛 included), and 删除 for a custom theme, at once
+ * and undone from the 主题已删除 notice. Under the list 新建主题 and the theme file buttons, then the
+ * collapsed editor of the custom theme in use (none while 汐岛 is). Valid edits preview in this
+ * renderer at once; only 保存 writes settings. 放弃修改, leaving 设置 (another tab shown, or 设置
+ * closed), or the theme in use changing (another one chosen, 汐岛 included, or a copy made) drops
+ * the unsaved edits and restores the saved appearance; a choice that was not saved changes nothing.
  */
 function ThemeList({
   settings,
-  commit,
-  latest,
+  themeList,
   adopt,
   shown
 }: {
   settings: AppSettings
-  commit: (patch: Partial<AppSettings>) => Promise<boolean>
-  latest: () => AppSettings
+  themeList: ThemeListOperations
   adopt: (settings: AppSettings) => void
   shown: boolean
 }) {
@@ -412,13 +416,14 @@ function ThemeList({
     }
   })
 
-  // List operations run one after another, each on the settings the previous one left.
-  const queue = useRef<Promise<void>>(Promise.resolve())
   const run = (operation: (current: AppSettings) => ThemeListResult, onSaved?: () => void) => {
-    queue.current = queue.current.then(async () => {
-      const result = operation(latest())
-      if (result.ok && (await commit(result.patch))) onSaved?.()
+    void themeList.run(operation).then((result) => {
+      if (result?.ok === true) onSaved?.()
     })
+  }
+  const opened = () => {
+    setExpanded(true)
+    setFocusName(true)
   }
 
   const edit = (next: CustomTheme) => {
@@ -453,14 +458,7 @@ function ThemeList({
     }
     run((current) => saveCurrentTheme(current, parsed.value))
   }
-  const create = () =>
-    run(
-      (current) => createTheme(current, resolveAppearance(current, systemPrefersDark()).scheme),
-      () => {
-        setExpanded(true)
-        setFocusName(true)
-      }
-    )
+  const create = () => run((current) => createTheme(current, resolveAppearance(current, systemPrefersDark()).scheme), opened)
 
   const themes = customThemes(settings)
   const choices = [
@@ -472,6 +470,37 @@ function ThemeList({
     }))
   ]
   const full = themes.length >= MAX_CUSTOM_THEMES
+
+  // The row menu, and where focus goes back when it closes: the ⋯ button, or the row's radio.
+  const [menu, setMenu] = useState<{ name: string; point: ContextMenuPoint; returnTo: HTMLElement } | null>(null)
+  const openMenu = (name: string, event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
+    const radio = event.currentTarget.querySelector<HTMLInputElement>('input[type="radio"]')
+    if (radio === null) return
+    event.preventDefault()
+    const from = 'button' in event ? radio : (event.target as HTMLElement)
+    // No scrolling into view: a scroll closes the menu that is about to open.
+    from.focus({ preventScroll: true })
+    setMenu({ name, point: contextMenuPoint(event, radio.closest<HTMLElement>('.theme-choice') ?? radio), returnTo: from })
+  }
+
+  // After 删除, focus goes to the next row, else the previous one, else 新建主题, once the row is gone.
+  const radios = useRef(new Map<string, HTMLInputElement>())
+  const createRef = useRef<HTMLButtonElement>(null)
+  const [deletedFocus, setDeletedFocus] = useState<{ deleted: string; next: string | null } | null>(null)
+  const remove = (name: string) => {
+    const names = choices.map((choice) => choice.name)
+    const at = names.indexOf(name)
+    const next = names[at + 1] ?? names[at - 1] ?? null
+    void themeList.remove(name).then((deleted) => {
+      if (deleted) setDeletedFocus({ deleted: name, next })
+    })
+  }
+  useEffect(() => {
+    if (deletedFocus === null || choices.some((choice) => choice.name === deletedFocus.deleted)) return
+    setDeletedFocus(null)
+    ;((deletedFocus.next === null ? null : radios.current.get(deletedFocus.next)) ?? createRef.current)?.focus()
+  })
+
   const draft = edits ?? saved
   const dirty = edits !== null && !sameTheme(edits, saved)
   const invalid = invalidFields(issues)
@@ -487,12 +516,72 @@ function ThemeList({
         <div className="theme-row-control">
           <div className="theme-list" role="radiogroup" aria-labelledby="setting-theme-list">
             {choices.map((choice) => (
-              <label key={choice.name} className={choice.inUse ? 'theme-choice is-selected' : 'theme-choice'}>
-                <input type="radio" name={groupName} checked={choice.inUse} onChange={choice.select} />
-                <span className="theme-choice-name">{choice.name}</span>
-              </label>
+              <div
+                key={choice.name}
+                className={['theme-choice', choice.inUse && 'is-selected', menu?.name === choice.name && 'is-menu-open'].filter(Boolean).join(' ')}
+                onContextMenu={(event) => openMenu(choice.name, event)}
+                onKeyDown={(event) => {
+                  if (isContextMenuKey(event)) openMenu(choice.name, event)
+                }}
+              >
+                <label className="theme-choice-label">
+                  <input
+                    ref={(radio) => {
+                      if (radio === null) radios.current.delete(choice.name)
+                      else radios.current.set(choice.name, radio)
+                    }}
+                    type="radio"
+                    name={groupName}
+                    checked={choice.inUse}
+                    onChange={choice.select}
+                  />
+                  <span className="theme-choice-name">{choice.name}</span>
+                </label>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-haspopup="menu"
+                  aria-expanded={menu?.name === choice.name}
+                  aria-label={`主题操作：${choice.name}`}
+                  title="主题操作"
+                  onClick={(event) => {
+                    // A press outside the open menu (this one included) has already closed it.
+                    const box = event.currentTarget.getBoundingClientRect()
+                    setMenu({ name: choice.name, point: { x: box.right, y: box.bottom + 4, end: true }, returnTo: event.currentTarget })
+                  }}
+                >
+                  <Icon name="more" />
+                </button>
+              </div>
             ))}
           </div>
+          {menu !== null && (
+            <ContextMenu
+              key={menu.name}
+              point={menu.point}
+              label={`主题操作：${menu.name}`}
+              items={[
+                {
+                  type: 'action',
+                  key: 'copy',
+                  label: '复制',
+                  disabled: full,
+                  title: full ? THEMES_FULL_TEXT : undefined,
+                  onSelect: () => run((current) => copyTheme(current, menu.name, resolveAppearance(current, systemPrefersDark()).scheme), opened)
+                },
+                ...(menu.name === BUILTIN_THEME_NAME
+                  ? []
+                  : [
+                      { type: 'separator', key: 'delete-separator' } satisfies ContextMenuItem,
+                      { type: 'action', key: 'delete', label: '删除', danger: true, onSelect: () => remove(menu.name) } satisfies ContextMenuItem
+                    ])
+              ]}
+              onClose={(returnFocus) => {
+                setMenu(null)
+                if (returnFocus && menu.returnTo.isConnected) menu.returnTo.focus()
+              }}
+            />
+          )}
           <ThemeTransfer
             shown={shown}
             adopt={(next) => {
@@ -502,12 +591,13 @@ function ThemeList({
             note={
               full ? (
                 <span className="setting-help" id="theme-full-note">
-                  最多 {MAX_CUSTOM_THEMES} 个自定义主题
+                  {THEMES_FULL_TEXT}
                 </span>
               ) : null
             }
           >
             <button
+              ref={createRef}
               type="button"
               className="btn btn-page"
               aria-disabled={full || undefined}

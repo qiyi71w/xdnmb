@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { targetText, type PostTarget } from '../../../../shared/drafts'
-import { BottomNotice } from '../../components/BottomNotice'
+import { BottomNotice, UNDO_WINDOW } from '../../components/BottomNotice'
 import { SAVE_FAILURE_TEXT } from '../editor/editorText'
 import type { UndoneDeletion } from '../editor/useEditorsStore'
 import { useEditorWorkspace } from '../editor/workspace'
@@ -10,9 +10,6 @@ const REFUSED_TEXT: Record<NonNullable<UndoneDeletion['refused']>, string> = {
   locked: '编辑框正在发送，草稿留在草稿列表',
   occupied: '编辑框里已有新内容，草稿留在草稿列表'
 }
-
-/** Unattended time on screen after which a deletion can no longer be undone (BottomNotice pauses it). */
-const UNDO_WINDOW = 10_000
 
 /** An undone deletion whose editor could not take the draft back: it is in 草稿 only. */
 interface NotTakenBack {

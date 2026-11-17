@@ -18,6 +18,7 @@ import {
   type Write
 } from './settingsSections'
 import type { SettingsWriteStatus } from './useSettingsWriter'
+import type { ThemeListOperations } from './useThemeListOperations'
 import { Icon } from '../components/Icon'
 import { KaomojiDecor } from '../components/KaomojiDecor'
 import { openLayer } from '../lib/layers'
@@ -97,10 +98,8 @@ export interface SettingsPageProps {
   platform: AppPlatform | null
   status: SettingsWriteStatus
   write: Write
-  /** Sends a change now and shows it once saved (theme list operations); resolves whether it was saved. */
-  commit: (patch: Partial<AppSettings>) => Promise<boolean>
-  /** The settings including changes not yet sent or answered. */
-  latest: () => AppSettings
+  /** The theme list operations (shared with the 主题已删除 notice, which outlives this tab). */
+  themeList: ThemeListOperations
   adopt: (settings: AppSettings) => void
   directory: BoardDirectory | null
   /**
@@ -493,10 +492,10 @@ function SectionJump({
 
 // ---------- Sections ----------
 
-function SectionBody({ id, settings, write, commit, latest, adopt, platform, identities, subscriptions, directory, active, onLoginItemNotApplied }: SettingsPageProps & { id: SectionId }) {
+function SectionBody({ id, settings, write, themeList, adopt, platform, identities, subscriptions, directory, active, onLoginItemNotApplied }: SettingsPageProps & { id: SectionId }) {
   switch (id) {
     case 'appearance':
-      return <AppearanceSection settings={settings} write={write} commit={commit} latest={latest} adopt={adopt} shown={active} />
+      return <AppearanceSection settings={settings} write={write} themeList={themeList} adopt={adopt} shown={active} />
     case 'reading':
       return <ReadingSection settings={settings} write={write} />
     case 'density':
