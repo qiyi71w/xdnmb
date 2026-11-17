@@ -196,11 +196,12 @@
    never by the image arriving. */
 .thread-row {
   --row-thumb: 64px;
+  --row-gap: 12px;
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  column-gap: 12px;
+  column-gap: var(--row-gap);
   width: 100%;
   padding: 10px 12px;
   border: 0;

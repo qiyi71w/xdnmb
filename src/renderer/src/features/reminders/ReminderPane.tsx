@@ -2,8 +2,8 @@
 // order the overview gives (counted threads first). The meta line ends with the thread's counts
 // (全串:3 PO:2 引用:1), the kinds still waiting for their baseline and, when its latest check left
 // something unknown, a warning icon whose accessible name and tip give the reasons; a 引用我 rule the
-// app enabled after a send adds 自动 at the line's right end. Refreshed by `reminders.onChanged` only
-// (no polling).
+// app enabled after a send adds 自动 in the row's bottom-right corner. Refreshed by
+// `reminders.onChanged` only (no polling).
 
 import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import type { ForumId, ThreadId } from '../../../../shared/forum'
@@ -66,9 +66,9 @@ function IssueStatus({ text, missing }: { text: string; missing: boolean }) {
 }
 
 /**
- * 自动 at the right end of the row's meta line while its 引用我 rule is one the app enabled after a
- * send; nothing for a rule the user enabled or a disabled one. The row's name carries the full
- * meaning instead of the bare word.
+ * 自动 in the row's bottom-right corner, level with the meta's last line, while its 引用我 rule is
+ * one the app enabled after a send; nothing for a rule the user enabled or a disabled one. The
+ * row's name carries the full meaning instead of the bare word.
  */
 export function AutoQuoteTag({ rules }: { rules: ReminderThreadRow['rules'] }) {
   if (!isAutoQuote(rules)) return null
@@ -407,7 +407,7 @@ export function ReminderPane({
                     metaEnd={
                       (counts !== null || baseline !== null || issues !== null || auto) && (
                         // One group that moves below No. as a whole when the meta line is short of
-                        // room: the counts, baseline text and warning icon, then 自动 at its right end.
+                        // room: the counts, baseline text and warning icon, then 自动 in the row's corner.
                         <span className="reminder-status">
                           {(counts !== null || baseline !== null || issues !== null) && (
                             <span className="reminder-state">
