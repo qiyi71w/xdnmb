@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SettingsUpdateResult } from '../../src/shared/api'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../src/shared/settings'
 import { themeFromBuiltin, type CustomTheme } from '../../src/shared/theme'
 import {
@@ -11,8 +12,12 @@ import {
   type ThemeEditsAction
 } from '../../src/renderer/src/app/themeEditsState'
 import { themeListQueue } from '../../src/renderer/src/app/useThemeListOperations'
+import { settingsWriter } from '../../src/renderer/src/app/useSettingsWriter'
 import { applyAppearance, previewTheme } from '../../src/renderer/src/lib/useAppearance'
-import { createTheme, deleteTheme, restoreTheme, selectBuiltinTheme, selectCustomTheme } from '../../src/shared/themeList'
+import { createTheme, customThemes, deleteTheme, restoreTheme, selectBuiltinTheme, selectCustomTheme } from '../../src/shared/themeList'
+
+// Node's, used to let promise continuations run; renderer tests are type-checked without Node types.
+declare function setImmediate(callback: () => void): unknown
 
 function theme(name: string, surface: string): CustomTheme {
   const base = themeFromBuiltin('light')
@@ -157,6 +162,117 @@ describe('theme list operations while edits are unsaved', () => {
     expect((await first)?.ok).toBe(true)
     expect(await second).toEqual({ ok: false, reason: 'unsaved' })
     expect(commit).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('theme list operations among other settings changes', () => {
+  /** Main's settings: updates are handled in order, each when `answer` replies to it. */
+  function fakeMain(initial: AppSettings) {
+    let stored = initial
+    const waiting: Array<{ patch: Partial<AppSettings>; reply: (result: SettingsUpdateResult) => void }> = []
+    const update = vi.fn((patch: Partial<AppSettings>) => {
+      const { promise, resolve } = Promise.withResolvers<SettingsUpdateResult>()
+      waiting.push({ patch, reply: resolve })
+      return promise
+    })
+    // The writer's send delay runs on the fake clock (`vi.advanceTimersByTime`).
+    vi.stubGlobal('window', {
+      xidao: { settings: { update } },
+      setTimeout: (callback: () => void, delay: number) => setTimeout(callback, delay),
+      clearTimeout: (timer: number) => clearTimeout(timer)
+    })
+    return {
+      update,
+      stored: () => stored,
+      answer: async (saved = true) => {
+        const { patch, reply } = waiting.shift()!
+        if (saved) stored = { ...stored, ...patch }
+        reply({ settings: stored, saved, issues: [] })
+        await settle()
+      }
+    }
+  }
+  /** Runs every promise continuation; timers wait for the fake clock. */
+  const settle = () => {
+    const { promise, resolve } = Promise.withResolvers<void>()
+    setImmediate(resolve)
+    return promise
+  }
+  const names = (settings: AppSettings) => customThemes(settings).map((theme) => theme.name)
+
+  function setup() {
+    const main = fakeMain(withList)
+    const latest = { current: withList }
+    const writer = settingsWriter(latest, () => undefined, () => undefined)
+    const queue = themeListQueue(writer.commit, () => latest.current, () => false)
+    return { main, latest, writer, queue }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it.each([
+    ['sent before the first one’s reply', true],
+    ['still waiting when the first one’s reply comes', false]
+  ])('each one sees the one before, with a 配色 change %s', async (_, sentBefore) => {
+    const { main, latest, writer, queue } = setup()
+    const first = queue.run((current) => createTheme(current, 'light'))
+    await settle()
+    writer.write({ colorScheme: 'dark' })
+    if (sentBefore) vi.advanceTimersByTime(0)
+    const second = queue.run((current) => createTheme(current, 'light'))
+    expect(main.update).toHaveBeenCalledTimes(sentBefore ? 2 : 1)
+
+    await main.answer()
+    // The new theme shows, and so does the newer 配色.
+    expect(names(latest.current)).toEqual(['青瓷', '夜航', '我的主题'])
+    expect(latest.current.colorScheme).toBe('dark')
+    // Then the 配色 change (when it went on its own) and the second operation.
+    if (sentBefore) await main.answer()
+    await main.answer()
+
+    expect((await first)?.ok).toBe(true)
+    expect((await second)?.ok).toBe(true)
+    expect(main.update).toHaveBeenCalledTimes(sentBefore ? 3 : 2)
+    expect(names(main.stored())).toEqual(['青瓷', '夜航', '我的主题', '我的主题 2'])
+    expect(main.stored().customTheme?.name).toBe('我的主题 2')
+    expect(main.stored().colorScheme).toBe('dark')
+    expect(latest.current).toEqual(main.stored())
+  })
+
+  it('a theme selected after 保存 and a 配色 change keeps the saved edits', async () => {
+    const { main, latest, writer, queue } = setup()
+    const saved = queue.save(edited)
+    await settle()
+    writer.write({ colorScheme: 'dark' })
+    vi.advanceTimersByTime(0)
+    const selected = queue.run((current) => selectCustomTheme(current, '夜航'))
+    await main.answer()
+    await main.answer()
+    await main.answer()
+
+    expect((await saved)?.ok).toBe(true)
+    expect((await selected)?.ok).toBe(true)
+    expect(main.stored().customTheme).toEqual(night)
+    expect(main.stored().customThemeList.others).toEqual([edited])
+    expect(latest.current).toEqual(main.stored())
+  })
+
+  it('an operation main did not save never shows, and the newer 配色 change stays', async () => {
+    const { main, latest, writer, queue } = setup()
+    const first = queue.run((current) => createTheme(current, 'light'))
+    await settle()
+    writer.write({ colorScheme: 'dark' })
+    vi.advanceTimersByTime(0)
+    await main.answer(false)
+
+    expect(await first).toBeNull()
+    expect(latest.current).toEqual({ ...withList, colorScheme: 'dark' })
   })
 })
 
