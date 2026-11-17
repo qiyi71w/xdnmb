@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import { IpcChannel, LIFECYCLE_REQUEST_CHANNEL, type XidaoApi } from '../shared/api'
+import { EXPORT_PROGRESS_CHANNEL, IpcChannel, LIFECYCLE_REQUEST_CHANNEL, type ExportProgress, type XidaoApi } from '../shared/api'
 import type { LifecycleRequest } from '../shared/lifecycle'
 import { REMINDERS_CHANGED_CHANNEL, REMINDERS_OPEN_CHANNEL } from '../shared/reminders'
 import { OFFLINE_CHANGED_CHANNEL } from '../shared/content'
@@ -256,7 +256,7 @@ const api: XidaoApi = {
     reside: () => ipcRenderer.invoke(IpcChannel.lifecycleReside),
     requestQuit: () => ipcRenderer.invoke(IpcChannel.lifecycleRequestQuit),
     presentQuit: () => ipcRenderer.invoke(IpcChannel.lifecyclePresentQuit),
-    cancelQuit: () => ipcRenderer.invoke(IpcChannel.lifecycleCancelQuit),
+    cancelQuit: (input) => ipcRenderer.invoke(IpcChannel.lifecycleCancelQuit, input),
     completeQuit: (input) => ipcRenderer.invoke(IpcChannel.lifecycleCompleteQuit, input),
     loadWorkspace: () => ipcRenderer.invoke(IpcChannel.loadWorkspace),
     saveWorkspace: (input) => ipcRenderer.invoke(IpcChannel.saveWorkspace, input),
@@ -299,6 +299,21 @@ const api: XidaoApi = {
     restartToUpgradeWithoutBackup: () => ipcRenderer.invoke(IpcChannel.restartToUpgradeWithoutBackup),
     getRestoreInfo: () => ipcRenderer.invoke(IpcChannel.getRestoreInfo),
     restoreBackupAndRestart: () => ipcRenderer.invoke(IpcChannel.restoreBackupAndRestart)
+  },
+  personalData: {
+    exportEstimate: () => ipcRenderer.invoke(IpcChannel.exportEstimate),
+    startExport: (input) => ipcRenderer.invoke(IpcChannel.startExport, input),
+    cancelExport: () => ipcRenderer.invoke(IpcChannel.cancelExport),
+    revealExport: () => ipcRenderer.invoke(IpcChannel.revealExport),
+    onExportProgress(listener) {
+      const handler = (_event: IpcRendererEvent, progress: ExportProgress) => listener(progress)
+      ipcRenderer.on(EXPORT_PROGRESS_CHANNEL, handler)
+      return () => { ipcRenderer.removeListener(EXPORT_PROGRESS_CHANNEL, handler) }
+    },
+    inspectImport: () => ipcRenderer.invoke(IpcChannel.inspectImport),
+    submitImportPassphrase: (input) => ipcRenderer.invoke(IpcChannel.submitImportPassphrase, input),
+    confirmImport: () => ipcRenderer.invoke(IpcChannel.confirmImport),
+    cancelImport: () => ipcRenderer.invoke(IpcChannel.cancelImport)
   }
 }
 

@@ -1,4 +1,4 @@
-import type { CloseAction, LifecycleRequest } from '../../shared/lifecycle'
+import type { CloseAction, LifecycleRequest, QuitCallOff } from '../../shared/lifecycle'
 import type { PublicationAttempt } from '../../shared/publication'
 import type { PublicationService } from '../publication/service'
 
@@ -54,6 +54,13 @@ export type QuitPurpose = 'quit' | 'install' | 'restart'
  */
 export type ExitReason = QuitPurpose | 'unsaved' | 'session-end'
 
+/**
+ * How a requested quit ended: `exiting` (the process ends), called off by the renderer
+ * (`QuitCallOff`), `unstored` (results could not be stored while finishing, the window came back),
+ * `reopened` (the app was opened again while finishing), or `not-started` (no quit could start now).
+ */
+export type QuitEnd = 'exiting' | QuitCallOff | 'unstored' | 'reopened' | 'not-started'
+
 /** Sends that ended failed or unknown while finishing without a window. */
 export interface FinishingSummary {
   failed: PublicationAttempt[]
@@ -97,11 +104,13 @@ export interface Lifecycle {
   /**
    * Real quit from any entry (close choice, remembered choice, tray, app menu), for installing an
    * update, or for restarting the app. The quit itself is the same: storage that refuses writes
-   * exits at once without saving the workspace.
+   * exits at once without saving the workspace. Settles with how the quit ended; asked again while
+   * a quit runs, with how that one ends.
    */
-  requestQuit(purpose?: QuitPurpose): void
+  requestQuit(purpose?: QuitPurpose): Promise<QuitEnd>
   presentQuit(): void
-  cancelQuit(): void
+  /** The renderer called the quit off (`reason`); the app keeps running. */
+  cancelQuit(reason: QuitCallOff): void
   /** The renderer handled the editors and the workspace; `saved: false` when drafts or the workspace were not saved. */
   completeQuit(saved: boolean): void
   /**
@@ -137,6 +146,13 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
   let sessionEnding = false
   /** The tray or a second launch asked for the window before the first one was ready. */
   let openedWhileStarting = false
+  /** Settles the running quit's `requestQuit` promises; null while none runs. */
+  let ending: PromiseWithResolvers<QuitEnd> | null = null
+
+  function endQuit(end: QuitEnd): void {
+    ending?.resolve(end)
+    ending = null
+  }
 
   /** `trigger`: an explicit opening to report; `null` when the app brings its window back itself. */
   async function openWindow(trigger: LaunchTrigger | null): Promise<void> {
@@ -157,6 +173,7 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
     phase = 'running'
     purpose = 'quit'
     deps.publication.setUnattended(false)
+    endQuit(trigger === null ? 'unstored' : 'reopened')
     void openWindow(trigger)
   }
 
@@ -199,21 +216,25 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       }
     }
     phase = 'exiting'
+    endQuit('exiting')
     deps.exit(sessionEnding ? 'session-end' : unsaved ? 'unsaved' : purpose, purpose === 'restart' && !sessionEnding)
   }
 
-  function requestQuit(requested: QuitPurpose = 'quit'): void {
+  function requestQuit(requested: QuitPurpose = 'quit'): Promise<QuitEnd> {
     if (phase === 'quitting') {
       if (requested !== 'quit') purpose = requested
       window.send({ kind: 'quit' })
-      return
+      return (ending ??= Promise.withResolvers()).promise
     }
-    if (phase !== 'running') return
+    if (phase !== 'running') return Promise.resolve('not-started')
     phase = 'quitting'
     purpose = requested
     unsaved = false
+    ending = Promise.withResolvers()
+    const { promise } = ending
     if (window.state() === 'none') void finish()
     else window.send({ kind: 'quit' })
+    return promise
   }
 
   function reopen(source: 'explicit' | 'activate' = 'explicit'): void {
@@ -290,10 +311,11 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       if (phase === 'quitting' && window.state() !== 'none') window.reveal()
     },
 
-    cancelQuit() {
+    cancelQuit(reason) {
       if (phase === 'quitting') {
         phase = 'running'
         purpose = 'quit'
+        endQuit(reason)
       }
     },
 
@@ -325,6 +347,7 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
         phase = 'running'
         purpose = 'quit'
         deps.publication.setUnattended(false)
+        endQuit('reopened')
       }
       if (openingTask !== null) await openingTask
       else if (window.state() === 'none') await openWindow(null)

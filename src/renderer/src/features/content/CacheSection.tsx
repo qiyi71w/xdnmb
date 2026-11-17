@@ -5,6 +5,7 @@ import { KaomojiDecor } from '../../components/KaomojiDecor'
 import { singleFlight } from '../../lib/singleFlight'
 import { useClearOnLeave } from '../../lib/useClearOnLeave'
 import { attempt, contentFailureText, exactBytes, formatBytes, limitToGbText, parseLimitGb, type Refused } from './contentText'
+import { PersonalDataBlock } from './PersonalData'
 import './content.css'
 
 type UsageState = { status: 'loading' } | { status: 'failed'; refused: Refused } | { status: 'ready'; usage: ContentUsage }
@@ -283,6 +284,8 @@ export function CacheSection({ active }: { active: boolean }) {
           {message.text}
         </p>
       )}
+
+      <PersonalDataBlock active={active} />
     </section>
   )
 }

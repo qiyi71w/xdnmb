@@ -439,3 +439,85 @@
   width: 9em;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- 个人数据 (导出、导入) ---------- */
+
+.personal-data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.personal-data-status {
+  display: grid;
+  gap: 6px;
+}
+
+.export-dialog,
+.import-dialog {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.export-body,
+.import-body {
+  gap: 12px;
+}
+
+.export-body > p,
+.import-body > p {
+  margin: 0;
+}
+
+/* A two-line outcome keeps its icon on the first line. */
+.import-outcome {
+  align-items: flex-start;
+}
+
+.import-outcome .icon {
+  margin-top: 3px;
+}
+
+.export-body .choice-row {
+  margin-inline: -8px;
+}
+
+.export-note {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+/* 导出口令 and 再次输入口令: label over field, the mismatch and the note right under them. */
+.export-passphrase {
+  display: grid;
+  gap: 6px;
+}
+
+.export-passphrase .field-label:not(:first-child) {
+  margin-top: 4px;
+}
+
+.export-passphrase > p {
+  margin: 0;
+}
+
+/* 输入导出口令 is a form; its header, body and actions stay the dialog's own rows. */
+.modal-form {
+  display: contents;
+}
+
+.export-progress {
+  display: grid;
+  gap: 4px;
+}
+
+.export-progress-text {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.personal-data .notice-inline,
+.export-body .notice-inline {
+  overflow-wrap: anywhere;
+}

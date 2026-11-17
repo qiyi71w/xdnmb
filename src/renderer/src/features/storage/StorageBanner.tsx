@@ -5,7 +5,7 @@ import { Modal } from '../../components/Modal'
 import { formatRecordTime } from '../../lib/time'
 import { useStayOpen } from '../lifecycle/QuitDialogs'
 import {
-  DOWNGRADE_DOCS_URL, RESTORE_ABANDONED_TEXT, restartOutcome, restoreSecretsText, storageBanner, type UpgradeRestart
+  DOWNGRADE_DOCS_URL, IMPORT_ABANDONED_TEXT, RESTORE_ABANDONED_TEXT, restartOutcome, restoreSecretsText, storageBanner, type UpgradeRestart
 } from './storageBannerModel'
 import './storage.css'
 
@@ -13,14 +13,18 @@ type Restorable = Extract<RestoreInfo, { restorable: true }>
 
 /**
  * Persistent state of storage that takes no writes this run, and the notice that a prepared restore
- * was given up. After a failed pre-upgrade backup it offers 重新启动重试 and 不备份升级… (asked
- * first); for a newer version's data, 了解更多 and, when the pre-upgrade backup can be restored,
- * 恢复升级前备份… (asked first). Every restart goes through the ordinary quit; one in progress
- * ignores further presses.
+ * or import was given up. After a failed pre-upgrade backup it offers 重新启动重试 and 不备份升级…
+ * (asked first); for a newer version's data, 了解更多 and, when the pre-upgrade backup can be
+ * restored, 恢复升级前备份… (asked first). Every restart goes through the ordinary quit; one in
+ * progress ignores further presses.
  */
-export function StorageBanner({ storage, restoreAbandoned }: { storage: StorageStatus | null; restoreAbandoned: boolean }) {
+export function StorageBanner({ storage, restoreAbandoned, importAbandoned }: {
+  storage: StorageStatus | null
+  restoreAbandoned: boolean
+  importAbandoned: boolean
+}) {
   const view = storageBanner(storage)
-  if (!restoreAbandoned && view === null) return null
+  if (!restoreAbandoned && !importAbandoned && view === null) return null
   // Under the tab bar, above the paper: the title band and its window controls stay as they are.
   return (
     <div className="storage-notices">
@@ -29,6 +33,14 @@ export function StorageBanner({ storage, restoreAbandoned }: { storage: StorageS
           <Icon name="alert" />
           <span className="storage-banner-text" role="status">
             {RESTORE_ABANDONED_TEXT}
+          </span>
+        </div>
+      )}
+      {importAbandoned && (
+        <div className="storage-banner">
+          <Icon name="alert" />
+          <span className="storage-banner-text" role="status">
+            {IMPORT_ABANDONED_TEXT}
           </span>
         </div>
       )}

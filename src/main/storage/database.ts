@@ -1611,6 +1611,32 @@ function backUpBeforeUpgrade(databasePath: string, supportedVersion: number, opt
 }
 
 /**
+ * Runs the migrations `connection` has not had, in one transaction, and returns the schema version
+ * it is at now. Throws (the transaction rolled back) when one fails. A staged import's database
+ * goes through it too, so imported data takes the same chain as the app's own.
+ */
+export function migrateDatabase(connection: Database.Database, migrations: readonly Migration[] = MIGRATIONS): number {
+  const ordered = [...migrations].sort((left, right) => left.version - right.version)
+  let previousVersion = 0
+  for (const migration of ordered) {
+    if (!Number.isSafeInteger(migration.version) || migration.version <= previousVersion) {
+      throw new Error('migration versions must be distinct positive integers')
+    }
+    previousVersion = migration.version
+  }
+  const schemaVersion = Number(connection.pragma('user_version', { simple: true }))
+  const pending = ordered.filter((migration) => migration.version > schemaVersion)
+  if (pending.length === 0) return schemaVersion
+  connection.transaction(() => {
+    for (const migration of pending) {
+      migration.up(connection)
+      connection.pragma(`user_version = ${migration.version}`)
+    }
+  }).immediate()
+  return previousVersion
+}
+
+/**
  * Opens the database, migrating it to the newest of `migrations` in one transaction. With
  * `preUpgrade` (the app's own database), an existing database is backed up before it is migrated.
  */
@@ -1650,24 +1676,7 @@ export function openReadingDatabase(
 
   const connection = db
   try {
-    const ordered = [...migrations].sort((left, right) => left.version - right.version)
-    let previousVersion = 0
-    for (const migration of ordered) {
-      if (!Number.isSafeInteger(migration.version) || migration.version <= previousVersion) {
-        throw new Error('migration versions must be distinct positive integers')
-      }
-      previousVersion = migration.version
-    }
-    const pending = ordered.filter((migration) => migration.version > schemaVersion)
-    if (pending.length > 0) {
-      connection.transaction(() => {
-        for (const migration of pending) {
-          migration.up(connection)
-          connection.pragma(`user_version = ${migration.version}`)
-        }
-      }).immediate()
-      schemaVersion = supportedVersion
-    }
+    schemaVersion = migrateDatabase(connection, migrations)
   } catch {
     closeQuietly(connection)
     return new SqliteReadingDatabase(null, { state: 'unavailable', reason: 'migration-failed' })

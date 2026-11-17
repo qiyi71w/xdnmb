@@ -23,6 +23,9 @@ export function storageBanner(storage: StorageStatus | null): StorageBannerView 
 /** Shown for the run in which a prepared restore was given up. */
 export const RESTORE_ABANDONED_TEXT = '恢复没有完成，数据没有改动。'
 
+/** Shown for the run in which a prepared import was given up. */
+export const IMPORT_ABANDONED_TEXT = '导入没有完成，数据没有改动。'
+
 /** 了解更多: the public developer docs' section on downgrading and the pre-upgrade backup. */
 export const DOWNGRADE_DOCS_URL = `${UPDATE_REPOSITORY_URL}/blob/main/docs/development.md#降级与恢复升级前备份`
 

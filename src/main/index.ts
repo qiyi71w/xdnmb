@@ -13,7 +13,7 @@ import { lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
-import { LIFECYCLE_REQUEST_CHANNEL, type AppPlatform } from '../shared/api'
+import { EXPORT_PROGRESS_CHANNEL, LIFECYCLE_REQUEST_CHANNEL, type AppPlatform } from '../shared/api'
 import { IMAGE_FORMAT_EXTENSION, IMAGE_SCHEME } from '../shared/images'
 import { createContentService, type ContentService } from './content/service'
 import { createDraftService } from './drafts/service'
@@ -39,10 +39,16 @@ import { createRequestScheduler } from './reading/scheduler'
 import type { AppStore } from './storage/contract'
 import { openReadingStore } from './storage/store'
 import { markUpgradeWithoutBackup } from './storage/backup'
-import { settleRestore, type RestoreOutcome } from './storage/restore-journal'
+import { settleSwap, type SwapSettlement } from './storage/swap-journal'
 import { createRestoreService } from './storage/restore-service'
 import { createUpgradeService } from './storage/upgrade'
 import createStorageWorker from './storage/worker?nodeWorker'
+import createExportWorker from './storage/export-worker?nodeWorker'
+import createImportWorker from './storage/import-worker?nodeWorker'
+import { MIGRATIONS } from './storage/migrations'
+import { createExportService, type ExportService } from './personal-data/service'
+import { createImportService, type ImportService } from './personal-data/import'
+import { createWorkerExportDatabase, createWorkerImportDatabase } from './personal-data/worker-database'
 import { createSubscriptionService } from './subscriptions/service'
 import { createPublicationAdapter } from './publication/adapter'
 import { createPublicationService } from './publication/service'
@@ -85,6 +91,8 @@ let store: AppStore | null = null
 let storeClosed = false
 let content: ContentService | null = null
 let lifecycle: Lifecycle | null = null
+let personalData: ExportService | null = null
+let personalImport: ImportService | null = null
 /** Kept referenced for the app's lifetime: the Windows tray, the macOS menu bar icon, the Linux status icon. */
 let tray: Tray | null = null
 let search: SearchService | null = null
@@ -346,23 +354,22 @@ async function start(): Promise<void> {
   denyAll.setPermissionCheckHandler((contents, permission, _origin, details) =>
     permission === 'local-fonts' && contents === mainWindow?.webContents && details.isMainFrame && typeof details.requestingUrl === 'string' && isAppDocument(details.requestingUrl))
 
-  // A restore the previous run prepared is carried out (or abandoned) here: the lock is held, the
-  // previous process has ended, and the database is not open yet. One that cannot be settled
-  // leaves the database unopened this run; the next start continues it.
+  // A swap the previous run prepared (such as a restore) is carried out (or abandoned) here: the
+  // lock is held, the previous process has ended, and the database is not open yet. One that cannot
+  // be settled leaves the database unopened this run; the next start continues it.
   const databasePath = join(app.getPath('userData'), 'xidao.sqlite')
-  let restore: RestoreOutcome | null
+  let swap: SwapSettlement | null | undefined
   try {
-    restore = settleRestore(databasePath)
+    swap = settleSwap(databasePath)
   } catch {
-    console.error('[storage] restore not settled')
-    restore = null
+    console.error('[storage] swap not settled')
   }
-  if (restore === 'abandoned') console.error('[storage] restore abandoned')
+  if (swap?.outcome === 'abandoned') console.error(`[storage] ${swap.kind} abandoned`)
   const openedStore = await openReadingStore({
     databasePath,
     appVersion: app.getVersion(),
     createWorker: createStorageWorker,
-    skipOpen: restore === null
+    skipOpen: swap === undefined
   })
   store = openedStore
   if (openedStore.status.state !== 'ready') console.error('[storage] status', openedStore.status.state)
@@ -538,6 +545,32 @@ async function start(): Promise<void> {
   await retained.recover().catch(() => console.error('[content] recovery failed'))
   await retained.enforceQuota().catch(() => console.error('[content] cleanup failed'))
   const searchService = createSearchService({ store: openedStore, client, scheduler, enforceQuota: () => retained.enforceQuota() })
+  // 导出个人数据: quitting cancels a running export, which removes its temporary files first.
+  const exportService = createExportService({
+    databasePath: join(app.getPath('userData'), 'xidao.sqlite'),
+    draftImagesDirectory: join(app.getPath('userData'), 'draft-images'),
+    imagesDirectory: join(app.getPath('userData'), 'images'),
+    appVersion: app.getVersion(),
+    status: () => openedStore.status,
+    sending: () => publication.inFlight().length > 0,
+    database: createWorkerExportDatabase(createExportWorker),
+    protector,
+    publish(progress) {
+      if (mainWindow !== null && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send(EXPORT_PROGRESS_CHANNEL, progress)
+    },
+    showInFolder: (path) => shell.showItemInFolder(path)
+  })
+  personalData = exportService
+  // 导入个人数据: the restart it needs goes through the ordinary quit (see `confirmImport`).
+  const importService = createImportService({
+    databasePath: join(app.getPath('userData'), 'xidao.sqlite'),
+    supportedVersion: MIGRATIONS.reduce((highest, migration) => Math.max(highest, migration.version), 0),
+    status: () => openedStore.status,
+    database: createWorkerImportDatabase(createImportWorker),
+    protector,
+    restart: () => lifecycle?.requestQuit('restart') ?? Promise.resolve('not-started')
+  })
+  personalImport = importService
   search = searchService
   // Batched worker backfill runs alongside the window; search stays unavailable until complete.
   void searchService.recover().catch(() => console.error('[search] index unavailable'))
@@ -648,6 +681,7 @@ async function start(): Promise<void> {
       updateService.resume()
       await reminders.startScheduling().catch(() => console.error('[reminders] scheduling unavailable'))
       retained.resume()
+      exportService.resume()
       searchService.resume()
       analyticsService.resume()
       void searchService.recover().catch(() => console.error('[search] index unavailable'))
@@ -696,7 +730,9 @@ async function start(): Promise<void> {
       ipc?.cancelAll()
       // Nothing is downloaded while quitting; a package that is not ready is not installed.
       updateService.stop()
-      backgroundStopped = Promise.all([retained.stop(), reminders.stop('quit'), searchService.stop(), analyticsService.stop()]).then(() => undefined)
+      backgroundStopped = Promise.all([
+        retained.stop(), reminders.stop('quit'), searchService.stop(), analyticsService.stop(), exportService.stop(), importService.stop()
+      ]).then(() => undefined)
       await backgroundStopped
     },
     notify: notifyUnfinished,
@@ -749,7 +785,12 @@ async function start(): Promise<void> {
       updateService.configure(saved)
       bossKeyService.configure(saved)
     }),
-    getStatus: () => ({ storage: openedStore.status, platform, restoreAbandoned: restore === 'abandoned' }),
+    getStatus: () => ({
+      storage: openedStore.status,
+      platform,
+      restoreAbandoned: swap?.kind === 'restore' && swap.outcome === 'abandoned',
+      importAbandoned: swap?.kind === 'import' && swap.outcome === 'abandoned'
+    }),
     upgrade: createUpgradeService({
       status: () => openedStore.status,
       markWithoutBackup: (schemaVersion) => markUpgradeWithoutBackup(app.getPath('userData'), schemaVersion),
@@ -773,6 +814,31 @@ async function start(): Promise<void> {
       const options: Electron.OpenDialogOptions = {
         title: '选择附图',
         filters: [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }],
+        properties: ['openFile']
+      }
+      const result = window === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(window, options)
+      return result.canceled ? null : (result.filePaths[0] ?? null)
+    },
+    personalData: exportService,
+    async chooseExportPath(sender, defaultName) {
+      const window = BrowserWindow.fromWebContents(sender)
+      const options: Electron.SaveDialogOptions = {
+        title: '导出个人数据',
+        defaultPath: join(app.getPath('documents'), defaultName),
+        filters: [{ name: '汐岛个人数据', extensions: ['xidao'] }],
+        properties: ['createDirectory', 'showOverwriteConfirmation']
+      }
+      const result = window === null ? await dialog.showSaveDialog(options) : await dialog.showSaveDialog(window, options)
+      return result.canceled || !result.filePath ? null : result.filePath
+    },
+    personalImport: importService,
+    async chooseImportPath(sender) {
+      const window = BrowserWindow.fromWebContents(sender)
+      // Only export files are listed; whatever is chosen is still checked by its content.
+      const options: Electron.OpenDialogOptions = {
+        title: '导入个人数据',
+        defaultPath: app.getPath('documents'),
+        filters: [{ name: '汐岛个人数据', extensions: ['xidao'] }],
         properties: ['openFile']
       }
       const result = window === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(window, options)
@@ -838,6 +904,8 @@ async function finishStorage(): Promise<void> {
   await announcements?.stop()
   await analytics?.stop()
   await content?.stop()
+  await personalData?.stop()
+  await personalImport?.stop()
   await opened.close()
   await updates?.launchInstaller()
 }

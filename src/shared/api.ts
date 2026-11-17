@@ -15,7 +15,7 @@ import type {
 import type { ReadingAnchor, ThreadReadingState, WriteResult } from './reading'
 import type { SubscriptionsApi } from './subscriptions'
 import type { PublicationApi } from './publication'
-import type { LifecycleApi, LoginItemApi } from './lifecycle'
+import type { LifecycleApi, LoginItemApi, QuitCallOff } from './lifecycle'
 import type { BossKeyApi } from './bossKey'
 import type { RemindersApi } from './reminders'
 import type { AppSettings, ZoomAction, ZoomState } from './settings'
@@ -229,6 +229,8 @@ export interface AppStatus {
   platform: AppPlatform
   /** This start found a prepared restore it could not carry out and opened the data as it was. */
   restoreAbandoned: boolean
+  /** This start found a prepared import it could not carry out and opened the data as it was. */
+  importAbandoned: boolean
 }
 
 /**
@@ -267,6 +269,123 @@ export type ThemeExportResult = { status: 'exported' } | { status: 'cancelled' }
  */
 export type ThreadReadPurpose = 'display' | 'lookup'
 export const THREAD_READ_PURPOSES: readonly ThreadReadPurpose[] = ['display', 'lookup']
+
+/**
+ * Why 导出个人数据 did not start or did not finish. `space`: the target volume lacks about
+ * `shortBytes`. `sending`: a post is being sent (a send whose result is unknown does not count).
+ * `storage`: storage is not writable. `busy`: an export is already running. `read`: this machine's
+ * data could not be read. `write`: the chosen location could not be written. `secrets`: a 饼干 or
+ * App UUID to export could not be decrypted on this machine.
+ */
+export type ExportFailure =
+  | { reason: 'space'; shortBytes: number }
+  | { reason: 'sending' | 'storage' | 'busy' | 'read' | 'write' | 'secrets' }
+
+/**
+ * What 导出… exports. `passphrase`: with 饼干与 App UUID, the 导出口令 (non-empty, any length) the
+ * whole file is encrypted with; null: without them, not encrypted. It only ever goes to main.
+ */
+export interface ExportOptions {
+  includeOffline: boolean
+  passphrase: string | null
+}
+
+/** A running export: bytes of the file written so far, of `totalBytes`. */
+export interface ExportRunning {
+  status: 'running'
+  writtenBytes: number
+  totalBytes: number
+}
+
+/**
+ * Progress of the export, from the main process. A finished export names its file, never its
+ * folder; a cancelled or failed one has left no file behind.
+ */
+export type ExportProgress =
+  | ExportRunning
+  | { status: 'done'; fileName: string }
+  | { status: 'failed'; failure: ExportFailure }
+  | { status: 'cancelled' }
+
+/**
+ * What the export dialog shows. Unavailable unless storage is writable. `contents` is null when the
+ * sizes could not be read: `offline` is the offline copies (null: there are none), `totalBytes` the
+ * estimated file size with them. `running`: an export in progress.
+ */
+export type ExportEstimate =
+  | { available: false; reason: 'read-only' | 'unavailable' }
+  | {
+      available: true
+      contents: { offline: { threads: number; bytes: number } | null; totalBytes: number } | null
+      running: ExportRunning | null
+    }
+
+/**
+ * Result of 导出…: `started` (progress follows as `ExportProgress` events), `dismissed` (the save
+ * dialog was closed), or `failed` before anything was written.
+ */
+export type ExportStartResult = { status: 'started' } | { status: 'dismissed' } | { status: 'failed'; failure: ExportFailure }
+
+/** Main → renderer: carries an `ExportProgress`. */
+export const EXPORT_PROGRESS_CHANNEL = 'personal-data:export-progress'
+
+/**
+ * Why 导入个人数据 refused the chosen file; nothing outside the import's staging was written, and
+ * the data is unchanged. `not-export`: not an export file. `newer`: exported by a newer schema;
+ * `appVersion` is the version that exported it. `corrupt`: damaged, incomplete or not importable.
+ * `protection`: the file carries 饼干 but this machine cannot protect them.
+ */
+export type ImportRejection = { reason: 'not-export' | 'corrupt' | 'protection' } | { reason: 'newer'; appVersion: string }
+
+/**
+ * Why a file could not be checked (as opposed to refused). `storage`: storage is not writable.
+ * `busy`: an import is already being checked or carried out, or another data swap is pending.
+ * `read`: the file or this machine's data could not be read. `space`: the disk is full.
+ */
+export interface ImportFailure {
+  reason: 'storage' | 'busy' | 'read' | 'space'
+}
+
+/** What the import confirmation shows: the file's origin and contents, and what this machine loses. */
+export interface ImportSummary {
+  /** ISO 8601, UTC. */
+  exportedAt: string
+  /** Version of the app that exported the file. */
+  appVersion: string
+  /** Threads of the offline copies in the file; 0 when it has none. */
+  offlineThreads: number
+  /** Whether the file carries 饼干与 App UUID. */
+  secrets: boolean
+  /** This machine's 浏览历史 and 发送记录 counts, which the import replaces. */
+  local: { history: number; sendRecords: number }
+}
+
+/**
+ * Result of 导入个人数据…: the open dialog, then every check. `dismissed`: the dialog was closed or
+ * the check cancelled. `passphrase`: the file is encrypted and waits for `submitImportPassphrase`
+ * (`wrong`: the one given was not its passphrase) or `cancelImport`. `ready`: the file passed and
+ * waits for `confirmImport` or `cancelImport`.
+ */
+export type ImportInspection =
+  | { status: 'dismissed' }
+  | { status: 'passphrase'; wrong: boolean }
+  | { status: 'ready'; summary: ImportSummary }
+  | { status: 'rejected'; rejection: ImportRejection }
+  | { status: 'failed'; failure: ImportFailure }
+
+/**
+ * Why the restart an import needs did not happen, so the import did not either (its staging and
+ * journal are gone). The renderer's own reasons (`QuitCallOff`), or `other` (the quit ended in the
+ * main process, or another quit was already running).
+ */
+export type ImportBlock = QuitCallOff | 'other'
+
+/**
+ * Result of 导入并重新启动. `restarting`: the import is prepared and the app is quitting through the
+ * ordinary quit; the next start swaps the data. `failed`: the import could not be prepared; the
+ * data is unchanged. `blocked`: the quit was called off; the data is unchanged.
+ */
+export type ImportConfirmResult = { status: 'restarting' } | { status: 'failed' } | { status: 'blocked'; reason: ImportBlock }
 
 /** The only surface exposed to the renderer (window.xidao). */
 export interface XidaoApi {
@@ -469,6 +588,29 @@ export interface XidaoApi {
     /** 恢复并重新启动: stages the pre-upgrade backup for the next start, then restarts. */
     restoreBackupAndRestart(): Promise<RestoreResult>
   }
+  /**
+   * 导出／导入个人数据. The renderer never sees a path: main shows the save and open dialogs and
+   * reports only file names.
+   */
+  personalData: {
+    exportEstimate(): Promise<ExportEstimate>
+    /** Save dialog, disk space check, then the export runs in the background. */
+    startExport(input: ExportOptions): Promise<ExportStartResult>
+    /** Cancels the running export; its `cancelled` progress follows once the partial file is gone. */
+    cancelExport(): Promise<void>
+    /** Shows the last exported file in the system file manager. */
+    revealExport(): Promise<{ shown: boolean }>
+    /** Export progress events; returns the unsubscribe. */
+    onExportProgress(listener: (progress: ExportProgress) => void): () => void
+    /** Open dialog (`.xidao` listed; any file is checked by its content), then every check. */
+    inspectImport(): Promise<ImportInspection>
+    /** The 导出口令 of the file waiting for one, then the rest of the check; as many tries as needed. */
+    submitImportPassphrase(input: { passphrase: string }): Promise<ImportInspection>
+    /** Builds the import result from the checked file and restarts through the ordinary quit. */
+    confirmImport(): Promise<ImportConfirmResult>
+    /** Gives up the checked (or still checking) file; its staging is removed. */
+    cancelImport(): Promise<void>
+  }
 }
 
 /** IPC channel names. Each maps 1:1 to an XidaoApi method; there is no generic channel. */
@@ -612,6 +754,14 @@ export const IpcChannel = {
   restartToUpgradeWithoutBackup: 'app:restart-to-upgrade-without-backup',
   getRestoreInfo: 'app:get-restore-info',
   restoreBackupAndRestart: 'app:restore-backup-and-restart',
+  exportEstimate: 'personal-data:export-estimate',
+  startExport: 'personal-data:start-export',
+  cancelExport: 'personal-data:cancel-export',
+  revealExport: 'personal-data:reveal-export',
+  inspectImport: 'personal-data:inspect-import',
+  submitImportPassphrase: 'personal-data:submit-passphrase',
+  confirmImport: 'personal-data:confirm-import',
+  cancelImport: 'personal-data:cancel-import',
   updateGetState: 'updates:get-state',
   updateCheck: 'updates:check',
   updateDownload: 'updates:download',

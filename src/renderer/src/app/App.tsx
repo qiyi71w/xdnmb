@@ -152,6 +152,7 @@ const NAV_FULL = 8 + RAIL_WIDTH
 export function App() {
   const [storage, setStorage] = useState<StorageStatus | null>(null)
   const [restoreAbandoned, setRestoreAbandoned] = useState(false)
+  const [importAbandoned, setImportAbandoned] = useState(false)
   const [platform, setPlatform] = useState<AppPlatform | null>(null)
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
   useAppearance(settings)
@@ -205,6 +206,7 @@ export function App() {
         if (!alive) return
         setStorage(status.storage)
         setRestoreAbandoned(status.restoreAbandoned)
+        setImportAbandoned(status.importAbandoned)
         setPlatform(status.platform)
       })
       .catch(() => undefined)
@@ -1495,7 +1497,7 @@ export function App() {
                       onNewTab={newTab}
                       settingsTrigger={navOverlay ? { ref: settingsButtonRef, onOpen: openSettingsButton } : null}
                     />
-                    <StorageBanner storage={storage} restoreAbandoned={restoreAbandoned} />
+                    <StorageBanner storage={storage} restoreAbandoned={restoreAbandoned} importAbandoned={importAbandoned} />
                     <div className="tab-host">
                       {tabs.tabs.map((tab) => (
                         <ImageMaskScope
