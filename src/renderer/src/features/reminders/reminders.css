@@ -82,10 +82,8 @@
 
 /* The row's reminder state at the end of its meta, as one unit that fills the rest of the meta
    line: short of room, it moves below No. and the reply count as a whole. Inside it, the counts and
-   baseline text wrap first, keeping the warning icon after them and 自动 beside them at the right
-   end. Only where even 全串:128, the icon and 自动 cannot share a line (the narrowest column beside a
-   thumbnail) does 自动 move below, still at the right. The meta stays the tip's positioning box, so
-   the warning tip still spans the text column. */
+   baseline text wrap first, keeping the warning icon after them. The meta is the positioning box of
+   the warning tip (which spans the text column) and, on a row with a thumbnail, of 自动. */
 .reminder-row .row-meta {
   position: relative;
 }
@@ -107,11 +105,41 @@
   gap: 10px;
 }
 
-/* 自动 — the 引用我 rule was enabled by the app: the neutral tag at the right end of the unit,
-   never squeezing the counts or the warning icon. */
+/* 自动 — the 引用我 rule was enabled by the app: the neutral tag in the row's bottom-right corner,
+   level with the last line of the meta, never squeezing the counts or the warning icon. Without a
+   thumbnail the text column reaches the row's edge, so it ends the unit there, on the line of the
+   last counts (on a line of its own only when even 全串:128 and the icon leave no room). */
 .reminder-auto {
   flex: none;
+  align-self: flex-end;
   margin-left: auto;
+}
+
+/* With a thumbnail the text column stops short of the row's edge: 自动 leaves the meta's flow for
+   the bottom of the thumbnail column, so it never takes a line of its own or moves as the counts
+   wrap. Still inside the row button, it stays part of the row's name and opens the thread. */
+.thread-row.has-thumb .reminder-auto {
+  position: absolute;
+  right: calc(-1 * (var(--row-thumb) + var(--row-gap)));
+  bottom: 0;
+}
+
+/* 自动 alone leaves nothing in the unit: drop the empty box so its gap cannot wrap a blank line. */
+.thread-row.has-thumb .reminder-status:not(:has(> .reminder-state)) {
+  display: contents;
+}
+
+/* A text column shorter than the thumbnail and 自动 under it grows to hold both, with the meta at
+   its foot, so the meta's last line and 自动 still share one line below the thumbnail. */
+.thread-row.has-thumb .row-text:has(.reminder-auto) {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(var(--row-thumb) + 22px);
+}
+
+.thread-row.has-thumb .row-text:has(.reminder-auto) > .row-meta {
+  margin-top: auto;
+  padding-top: 2px;
 }
 
 /* The same state under a 提醒 menu's kinds, beside any save error. */

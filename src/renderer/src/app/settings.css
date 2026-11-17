@@ -88,21 +88,26 @@
   color: var(--ink-2);
 }
 
-/* 主题: the name on the left and, beside it, the radio list with 新建主题 and the theme file buttons
-   under it. Rows are quiet like the buttons: no edge at rest, the hover layer under the pointer (and
-   while the row's menu is open); the one in use is the checked radio and a bold name, never the color
-   alone. The radio's ring goes on the whole row, not the small radio. Each row ends with its ⋯ menu
-   button. The list grows with the themes; it has no scrolling of its own. */
+/* 主题 is a collection (as 功能显示 and 版块管理 are), not one value: its name on a line of its own
+   and the list under it across the section. The content keeps the section's edges: the radios and
+   the 新建主题 icon start where the setting names start, and each ⋯ ends where the 配色 control
+   ends. Only the rows' hover layer and the buttons' own padding reach past them. Rows are quiet like
+   the buttons: no edge at rest, the hover layer under the pointer (and while the row's menu is open);
+   the one in use is the checked radio and a bold name, never the color alone. The radio's ring goes
+   on the whole row, not the small radio. The list grows with the themes; it has no scrolling of its
+   own. */
 .theme-row {
+  --theme-row-start: 8px;
+  --theme-row-end: 4px;
+  --theme-menu-inset: 7px;
+  --theme-btn-inset: 12px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 8px 16px;
+  gap: 4px;
 }
 
-/* Lines up with the first row's name. */
-.theme-row-label {
-  padding-top: 6px;
+:root[data-density='compact'] .theme-row {
+  --theme-menu-inset: 5px;
+  --theme-btn-inset: 9px;
 }
 
 .theme-row-control {
@@ -113,15 +118,16 @@
 
 .theme-list {
   display: grid;
-  gap: 2px;
+  gap: 1px;
+  margin: 0 calc(-1 * (var(--theme-row-end) + var(--theme-menu-inset))) 0 calc(-1 * var(--theme-row-start));
 }
 
 .theme-choice {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   min-height: 32px;
-  padding: 1px 1px 1px 11px;
+  padding: 1px var(--theme-row-end) 1px var(--theme-row-start);
   border-radius: var(--radius-m);
   color: var(--ink);
   transition: background-color 0.15s var(--ease-out);
@@ -143,7 +149,7 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   align-self: stretch;
   padding: 3px 0;
   cursor: pointer;
@@ -169,6 +175,11 @@
 
 .theme-choice.is-selected .theme-choice-name {
   font-weight: 600;
+}
+
+/* The 新建主题 icon on the radios' edge; the notes after the buttons keep the section's edge. */
+.theme-transfer-buttons {
+  margin-left: calc(-1 * var(--theme-btn-inset));
 }
 
 /* Locked by unsaved edits: the other rows and every ⋯ fade like an unavailable page button (ink-3,

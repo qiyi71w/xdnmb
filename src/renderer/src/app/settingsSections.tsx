@@ -470,7 +470,7 @@ function ThemeList({
   return (
     <>
       <div className="theme-row">
-        <span className="setting-label theme-row-label" id="setting-theme-list">
+        <span className="setting-label" id="setting-theme-list">
           主题
         </span>
         <div className="theme-row-control">
@@ -577,6 +577,7 @@ function ThemeList({
                   if (!full && !locked) void files.importFile()
                 }}
               >
+                <Icon name="upload" />
                 导入主题…
               </button>
               {full && (
