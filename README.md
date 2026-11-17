@@ -31,7 +31,7 @@
 - **多标签阅读**：每个标签有独立的前进后退，可分栏或整页阅读，重启后恢复标签和阅读位置。
 - **串阅读**：在“全部”和“只看 PO”之间切换，两种模式分别记住阅读位置，滚到底部自动加载下一页。
 - **引用**：悬停预览文字与附图，点击缩略图查看原图；单击引用跳转，“返回引用处”回到原位。
-- **发串与回复**：浮动编辑器，自动存草稿，支持附图、水印和自定义颜文字；右键发言选“+1”可把它的正文填进回复。
+- **发串与回复**：浮动编辑器，自动存草稿，支持附图、水印和自定义颜文字（右键可编辑；选中发言或正文里的字，右键“存为颜文字”）；右键发言选“+1”可把它的正文填进回复。
 - **多饼干**：导入官网导出的饼干或 userhash，也可登录官网后选择导入；浏览、发言、网页同步可各用一块饼干。回复时打开饼干列表，能看到每块饼干在本串用汐岛发过几次。
 - **订阅**：管理 App UUID 订阅和网页订阅，在两端之间同步，两端按同一顺序显示，可多选取消订阅。App UUID 可以是任意文字。
 - **提醒**：每个串可单独开启“全串更新”“PO 追更”“引用我的发言”，后台检查并发系统通知；在汐岛发过言的串会自动提醒引用，7 天没再发言后关闭。自己的发言和看过的回复不计入，宁可多提醒也不漏掉别人的。
@@ -113,6 +113,6 @@ npm test
 ## 致谢
 
 - 协议参考：[TransparentLC/xdcmd 的 API 整理](https://github.com/TransparentLC/xdcmd/wiki/自己整理的-X-岛匿名版-API-文档)、[X 岛原始 API 文档](https://www.zybuluo.com/ovear/note/151481)、[orzogc/xdnmb](https://github.com/orzogc/xdnmb) 与 [orzogc/xdnmb_api](https://github.com/orzogc/xdnmb_api)（AGPL-3.0）。
-- 预设颜文字取自 [xdnmb_api](https://github.com/orzogc/xdnmb_api/blob/28fdba53031a15e0de88954679afe91b9308f71a/lib/src/xdnmb.dart#L1780-L1889) 中的 X 岛官方颜文字列表。
+- 预设颜文字取自 [xdnmb_api](https://github.com/orzogc/xdnmb_api/blob/28fdba53031a15e0de88954679afe91b9308f71a/lib/src/xdnmb.dart#L1780-L1889) 中的 X 岛官方颜文字列表，以及 [xdnmb](https://github.com/orzogc/xdnmb/blob/2467f43d58b837c02b1fe72da1c7ca6484ab50d9/lib/app/utils/emoticons.dart#L4-L139) 中的蓝岛颜文字。
 - 联网搜索使用 [nmb-search](https://nmb-search.166666666.xyz/)（[API 与使用条款](https://nmb-search.166666666.xyz/api.txt)），它基于 [4get](https://git.lolcat.ca/lolcat/4get)。
 - 第三方依赖的许可说明见 [docs/development.md](docs/development.md#第三方许可)。

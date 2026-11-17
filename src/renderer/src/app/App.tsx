@@ -39,6 +39,7 @@ import { EditorWorkspaceContext, type EditorWorkspace } from '../features/editor
 import { PoPromptDialog } from '../features/publication/PoPromptDialog'
 import { LaunchNotices } from '../features/lifecycle/LaunchNotices'
 import { DraftDeletedNotices } from '../features/drafts/DraftDeletedNotices'
+import { KaomojiSaveNotices, KaomojiSavingContext, useKaomojiSaving } from '../features/editor/kaomojiSaving'
 import { LifecycleHost } from '../features/lifecycle/LifecycleHost'
 import { EditContextMenuHost } from '../components/EditContextMenu'
 import { CookieColorPickerHost } from '../features/cookieColors/CookieColorPicker'
@@ -168,6 +169,7 @@ export function App() {
     () => ({ settings, latest: latestSettings, write: writeSettings, notSaved: settingsWriter.status.notSaved }),
     [settings, latestSettings, writeSettings, settingsWriter.status.notSaved]
   )
+  const kaomojiSaving = useKaomojiSaving(settings.customKaomoji, latestSettings, writeSettings)
   const registry = useMemo(createContentRegistry, [])
   const { tabs, dispatch, navigation: readingNavigation, seeds } = useReadingNavigation(registry, settings.newTabSplitDefault)
   // 图片遮罩 reveals of each tab's page visit (renderer memory only).
@@ -1442,6 +1444,7 @@ export function App() {
   return (
     <AppCoveredContext value={coverage}>
     <SettingsContext value={settingsAccess}>
+    <KaomojiSavingContext value={kaomojiSaving.save}>
     <SettingsOpenerContext value={openSettings}>
     <UpdatesContext value={updates}>
     <ThirdPartyContext value={thirdParty.access}>
@@ -1572,6 +1575,7 @@ export function App() {
                 <LaunchNotices openDraft={openFailedDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
                 <DraftDeletedNotices onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
                 <ThemeDeletedNotice operations={themeList} fallbackFocus={activeTabFocus} />
+                <KaomojiSaveNotices saving={kaomojiSaving} fallbackFocus={activeTabFocus} />
                 <UpdateNotice fallbackFocus={activeTabFocus} />
                 <BottomNotice
                   open={loginItemNotApplied}
@@ -1691,6 +1695,7 @@ export function App() {
     </ThirdPartyContext>
     </UpdatesContext>
     </SettingsOpenerContext>
+    </KaomojiSavingContext>
     </SettingsContext>
     </AppCoveredContext>
   )

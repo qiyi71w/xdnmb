@@ -3,13 +3,14 @@ import type { AppSettings } from '../../../shared/settings'
 
 /**
  * The settings in effect and the one way to change them: `write` shows a patch at once and saves it
- * through `settings.update` (see `useSettingsWriter`). Build a patch from `latest()`, not from a
- * rendered `settings`, so changes made in quick succession never drop each other.
+ * through `settings.update` (see `useSettingsWriter`), its promise telling whether that was saved.
+ * Build a patch from `latest()`, not from a rendered `settings`, so changes made in quick succession
+ * never drop each other.
  */
 export interface SettingsAccess {
   settings: AppSettings
   latest: () => AppSettings
-  write: (patch: Partial<AppSettings>, delay?: number) => void
+  write: (patch: Partial<AppSettings>, delay?: number) => Promise<boolean>
   /** Local storage refused the last write: `settings` are what stays in effect. */
   notSaved: boolean
 }

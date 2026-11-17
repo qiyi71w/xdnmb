@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ClipboardEditCommand } from '../../../shared/api'
+import { KaomojiSavingContext, saveKaomojiItem } from '../features/editor/kaomojiSaving'
 import { useCover } from '../lib/appCovered'
 import { runEditCommand } from '../lib/clipboard'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from './ContextMenu'
 import { selectionCopyItem } from './copyMenuItems'
+
+/** Marks a compose panel's text (`data-save-kaomoji` on it): its edit menu adds 存为颜文字 for the selection. */
+const SAVE_KAOMOJI_FIELD = 'data-save-kaomoji'
 
 /** Input types holding text the edit menu serves; checkboxes, ranges, buttons and the like have none. */
 const TEXT_INPUT_TYPES: Record<string, true> = { text: true, search: true, url: true, tel: true, email: true, password: true, number: true }
@@ -18,9 +22,10 @@ function textField(target: EventTarget | null): TextField | null {
 
 /**
  * 剪切／复制／粘贴／全选 as the field allows now. A masked (password) field only pastes: its text
- * is never copied out, by the menu or by the platform, until 显示 turns it into plain text.
+ * is never copied out, by the menu or by the platform, until 显示 turns it into plain text. A compose
+ * panel's text adds 存为颜文字 for the selection (taken now), unavailable like 复制 without one.
  */
-function fieldItems(field: TextField): ContextMenuItem[] {
+function fieldItems(field: TextField, saveKaomoji: ((selected: string) => void) | null): ContextMenuItem[] {
   // `:disabled` also covers a field inside a disabled fieldset, whose own `disabled` stays false.
   const usable = !field.matches(':disabled')
   const writable = usable && !field.readOnly
@@ -37,13 +42,16 @@ function fieldItems(field: TextField): ContextMenuItem[] {
     title,
     onSelect: () => void runEditCommand(command).catch(() => undefined)
   })
-  return [
+  const items: ContextMenuItem[] = [
     item('cut', '剪切', 'cut', writable && selected && !masked, maskedTitle),
     item('copy', '复制', 'copy', selected && !masked, maskedTitle),
     item('paste', '粘贴', 'paste', writable),
     { type: 'separator', key: 'separator' },
     item('select-all', '全选', 'selectAll', usable && !masked && field.value !== '', maskedTitle)
   ]
+  if (saveKaomoji === null || !field.hasAttribute(SAVE_KAOMOJI_FIELD)) return items
+  const text = start === null || end === null ? '' : field.value.slice(start, end)
+  return [...items, { type: 'separator', key: 'kaomoji-separator' }, saveKaomojiItem(saveKaomoji, text, selected)]
 }
 
 interface OpenMenu {
@@ -57,13 +65,13 @@ interface OpenMenu {
 }
 
 /** The menu for a context-menu request at `target` (pointer at `pointer`, else the keyboard); null for none. */
-function menuFor(target: EventTarget | null, pointer: ContextMenuPoint | null): OpenMenu | null {
+function menuFor(target: EventTarget | null, pointer: ContextMenuPoint | null, saveKaomoji: ((selected: string) => void) | null): OpenMenu | null {
   const field = textField(target)
   if (field !== null) {
     return {
       point: pointer ?? contextMenuPoint(null, field),
       label: '编辑',
-      items: fieldItems(field),
+      items: fieldItems(field, saveKaomoji),
       container: field.closest('dialog') ?? document.body,
       restore: field
     }
@@ -92,18 +100,23 @@ function menuFor(target: EventTarget | null, pointer: ContextMenuPoint | null): 
 export function EditContextMenuHost() {
   const [open, setOpen] = useState<OpenMenu | null>(null)
   useCover(open !== null)
+  const saveKaomoji = useContext(KaomojiSavingContext)
+  const save = useRef(saveKaomoji)
+  useLayoutEffect(() => {
+    save.current = saveKaomoji
+  })
 
   useEffect(() => {
     const onContextMenu = (event: MouseEvent) => {
       if (event.defaultPrevented) return
-      const menu = menuFor(event.target, event.button === 2 ? { x: event.clientX, y: event.clientY } : null)
+      const menu = menuFor(event.target, event.button === 2 ? { x: event.clientX, y: event.clientY } : null, save.current)
       if (menu === null) return
       event.preventDefault()
       setOpen(menu)
     }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || !isContextMenuKey(event)) return
-      const menu = menuFor(document.activeElement, null)
+      const menu = menuFor(document.activeElement, null, save.current)
       if (menu === null) return
       event.preventDefault()
       setOpen(menu)

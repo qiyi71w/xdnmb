@@ -356,7 +356,7 @@ describe('settings', () => {
   it('keeps the recent kaomoji across a restart, in their order', async () => {
     const path = join(folder(), 'settings.sqlite')
     const first = open(path)
-    const recentKaomoji = ['[n]', '多行\n颜文字', '(｀・ω・)', '|∀ﾟ', 'a', 'b', 'c', 'd']
+    const recentKaomoji = ['[n]', '多行\n颜文字', '(｀・ω・)', '|∀ﾟ', '\u3000', 'b', 'c', 'd']
     expect(await createSettingsService(storeOf(first)).update({ recentKaomoji })).toMatchObject({ saved: true, issues: [] })
     first.close()
     databases.splice(databases.indexOf(first), 1)
@@ -366,9 +366,9 @@ describe('settings', () => {
   it('drops only the invalid or repeated stored recent kaomoji and keeps the first 8', () => {
     const stored = new Map<string, unknown>([
       ['density', 'compact'],
-      ['recentKaomoji', ['a', 42, '  ', 'b', 'a', 'bad\u0000', { text: 'c' }, 'c', 'd', 'e', 'f', 'g', 'h', 'i']]
+      ['recentKaomoji', ['a', 42, '', 'b', 'a', 'bad\u0000', { text: 'c' }, 'c', 'x'.repeat(501), '\u3000', 'e', 'f', 'g', 'h', 'i']]
     ])
-    expect(settingsFromStored(stored)).toEqual({ ...DEFAULT_SETTINGS, density: 'compact', recentKaomoji: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] })
+    expect(settingsFromStored(stored)).toEqual({ ...DEFAULT_SETTINGS, density: 'compact', recentKaomoji: ['a', 'b', 'c', '\u3000', 'e', 'f', 'g', 'h'] })
     expect(settingsFromStored(new Map<string, unknown>([['recentKaomoji', 'a']])).recentKaomoji).toEqual([])
   })
 
@@ -429,7 +429,9 @@ describe('settings', () => {
     ['a kaomoji repeated under another name', { customKaomoji: [{ text: 'x' }, { text: 'x', name: '别名' }] }, 'customKaomoji'],
     ['more than 8 recent kaomoji', { recentKaomoji: ['1', '2', '3', '4', '5', '6', '7', '8', '9'] }, 'recentKaomoji'],
     ['a repeated recent kaomoji', { recentKaomoji: ['x', 'y', 'x'] }, 'recentKaomoji'],
-    ['a blank recent kaomoji', { recentKaomoji: ['  '] }, 'recentKaomoji'],
+    ['an empty recent kaomoji', { recentKaomoji: [''] }, 'recentKaomoji'],
+    ['a recent kaomoji past 500 characters', { recentKaomoji: ['x'.repeat(501)] }, 'recentKaomoji'],
+    ['a recent kaomoji with a control character', { recentKaomoji: ['bad\u0000'] }, 'recentKaomoji'],
     ['a recent kaomoji that is not text', { recentKaomoji: [{ text: 'x' }] }, 'recentKaomoji'],
     ['a list narrower than the minimum', { listWidth: 100 }, 'listWidth']
   ])('refuses %s', (_label, patch, field) => {

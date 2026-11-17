@@ -19,6 +19,7 @@ import { focusKey, type SaveFailure } from './useEditorsStore'
 import { useEditorWorkspace } from './workspace'
 import { AttachmentPreview } from './AttachmentPreview'
 import { useComposeTips } from './composeTips'
+import { kaomojiInsertion, type KaomojiInsert } from './kaomoji'
 import { KaomojiPicker } from './KaomojiPicker'
 import './editor.css'
 
@@ -148,21 +149,25 @@ export function EditorPanel({
   })
 
   /**
-   * 颜文字: `inserted` goes into the text at its caret, over its selection, even when
-   * focus was elsewhere (标题／名称); focus ends in the text with the caret after the insertion.
+   * 颜文字: `kaomoji` goes into the text at its caret, over its selection (防剧透: around it), even
+   * when focus was elsewhere (标题／名称); focus ends in the text, the caret where `kaomojiInsertion`
+   * puts it.
    */
-  const insertText = (inserted: string) => {
+  const insertKaomoji = (kaomoji: KaomojiInsert) => {
     const textarea = textareaRef.current
     if (textarea === null || locked) return
     const { selectionStart: start, selectionEnd: end, value } = textarea
+    const { replacement, text, caret } = kaomojiInsertion(value, start, end, kaomoji)
     textarea.focus()
     textarea.setSelectionRange(start, end)
-    // As if typed: one native undo step, the caret after it, the change through onChange.
-    if (document.execCommand('insertText', false, inserted)) return
-    const next = value.slice(0, start) + inserted + value.slice(end)
-    pendingCaret.current = start + inserted.length
-    if (report !== undefined) store.dispatch({ type: 'edit-report', editorId, patch: { text: next } })
-    else edit({ content: next })
+    // As if typed: one native undo step, the change through onChange.
+    if (document.execCommand('insertText', false, replacement)) {
+      textarea.setSelectionRange(caret, caret)
+      return
+    }
+    pendingCaret.current = caret
+    if (report !== undefined) store.dispatch({ type: 'edit-report', editorId, patch: { text } })
+    else edit({ content: text })
   }
 
   /** Collapsing saves the draft at once (see `useEditorsStore`). */
@@ -292,6 +297,8 @@ export function EditorPanel({
         value={report?.text ?? editor.fields.content}
         readOnly={locked}
         aria-keyshortcuts={sendAriaShortcut(platform)}
+        // Its edit menu (EditContextMenu) adds 存为颜文字 for the selection.
+        data-save-kaomoji=""
         onChange={(event) => report !== undefined
           ? store.dispatch({ type: 'edit-report', editorId, patch: { text: event.target.value } })
           : edit({ content: event.target.value })}
@@ -545,7 +552,7 @@ export function EditorPanel({
               <Icon name="fields" />
               {fieldsHidden && <span className="compose-dot" aria-hidden="true" />}
             </button>
-            <KaomojiPicker disabled={locked} onInsert={insertText} />
+            <KaomojiPicker disabled={locked} onInsert={insertKaomoji} />
             {status}
           </div>
           {actions}

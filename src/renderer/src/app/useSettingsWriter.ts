@@ -12,14 +12,21 @@ export interface SettingsWriteStatus {
 const NO_STATUS: SettingsWriteStatus = { notSaved: false, refused: [] }
 
 export interface SettingsWriter {
-  /** Shows `patch` now and sends it after `delay` ms (coalesced with other waiting changes). */
-  write: (patch: Partial<AppSettings>, delay?: number) => void
   /**
-   * Sends `patch` now, together with any waiting changes, and resolves whether main saved it. The
-   * patch shows once main's reply is applied; a refused or unsaved one never shows.
+   * Shows `patch` now and sends it after `delay` ms (coalesced with other waiting changes); resolves
+   * whether the update that carried it was saved.
+   */
+  write: (patch: Partial<AppSettings>, delay?: number) => Promise<boolean>
+  /**
+   * Sends `patch` now, together with any waiting changes, and resolves whether main saved it; the
+   * waiting writes it carries resolve the same. The patch shows once main's reply is applied; a
+   * refused or unsaved one never shows.
    */
   commit: (patch: Partial<AppSettings>) => Promise<boolean>
-  /** Settings changed elsewhere in main (theme import): they win over waiting and in-flight writes. */
+  /**
+   * Settings changed elsewhere in main (theme import): they win over waiting and in-flight writes.
+   * Waiting writes are dropped and resolve false.
+   */
   adopt: (next: AppSettings) => void
 }
 
@@ -33,6 +40,9 @@ export interface SettingsWriter {
  * settings it sent take main's values, except those changed again since, so whatever is built on
  * `latest` next (the theme list queue) includes it.
  *
+ * Each write's promise tells whether the update that carried it was saved (false when refused,
+ * failed or dropped); a write sent by `commit` is carried by the commit's update.
+ *
  * `latest` holds the settings including changes not yet sent or answered; it is what `show` was
  * last given, and the caller keeps it in step with settings it shows otherwise.
  */
@@ -42,6 +52,8 @@ export function settingsWriter(
   report: (status: SettingsWriteStatus) => void
 ): SettingsWriter {
   let pending: Partial<AppSettings> | null = null
+  /** Writes in `pending`, told whether the update carrying them was saved. */
+  let waiting: ((saved: boolean) => void)[] = []
   let timer: number | null = null
   let sequence = 0
   /** For each setting, the update that sends its latest change; none while that change waits. */
@@ -52,12 +64,24 @@ export function settingsWriter(
     show(settings)
   }
 
-  const sendNow = (patch: Partial<AppSettings>, committed: boolean): Promise<boolean> => {
+  /** Takes the waiting writes: the next update sent carries them. */
+  const takeWaiting = () => {
+    const settle = waiting
+    waiting = []
+    return settle
+  }
+
+  const sendNow = (
+    patch: Partial<AppSettings>,
+    committed: boolean,
+    settle: ((saved: boolean) => void)[]
+  ): Promise<boolean> => {
     const id = ++sequence
     const keys = Object.keys(patch) as (keyof AppSettings)[]
     for (const key of keys) sentBy.set(key, id)
     return window.xidao.settings.update(patch).then(
       (result) => {
+        for (const tell of settle) tell(result.saved)
         if (id === sequence && pending === null) {
           apply(result.settings)
           report({ notSaved: !result.saved && result.issues.length === 0, refused: result.issues })
@@ -73,6 +97,7 @@ export function settingsWriter(
         return result.saved
       },
       () => {
+        for (const tell of settle) tell(false)
         if (id === sequence) report({ notSaved: true, refused: [] })
         return false
       }
@@ -83,7 +108,7 @@ export function settingsWriter(
     timer = null
     const patch = pending
     pending = null
-    if (patch !== null) void sendNow(patch, false)
+    if (patch !== null) void sendNow(patch, false, takeWaiting())
   }
 
   const stopTimer = () => {
@@ -98,16 +123,20 @@ export function settingsWriter(
       apply({ ...latest.current, ...patch })
       stopTimer()
       timer = window.setTimeout(send, delay)
+      const { promise, resolve } = Promise.withResolvers<boolean>()
+      waiting.push(resolve)
+      return promise
     },
     commit: (patch) => {
       stopTimer()
       const sent = { ...pending, ...patch }
       pending = null
-      return sendNow(sent, true)
+      return sendNow(sent, true, takeWaiting())
     },
     adopt: (next) => {
       stopTimer()
       pending = null
+      for (const tell of takeWaiting()) tell(false)
       sequence++
       sentBy.clear()
       apply(next)

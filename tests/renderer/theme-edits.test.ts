@@ -274,6 +274,33 @@ describe('theme list operations among other settings changes', () => {
     expect(await first).toBeNull()
     expect(latest.current).toEqual({ ...withList, colorScheme: 'dark' })
   })
+
+  it.each([true, false])('a waiting write sent by an operation is told that update’s result (saved: %s)', async (saved) => {
+    const { main, writer, queue } = setup()
+    const written = writer.write({ colorScheme: 'dark' }, 500)
+    const created = queue.run((current) => createTheme(current, 'light'))
+    await settle()
+    expect(main.update).toHaveBeenCalledTimes(1)
+    expect(main.update.mock.calls[0]![0]).toMatchObject({ colorScheme: 'dark' })
+    await main.answer(saved)
+
+    expect(await written).toBe(saved)
+    expect((await created)?.ok ?? false).toBe(saved)
+    // Nothing is left to send once the delay passes.
+    vi.advanceTimersByTime(500)
+    expect(main.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('a write still waiting when settings are adopted is dropped and told it was not saved', async () => {
+    const { main, latest, writer } = setup()
+    const written = writer.write({ colorScheme: 'dark' }, 500)
+    writer.adopt({ ...withList, density: 'compact' })
+    vi.advanceTimersByTime(500)
+
+    expect(await written).toBe(false)
+    expect(main.update).not.toHaveBeenCalled()
+    expect(latest.current).toEqual({ ...withList, density: 'compact' })
+  })
 })
 
 describe('the window preview of unsaved edits', () => {
