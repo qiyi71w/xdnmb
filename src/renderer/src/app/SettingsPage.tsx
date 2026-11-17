@@ -18,6 +18,7 @@ import {
   type Write
 } from './settingsSections'
 import type { SettingsWriteStatus } from './useSettingsWriter'
+import type { ThemeEditsAccess } from './useThemeEdits'
 import type { ThemeListOperations } from './useThemeListOperations'
 import { Icon } from '../components/Icon'
 import { KaomojiDecor } from '../components/KaomojiDecor'
@@ -100,6 +101,8 @@ export interface SettingsPageProps {
   write: Write
   /** The theme list operations (shared with the 主题已删除 notice, which outlives this tab). */
   themeList: ThemeListOperations
+  /** The unsaved theme edits (kept by the app, so they outlive this tab being hidden). */
+  themeEdits: ThemeEditsAccess
   adopt: (settings: AppSettings) => void
   directory: BoardDirectory | null
   /**
@@ -492,10 +495,10 @@ function SectionJump({
 
 // ---------- Sections ----------
 
-function SectionBody({ id, settings, write, themeList, adopt, platform, identities, subscriptions, directory, active, onLoginItemNotApplied }: SettingsPageProps & { id: SectionId }) {
+function SectionBody({ id, settings, write, themeList, themeEdits, adopt, platform, identities, subscriptions, directory, active, onLoginItemNotApplied }: SettingsPageProps & { id: SectionId }) {
   switch (id) {
     case 'appearance':
-      return <AppearanceSection settings={settings} write={write} themeList={themeList} adopt={adopt} shown={active} />
+      return <AppearanceSection settings={settings} write={write} themeList={themeList} themeEdits={themeEdits} adopt={adopt} shown={active} />
     case 'reading':
       return <ReadingSection settings={settings} write={write} />
     case 'density':

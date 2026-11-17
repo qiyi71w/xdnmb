@@ -31,7 +31,8 @@ export function TopBar({
   onForward,
   onActivate,
   onClose,
-  onNewTab
+  onNewTab,
+  themeUnsaved
 }: {
   tabs: readonly StripTab[]
   activeId: number
@@ -54,6 +55,8 @@ export function TopBar({
   onActivate: (tabId: number) => void
   onClose: (tabId: number) => void
   onNewTab: () => void
+  /** The theme in use has unsaved edits: 设置's tab carries a dot, and its name and tooltip say so. */
+  themeUnsaved: boolean
 }) {
   const stripRef = useRef<HTMLDivElement>(null)
   const updateState = useUpdates().state
@@ -124,6 +127,8 @@ export function TopBar({
         {tabs.map((tab, index) => {
           const selected = tab.id === activeId
           const title = titleOf(tab)
+          const marked = themeUnsaved && isSettingsTab(tab)
+          const label = marked ? `${title}，主题有未保存的修改` : title
           return (
             <div key={tab.id} className={selected ? 'tab is-active' : 'tab'} role="presentation">
               <button
@@ -133,8 +138,9 @@ export function TopBar({
                 className="tab-button"
                 aria-selected={selected}
                 aria-controls={`tabpanel-${tab.id}`}
+                aria-label={marked ? label : undefined}
                 tabIndex={selected ? 0 : -1}
-                title={title}
+                title={label}
                 onClick={() => onActivate(tab.id)}
                 onKeyDown={(event) => onTabKeyDown(event, index)}
               >
@@ -144,6 +150,7 @@ export function TopBar({
                   tab.split && <Icon name="split" size={14} className="tab-icon" />
                 )}
                 <span className="tab-title">{title}</span>
+                {marked && <span className="tab-mark" aria-hidden="true" />}
               </button>
               <button
                 type="button"

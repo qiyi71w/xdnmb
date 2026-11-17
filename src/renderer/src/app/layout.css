@@ -248,6 +248,21 @@
   white-space: nowrap;
 }
 
+/* 设置 with unsaved theme edits: a small accent dot right after the title (`.shell-dot.is-mark`'s
+   size and colour). The tab's name and tooltip say it too; the dot is hidden from assistive tech. */
+.tab-title:has(+ .tab-mark) {
+  flex: 0 1 auto;
+}
+
+.tab-mark {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-right: auto;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
 .tab-close {
   flex: none;
   display: inline-grid;

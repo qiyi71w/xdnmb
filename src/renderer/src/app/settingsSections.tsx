@@ -2,7 +2,7 @@
 // global preferences and window behavior. Global preferences go through `write` (shown at once,
 // saved by `useSettingsWriter`); the other sections keep their own APIs.
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react'
 import type { AppPlatform } from '../../../shared/api'
 import { BOSS_KEY_DEFAULT, bossKeyLabel, recordBossKey, type BossKeyStatus } from '../../../shared/bossKey'
 import { CLOSE_ACTIONS, type CloseAction, type LoginItemState } from '../../../shared/lifecycle'
@@ -20,7 +20,6 @@ import {
   THEME_COLOR_KEYS,
   THEME_LIMITS,
   type AppearanceIssue,
-  type CustomTheme,
   type ReadingFont,
   type SchemeBase,
   type ThemeColors
@@ -31,10 +30,8 @@ import {
   createTheme,
   customThemes,
   MAX_CUSTOM_THEMES,
-  saveCurrentTheme,
   selectBuiltinTheme,
   selectCustomTheme,
-  themeNameTaken,
   type ThemeListResult
 } from '../../../shared/themeList'
 import imageMaskSample from '../../../../resources/image-mask-preview.png'
@@ -42,9 +39,10 @@ import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, 
 import { Icon } from '../components/Icon'
 import { KaomojiDecor } from '../components/KaomojiDecor'
 import { ImageMaskCover } from '../features/image/imageMask'
-import { previewTheme, systemPrefersDark, systemReducesMotion } from '../lib/useAppearance'
+import { systemPrefersDark, systemReducesMotion } from '../lib/useAppearance'
 import { useClearOnLeave } from '../lib/useClearOnLeave'
 import { describeIssues, invalidFields } from './appearanceIssues'
+import type { ThemeEditsAccess } from './useThemeEdits'
 import type { SettingsWriteStatus } from './useSettingsWriter'
 import type { ThemeListOperations } from './useThemeListOperations'
 import './settings.css'
@@ -267,12 +265,14 @@ export function AppearanceSection({
   settings,
   write,
   themeList,
+  themeEdits,
   adopt,
   shown
 }: {
   settings: AppSettings
   write: Write
   themeList: ThemeListOperations
+  themeEdits: ThemeEditsAccess
   adopt: (settings: AppSettings) => void
   /** 设置 is the active tab. */
   shown: boolean
@@ -291,7 +291,7 @@ export function AppearanceSection({
           onChange={(colorScheme) => write({ colorScheme })}
         />
       </SettingRow>
-      <ThemeList settings={settings} themeList={themeList} adopt={adopt} shown={shown} />
+      <ThemeList settings={settings} themeList={themeList} themeEdits={themeEdits} adopt={adopt} shown={shown} />
     </Section>
   )
 }
@@ -305,16 +305,6 @@ const COLOR_LABELS: Record<keyof ThemeColors, string> = {
 }
 
 const HEX = /^#[0-9a-f]{6}$/i
-
-function sameTheme(a: CustomTheme | null, b: CustomTheme | null): boolean {
-  if (a === null || b === null) return a === b
-  return (
-    a.name === b.name &&
-    a.opacity === b.opacity &&
-    a.radius === b.radius &&
-    (['light', 'dark'] as const).every((scheme) => THEME_COLOR_KEYS.every((key) => a.colors[scheme][key] === b.colors[scheme][key]))
-  )
-}
 
 const SCHEME_LABELS: Record<SchemeBase, string> = { light: '浅色', dark: '深色' }
 
@@ -376,41 +366,33 @@ const THEMES_FULL_TEXT = `已有 ${MAX_CUSTOM_THEMES} 个自定义主题，删�
  * key or Shift+F10 on the row opens too: 复制 (汐岛 included), and for a custom theme 导出… (that
  * theme, to a file) and 删除, at once and undone from the 主题已删除 notice. Under the list 新建主题,
  * 导入主题… (the file's theme added last and used, the editor left as it was) and the file result
- * line, then the collapsed editor of the custom theme in use (none while 汐岛 is). Valid edits
- * preview in this renderer at once; only 保存 writes settings. 放弃修改, leaving 设置 (another tab
- * shown, or 设置 closed), or the theme in use changing (another one chosen, 汐岛 included, a copy
- * made or a theme imported) drops the unsaved edits and restores the saved appearance; a choice that
- * was not saved changes nothing.
+ * line, then the collapsed editor of the custom theme in use (none while 汐岛 is).
+ *
+ * The edits live in the app (`themeEdits`, useThemeEdits.ts): valid ones preview in the whole window
+ * at once, also while another tab is shown, and only 保存 writes settings. While they are unsaved
+ * the list is locked so they are never dropped without a word: the other rows, every row menu,
+ * 新建主题 and 导入主题… stay focusable but are `aria-disabled` and do nothing, and a line under the
+ * list says how to unlock it. 配色 still switches (the preview follows it).
  */
 function ThemeList({
   settings,
   themeList,
+  themeEdits,
   adopt,
   shown
 }: {
   settings: AppSettings
   themeList: ThemeListOperations
+  themeEdits: ThemeEditsAccess
   adopt: (settings: AppSettings) => void
   shown: boolean
 }) {
   const groupName = useId()
-  const saved = settings.customThemeEnabled ? settings.customTheme : null
-  const [edits, setEdits] = useState<CustomTheme | null>(null)
-  const [basis, setBasis] = useState(saved)
-  const [issues, setIssues] = useState<AppearanceIssue[]>([])
+  const { saved, draft, issues, unsaved: locked, edit, discard } = themeEdits
   const [expanded, setExpanded] = useState(false)
   const [focusName, setFocusName] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
   const [editingScheme, setEditingScheme] = useState<SchemeBase>(resolveAppearance(settings, systemPrefersDark()).scheme)
-  useEffect(() => () => previewTheme(null), [])
-  useEffect(() => {
-    if (!sameTheme(saved, basis)) {
-      setBasis(saved)
-      setEdits(null)
-      setIssues([])
-      previewTheme(null)
-    }
-  }, [saved, basis])
   useEffect(() => {
     if (focusName && nameRef.current !== null) {
       nameRef.current.focus()
@@ -419,6 +401,7 @@ function ThemeList({
   })
 
   const run = (operation: (current: AppSettings) => ThemeListResult, onSaved?: () => void) => {
+    if (locked) return
     void themeList.run(operation).then((result) => {
       if (result?.ok === true) onSaved?.()
     })
@@ -428,44 +411,13 @@ function ThemeList({
     setFocusName(true)
   }
 
-  const edit = (next: CustomTheme) => {
-    setEdits(next)
-    const parsed = parseCustomTheme(next)
-    const found: AppearanceIssue[] = !parsed.ok
-      ? parsed.issues
-      : themeNameTaken(settings, next.name)
-        ? [{ kind: 'field', field: 'customTheme.name', problem: 'duplicate' }]
-        : []
-    setIssues(found)
-    if (parsed.ok && found.length === 0) previewTheme(parsed.value)
-  }
-  const discard = () => {
-    setEdits(null)
-    setIssues([])
-    previewTheme(null)
-  }
-  const discardRef = useRef(discard)
-  useLayoutEffect(() => {
-    discardRef.current = discard
-  })
-  useEffect(() => {
-    if (!shown) discardRef.current()
-  }, [shown])
   const save = () => {
-    if (edits === null || issues.length > 0) return
-    const parsed = parseCustomTheme(edits)
-    if (!parsed.ok) {
-      setIssues(parsed.issues)
-      return
-    }
-    run((current) => saveCurrentTheme(current, parsed.value))
+    if (!locked || issues.length > 0 || draft === null) return
+    const parsed = parseCustomTheme(draft)
+    if (parsed.ok) void themeList.save(parsed.value)
   }
   const create = () => run((current) => createTheme(current, resolveAppearance(current, systemPrefersDark()).scheme), opened)
-  // An imported theme is added and used; like choosing another theme, it drops unsaved edits.
-  const files = useThemeFiles(shown, (next) => {
-    discard()
-    adopt(next)
-  })
+  const files = useThemeFiles(shown, adopt)
 
   const themes = customThemes(settings)
   const choices = [
@@ -484,6 +436,7 @@ function ThemeList({
     const radio = event.currentTarget.querySelector<HTMLInputElement>('input[type="radio"]')
     if (radio === null) return
     event.preventDefault()
+    if (locked) return
     const from = 'button' in event ? radio : (event.target as HTMLElement)
     // No scrolling into view: a scroll closes the menu that is about to open.
     from.focus({ preventScroll: true })
@@ -508,12 +461,12 @@ function ThemeList({
     ;((deletedFocus.next === null ? null : radios.current.get(deletedFocus.next)) ?? createRef.current)?.focus()
   })
 
-  const draft = edits ?? saved
-  const dirty = edits !== null && !sameTheme(edits, saved)
   const invalid = invalidFields(issues)
   const nameProblem = issues.find((issue) => issue.kind === 'field' && issue.field === 'customTheme.name')
   const otherScheme: SchemeBase = editingScheme === 'light' ? 'dark' : 'light'
   const otherInvalid = THEME_COLOR_KEYS.some((key) => invalid.has(`colors.${otherScheme}.${key}`))
+  const unsavedNote = locked ? 'theme-unsaved-note' : undefined
+  const addNotes = [full && 'theme-full-note', unsavedNote].filter(Boolean).join(' ') || undefined
   return (
     <>
       <div className="theme-row">
@@ -522,45 +475,55 @@ function ThemeList({
         </span>
         <div className="theme-row-control">
           <div className="theme-list" role="radiogroup" aria-labelledby="setting-theme-list">
-            {choices.map((choice) => (
-              <div
-                key={choice.name}
-                className={['theme-choice', choice.inUse && 'is-selected', menu?.name === choice.name && 'is-menu-open'].filter(Boolean).join(' ')}
-                onContextMenu={(event) => openMenu(choice.name, event)}
-                onKeyDown={(event) => {
-                  if (isContextMenuKey(event)) openMenu(choice.name, event)
-                }}
-              >
-                <label className="theme-choice-label">
-                  <input
-                    ref={(radio) => {
-                      if (radio === null) radios.current.delete(choice.name)
-                      else radios.current.set(choice.name, radio)
-                    }}
-                    type="radio"
-                    name={groupName}
-                    checked={choice.inUse}
-                    onChange={choice.select}
-                  />
-                  <span className="theme-choice-name">{choice.name}</span>
-                </label>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  aria-haspopup="menu"
-                  aria-expanded={menu?.name === choice.name}
-                  aria-label={`主题操作：${choice.name}`}
-                  title="主题操作"
-                  onClick={(event) => {
-                    // A press outside the open menu (this one included) has already closed it.
-                    const box = event.currentTarget.getBoundingClientRect()
-                    setMenu({ name: choice.name, point: { x: box.right, y: box.bottom + 4, end: true }, returnTo: event.currentTarget })
+            {choices.map((choice) => {
+              const unavailable = locked && !choice.inUse
+              return (
+                <div
+                  key={choice.name}
+                  className={['theme-choice', choice.inUse && 'is-selected', unavailable && 'is-unavailable', menu?.name === choice.name && 'is-menu-open']
+                    .filter(Boolean)
+                    .join(' ')}
+                  onContextMenu={(event) => openMenu(choice.name, event)}
+                  onKeyDown={(event) => {
+                    if (isContextMenuKey(event)) openMenu(choice.name, event)
                   }}
                 >
-                  <Icon name="more" />
-                </button>
-              </div>
-            ))}
+                  <label className="theme-choice-label">
+                    <input
+                      ref={(radio) => {
+                        if (radio === null) radios.current.delete(choice.name)
+                        else radios.current.set(choice.name, radio)
+                      }}
+                      type="radio"
+                      name={groupName}
+                      checked={choice.inUse}
+                      aria-disabled={unavailable || undefined}
+                      aria-describedby={unavailable ? unsavedNote : undefined}
+                      onChange={choice.select}
+                    />
+                    <span className="theme-choice-name">{choice.name}</span>
+                  </label>
+                  <button
+                    type="button"
+                    className="icon-btn theme-menu-button"
+                    aria-haspopup="menu"
+                    aria-expanded={menu?.name === choice.name}
+                    aria-label={`主题操作：${choice.name}`}
+                    aria-disabled={locked || undefined}
+                    aria-describedby={unsavedNote}
+                    title="主题操作"
+                    onClick={(event) => {
+                      if (locked) return
+                      // A press outside the open menu (this one included) has already closed it.
+                      const box = event.currentTarget.getBoundingClientRect()
+                      setMenu({ name: choice.name, point: { x: box.right, y: box.bottom + 4, end: true }, returnTo: event.currentTarget })
+                    }}
+                  >
+                    <Icon name="more" />
+                  </button>
+                </div>
+              )
+            })}
           </div>
           {menu !== null && (
             <ContextMenu
@@ -596,8 +559,8 @@ function ThemeList({
                 ref={createRef}
                 type="button"
                 className="btn btn-page"
-                aria-disabled={full || undefined}
-                aria-describedby={full ? 'theme-full-note' : undefined}
+                aria-disabled={full || locked || undefined}
+                aria-describedby={addNotes}
                 onClick={() => {
                   if (!full) create()
                 }}
@@ -608,10 +571,10 @@ function ThemeList({
               <button
                 type="button"
                 className="btn btn-page"
-                aria-disabled={full || files.busy || undefined}
-                aria-describedby={full ? 'theme-full-note' : undefined}
+                aria-disabled={full || locked || files.busy || undefined}
+                aria-describedby={addNotes}
                 onClick={() => {
-                  if (!full) void files.importFile()
+                  if (!full && !locked) void files.importFile()
                 }}
               >
                 导入主题…
@@ -622,6 +585,11 @@ function ThemeList({
                 </span>
               )}
             </div>
+            {locked && (
+              <p className="setting-help" id="theme-unsaved-note">
+                保存或放弃修改后可以切换主题
+              </p>
+            )}
             <ThemeFileResult result={files.result} />
           </div>
         </div>
@@ -732,7 +700,7 @@ function ThemeList({
                 />
               </SettingRow>
             </div>
-            {dirty && (
+            {locked && (
               <div className="theme-actions">
                 <button type="button" className="btn btn-primary" aria-disabled={issues.length > 0 || undefined} onClick={save}>
                   保存

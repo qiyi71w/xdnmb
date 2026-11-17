@@ -4,13 +4,15 @@ import type { ThemeListOperations, ThemeRestoreFailure } from './useThemeListOpe
 
 const FAILURE_TEXT: Record<ThemeRestoreFailure, string> = {
   full: `没能撤销：已有 ${MAX_CUSTOM_THEMES} 个自定义主题`,
-  'not-saved': '没能撤销：设置未保存'
+  'not-saved': '没能撤销：设置未保存',
+  unsaved: '没能撤销：主题有未保存的修改'
 }
 
 /**
  * 主题已删除 for the latest deleted theme, timed and closed like 草稿已删除: 撤销 puts the theme back
- * at its place (in use again if it was). A failed 撤销 keeps the notice, saying why, until closed.
- * Another deletion replaces it, ending this 撤销.
+ * at its place (in use again if it was). A failed 撤销 keeps the notice, saying why, until closed;
+ * while the theme in use has unsaved edits it fails like any list operation, and works again once
+ * they are saved or discarded. Another deletion replaces it, ending this 撤销.
  */
 export function ThemeDeletedNotice({ operations, fallbackFocus }: { operations: ThemeListOperations; fallbackFocus: () => HTMLElement | null }) {
   const { deletion, undo, forget } = operations

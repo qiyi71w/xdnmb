@@ -171,6 +171,34 @@
   font-weight: 600;
 }
 
+/* Locked by unsaved edits: the other rows and every ⋯ fade like an unavailable page button (ink-3,
+   faded radio), stay focusable, and hover lays nothing. The row in use keeps its look. */
+.theme-choice.is-unavailable {
+  color: var(--ink-3);
+}
+
+.theme-choice.is-unavailable:hover {
+  background: transparent;
+}
+
+.theme-choice.is-unavailable .theme-choice-label {
+  cursor: default;
+}
+
+.theme-choice.is-unavailable input {
+  opacity: 0.55;
+}
+
+.icon-btn.theme-menu-button[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.icon-btn.theme-menu-button[aria-disabled='true']:hover {
+  background: transparent;
+  color: var(--ink-2);
+}
+
 /* The editor of the theme in use, under a soft line; collapsed until opened. Inside it, the editor
    and the 保存 row are two groups, a little further apart than the rows inside the editor. */
 .theme-editor-block {
