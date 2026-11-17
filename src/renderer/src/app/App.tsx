@@ -11,6 +11,7 @@ import { BoardPanelEmptyPage, BoardPanelTitle, RailNavigation } from '../feature
 import type { FeatureHost, NavProps, PageOpening } from '../features/directory/navParts'
 import { RAIL_WIDTH } from '../features/directory/Rail'
 import { SettingsPage, type SettingsTarget } from './SettingsPage'
+import { ThemeDeletedNotice } from './ThemeDeletedNotice'
 import {
   closeBoardPanel,
   ListHostContext,
@@ -93,6 +94,9 @@ import { isEditableTarget, matchShortcut, shortcutLabel, type ShortcutAction } f
 import { composeTargetsOf, TabView } from './TabView'
 import { TopBar } from './TopBar'
 import { useSettingsWriter } from './useSettingsWriter'
+import type { SettingsTabState } from './themeEditsState'
+import { useThemeEdits } from './useThemeEdits'
+import { useThemeListOperations } from './useThemeListOperations'
 import { StorageBanner } from '../features/storage/StorageBanner'
 import './layout.css'
 
@@ -159,6 +163,8 @@ export function App() {
   useAppearance(settings)
   const settingsWriter = useSettingsWriter(settings, setSettings)
   const { write: writeSettings, latest: latestSettings } = settingsWriter
+  const themeEdits = useThemeEdits(settings)
+  const themeList = useThemeListOperations(settingsWriter.commit, latestSettings, themeEdits.isUnsaved)
   const settingsAccess = useMemo<SettingsAccess>(
     () => ({ settings, latest: latestSettings, write: writeSettings, notSaved: settingsWriter.status.notSaved }),
     [settings, latestSettings, writeSettings, settingsWriter.status.notSaved]
@@ -550,6 +556,10 @@ export function App() {
 
   const settingsTab = tabs?.settings ?? null
   const settingsActive = settingsTab !== null && tabs?.activeId === settingsTab.id
+  // Unsaved theme edits stay (and keep previewing) while another tab is shown; closing 设置 drops them.
+  const { settingsTab: settingsTabChanged } = themeEdits
+  const settingsTabState: SettingsTabState = settingsTab === null ? 'closed' : settingsActive ? 'current' : 'background'
+  useLayoutEffect(() => settingsTabChanged(settingsTabState), [settingsTabChanged, settingsTabState])
   // 设置 left (another tab shown, or closed): UUID, binding or source may have changed there.
   const settingsWasActive = useRef(false)
   useEffect(() => {
@@ -1499,6 +1509,7 @@ export function App() {
                       onClose={closeTab}
                       onNewTab={newTab}
                       settingsTrigger={navOverlay ? { ref: settingsButtonRef, onOpen: openSettingsButton } : null}
+                      themeUnsaved={themeEdits.unsaved}
                     />
                     <StorageBanner storage={storage} restoreAbandoned={restoreAbandoned} importAbandoned={importAbandoned} />
                     <div className="tab-host">
@@ -1536,6 +1547,8 @@ export function App() {
                           platform={platform}
                           status={settingsWriter.status}
                           write={writeSettings}
+                          themeList={themeList}
+                          themeEdits={themeEdits}
                           adopt={settingsWriter.adopt}
                           directory={dirData}
                           target={settingsTarget}
@@ -1561,6 +1574,7 @@ export function App() {
                 />
                 <LaunchNotices openDraft={openFailedDraft} onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
                 <DraftDeletedNotices onOpenDrafts={openDrafts} fallbackFocus={activeTabFocus} />
+                <ThemeDeletedNotice operations={themeList} fallbackFocus={activeTabFocus} />
                 <KaomojiSaveNotices saving={kaomojiSaving} fallbackFocus={activeTabFocus} />
                 <UpdateNotice fallbackFocus={activeTabFocus} />
                 <BottomNotice

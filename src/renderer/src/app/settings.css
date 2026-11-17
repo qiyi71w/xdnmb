@@ -88,18 +88,141 @@
   color: var(--ink-2);
 }
 
-/* 自定义主题: the editor, the 保存 row and the import / export row are three groups, a little
-   further apart than the rows inside the editor. */
+/* 主题: the name on the left and, beside it, the radio list with 新建主题 and the theme file buttons
+   under it. Rows are quiet like the buttons: no edge at rest, the hover layer under the pointer (and
+   while the row's menu is open); the one in use is the checked radio and a bold name, never the color
+   alone. The radio's ring goes on the whole row, not the small radio. Each row ends with its ⋯ menu
+   button. The list grows with the themes; it has no scrolling of its own. */
+.theme-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px 16px;
+}
+
+/* Lines up with the first row's name. */
+.theme-row-label {
+  padding-top: 6px;
+}
+
+.theme-row-control {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.theme-list {
+  display: grid;
+  gap: 2px;
+}
+
+.theme-choice {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 1px 1px 1px 11px;
+  border-radius: var(--radius-m);
+  color: var(--ink);
+  transition: background-color 0.15s var(--ease-out);
+}
+
+.theme-choice:hover,
+.theme-choice.is-menu-open {
+  background: var(--hover);
+}
+
+.theme-choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The radio and the name: the whole row but its ⋯ button chooses the theme. */
+.theme-choice-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  align-self: stretch;
+  padding: 3px 0;
+  cursor: pointer;
+}
+
+.theme-choice input {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: inherit;
+}
+
+.theme-choice input:focus-visible {
+  outline: none;
+}
+
+.theme-choice-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.theme-choice.is-selected .theme-choice-name {
+  font-weight: 600;
+}
+
+/* Locked by unsaved edits: the other rows and every ⋯ fade like an unavailable page button (ink-3,
+   faded radio), stay focusable, and hover lays nothing. The row in use keeps its look. */
+.theme-choice.is-unavailable {
+  color: var(--ink-3);
+}
+
+.theme-choice.is-unavailable:hover {
+  background: transparent;
+}
+
+.theme-choice.is-unavailable .theme-choice-label {
+  cursor: default;
+}
+
+.theme-choice.is-unavailable input {
+  opacity: 0.55;
+}
+
+.icon-btn.theme-menu-button[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.icon-btn.theme-menu-button[aria-disabled='true']:hover {
+  background: transparent;
+  color: var(--ink-2);
+}
+
+/* The editor of the theme in use, under a soft line; collapsed until opened. Inside it, the editor
+   and the 保存 row are two groups, a little further apart than the rows inside the editor. */
+.theme-editor-block {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.theme-editor-title {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+  color: var(--ink);
+}
+
 .theme-body:not([hidden]) {
   display: grid;
   gap: 20px;
 }
 
-.theme-empty,
 .theme-editor {
   display: grid;
   gap: 12px;
-  justify-items: start;
 }
 
 .theme-editor {

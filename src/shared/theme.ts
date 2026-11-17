@@ -540,14 +540,15 @@ function colorsFromBuiltin(base: SchemeBase): ThemeColors {
  * Why a theme file or a settings change was refused. The previous settings stay in effect.
  * - `syntax`: not JSON; `format`: not an 汐岛 theme document; `version`: unsupported version.
  * - `field`: `field` is a dotted path (e.g. `colors.text`). `unavailable` means the value is valid
- *   alone but not usable now (e.g. the custom scheme without a custom theme).
+ *   alone but not usable now (e.g. the custom scheme without a custom theme); `duplicate` means a
+ *   theme name another custom theme (or 汐岛) already has.
  * A custom theme's own colors are the user's choice: their contrast is never checked.
  */
 export type AppearanceIssue =
   | { kind: 'syntax' }
   | { kind: 'format' }
   | { kind: 'version'; found: number | null }
-  | { kind: 'field'; field: string; problem: 'missing' | 'type' | 'range' | 'unknown' | 'unavailable' }
+  | { kind: 'field'; field: string; problem: 'missing' | 'type' | 'range' | 'unknown' | 'unavailable' | 'duplicate' }
 
 type Fields = Record<string, unknown>
 

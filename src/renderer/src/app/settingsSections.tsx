@@ -2,7 +2,7 @@
 // global preferences and window behavior. Global preferences go through `write` (shown at once,
 // saved by `useSettingsWriter`); the other sections keep their own APIs.
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react'
 import type { AppPlatform } from '../../../shared/api'
 import { BOSS_KEY_DEFAULT, bossKeyLabel, recordBossKey, type BossKeyStatus } from '../../../shared/bossKey'
 import { CLOSE_ACTIONS, type CloseAction, type LoginItemState } from '../../../shared/lifecycle'
@@ -19,21 +19,32 @@ import {
   parseCustomTheme,
   THEME_COLOR_KEYS,
   THEME_LIMITS,
-  themeFromBuiltin,
   type AppearanceIssue,
-  type CustomTheme,
   type ReadingFont,
   type SchemeBase,
   type ThemeColors
 } from '../../../shared/theme'
+import {
+  BUILTIN_THEME_NAME,
+  copyTheme,
+  createTheme,
+  customThemes,
+  MAX_CUSTOM_THEMES,
+  selectBuiltinTheme,
+  selectCustomTheme,
+  type ThemeListResult
+} from '../../../shared/themeList'
 import imageMaskSample from '../../../../resources/image-mask-preview.png'
+import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../components/ContextMenu'
 import { Icon } from '../components/Icon'
 import { KaomojiDecor } from '../components/KaomojiDecor'
 import { ImageMaskCover } from '../features/image/imageMask'
-import { previewTheme, systemPrefersDark, systemReducesMotion } from '../lib/useAppearance'
+import { systemPrefersDark, systemReducesMotion } from '../lib/useAppearance'
 import { useClearOnLeave } from '../lib/useClearOnLeave'
 import { describeIssues, invalidFields } from './appearanceIssues'
+import type { ThemeEditsAccess } from './useThemeEdits'
 import type { SettingsWriteStatus } from './useSettingsWriter'
+import type { ThemeListOperations } from './useThemeListOperations'
 import './settings.css'
 
 declare global {
@@ -250,7 +261,22 @@ export function Switch({
 // ---------------------------------------------------------------------------------------------
 // Sections
 
-export function AppearanceSection({ settings, write }: { settings: AppSettings; write: Write }) {
+export function AppearanceSection({
+  settings,
+  write,
+  themeList,
+  themeEdits,
+  adopt,
+  shown
+}: {
+  settings: AppSettings
+  write: Write
+  themeList: ThemeListOperations
+  themeEdits: ThemeEditsAccess
+  adopt: (settings: AppSettings) => void
+  /** 设置 is the active tab. */
+  shown: boolean
+}) {
   return (
     <Section id="settings-appearance" title="外观">
       <SettingRow labelId="setting-scheme" label="配色">
@@ -265,22 +291,7 @@ export function AppearanceSection({ settings, write }: { settings: AppSettings; 
           onChange={(colorScheme) => write({ colorScheme })}
         />
       </SettingRow>
-      <SettingRow labelId="setting-theme-source" label="主题">
-        <Choice
-          labelledBy="setting-theme-source"
-          options={[
-            { value: 'builtin', label: '汐岛' },
-            { value: 'custom', label: settings.customTheme?.name ?? '自定义', unavailableReason: settings.customTheme === null ? 'theme-create-help' : undefined }
-          ]}
-          value={settings.customThemeEnabled ? 'custom' : 'builtin'}
-          onChange={(value) => write({ customThemeEnabled: value === 'custom' })}
-        />
-        {settings.customTheme === null && (
-          <span className="setting-help" id="theme-create-help">
-            先创建或导入主题
-          </span>
-        )}
-      </SettingRow>
+      <ThemeList settings={settings} themeList={themeList} themeEdits={themeEdits} adopt={adopt} shown={shown} />
     </Section>
   )
 }
@@ -294,16 +305,6 @@ const COLOR_LABELS: Record<keyof ThemeColors, string> = {
 }
 
 const HEX = /^#[0-9a-f]{6}$/i
-
-function sameTheme(a: CustomTheme | null, b: CustomTheme | null): boolean {
-  if (a === null || b === null) return a === b
-  return (
-    a.name === b.name &&
-    a.opacity === b.opacity &&
-    a.radius === b.radius &&
-    (['light', 'dark'] as const).every((scheme) => THEME_COLOR_KEYS.every((key) => a.colors[scheme][key] === b.colors[scheme][key]))
-  )
-}
 
 const SCHEME_LABELS: Record<SchemeBase, string> = { light: '浅色', dark: '深色' }
 
@@ -356,206 +357,366 @@ function ThemeField({
   )
 }
 
+/** Why 新建主题, 导入主题… and 复制 are unavailable at the limit. */
+const THEMES_FULL_TEXT = `已有 ${MAX_CUSTOM_THEMES} 个自定义主题，删除一个后才能再添加`
+
 /**
- * 自定义主题, collapsed until opened. Valid edits preview in this renderer at once; only 保存 writes
- * settings. 放弃修改, or leaving 设置 (another tab shown, or 设置 closed), restores the saved
- * appearance and drops the unsaved edits.
+ * 主题: 汐岛 and the custom themes as a radio list; choosing one uses it at once (saved without
+ * 保存). Each row ends with a ⋯ button opening the row's menu, which a right-click, the ContextMenu
+ * key or Shift+F10 on the row opens too: 复制 (汐岛 included), and for a custom theme 导出… (that
+ * theme, to a file) and 删除, at once and undone from the 主题已删除 notice. Under the list 新建主题,
+ * 导入主题… (the file's theme added last and used, the editor left as it was) and the file result
+ * line, then the collapsed editor of the custom theme in use (none while 汐岛 is).
+ *
+ * The edits live in the app (`themeEdits`, useThemeEdits.ts): valid ones preview in the whole window
+ * at once, also while another tab is shown, and only 保存 writes settings. While they are unsaved
+ * the list is locked so they are never dropped without a word: the other rows, every row menu,
+ * 新建主题 and 导入主题… stay focusable but are `aria-disabled` and do nothing, and a line under the
+ * list says how to unlock it. 配色 still switches (the preview follows it).
  */
-export function ThemeSection({
+function ThemeList({
   settings,
-  write,
+  themeList,
+  themeEdits,
   adopt,
   shown
 }: {
   settings: AppSettings
-  write: Write
+  themeList: ThemeListOperations
+  themeEdits: ThemeEditsAccess
   adopt: (settings: AppSettings) => void
-  /** 设置 is the active tab. */
   shown: boolean
 }) {
-  const [draft, setDraft] = useState<CustomTheme | null>(settings.customTheme)
-  const [basis, setBasis] = useState(settings.customTheme)
-  const [issues, setIssues] = useState<AppearanceIssue[]>([])
+  const groupName = useId()
+  const { saved, draft, issues, unsaved: locked, edit, discard } = themeEdits
   const [expanded, setExpanded] = useState(false)
+  const [focusName, setFocusName] = useState(false)
+  const nameRef = useRef<HTMLInputElement>(null)
   const [editingScheme, setEditingScheme] = useState<SchemeBase>(resolveAppearance(settings, systemPrefersDark()).scheme)
-  useEffect(() => () => previewTheme(null), [])
   useEffect(() => {
-    if (!sameTheme(settings.customTheme, basis)) {
-      setBasis(settings.customTheme)
-      setDraft(settings.customTheme)
-      setIssues([])
-      previewTheme(null)
+    if (focusName && nameRef.current !== null) {
+      nameRef.current.focus()
+      setFocusName(false)
     }
-  }, [settings.customTheme, basis])
-
-  const edit = (next: CustomTheme) => {
-    setDraft(next)
-    const parsed = parseCustomTheme(next)
-    setIssues(parsed.ok ? [] : parsed.issues)
-    if (parsed.ok) previewTheme(parsed.value)
-  }
-  const create = () => edit(themeFromBuiltin(resolveAppearance(settings, systemPrefersDark()).scheme))
-  const discard = () => {
-    setDraft(settings.customTheme)
-    setIssues([])
-    previewTheme(null)
-  }
-  const discardRef = useRef(discard)
-  useLayoutEffect(() => {
-    discardRef.current = discard
   })
-  useEffect(() => {
-    if (!shown) discardRef.current()
-  }, [shown])
-  const save = () => {
-    if (draft === null) return
-    const parsed = parseCustomTheme(draft)
-    if (!parsed.ok) {
-      setIssues(parsed.issues)
-      return
-    }
-    write({ customTheme: parsed.value, customThemeEnabled: true })
-    previewTheme(null)
+
+  const run = (operation: (current: AppSettings) => ThemeListResult, onSaved?: () => void) => {
+    if (locked) return
+    void themeList.run(operation).then((result) => {
+      if (result?.ok === true) onSaved?.()
+    })
   }
-  const dirty = !sameTheme(draft, settings.customTheme)
+  const opened = () => {
+    setExpanded(true)
+    setFocusName(true)
+  }
+
+  const save = () => {
+    if (!locked || issues.length > 0 || draft === null) return
+    const parsed = parseCustomTheme(draft)
+    if (parsed.ok) void themeList.save(parsed.value)
+  }
+  const create = () => run((current) => createTheme(current, resolveAppearance(current, systemPrefersDark()).scheme), opened)
+  const files = useThemeFiles(shown, adopt)
+
+  const themes = customThemes(settings)
+  const choices = [
+    { name: BUILTIN_THEME_NAME, inUse: saved === null, select: () => run(() => selectBuiltinTheme()) },
+    ...themes.map((theme) => ({
+      name: theme.name,
+      inUse: theme.name === saved?.name,
+      select: () => run((current) => selectCustomTheme(current, theme.name))
+    }))
+  ]
+  const full = themes.length >= MAX_CUSTOM_THEMES
+
+  // The row menu, and where focus goes back when it closes: the ⋯ button, or the row's radio.
+  const [menu, setMenu] = useState<{ name: string; point: ContextMenuPoint; returnTo: HTMLElement } | null>(null)
+  const openMenu = (name: string, event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
+    const radio = event.currentTarget.querySelector<HTMLInputElement>('input[type="radio"]')
+    if (radio === null) return
+    event.preventDefault()
+    if (locked) return
+    const from = 'button' in event ? radio : (event.target as HTMLElement)
+    // No scrolling into view: a scroll closes the menu that is about to open.
+    from.focus({ preventScroll: true })
+    setMenu({ name, point: contextMenuPoint(event, radio.closest<HTMLElement>('.theme-choice') ?? radio), returnTo: from })
+  }
+
+  // After 删除, focus goes to the next row, else the previous one, else 新建主题, once the row is gone.
+  const radios = useRef(new Map<string, HTMLInputElement>())
+  const createRef = useRef<HTMLButtonElement>(null)
+  const [deletedFocus, setDeletedFocus] = useState<{ deleted: string; next: string | null } | null>(null)
+  const remove = (name: string) => {
+    const names = choices.map((choice) => choice.name)
+    const at = names.indexOf(name)
+    const next = names[at + 1] ?? names[at - 1] ?? null
+    void themeList.remove(name).then((deleted) => {
+      if (deleted) setDeletedFocus({ deleted: name, next })
+    })
+  }
+  useEffect(() => {
+    if (deletedFocus === null || choices.some((choice) => choice.name === deletedFocus.deleted)) return
+    setDeletedFocus(null)
+    ;((deletedFocus.next === null ? null : radios.current.get(deletedFocus.next)) ?? createRef.current)?.focus()
+  })
+
   const invalid = invalidFields(issues)
-  const usable = settings.customTheme
-  const nameInvalid = invalid.has('name')
+  const nameProblem = issues.find((issue) => issue.kind === 'field' && issue.field === 'customTheme.name')
   const otherScheme: SchemeBase = editingScheme === 'light' ? 'dark' : 'light'
   const otherInvalid = THEME_COLOR_KEYS.some((key) => invalid.has(`colors.${otherScheme}.${key}`))
+  const unsavedNote = locked ? 'theme-unsaved-note' : undefined
+  const addNotes = [full && 'theme-full-note', unsavedNote].filter(Boolean).join(' ') || undefined
   return (
-    <Section
-      id="settings-theme"
-      title={
-        <button type="button" className="theme-disclosure" aria-expanded={expanded} aria-controls="theme-editor-body" onClick={() => setExpanded(!expanded)}>
-          自定义主题 <Icon name={expanded ? 'minus' : 'plus'} size={14} />
-        </button>
-      }
-    >
-      <div id="theme-editor-body" className="theme-body" hidden={!expanded}>
-        {draft === null ? (
-          <div className="theme-empty">
-            <button type="button" className="btn btn-page" onClick={create}>
-              <Icon name="plus" />
-              创建主题
-            </button>
+    <>
+      <div className="theme-row">
+        <span className="setting-label theme-row-label" id="setting-theme-list">
+          主题
+        </span>
+        <div className="theme-row-control">
+          <div className="theme-list" role="radiogroup" aria-labelledby="setting-theme-list">
+            {choices.map((choice) => {
+              const unavailable = locked && !choice.inUse
+              return (
+                <div
+                  key={choice.name}
+                  className={['theme-choice', choice.inUse && 'is-selected', unavailable && 'is-unavailable', menu?.name === choice.name && 'is-menu-open']
+                    .filter(Boolean)
+                    .join(' ')}
+                  onContextMenu={(event) => openMenu(choice.name, event)}
+                  onKeyDown={(event) => {
+                    if (isContextMenuKey(event)) openMenu(choice.name, event)
+                  }}
+                >
+                  <label className="theme-choice-label">
+                    <input
+                      ref={(radio) => {
+                        if (radio === null) radios.current.delete(choice.name)
+                        else radios.current.set(choice.name, radio)
+                      }}
+                      type="radio"
+                      name={groupName}
+                      checked={choice.inUse}
+                      aria-disabled={unavailable || undefined}
+                      aria-describedby={unavailable ? unsavedNote : undefined}
+                      onChange={choice.select}
+                    />
+                    <span className="theme-choice-name">{choice.name}</span>
+                  </label>
+                  <button
+                    type="button"
+                    className="icon-btn theme-menu-button"
+                    aria-haspopup="menu"
+                    aria-expanded={menu?.name === choice.name}
+                    aria-label={`主题操作：${choice.name}`}
+                    aria-disabled={locked || undefined}
+                    aria-describedby={unsavedNote}
+                    title="主题操作"
+                    onClick={(event) => {
+                      if (locked) return
+                      // A press outside the open menu (this one included) has already closed it.
+                      const box = event.currentTarget.getBoundingClientRect()
+                      setMenu({ name: choice.name, point: { x: box.right, y: box.bottom + 4, end: true }, returnTo: event.currentTarget })
+                    }}
+                  >
+                    <Icon name="more" />
+                  </button>
+                </div>
+              )
+            })}
           </div>
-        ) : (
-          <div className="theme-editor">
-            <ThemeField label="名称" labelFor="theme-name" error={nameInvalid ? nameError(draft.name) : null} errorId="theme-name-error">
-              <input
-                id="theme-name"
-                className="text-input theme-name-input"
-                type="text"
-                autoComplete="off"
-                spellCheck={false}
-                value={draft.name}
-                aria-invalid={nameInvalid ? true : undefined}
-                aria-describedby={nameInvalid ? 'theme-name-error' : undefined}
-                onChange={(event) => edit({ ...draft, name: event.target.value })}
-              />
-            </ThemeField>
-            <ThemeField
-              label="编辑颜色"
-              labelId="theme-base"
-              error={otherInvalid ? `${SCHEME_LABELS[otherScheme]}有颜色格式不正确` : null}
-              errorId="theme-base-error"
-            >
-              <Choice<SchemeBase>
-                labelledBy="theme-base"
-                describedBy={otherInvalid ? 'theme-base-error' : undefined}
-                options={[
-                  { value: 'light', label: SCHEME_LABELS.light },
-                  { value: 'dark', label: SCHEME_LABELS.dark }
-                ]}
-                value={editingScheme}
-                onChange={setEditingScheme}
-              />
-            </ThemeField>
-
-            <div className="theme-colors" role="group" aria-label="颜色">
-              {THEME_COLOR_KEYS.map((key) => {
-                const label = COLOR_LABELS[key]
-                const typed = draft.colors[editingScheme][key]
-                const picker = HEX.test(typed) ? typed.toLowerCase() : (usable?.colors[editingScheme][key] ?? '#000000')
-                const fieldInvalid = invalid.has(`colors.${editingScheme}.${key}`)
-                const errorId = `theme-color-${key}-error`
-                const setColor = (value: string) =>
-                  edit({ ...draft, colors: { ...draft.colors, [editingScheme]: { ...draft.colors[editingScheme], [key]: value } } })
-                return (
-                  <ThemeField key={key} label={label} labelFor={`theme-color-${key}`} error={fieldInvalid ? '格式应为 #rrggbb' : null} errorId={errorId}>
-                    <span className="theme-color-inputs">
-                      <input
-                        type="color"
-                        className="color-swatch"
-                        aria-label={`${label}：取色器`}
-                        value={picker}
-                        onChange={(event) => setColor(event.target.value)}
-                      />
-                      <input
-                        id={`theme-color-${key}`}
-                        className="text-input color-text"
-                        type="text"
-                        autoComplete="off"
-                        spellCheck={false}
-                        value={typed}
-                        aria-invalid={fieldInvalid ? true : undefined}
-                        aria-describedby={fieldInvalid ? errorId : undefined}
-                        onChange={(event) => setColor(event.target.value)}
-                      />
-                    </span>
-                  </ThemeField>
-                )
-              })}
+          {menu !== null && (
+            <ContextMenu
+              key={menu.name}
+              point={menu.point}
+              label={`主题操作：${menu.name}`}
+              items={[
+                {
+                  type: 'action',
+                  key: 'copy',
+                  label: '复制',
+                  disabled: full,
+                  title: full ? THEMES_FULL_TEXT : undefined,
+                  onSelect: () => run((current) => copyTheme(current, menu.name, resolveAppearance(current, systemPrefersDark()).scheme), opened)
+                },
+                ...(menu.name === BUILTIN_THEME_NAME
+                  ? []
+                  : [
+                      { type: 'action', key: 'export', label: '导出…', onSelect: () => void files.exportFile(menu.name) } satisfies ContextMenuItem,
+                      { type: 'separator', key: 'delete-separator' } satisfies ContextMenuItem,
+                      { type: 'action', key: 'delete', label: '删除', danger: true, onSelect: () => remove(menu.name) } satisfies ContextMenuItem
+                    ])
+              ]}
+              onClose={(returnFocus) => {
+                setMenu(null)
+                if (returnFocus && menu.returnTo.isConnected) menu.returnTo.focus()
+              }}
+            />
+          )}
+          <div className="theme-transfer">
+            <div className="theme-transfer-buttons">
+              <button
+                ref={createRef}
+                type="button"
+                className="btn btn-page"
+                aria-disabled={full || locked || undefined}
+                aria-describedby={addNotes}
+                onClick={() => {
+                  if (!full) create()
+                }}
+              >
+                <Icon name="plus" />
+                新建主题
+              </button>
+              <button
+                type="button"
+                className="btn btn-page"
+                aria-disabled={full || locked || files.busy || undefined}
+                aria-describedby={addNotes}
+                onClick={() => {
+                  if (!full && !locked) void files.importFile()
+                }}
+              >
+                导入主题…
+              </button>
+              {full && (
+                <span className="setting-help" id="theme-full-note">
+                  {THEMES_FULL_TEXT}
+                </span>
+              )}
             </div>
-
-            <SettingRow labelId="theme-opacity" label="透明度">
-              <Slider
-                labelledBy="theme-opacity"
-                min={THEME_LIMITS.opacity.min}
-                max={THEME_LIMITS.opacity.max}
-                step={0.05}
-                value={draft.opacity}
-                valueText={draft.opacity.toFixed(2)}
-                onChange={(opacity) => edit({ ...draft, opacity: Math.round(opacity * 100) / 100 })}
-              />
-            </SettingRow>
-            <SettingRow labelId="theme-radius" label="圆角">
-              <Slider
-                labelledBy="theme-radius"
-                min={THEME_LIMITS.radius.min}
-                max={THEME_LIMITS.radius.max}
-                step={1}
-                value={draft.radius}
-                valueText={`${draft.radius} 像素`}
-                onChange={(radius) => edit({ ...draft, radius })}
-              />
-            </SettingRow>
+            {locked && (
+              <p className="setting-help" id="theme-unsaved-note">
+                保存或放弃修改后可以切换主题
+              </p>
+            )}
+            <ThemeFileResult result={files.result} />
           </div>
-        )}
-        {dirty && (
-          <div className="theme-actions">
-            <button type="button" className="btn btn-primary" aria-disabled={issues.length > 0 || undefined} onClick={save}>
-              保存
-            </button>
-            <button type="button" className="btn btn-page" onClick={discard}>
-              放弃修改
-            </button>
-            <span className="setting-help" role="status">
-              {issues.length > 0 ? '修改未应用' : '预览中'}
-            </span>
-          </div>
-        )}
-
-        <ThemeTransfer
-          shown={shown}
-          adopt={(next) => {
-            previewTheme(null)
-            adopt(next)
-          }}
-        />
+        </div>
       </div>
-    </Section>
+
+      {saved !== null && draft !== null && (
+        <div className="theme-editor-block">
+          <h4 className="theme-editor-title">
+            <button type="button" className="theme-disclosure" aria-expanded={expanded} aria-controls="theme-editor-body" onClick={() => setExpanded(!expanded)}>
+              编辑“{saved.name}” <Icon name={expanded ? 'minus' : 'plus'} size={14} />
+            </button>
+          </h4>
+          <div id="theme-editor-body" className="theme-body" hidden={!expanded}>
+            <div className="theme-editor">
+              <ThemeField
+                label="名称"
+                labelFor="theme-name"
+                error={nameProblem === undefined ? null : nameProblem.kind === 'field' && nameProblem.problem === 'duplicate' ? '已有同名主题' : nameError(draft.name)}
+                errorId="theme-name-error"
+              >
+                <input
+                  ref={nameRef}
+                  id="theme-name"
+                  className="text-input theme-name-input"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={draft.name}
+                  aria-invalid={nameProblem !== undefined ? true : undefined}
+                  aria-describedby={nameProblem !== undefined ? 'theme-name-error' : undefined}
+                  onChange={(event) => edit({ ...draft, name: event.target.value })}
+                />
+              </ThemeField>
+              <ThemeField
+                label="编辑颜色"
+                labelId="theme-base"
+                error={otherInvalid ? `${SCHEME_LABELS[otherScheme]}有颜色格式不正确` : null}
+                errorId="theme-base-error"
+              >
+                <Choice<SchemeBase>
+                  labelledBy="theme-base"
+                  describedBy={otherInvalid ? 'theme-base-error' : undefined}
+                  options={[
+                    { value: 'light', label: SCHEME_LABELS.light },
+                    { value: 'dark', label: SCHEME_LABELS.dark }
+                  ]}
+                  value={editingScheme}
+                  onChange={setEditingScheme}
+                />
+              </ThemeField>
+
+              <div className="theme-colors" role="group" aria-label="颜色">
+                {THEME_COLOR_KEYS.map((key) => {
+                  const label = COLOR_LABELS[key]
+                  const typed = draft.colors[editingScheme][key]
+                  const picker = HEX.test(typed) ? typed.toLowerCase() : saved.colors[editingScheme][key]
+                  const fieldInvalid = invalid.has(`colors.${editingScheme}.${key}`)
+                  const errorId = `theme-color-${key}-error`
+                  const setColor = (value: string) =>
+                    edit({ ...draft, colors: { ...draft.colors, [editingScheme]: { ...draft.colors[editingScheme], [key]: value } } })
+                  return (
+                    <ThemeField key={key} label={label} labelFor={`theme-color-${key}`} error={fieldInvalid ? '格式应为 #rrggbb' : null} errorId={errorId}>
+                      <span className="theme-color-inputs">
+                        <input
+                          type="color"
+                          className="color-swatch"
+                          aria-label={`${label}：取色器`}
+                          value={picker}
+                          onChange={(event) => setColor(event.target.value)}
+                        />
+                        <input
+                          id={`theme-color-${key}`}
+                          className="text-input color-text"
+                          type="text"
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={typed}
+                          aria-invalid={fieldInvalid ? true : undefined}
+                          aria-describedby={fieldInvalid ? errorId : undefined}
+                          onChange={(event) => setColor(event.target.value)}
+                        />
+                      </span>
+                    </ThemeField>
+                  )
+                })}
+              </div>
+
+              <SettingRow labelId="theme-opacity" label="透明度">
+                <Slider
+                  labelledBy="theme-opacity"
+                  min={THEME_LIMITS.opacity.min}
+                  max={THEME_LIMITS.opacity.max}
+                  step={0.05}
+                  value={draft.opacity}
+                  valueText={draft.opacity.toFixed(2)}
+                  onChange={(opacity) => edit({ ...draft, opacity: Math.round(opacity * 100) / 100 })}
+                />
+              </SettingRow>
+              <SettingRow labelId="theme-radius" label="圆角">
+                <Slider
+                  labelledBy="theme-radius"
+                  min={THEME_LIMITS.radius.min}
+                  max={THEME_LIMITS.radius.max}
+                  step={1}
+                  value={draft.radius}
+                  valueText={`${draft.radius} 像素`}
+                  onChange={(radius) => edit({ ...draft, radius })}
+                />
+              </SettingRow>
+            </div>
+            {locked && (
+              <div className="theme-actions">
+                <button type="button" className="btn btn-primary" aria-disabled={issues.length > 0 || undefined} onClick={save}>
+                  保存
+                </button>
+                <button type="button" className="btn btn-page" onClick={discard}>
+                  放弃修改
+                </button>
+                <span className="setting-help" role="status">
+                  {issues.length > 0 ? '修改未应用' : '预览中'}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
@@ -564,75 +725,77 @@ type TransferResult = { tone: 'done' | 'warning'; text: string; issues?: Appeara
 const IMPORT_FAILURES = {
   read: '无法读取文件',
   'too-large': '主题文件超过 64 KB',
+  full: THEMES_FULL_TEXT,
   'not-saved': '主题未保存'
 } as const
 
 /**
- * Theme import / export through the system file dialogs (main shows them). Cancelling says nothing.
- * Leaving 设置 clears a completed result; an import finishing after that is still adopted, unannounced.
+ * Theme files through the system dialogs (main shows them): 导入主题… adds the file's theme as a new
+ * one and `adopt`s the saved settings; a row's 导出… writes that custom theme, named to main. One at a
+ * time; cancelling says nothing. Leaving 设置 clears a completed result; an import finishing after
+ * that is still adopted, unannounced.
  */
-function ThemeTransfer({ adopt, shown }: { adopt: (settings: AppSettings) => void; shown: boolean }) {
+function useThemeFiles(shown: boolean, adopt: (settings: AppSettings) => void) {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<TransferResult | null>(null)
   const begin = useClearOnLeave(shown, () => setResult((last) => (last?.tone === 'done' ? null : last)))
 
-  const run = async (action: 'import' | 'export') => {
+  const run = async (transfer: () => Promise<TransferResult | null>, unfinished: string) => {
     if (busy) return
     setBusy(true)
     setResult(null)
     const current = begin()
     try {
-      if (action === 'import') {
-        const outcome = await window.xidao.theme.import()
-        if (outcome.status === 'imported') {
-          adopt(outcome.settings)
-          if (current()) setResult({ tone: 'done', text: `已导入“${outcome.settings.customTheme?.name ?? ''}”` })
-        } else if (outcome.status === 'rejected') {
-          setResult({ tone: 'warning', text: '主题文件不可用', issues: outcome.issues })
-        } else if (outcome.status === 'failed') {
-          setResult({ tone: 'warning', text: IMPORT_FAILURES[outcome.reason] })
-        }
-      } else {
-        const outcome = await window.xidao.theme.export()
-        if (outcome.status === 'exported') {
-          if (current()) setResult({ tone: 'done', text: '已导出主题' })
-        } else if (outcome.status === 'failed') setResult({ tone: 'warning', text: '未能写入文件' })
-      }
+      const next = await transfer()
+      if (next !== null && (next.tone !== 'done' || current())) setResult(next)
     } catch {
-      setResult({ tone: 'warning', text: action === 'import' ? '导入未完成' : '导出未完成' })
+      setResult({ tone: 'warning', text: unfinished })
     } finally {
       setBusy(false)
     }
   }
 
+  const importFile = () =>
+    run(async () => {
+      const outcome = await window.xidao.theme.import()
+      if (outcome.status === 'cancelled') return null
+      if (outcome.status === 'rejected') return { tone: 'warning', text: '主题文件不可用', issues: outcome.issues }
+      if (outcome.status === 'failed') return { tone: 'warning', text: IMPORT_FAILURES[outcome.reason] }
+      adopt(outcome.settings)
+      return { tone: 'done', text: `已导入“${outcome.settings.customTheme?.name ?? ''}”` }
+    }, '导入未完成')
+
+  const exportFile = (name: string) =>
+    run(async () => {
+      const outcome = await window.xidao.theme.export({ name })
+      if (outcome.status === 'cancelled') return null
+      if (outcome.status === 'exported') return { tone: 'done', text: `已导出“${name}”` }
+      return { tone: 'warning', text: outcome.reason === 'write' ? '未能写入文件' : `没能导出：“${name}”已不在列表中` }
+    }, '导出未完成')
+
+  return { busy, result, importFile, exportFile }
+}
+
+/** The last theme file import or export result, announced as it changes. */
+function ThemeFileResult({ result }: { result: TransferResult | null }) {
   return (
-    <div className="theme-transfer">
-      <div className="theme-transfer-buttons">
-        <button type="button" className="btn btn-page" aria-disabled={busy ? true : undefined} onClick={() => void run('import')}>
-          导入主题…
-        </button>
-        <button type="button" className="btn btn-page" aria-disabled={busy ? true : undefined} onClick={() => void run('export')}>
-          导出主题…
-        </button>
-      </div>
-      <div role="status" className="theme-transfer-result">
-        {result !== null && (
-          <>
-            <p className={result.tone === 'done' ? 'notice-inline is-done' : 'notice-inline is-warning'}>
-              <Icon name={result.tone === 'done' ? 'check' : 'alert'} size={14} />
-              {result.text}
-              {result.tone !== 'done' && <KaomojiDecor state="failure" />}
-            </p>
-            {result.issues !== undefined && (
-              <ul className="issue-items">
-                {describeIssues(result.issues).map((text) => (
-                  <li key={text}>{text}</li>
-                ))}
-              </ul>
-            )}
-          </>
-        )}
-      </div>
+    <div role="status" className="theme-transfer-result">
+      {result !== null && (
+        <>
+          <p className={result.tone === 'done' ? 'notice-inline is-done' : 'notice-inline is-warning'}>
+            <Icon name={result.tone === 'done' ? 'check' : 'alert'} size={14} />
+            {result.text}
+            {result.tone !== 'done' && <KaomojiDecor state="failure" />}
+          </p>
+          {result.issues !== undefined && (
+            <ul className="issue-items">
+              {describeIssues(result.issues).map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
     </div>
   )
 }

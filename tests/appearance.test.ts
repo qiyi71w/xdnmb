@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSettingsService, type SettingsStore } from '../src/main/appearance'
 import { openReadingDatabase, type ReadingDatabase } from '../src/main/storage/database'
 import { applySettingsPatch, DEFAULT_SETTINGS, nextZoomFactor, resolveAppearance, settingsFromStored, type AppSettings } from '../src/shared/settings'
+import { customThemes, MAX_CUSTOM_THEMES } from '../src/shared/themeList'
 import { COOKIE_COLORS } from '../src/shared/cookieColors'
 import {
   cookieColorToken,
@@ -486,23 +487,38 @@ describe('settings service with real storage', () => {
     expect(db.loadSettings()).toEqual(before)
   })
 
-  it('restores the exported theme and reading parameters in another profile', async () => {
+  it('adds an imported theme last and uses it, without replacing a theme or adopting its reading parameters', async () => {
     const dir = folder()
-    const source = createSettingsService(storeOf(open(join(dir, 'a.sqlite'))))
-    await source.update({ customTheme: sepia, colorScheme: 'light', reading: { font: 'serif', fontSize: 19, readingWidth: 34 } })
-    const file = join(dir, 'theme.json')
-    expect(await source.exportTheme(file, false)).toEqual({ status: 'exported' })
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ format: 'xidao-theme', version: 2 })
+    const db = open(join(dir, 'a.sqlite'))
+    const service = createSettingsService(storeOf(db))
+    const blue = { ...sepia, name: '青瓷' }
+    const reading = { font: 'serif' as const, fontSize: 19, readingWidth: 34 }
+    await service.update({ customTheme: sepia, customThemeEnabled: false, customThemeList: { others: [blue], currentIndex: 1 }, reading })
+    const before = db.loadSettings()
+    const night = { ...sepia, name: '夜航', opacity: 0.5 }
+    const file = join(dir, 'night.json')
+    writeFileSync(file, serializeThemeDocument(themeDocument(night, { font: 'local:Noto Serif CJK SC', fontSize: 24, readingWidth: 50 })))
 
-    const targetDb = open(join(dir, 'b.sqlite'))
-    const target = createSettingsService(storeOf(targetDb))
-    expect(await target.importTheme(file)).toMatchObject({ status: 'imported' })
-    expect(targetDb.loadSettings()).toEqual({
-      ...DEFAULT_SETTINGS,
-      customThemeEnabled: true,
-      customTheme: sepia,
-      reading: { font: 'serif', fontSize: 19, readingWidth: 34 }
-    })
+    const imported = await service.importTheme(file)
+    expect(imported).toEqual({ status: 'imported', settings: db.loadSettings() })
+    const after = db.loadSettings()
+    expect(customThemes(after)).toEqual([blue, sepia, night])
+    expect(after).toMatchObject({ customTheme: night, customThemeEnabled: true, reading })
+    expect(after.reading).toEqual(before.reading)
+  })
+
+  it('imports version 1 and version 2 files as new themes', async () => {
+    const dir = folder()
+    const db = open(join(dir, 'a.sqlite'))
+    const service = createSettingsService(storeOf(db))
+    const v1 = join(dir, 'v1.json')
+    writeFileSync(v1, JSON.stringify({ format: 'xidao-theme', version: 1, name: '旧主题', base: 'light', colors: sepia.colors.light, opacity: 0.7, radius: 10, font: 'serif', fontSize: 20, readingWidth: 36 }))
+    const v2 = join(dir, 'v2.json')
+    writeFileSync(v2, serializeThemeDocument(themeDocument(sepia, { font: 'serif', fontSize: 20, readingWidth: 36 })))
+    expect(await service.importTheme(v1)).toMatchObject({ status: 'imported', settings: { customTheme: { name: '旧主题', colors: { light: sepia.colors.light } } } })
+    expect(await service.importTheme(v2)).toMatchObject({ status: 'imported', settings: { customTheme: sepia } })
+    expect(customThemes(db.loadSettings()).map((theme) => theme.name)).toEqual(['旧主题', '旧纸'])
+    expect(db.loadSettings().reading).toEqual(DEFAULT_SETTINGS.reading)
   })
 
   it('imports a low-contrast theme file and saves its colors unchanged', async () => {
@@ -516,12 +532,84 @@ describe('settings service with real storage', () => {
     expect(db.loadSettings()).toMatchObject({ customThemeEnabled: true, customTheme: pale })
   })
 
-  it('exports a seed of the built-in scheme in effect when there is no custom theme', async () => {
+  it('numbers an imported theme whose name a custom theme or 汐岛 has, shortening a long name', async () => {
     const dir = folder()
-    const service = createSettingsService(storeOf(open(join(dir, 'a.sqlite'))))
+    const db = open(join(dir, 'a.sqlite'))
+    const service = createSettingsService(storeOf(db))
+    const long = '长'.repeat(40)
+    const blue = { ...sepia, name: '青瓷' }
+    await service.update({ customTheme: sepia, customThemeEnabled: true, customThemeList: { others: [blue, { ...sepia, name: long }], currentIndex: 1 } })
     const file = join(dir, 'theme.json')
-    expect(await service.exportTheme(file, true)).toEqual({ status: 'exported' })
-    const parsed = parseThemeDocument(readFileSync(file, 'utf8'))
-    expect(parsed).toMatchObject({ ok: true, theme: themeFromBuiltin('dark') })
+    const listed = ['青瓷', '旧纸', long]
+    for (const [name, adopted] of [['青瓷', '青瓷 2'], ['青瓷', '青瓷 3'], ['汐岛', '汐岛 2'], [long, `${'长'.repeat(38)} 2`], ['旧纸', '旧纸 2'], ['晨雾', '晨雾']] as const) {
+      writeFileSync(file, serializeThemeDocument(themeDocument({ ...sepia, name }, DEFAULT_SETTINGS.reading)))
+      expect(await service.importTheme(file)).toMatchObject({ status: 'imported', settings: { customThemeEnabled: true, customTheme: { name: adopted } } })
+      listed.push(adopted)
+      expect(customThemes(db.loadSettings()).map((theme) => theme.name)).toEqual(listed)
+    }
+  })
+
+  it(`refuses an import when the list has ${MAX_CUSTOM_THEMES} themes, leaving the settings unchanged`, async () => {
+    const dir = folder()
+    const db = open(join(dir, 'a.sqlite'))
+    const service = createSettingsService(storeOf(db))
+    const themes = Array.from({ length: MAX_CUSTOM_THEMES }, (_, index) => ({ ...sepia, name: `主题 ${index + 1}` }))
+    await service.update({ customTheme: themes[0], customThemeEnabled: true, customThemeList: { others: themes.slice(1), currentIndex: 0 } })
+    const before = db.loadSettings()
+    const file = join(dir, 'theme.json')
+    writeFileSync(file, serializeThemeDocument(themeDocument({ ...sepia, name: '晨雾' }, DEFAULT_SETTINGS.reading)))
+    expect(await service.importTheme(file)).toEqual({ status: 'failed', reason: 'full' })
+    expect(db.loadSettings()).toEqual(before)
+  })
+
+  it('exports the named custom theme, not the one in use, with the current reading parameters as a version 2 file', async () => {
+    const dir = folder()
+    const db = open(join(dir, 'a.sqlite'))
+    const service = createSettingsService(storeOf(db))
+    const odd = { ...sepia, name: 'a/b:c*d?"e<f>g|h\\i' }
+    const reading = { font: 'serif' as const, fontSize: 19, readingWidth: 34 }
+    await service.update({ customTheme: sepia, customThemeEnabled: true, customThemeList: { others: [odd], currentIndex: 1 }, reading })
+    const offered: string[] = []
+    const file = join(dir, 'theme.json')
+    expect(await service.exportTheme(odd.name, async (fileName) => (offered.push(fileName), file))).toEqual({ status: 'exported' })
+    expect(offered).toEqual(['a_b_c_d__e_f_g_h_i.json'])
+    const text = readFileSync(file, 'utf8')
+    expect(JSON.parse(text)).toEqual({ format: 'xidao-theme', version: 2, ...odd, ...reading })
+    expect(parseThemeDocument(text)).toEqual({ ok: true, theme: odd, reading })
+
+    // The file brings the same theme back in another profile, whose reading parameters stay.
+    const targetDb = open(join(dir, 'b.sqlite'))
+    const target = createSettingsService(storeOf(targetDb))
+    expect(await target.importTheme(file)).toMatchObject({ status: 'imported' })
+    expect(targetDb.loadSettings()).toEqual({ ...DEFAULT_SETTINGS, customThemeEnabled: true, customTheme: odd })
+  })
+
+  it('refuses exporting 汐岛 or a name no custom theme has before the dialog, and writes nothing', async () => {
+    const dir = folder()
+    const db = open(join(dir, 'a.sqlite'))
+    const service = createSettingsService(storeOf(db))
+    const dialogs: string[] = []
+    const choose = async (fileName: string) => (dialogs.push(fileName), join(dir, fileName))
+    expect(await service.exportTheme('旧纸', choose)).toEqual({ status: 'failed', reason: 'not-found' })
+    await service.update({ customTheme: sepia, customThemeEnabled: true })
+    for (const name of ['汐岛', '青瓷', '']) expect(await service.exportTheme(name, choose)).toEqual({ status: 'failed', reason: 'not-found' })
+    expect(dialogs).toEqual([])
+    expect(await service.exportTheme('旧纸', async () => null)).toEqual({ status: 'cancelled' })
+    expect(readdirSync(dir).filter((name) => name.endsWith('.json'))).toEqual([])
+  })
+
+  it('writes nothing when the theme is gone by the time the dialog closes, and reports a failed write', async () => {
+    const dir = folder()
+    const db = open(join(dir, 'a.sqlite'))
+    const service = createSettingsService(storeOf(db))
+    await service.update({ customTheme: sepia, customThemeEnabled: true })
+    const file = join(dir, 'theme.json')
+    const renamed = await service.exportTheme('旧纸', async () => {
+      await service.update({ customTheme: { ...sepia, name: '新纸' } })
+      return file
+    })
+    expect(renamed).toEqual({ status: 'failed', reason: 'not-found' })
+    expect(readdirSync(dir).filter((name) => name.endsWith('.json'))).toEqual([])
+    expect(await service.exportTheme('新纸', async () => join(dir, 'missing', 'theme.json'))).toEqual({ status: 'failed', reason: 'write' })
   })
 })

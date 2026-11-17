@@ -4,7 +4,8 @@
 import { open, writeFile } from 'node:fs/promises'
 import type { SettingsUpdateResult, ThemeExportResult, ThemeImportResult } from '../shared/api'
 import { applySettingsPatch, DEFAULT_SETTINGS, type AppSettings } from '../shared/settings'
-import { MAX_THEME_FILE_BYTES, parseThemeDocument, serializeThemeDocument, themeDocument, themeFromBuiltin } from '../shared/theme'
+import { MAX_THEME_FILE_BYTES, parseThemeDocument, serializeThemeDocument, themeDocument } from '../shared/theme'
+import { exportedTheme, importTheme } from '../shared/themeList'
 import type { ReadingStore } from './storage/contract'
 
 export type SettingsStore = Pick<ReadingStore, 'loadSettings' | 'saveSettings'>
@@ -14,8 +15,11 @@ export interface SettingsService {
   update(patch: unknown): Promise<SettingsUpdateResult>
   /** `path` is the file chosen in the open dialog, or `null` when it was cancelled. */
   importTheme(path: string | null): Promise<ThemeImportResult>
-  /** `path` is the file chosen in the save dialog, or `null` when it was cancelled. */
-  exportTheme(path: string | null, systemDark: boolean): Promise<ThemeExportResult>
+  /**
+   * Exports the custom theme named `name`. `choosePath` (the system save dialog, offered the file
+   * name) is called only once the theme is found; it returns `null` when cancelled.
+   */
+  exportTheme(name: string, choosePath: (fileName: string) => Promise<string | null>): Promise<ThemeExportResult>
 }
 
 type ReadResult = { ok: true; text: string } | { ok: false; reason: 'read' | 'too-large' }
@@ -88,28 +92,37 @@ export function createSettingsService(store: SettingsStore, onSaved?: (settings:
         if (parsed === null) return { status: 'rejected', issues: [{ kind: 'syntax' }] }
         if (!parsed.ok) return { status: 'rejected', issues: parsed.issues }
         const current = await load()
-        const next: AppSettings = { ...current, customTheme: parsed.theme, reading: parsed.reading, customThemeEnabled: true }
-        return (await save(next)) ? { status: 'imported', settings: next } : { status: 'failed', reason: 'not-saved' }
+        // The file's theme is added as a new one; its reading parameters are checked but not adopted.
+        const listed = importTheme(current, parsed.theme)
+        if (!listed.ok) return { status: 'failed', reason: 'full' }
+        const next = applySettingsPatch(current, listed.patch)
+        if (!next.ok) return { status: 'rejected', issues: next.issues }
+        return (await save(next.value)) ? { status: 'imported', settings: next.value } : { status: 'failed', reason: 'not-saved' }
       }),
 
-    exportTheme: (path, systemDark) =>
-      serial(async (): Promise<ThemeExportResult> => {
-        if (path === null) return { status: 'cancelled' }
+    exportTheme: async (name, choosePath) => {
+      const found = exportedTheme(await serial(load), name)
+      if (found === null) return { status: 'failed', reason: 'not-found' }
+      // The dialog stays outside the queue so settings keep saving while it is open.
+      const path = await choosePath(themeFileName(found.name))
+      if (path === null) return { status: 'cancelled' }
+      return serial(async (): Promise<ThemeExportResult> => {
         const current = await load()
-        const scheme = current.colorScheme === 'light' || current.colorScheme === 'dark' ? current.colorScheme : systemDark ? 'dark' : 'light'
-        const theme = current.customTheme ?? themeFromBuiltin(scheme)
+        // Exported as it is now: renamed or deleted while the dialog was open, nothing is written.
+        const theme = exportedTheme(current, found.name)
+        if (theme === null) return { status: 'failed', reason: 'not-found' }
         try {
           await writeFile(path, serializeThemeDocument(themeDocument(theme, current.reading)), 'utf8')
           return { status: 'exported' }
         } catch {
-          return { status: 'failed' }
+          return { status: 'failed', reason: 'write' }
         }
       })
+    }
   }
 }
 
-/** File name offered by the save dialog for a theme name. */
-export function themeFileName(settings: AppSettings): string {
-  const name = settings.customTheme?.name ?? '汐岛主题'
+/** File name offered by the save dialog for a theme name: the name, characters files cannot have replaced. */
+function themeFileName(name: string): string {
   return `${name.replace(/[\\/:*?"<>|]/g, '_')}.json`
 }

@@ -19,6 +19,9 @@ function documentVisible(): boolean {
 /** Order in which notices appeared; each notice keeps its place while it stays shown. */
 let appeared = 0
 
+/** Unattended time on screen after which a deleted item's notice closes and 撤销 ends (`expiresAfter`). */
+export const UNDO_WINDOW = 10_000
+
 export interface BottomNoticeAction {
   label: string
   /** The action is under way: kept focusable, presses are ignored. */

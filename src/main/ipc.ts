@@ -23,7 +23,8 @@ import type { DraftService } from './drafts/service'
 import type { IdentityService } from './identity/service'
 import type { ImageService } from './images/service'
 import type { ZoomAction } from '../shared/settings'
-import { themeFileName, type SettingsService } from './appearance'
+import { THEME_LIMITS } from '../shared/theme'
+import type { SettingsService } from './appearance'
 import type { ReadingService } from './reading/service'
 import type { AppStore } from './storage/contract'
 import { emptyReadingState } from './storage/reading-state'
@@ -97,8 +98,6 @@ interface IpcDeps {
   upgrade: UpgradeService
   /** 读取恢复信息 / 恢复并重新启动 while a newer version's data is open read-only. */
   restore: RestoreService
-  /** Operating system light/dark preference, for exporting a built-in scheme under `system`. */
-  systemPrefersDark: () => boolean
   /** True only for the app's own renderer document in its main frame. */
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
   /** System save dialog for the sender's window; null when dismissed. */
@@ -209,6 +208,13 @@ function postTarget(value: unknown): PostTarget {
 
 function boundedText(value: unknown, max: number): string {
   if (typeof value !== 'string' || value.length > max) throw new InvalidRequestError()
+  return value
+}
+
+/** A theme name as the renderer lists it: text within the name length limit (counted in characters). */
+function themeName(value: unknown): string {
+  const max = THEME_LIMITS.nameLength.max
+  if (typeof value !== 'string' || value.length > max * 2 || [...value].length > max) throw new InvalidRequestError()
   return value
 }
 
@@ -352,7 +358,7 @@ export interface IpcRegistration {
 
 export function registerIpc({
   reading, images, identities, account, drafts, content, subscriptions, publication, reminders, lifecycle, store, settings, search, onlineSearch,
-  analytics, thirdParty, announcements, updates, loginItem, bossKey, getStatus, upgrade, restore, systemPrefersDark, isTrustedSender, chooseSavePath, chooseImageFile,
+  analytics, thirdParty, announcements, updates, loginItem, bossKey, getStatus, upgrade, restore, isTrustedSender, chooseSavePath, chooseImageFile,
   personalData, chooseExportPath, personalImport, chooseImportPath
 }: IpcDeps): IpcRegistration {
   const owner = (sender: WebContents): string => String(sender.id)
@@ -668,11 +674,17 @@ export function registerIpc({
     return settings.importTheme(choice.canceled ? null : (choice.filePaths[0] ?? null))
   })
 
-  handle(IpcChannel.exportTheme, async (event) => {
+  // The name is checked to be a custom theme before the save dialog opens; the renderer gives no path.
+  handle(IpcChannel.exportTheme, async (event, raw) => {
+    const input = record(raw)
+    if (Object.keys(input).length !== 1) throw new InvalidRequestError()
+    const name = themeName(input.name)
     const window = BrowserWindow.fromWebContents(event.sender)
-    const options = { title: '导出主题', defaultPath: themeFileName(await settings.get()), filters: themeFilters }
-    const choice = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options)
-    return settings.exportTheme(choice.canceled || !choice.filePath ? null : choice.filePath, systemPrefersDark())
+    return settings.exportTheme(name, async (fileName) => {
+      const options = { title: '导出主题', defaultPath: fileName, filters: themeFilters }
+      const choice = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options)
+      return choice.canceled || !choice.filePath ? null : choice.filePath
+    })
   })
 
   handle(IpcChannel.getZoom, async (event) => currentZoom(event.sender))

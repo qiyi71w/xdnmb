@@ -37,6 +37,8 @@ export type ContextMenuItem =
       label: string
       disabled?: boolean
       title?: string
+      /** A destructive action (删除): drawn in the danger ink. */
+      danger?: boolean
       /** Runs without closing the menu (e.g. a retry whose result shows in the menu). */
       keepOpen?: boolean
       onSelect: () => void
@@ -219,7 +221,7 @@ export function ContextMenuEntry({
       aria-disabled={item.disabled === true ? true : undefined}
       aria-busy={item.type === 'check' && item.busy === true ? true : undefined}
       title={item.type === 'action' ? item.title : undefined}
-      className={checked ? 'context-menu-item is-on' : 'context-menu-item'}
+      className={checked ? 'context-menu-item is-on' : item.type === 'action' && item.danger === true ? 'context-menu-item is-danger' : 'context-menu-item'}
       tabIndex={-1}
       onClick={() => onChoose(item)}
     >
