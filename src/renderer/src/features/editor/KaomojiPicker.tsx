@@ -1,11 +1,11 @@
 // The compose panel's 颜文字 button and its panel. The panel opens above the toolbar and stays open
 // for several inserts; Esc (focus back on the button) or a press outside closes it. A kaomoji goes
-// into the text at its caret or over its selection, wherever focus was. The 最近使用 row comes first
-// (the `recentKaomoji` setting, as it was when the panel opened, so nothing moves under the pointer
-// while inserting), then the presets, the user's own kaomoji (removable; the `customKaomoji`
-// setting) and 添加, which opens a multi-line field (Enter is a new line, Ctrl/Cmd+Enter saves) and
-// an optional name. A named item shows its name in the interface face, like the named presets, and
-// its full text on hover.
+// into the text at its caret or over its selection, wherever focus was; 防剧透 goes around the
+// selection instead. The 最近使用 row comes first (the `recentKaomoji` setting, as it was when the
+// panel opened, so nothing moves under the pointer while inserting), then the presets, the user's
+// own kaomoji (removable; the `customKaomoji` setting) and 添加, which opens a multi-line field
+// (Enter is a new line, Ctrl/Cmd+Enter saves) and an optional name. A named item shows its name in
+// the interface face, like the named presets, and its full text on hover.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { KAOMOJI_LIMITS } from '../../../../shared/settings'
@@ -13,7 +13,7 @@ import { isSendShortcut, sendAriaShortcut, sendShortcutLabel } from '../../app/s
 import { Icon } from '../../components/Icon'
 import { openLayer } from '../../lib/layers'
 import { useSettings } from '../../lib/settingsContext'
-import { KAOMOJI_PRESETS, newKaomoji, normalizeKaomojiText, recentKaomojiItems, withRecentKaomoji } from './kaomoji'
+import { KAOMOJI_PRESETS, newKaomoji, normalizeKaomojiText, recentKaomojiItems, withRecentKaomoji, type KaomojiInsert } from './kaomoji'
 import { useEditorWorkspace } from './workspace'
 
 const ITEM = '[data-kaomoji-item]'
@@ -39,7 +39,7 @@ function verticalNeighbour(items: readonly HTMLElement[], from: HTMLElement, dow
   return best
 }
 
-export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onInsert: (text: string) => void }) {
+export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onInsert: (kaomoji: KaomojiInsert) => void }) {
   const [open, setOpen] = useState(false)
   const panelId = useId()
   const panelRef = useRef<HTMLDivElement>(null)
@@ -125,9 +125,9 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
     focusAt.current = at
   }
 
-  const insert = (text: string) => {
-    onInsert(text)
-    write({ recentKaomoji: withRecentKaomoji(latest().recentKaomoji, text) })
+  const insert = (kaomoji: KaomojiInsert) => {
+    onInsert(kaomoji)
+    write({ recentKaomoji: withRecentKaomoji(latest().recentKaomoji, kaomoji.text) })
   }
 
   const onGridKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -230,7 +230,7 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
           }}>
             {recent.length > 0 && (
               <div className="kaomoji-recent" role="group" aria-label="最近使用">
-                {recent.map(({ text, name }, index) => (
+                {recent.map(({ text, name, wrap }, index) => (
                   <button
                     key={text}
                     type="button"
@@ -239,7 +239,7 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
                     title={name === null ? undefined : text}
                     data-kaomoji-item=""
                     onMouseDown={keepFocus}
-                    onClick={() => insert(text)}
+                    onClick={() => insert({ text, wrap })}
                   >
                     {name ?? text}
                   </button>
@@ -257,7 +257,7 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
                   title={named ? kaomoji.text : undefined}
                   data-kaomoji-item=""
                   onMouseDown={keepFocus}
-                  onClick={() => insert(kaomoji.text)}
+                  onClick={() => insert(kaomoji)}
                 >
                   {kaomoji.name}
                 </button>
@@ -276,7 +276,7 @@ export function KaomojiPicker({ disabled, onInsert }: { disabled: boolean; onIns
                     aria-describedby={`${panelId}-custom`}
                     data-kaomoji-item=""
                     onMouseDown={keepFocus}
-                    onClick={() => insert(text)}
+                    onClick={() => insert({ text })}
                     onKeyDown={(event) => {
                       if (event.key !== 'Delete' && event.key !== 'Backspace') return
                       event.preventDefault()

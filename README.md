@@ -113,6 +113,6 @@ npm test
 ## 致谢
 
 - 协议参考：[TransparentLC/xdcmd 的 API 整理](https://github.com/TransparentLC/xdcmd/wiki/自己整理的-X-岛匿名版-API-文档)、[X 岛原始 API 文档](https://www.zybuluo.com/ovear/note/151481)、[orzogc/xdnmb](https://github.com/orzogc/xdnmb) 与 [orzogc/xdnmb_api](https://github.com/orzogc/xdnmb_api)（AGPL-3.0）。
-- 预设颜文字取自 [xdnmb_api](https://github.com/orzogc/xdnmb_api/blob/28fdba53031a15e0de88954679afe91b9308f71a/lib/src/xdnmb.dart#L1780-L1889) 中的 X 岛官方颜文字列表。
+- 预设颜文字取自 [xdnmb_api](https://github.com/orzogc/xdnmb_api/blob/28fdba53031a15e0de88954679afe91b9308f71a/lib/src/xdnmb.dart#L1780-L1889) 中的 X 岛官方颜文字列表，以及 [xdnmb](https://github.com/orzogc/xdnmb/blob/2467f43d58b837c02b1fe72da1c7ca6484ab50d9/lib/app/utils/emoticons.dart#L4-L139) 中的蓝岛颜文字。
 - 联网搜索使用 [nmb-search](https://nmb-search.166666666.xyz/)（[API 与使用条款](https://nmb-search.166666666.xyz/api.txt)），它基于 [4get](https://git.lolcat.ca/lolcat/4get)。
 - 第三方依赖的许可说明见 [docs/development.md](docs/development.md#第三方许可)。
