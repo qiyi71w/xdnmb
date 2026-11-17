@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  KAOMOJI_PRESETS, kaomojiInsertion, newKaomoji, normalizeKaomojiText, recentKaomojiItems, withRecentKaomoji
+  editKaomoji, KAOMOJI_PRESETS, kaomojiInsertion, newKaomoji, normalizeKaomojiText, recentKaomojiItems, saveSelectionAsKaomoji,
+  undoSavedKaomoji, withRecentKaomoji
 } from '../../src/renderer/src/features/editor/kaomoji'
+import { INITIAL_KAOMOJI_SAVE, kaomojiSaveReducer } from '../../src/renderer/src/features/editor/kaomojiSaveState'
 import { KAOMOJI_DECOR } from '../../src/renderer/src/lib/kaomojiDecor'
 
 const preset = (name: string) => {
@@ -85,6 +87,143 @@ describe('custom kaomoji', () => {
     expect(newKaomoji([], '\u3000', '')).toBeNull()
     expect(newKaomoji([], ' \n\t', '空白')).toBeNull()
     expect(newKaomoji([], '\u3000x', '')).toEqual({ text: '\u3000x' })
+  })
+})
+
+describe('editing an own kaomoji', () => {
+  const custom = [{ text: 'a' }, { text: 'b', name: '乙' }, { text: 'c' }]
+
+  it('keeps its place, with the new text and name', () => {
+    const result = editKaomoji(custom, [], 'b', 'B', '  新名  ')
+    expect(result).toMatchObject({ ok: true, customKaomoji: [{ text: 'a' }, { text: 'B', name: '新名' }, { text: 'c' }] })
+    expect(editKaomoji(custom, [], 'b', 'B', '')).toMatchObject({ ok: true, customKaomoji: [{ text: 'a' }, { text: 'B' }, { text: 'c' }] })
+  })
+
+  it('refuses a text that a preset (蓝岛 ones included) or another own kaomoji has', () => {
+    expect(editKaomoji(custom, [], 'b', preset('呼伦悲尔').text, '')).toEqual({ ok: false, reason: 'duplicate' })
+    expect(editKaomoji(custom, [], 'b', 'c', '')).toEqual({ ok: false, reason: 'duplicate' })
+  })
+
+  it('may keep its text and change only the name', () => {
+    expect(editKaomoji(custom, [], 'b', 'b', '丙')).toMatchObject({ ok: true, customKaomoji: [{ text: 'a' }, { text: 'b', name: '丙' }, { text: 'c' }] })
+  })
+
+  it('may rename one kept from before whose text a 蓝岛 preset now has, but not take that text for another', () => {
+    const text = preset('呼伦悲尔').text
+    const kept = [{ text: 'a' }, { text, name: '旧名' }]
+    expect(editKaomoji(kept, [text], text, text, '新名')).toEqual({ ok: true, customKaomoji: [{ text: 'a' }, { text, name: '新名' }], recentKaomoji: [text] })
+    expect(editKaomoji(kept, [], 'a', text, '')).toEqual({ ok: false, reason: 'duplicate' })
+  })
+
+  it('refuses a name past 16 characters, a blank text, and a kaomoji no longer there', () => {
+    expect(editKaomoji(custom, [], 'b', 'b', '一二三四五六七八九十一二三四五六七')).toEqual({ ok: false, reason: 'name' })
+    expect(editKaomoji(custom, [], 'b', ' \n', '')).toEqual({ ok: false, reason: 'blank' })
+    expect(editKaomoji(custom, [], 'gone', 'x', '')).toEqual({ ok: false, reason: 'missing' })
+  })
+
+  it('puts the new text in place of the old one in 最近使用, once', () => {
+    expect(editKaomoji(custom, ['[n]', 'b', 'a'], 'b', 'B', '')).toMatchObject({ recentKaomoji: ['[n]', 'B', 'a'] })
+    // An old text that is no kaomoji any more (the earlier 防剧透) can be in the list already.
+    expect(editKaomoji(custom, ['[h] [/h]', 'a', 'b'], 'b', '[h] [/h]', '')).toMatchObject({ recentKaomoji: ['[h] [/h]', 'a'] })
+  })
+})
+
+describe('saving selected text as a kaomoji', () => {
+  it('turns CRLF into LF and drops blank lines at either end, keeping the spaces that start a line', () => {
+    const result = saveSelectionAsKaomoji([{ text: 'x' }], '\r\n  \r\n  ∧＿∧\r\n （´・ω・） \r\n\r\n')
+    expect(result).toEqual({ ok: true, entry: { text: '  ∧＿∧\n （´・ω・） ' }, customKaomoji: [{ text: 'x' }, { text: '  ∧＿∧\n （´・ω・） ' }] })
+  })
+
+  it('says why it saved nothing: blank, too long, control characters, already there, list full', () => {
+    expect(saveSelectionAsKaomoji([], ' \n\u3000\n')).toEqual({ ok: false, reason: 'blank' })
+    expect(saveSelectionAsKaomoji([], 'x'.repeat(501))).toEqual({ ok: false, reason: 'too-long' })
+    expect(saveSelectionAsKaomoji([], 'a\u0001b')).toEqual({ ok: false, reason: 'forbidden' })
+    expect(saveSelectionAsKaomoji([], `\n${preset('呼伦悲尔').text}\n`)).toEqual({ ok: false, reason: 'duplicate' })
+    expect(saveSelectionAsKaomoji([{ text: 'mine', name: '我的' }], 'mine')).toEqual({ ok: false, reason: 'duplicate' })
+    const full = Array.from({ length: 200 }, (_, index) => ({ text: `k${index}` }))
+    expect(saveSelectionAsKaomoji(full, 'new')).toEqual({ ok: false, reason: 'full' })
+  })
+
+  it('undoes back to the lists before the save', () => {
+    const before = [{ text: 'a' }]
+    const saved = saveSelectionAsKaomoji(before, 'new')
+    if (!saved.ok) throw new Error('not saved')
+    // Inserted after saving, it is in 最近使用 too.
+    expect(undoSavedKaomoji(saved.customKaomoji, ['new', '[n]'], 'new')).toEqual({ customKaomoji: before, recentKaomoji: ['[n]'] })
+  })
+
+  it('undoes nothing once the saved kaomoji was removed or its text edited', () => {
+    expect(undoSavedKaomoji([{ text: 'a' }], ['a'], 'new')).toBeNull()
+    const edited = editKaomoji([{ text: 'a' }, { text: 'new' }], [], 'new', 'newer', '')
+    if (!edited.ok) throw new Error('not edited')
+    expect(undoSavedKaomoji(edited.customKaomoji, [], 'new')).toBeNull()
+  })
+})
+
+describe('the 存为颜文字 notice', () => {
+  const savedA = () => {
+    const writing = kaomojiSaveReducer(INITIAL_KAOMOJI_SAVE, { type: 'writing', id: 1 })
+    return kaomojiSaveReducer(writing, { type: 'written', id: 1, saved: true, entry: { text: 'A' } })
+  }
+
+  it('shows 已存为颜文字 only once the write is saved, and 设置未保存 when it is not', () => {
+    const writing = kaomojiSaveReducer(INITIAL_KAOMOJI_SAVE, { type: 'writing', id: 1 })
+    expect(writing.notice).toBeNull()
+    expect(savedA().notice).toEqual({ kind: 'saved', id: 1, entry: { text: 'A' }, undo: 'idle', rewrite: false, gone: false })
+    expect(kaomojiSaveReducer(writing, { type: 'written', id: 1, saved: false, entry: { text: 'A' } }).notice).toEqual({ kind: 'not-saved', id: 1 })
+  })
+
+  it('keeps the notice while 撤销 is under way, and with 撤销 again when it was not saved', () => {
+    const busy = kaomojiSaveReducer(savedA(), { type: 'undoing', id: 1 })
+    expect(busy.notice).toMatchObject({ kind: 'saved', undo: 'busy' })
+    const failed = kaomojiSaveReducer(busy, { type: 'undone', id: 1, saved: false, listed: true })
+    expect(failed.notice).toMatchObject({ kind: 'saved', entry: { text: 'A' }, undo: 'failed', rewrite: false })
+    expect(kaomojiSaveReducer(busy, { type: 'undone', id: 1, saved: false, listed: false }).notice).toMatchObject({ undo: 'failed', rewrite: true })
+    expect(kaomojiSaveReducer(kaomojiSaveReducer(failed, { type: 'undoing', id: 1 }), { type: 'undone', id: 1, saved: true, listed: false }).notice).toBeNull()
+  })
+
+  it('keeps rewriting once a 撤销 failed without rolling back, even if the text is listed again', () => {
+    const busy = kaomojiSaveReducer(savedA(), { type: 'undoing', id: 1 })
+    const rewrite = kaomojiSaveReducer(busy, { type: 'undone', id: 1, saved: false, listed: false })
+    // The same text added since, then trying again fails too: still only a rewrite.
+    const again = kaomojiSaveReducer(kaomojiSaveReducer(rewrite, { type: 'undoing', id: 1 }), { type: 'undone', id: 1, saved: false, listed: true })
+    expect(again.notice).toMatchObject({ undo: 'failed', rewrite: true })
+  })
+
+  it('marks the saved kaomoji gone once removed or edited, unless its own 撤销 took it out of the lists', () => {
+    expect(kaomojiSaveReducer(savedA(), { type: 'gone', id: 1 }).notice).toMatchObject({ gone: true })
+    const busy = kaomojiSaveReducer(savedA(), { type: 'undoing', id: 1 })
+    expect(kaomojiSaveReducer(busy, { type: 'gone', id: 1 })).toBe(busy)
+    // Rolled back after a failed 撤销, it is listed again: removing or editing it later still counts.
+    const failed = kaomojiSaveReducer(busy, { type: 'undone', id: 1, saved: false, listed: true })
+    expect(kaomojiSaveReducer(failed, { type: 'gone', id: 1 }).notice).toMatchObject({ gone: true })
+    // Not rolled back, it is out of the lists because of the 撤销 itself.
+    const rewrite = kaomojiSaveReducer(busy, { type: 'undone', id: 1, saved: false, listed: false })
+    expect(kaomojiSaveReducer(rewrite, { type: 'gone', id: 1 })).toBe(rewrite)
+  })
+
+  it('keeps the latest save only: after A then B, only B shows and its undo leaves A', () => {
+    const a = saveSelectionAsKaomoji([], 'A')
+    if (!a.ok) throw new Error('A not saved')
+    const b = saveSelectionAsKaomoji(a.customKaomoji, 'B')
+    if (!b.ok) throw new Error('B not saved')
+    let state = kaomojiSaveReducer(INITIAL_KAOMOJI_SAVE, { type: 'writing', id: 1 })
+    state = kaomojiSaveReducer(state, { type: 'written', id: 1, saved: true, entry: a.entry })
+    state = kaomojiSaveReducer(state, { type: 'writing', id: 2 })
+    state = kaomojiSaveReducer(state, { type: 'written', id: 2, saved: true, entry: b.entry })
+    expect(state.notice).toEqual({ kind: 'saved', id: 2, entry: { text: 'B' }, undo: 'idle', rewrite: false, gone: false })
+    // A reply to an earlier attempt arriving late changes nothing.
+    expect(kaomojiSaveReducer(state, { type: 'written', id: 1, saved: true, entry: a.entry })).toBe(state)
+    expect(undoSavedKaomoji(b.customKaomoji, [], 'B')?.customKaomoji).toEqual([{ text: 'A' }])
+  })
+
+  it('replaces a shown notice with the reason a later save was refused', () => {
+    let state = kaomojiSaveReducer(INITIAL_KAOMOJI_SAVE, { type: 'writing', id: 1 })
+    state = kaomojiSaveReducer(state, { type: 'written', id: 1, saved: true, entry: { text: 'A' } })
+    state = kaomojiSaveReducer(state, { type: 'refused', id: 2, reason: 'duplicate' })
+    expect(state.notice).toEqual({ kind: 'refused', id: 2, reason: 'duplicate' })
+    expect(kaomojiSaveReducer(state, { type: 'dismiss', id: 1 })).toBe(state)
+    expect(kaomojiSaveReducer(state, { type: 'dismiss', id: 2 }).notice).toBeNull()
   })
 })
 

@@ -11,8 +11,9 @@ import { selectedPostNumber } from '../quote/selectionNumber'
 import { numberActionItems } from '../quote/NumberSelectionMenu'
 import { ContextMenu, contextMenuPoint, isContextMenuKey, type ContextMenuItem, type ContextMenuPoint } from '../../components/ContextMenu'
 import { CookieId } from '../../components/CookieId'
-import { copyNumberItem, copyTextItem, selectionCopyItem, withSelectionCopy } from '../../components/copyMenuItems'
+import { copyNumberItem, copyTextItem, selectedText, selectionTextCopyItem } from '../../components/copyMenuItems'
 import { cookieColorItems } from '../cookieColors/CookieColorPicker'
+import { KaomojiSavingContext, saveKaomojiItem } from '../editor/kaomojiSaving'
 import { setBlocked } from './useBlocks'
 import { useCover } from '../../lib/appCovered'
 
@@ -31,7 +32,8 @@ export interface PostActions {
  * thread keeps a hidden one. The context menu (right click, ContextMenu key, Shift+F10) offers
  * 回复／+1／举报／屏蔽串号／屏蔽饼干 (no 屏蔽 on the user's own posts; +1 unavailable without body
  * text), then 复制内容／复制串号／复制饼干
- * and 饼干颜色… (not for an admin), under 复制选中文字 when text in the post is selected. A selection
+ * and 饼干颜色… (not for an admin), under 复制选中文字 and 存为颜文字 (one text, taken when the menu
+ * opened) when text in the post is selected. A selection
  * that is exactly one whole post number in the body adds 预览／打开／在新标签页打开 for that number
  * (through the quote card: nothing opens before it is located); other digits never do.
  */
@@ -56,10 +58,11 @@ export function PostView({
   const quotes = useContext(QuoteControllerContext)
   const entryKey = useContext(QuoteEntryContext)
   const activeQuote = useContext(QuoteActiveContext)
+  const saveKaomoji = useContext(KaomojiSavingContext)
   const [menu, setMenu] = useState<{
     point: ContextMenuPoint
     owner: HTMLElement
-    selection: ContextMenuItem | null
+    selected: string | null
     number: { postId: PostId; range: Range } | null
   } | null>(null)
   useCover(menu !== null)
@@ -73,7 +76,13 @@ export function PostView({
   const number = menu?.number ?? null
   const numberItems: ContextMenuItem[] =
     number === null || quotes === null || entryKey === null ? [] : numberActionItems(quotes, entryKey, number, articleRef.current, post.id)
-  const items: ContextMenuItem[] = actions === undefined || menu === null ? [] : withSelectionCopy(menu.selection, [
+  const selectionItems: ContextMenuItem[] = menu?.selected == null ? [] : [
+    selectionTextCopyItem(menu.selected),
+    ...(saveKaomoji === null ? [] : [saveKaomojiItem(saveKaomoji, menu.selected)]),
+    { type: 'separator', key: 'selection-separator' }
+  ]
+  const items: ContextMenuItem[] = actions === undefined || menu === null ? [] : [
+    ...selectionItems,
     ...numberItems,
     ...(numberItems.length > 0 ? [{ type: 'separator' as const, key: 'number-separator' }] : []),
     { type: 'action', key: 'reply', label: '回复', onSelect: () => actions.reply(articleRef.current) },
@@ -95,7 +104,7 @@ export function PostView({
     copyNumberItem(post.id),
     ...(userHash !== null ? [copyTextItem('copy-cookie', '复制饼干', userHash, '')] : []),
     ...cookieColorItems({ userHash, isAdmin: post.isAdmin }, menu.point, menu.owner)
-  ])
+  ]
   const name = meaningfulName(post.name)
   const title = meaningfulTitle(post.title)
   const isPo = !isHead && poHash !== null && post.userHash === poHash
@@ -106,7 +115,7 @@ export function PostView({
     setMenu({
       point: contextMenuPoint(event, event.currentTarget),
       owner: event.currentTarget,
-      selection: selectionCopyItem(undefined, event.currentTarget),
+      selected: selectedText(event.currentTarget),
       number: selectedPostNumber(event.currentTarget)
     })
   }

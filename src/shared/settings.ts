@@ -107,9 +107,19 @@ function isInsertableKaomojiText(text: string): boolean {
   return text !== '' && [...text].length <= KAOMOJI_LIMITS.length && !KAOMOJI_FORBIDDEN.test(text)
 }
 
+/** Why a text may not be the text of one of the user's own kaomoji. */
+export type KaomojiTextProblem = 'blank' | 'too-long' | 'forbidden'
+
+/** What keeps `text` from being one of the user's own kaomoji (blank, too long, control characters), or null. */
+export function kaomojiTextProblem(text: string): KaomojiTextProblem | null {
+  if (text.trim() === '') return 'blank'
+  if ([...text].length > KAOMOJI_LIMITS.length) return 'too-long'
+  return KAOMOJI_FORBIDDEN.test(text) ? 'forbidden' : null
+}
+
 /** Whether `text` may be the text of one of the user's own kaomoji: insertable and not blank. */
 export function isKaomojiText(text: string): boolean {
-  return text.trim() !== '' && isInsertableKaomojiText(text)
+  return kaomojiTextProblem(text) === null
 }
 
 /** Whether `name` may be a kaomoji's name: already trimmed, 1–16 characters, one line, no control characters. */

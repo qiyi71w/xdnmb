@@ -297,6 +297,8 @@ export function EditorPanel({
         value={report?.text ?? editor.fields.content}
         readOnly={locked}
         aria-keyshortcuts={sendAriaShortcut(platform)}
+        // Its edit menu (EditContextMenu) adds 存为颜文字 for the selection.
+        data-save-kaomoji=""
         onChange={(event) => report !== undefined
           ? store.dispatch({ type: 'edit-report', editorId, patch: { text: event.target.value } })
           : edit({ content: event.target.value })}
