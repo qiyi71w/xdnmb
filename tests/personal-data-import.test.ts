@@ -837,8 +837,11 @@ describe('staging space', () => {
     expect((await measuring.inspect(async () => file)).status).toBe('ready')
     const extracted = allocatedUnder(importStagingDirectory(roomy))
     await measuring.cancel()
-    // A budget of the content's bytes (at most the file's own size, twice) would not notice.
-    expect(extracted).toBeGreaterThan(2 * statSync(file).size)
+    // The room offered is short of what extraction takes here, and at least any budget of the content's
+    // bytes (at most the file's own size, twice). Where each small file takes a block (ext4, APFS) the
+    // former is the larger; where tiny files live in the file table (NTFS) the latter, and only counting
+    // a block per file refuses it.
+    const room = Math.max(extracted - 1, 2 * statSync(file).size)
 
     const { userData } = targetMachine()
     const outside = tree(userData)
@@ -846,7 +849,7 @@ describe('staging space', () => {
     const { service } = importer(userData, {
       async volume(directory) {
         extractedWhenAsked.push(readdirSync(directory, { recursive: true }).some((name) => !['draft-images', 'images'].includes(String(name))))
-        return { available: extracted - 1, blockSize }
+        return { available: room, blockSize }
       }
     })
     expect(await service.inspect(async () => file)).toEqual({ status: 'failed', failure: { reason: 'space' } })
