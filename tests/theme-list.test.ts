@@ -9,6 +9,7 @@ import { applySettingsPatch, DEFAULT_SETTINGS, settingsFromStored, type AppSetti
 import { parseCustomTheme, themeFromBuiltin, type CustomTheme } from '../src/shared/theme'
 import {
   copyTheme,
+  exportedTheme,
   createTheme,
   customThemes,
   deleteTheme,
@@ -152,11 +153,32 @@ describe('theme list rules', () => {
     expect([...numbered]).toHaveLength(40)
     expect(uniqueThemeName(long, [long, numbered])).toBe(`${'长'.repeat(38)} 3`)
     expect(uniqueThemeName('汐岛', [])).toBe('汐岛 2')
-    // The imported theme takes a name unique among the others and still valid.
+    // The imported theme is added last under a name unique among all custom themes and still valid.
     const settings = { ...library, customThemeList: { others: [a, { ...c, name: long }], currentIndex: 1 } }
     const imported = applied(settings, importTheme(settings, { ...c, name: long }))
     expect(imported.customTheme?.name).toBe(numbered)
+    expect(names(imported)).toEqual(['青瓷', '夜航', long, numbered])
     expect(parseCustomTheme(imported.customTheme).ok).toBe(true)
+  })
+
+  it('adds an imported theme last and uses it, keeping every theme, until the list is full', () => {
+    const builtin = applied(library, selectBuiltinTheme())
+    const imported = applied(builtin, importTheme(builtin, { ...b, name: '夜航' }))
+    expect(names(imported)).toEqual(['青瓷', '夜航', '纸白', '夜航 2'])
+    expect(customThemes(imported).slice(0, 3)).toEqual([a, b, c])
+    expect(imported).toMatchObject({ customTheme: { ...b, name: '夜航 2' }, customThemeEnabled: true })
+    expect(applied(DEFAULT_SETTINGS, importTheme(DEFAULT_SETTINGS, a))).toMatchObject({ customTheme: a, customThemeEnabled: true, customThemeList: { others: [], currentIndex: 0 } })
+    expect(importTheme(many(MAX_CUSTOM_THEMES), a)).toEqual({ ok: false, reason: 'full' })
+    expect(importTheme(many(MAX_CUSTOM_THEMES - 1), a).ok).toBe(true)
+  })
+
+  it('finds the custom theme to export by name, never 汐岛', () => {
+    expect(exportedTheme(library, '纸白')).toEqual(c)
+    expect(exportedTheme(library, ' 夜航 ')).toEqual(b)
+    expect(exportedTheme(applied(library, selectBuiltinTheme()), '夜航')).toEqual(b)
+    expect(exportedTheme(library, '汐岛')).toBeNull()
+    expect(exportedTheme(library, '不存在')).toBeNull()
+    expect(exportedTheme(DEFAULT_SETTINGS, '汐岛')).toBeNull()
   })
 
   it('copies a theme as “<name> 副本” at the end and uses it, numbering repeated copies', () => {
@@ -296,6 +318,8 @@ describe('theme list rules', () => {
       (current) => deleteTheme(current, '晨雾 副本'),
       (current) => restoreTheme(current, { theme: { ...b, name: '晨雾 副本' }, index: 4, inUse: true }),
       (current) => deleteTheme(current, '晨雾 副本'),
+      (current) => importTheme(current, { ...a, name: '晨雾' }),
+      (current) => deleteTheme(current, '晨雾 2'),
       (current) => selectCustomTheme(current, '夜航')
     ]
     for (const step of steps) {

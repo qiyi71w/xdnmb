@@ -367,18 +367,20 @@ function ThemeField({
   )
 }
 
-/** Why 新建主题 and 复制 are unavailable at the limit. */
+/** Why 新建主题, 导入主题… and 复制 are unavailable at the limit. */
 const THEMES_FULL_TEXT = `已有 ${MAX_CUSTOM_THEMES} 个自定义主题，删除一个后才能再添加`
 
 /**
  * 主题: 汐岛 and the custom themes as a radio list; choosing one uses it at once (saved without
  * 保存). Each row ends with a ⋯ button opening the row's menu, which a right-click, the ContextMenu
- * key or Shift+F10 on the row opens too: 复制 (汐岛 included), and 删除 for a custom theme, at once
- * and undone from the 主题已删除 notice. Under the list 新建主题 and the theme file buttons, then the
- * collapsed editor of the custom theme in use (none while 汐岛 is). Valid edits preview in this
- * renderer at once; only 保存 writes settings. 放弃修改, leaving 设置 (another tab shown, or 设置
- * closed), or the theme in use changing (another one chosen, 汐岛 included, or a copy made) drops
- * the unsaved edits and restores the saved appearance; a choice that was not saved changes nothing.
+ * key or Shift+F10 on the row opens too: 复制 (汐岛 included), and for a custom theme 导出… (that
+ * theme, to a file) and 删除, at once and undone from the 主题已删除 notice. Under the list 新建主题,
+ * 导入主题… (the file's theme added last and used, the editor left as it was) and the file result
+ * line, then the collapsed editor of the custom theme in use (none while 汐岛 is). Valid edits
+ * preview in this renderer at once; only 保存 writes settings. 放弃修改, leaving 设置 (another tab
+ * shown, or 设置 closed), or the theme in use changing (another one chosen, 汐岛 included, a copy
+ * made or a theme imported) drops the unsaved edits and restores the saved appearance; a choice that
+ * was not saved changes nothing.
  */
 function ThemeList({
   settings,
@@ -459,6 +461,11 @@ function ThemeList({
     run((current) => saveCurrentTheme(current, parsed.value))
   }
   const create = () => run((current) => createTheme(current, resolveAppearance(current, systemPrefersDark()).scheme), opened)
+  // An imported theme is added and used; like choosing another theme, it drops unsaved edits.
+  const files = useThemeFiles(shown, (next) => {
+    discard()
+    adopt(next)
+  })
 
   const themes = customThemes(settings)
   const choices = [
@@ -572,6 +579,7 @@ function ThemeList({
                 ...(menu.name === BUILTIN_THEME_NAME
                   ? []
                   : [
+                      { type: 'action', key: 'export', label: '导出…', onSelect: () => void files.exportFile(menu.name) } satisfies ContextMenuItem,
                       { type: 'separator', key: 'delete-separator' } satisfies ContextMenuItem,
                       { type: 'action', key: 'delete', label: '删除', danger: true, onSelect: () => remove(menu.name) } satisfies ContextMenuItem
                     ])
@@ -582,34 +590,40 @@ function ThemeList({
               }}
             />
           )}
-          <ThemeTransfer
-            shown={shown}
-            adopt={(next) => {
-              discard()
-              adopt(next)
-            }}
-            note={
-              full ? (
+          <div className="theme-transfer">
+            <div className="theme-transfer-buttons">
+              <button
+                ref={createRef}
+                type="button"
+                className="btn btn-page"
+                aria-disabled={full || undefined}
+                aria-describedby={full ? 'theme-full-note' : undefined}
+                onClick={() => {
+                  if (!full) create()
+                }}
+              >
+                <Icon name="plus" />
+                新建主题
+              </button>
+              <button
+                type="button"
+                className="btn btn-page"
+                aria-disabled={full || files.busy || undefined}
+                aria-describedby={full ? 'theme-full-note' : undefined}
+                onClick={() => {
+                  if (!full) void files.importFile()
+                }}
+              >
+                导入主题…
+              </button>
+              {full && (
                 <span className="setting-help" id="theme-full-note">
                   {THEMES_FULL_TEXT}
                 </span>
-              ) : null
-            }
-          >
-            <button
-              ref={createRef}
-              type="button"
-              className="btn btn-page"
-              aria-disabled={full || undefined}
-              aria-describedby={full ? 'theme-full-note' : undefined}
-              onClick={() => {
-                if (!full) create()
-              }}
-            >
-              <Icon name="plus" />
-              新建主题
-            </button>
-          </ThemeTransfer>
+              )}
+            </div>
+            <ThemeFileResult result={files.result} />
+          </div>
         </div>
       </div>
 
@@ -743,88 +757,77 @@ type TransferResult = { tone: 'done' | 'warning'; text: string; issues?: Appeara
 const IMPORT_FAILURES = {
   read: '无法读取文件',
   'too-large': '主题文件超过 64 KB',
+  full: THEMES_FULL_TEXT,
   'not-saved': '主题未保存'
 } as const
 
 /**
- * Theme import / export through the system file dialogs (main shows them), after the list's own
- * buttons (`children`) and before a `note` about them. Cancelling says nothing. Leaving 设置 clears a
- * completed result; an import finishing after that is still adopted, unannounced.
+ * Theme files through the system dialogs (main shows them): 导入主题… adds the file's theme as a new
+ * one and `adopt`s the saved settings; a row's 导出… writes that custom theme, named to main. One at a
+ * time; cancelling says nothing. Leaving 设置 clears a completed result; an import finishing after
+ * that is still adopted, unannounced.
  */
-function ThemeTransfer({
-  adopt,
-  shown,
-  note,
-  children
-}: {
-  adopt: (settings: AppSettings) => void
-  shown: boolean
-  note: ReactNode
-  children: ReactNode
-}) {
+function useThemeFiles(shown: boolean, adopt: (settings: AppSettings) => void) {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<TransferResult | null>(null)
   const begin = useClearOnLeave(shown, () => setResult((last) => (last?.tone === 'done' ? null : last)))
 
-  const run = async (action: 'import' | 'export') => {
+  const run = async (transfer: () => Promise<TransferResult | null>, unfinished: string) => {
     if (busy) return
     setBusy(true)
     setResult(null)
     const current = begin()
     try {
-      if (action === 'import') {
-        const outcome = await window.xidao.theme.import()
-        if (outcome.status === 'imported') {
-          adopt(outcome.settings)
-          if (current()) setResult({ tone: 'done', text: `已导入“${outcome.settings.customTheme?.name ?? ''}”` })
-        } else if (outcome.status === 'rejected') {
-          setResult({ tone: 'warning', text: '主题文件不可用', issues: outcome.issues })
-        } else if (outcome.status === 'failed') {
-          setResult({ tone: 'warning', text: IMPORT_FAILURES[outcome.reason] })
-        }
-      } else {
-        const outcome = await window.xidao.theme.export()
-        if (outcome.status === 'exported') {
-          if (current()) setResult({ tone: 'done', text: '已导出主题' })
-        } else if (outcome.status === 'failed') setResult({ tone: 'warning', text: '未能写入文件' })
-      }
+      const next = await transfer()
+      if (next !== null && (next.tone !== 'done' || current())) setResult(next)
     } catch {
-      setResult({ tone: 'warning', text: action === 'import' ? '导入未完成' : '导出未完成' })
+      setResult({ tone: 'warning', text: unfinished })
     } finally {
       setBusy(false)
     }
   }
 
+  const importFile = () =>
+    run(async () => {
+      const outcome = await window.xidao.theme.import()
+      if (outcome.status === 'cancelled') return null
+      if (outcome.status === 'rejected') return { tone: 'warning', text: '主题文件不可用', issues: outcome.issues }
+      if (outcome.status === 'failed') return { tone: 'warning', text: IMPORT_FAILURES[outcome.reason] }
+      adopt(outcome.settings)
+      return { tone: 'done', text: `已导入“${outcome.settings.customTheme?.name ?? ''}”` }
+    }, '导入未完成')
+
+  const exportFile = (name: string) =>
+    run(async () => {
+      const outcome = await window.xidao.theme.export({ name })
+      if (outcome.status === 'cancelled') return null
+      if (outcome.status === 'exported') return { tone: 'done', text: `已导出“${name}”` }
+      return { tone: 'warning', text: outcome.reason === 'write' ? '未能写入文件' : `没能导出：“${name}”已不在列表中` }
+    }, '导出未完成')
+
+  return { busy, result, importFile, exportFile }
+}
+
+/** The last theme file import or export result, announced as it changes. */
+function ThemeFileResult({ result }: { result: TransferResult | null }) {
   return (
-    <div className="theme-transfer">
-      <div className="theme-transfer-buttons">
-        {children}
-        <button type="button" className="btn btn-page" aria-disabled={busy ? true : undefined} onClick={() => void run('import')}>
-          导入主题…
-        </button>
-        <button type="button" className="btn btn-page" aria-disabled={busy ? true : undefined} onClick={() => void run('export')}>
-          导出主题…
-        </button>
-        {note}
-      </div>
-      <div role="status" className="theme-transfer-result">
-        {result !== null && (
-          <>
-            <p className={result.tone === 'done' ? 'notice-inline is-done' : 'notice-inline is-warning'}>
-              <Icon name={result.tone === 'done' ? 'check' : 'alert'} size={14} />
-              {result.text}
-              {result.tone !== 'done' && <KaomojiDecor state="failure" />}
-            </p>
-            {result.issues !== undefined && (
-              <ul className="issue-items">
-                {describeIssues(result.issues).map((text) => (
-                  <li key={text}>{text}</li>
-                ))}
-              </ul>
-            )}
-          </>
-        )}
-      </div>
+    <div role="status" className="theme-transfer-result">
+      {result !== null && (
+        <>
+          <p className={result.tone === 'done' ? 'notice-inline is-done' : 'notice-inline is-warning'}>
+            <Icon name={result.tone === 'done' ? 'check' : 'alert'} size={14} />
+            {result.text}
+            {result.tone !== 'done' && <KaomojiDecor state="failure" />}
+          </p>
+          {result.issues !== undefined && (
+            <ul className="issue-items">
+              {describeIssues(result.issues).map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
     </div>
   )
 }

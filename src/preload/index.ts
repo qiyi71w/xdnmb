@@ -178,7 +178,7 @@ const api: XidaoApi = {
   },
   theme: {
     import: () => ipcRenderer.invoke(IpcChannel.importTheme),
-    export: () => ipcRenderer.invoke(IpcChannel.exportTheme)
+    export: (input) => ipcRenderer.invoke(IpcChannel.exportTheme, input)
   },
   view: {
     getZoom: () => ipcRenderer.invoke(IpcChannel.getZoom),

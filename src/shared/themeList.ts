@@ -208,12 +208,18 @@ export function saveCurrentTheme(settings: ThemeListSettings, theme: CustomTheme
 }
 
 /**
- * A theme from a theme file replaces the current theme and is used; a name another custom theme
- * (or 汐岛) has gets a number. Without a current theme it becomes the first one.
+ * A theme from a theme file is added last and used; no theme is replaced. A name another custom
+ * theme (or 汐岛) has gets a number. Refused when the list is full.
  */
 export function importTheme(settings: ThemeListSettings, theme: CustomTheme): ThemeListResult {
-  const name = uniqueThemeName(theme.name, settings.customThemeList.others.map((other) => other.name))
-  return { ok: true, patch: { customTheme: { ...theme, name }, customThemeEnabled: true } }
+  const all = customThemes(settings)
+  return append(all, { ...theme, name: uniqueThemeName(theme.name, all.map((other) => other.name)) })
+}
+
+/** The custom theme named `name`, to export; never 汐岛, which no custom theme may be named. */
+export function exportedTheme(settings: ThemeListSettings, name: string): CustomTheme | null {
+  const key = nameKey(name)
+  return customThemes(settings).find((theme) => theme.name === key) ?? null
 }
 
 /** Validates a `customThemeList` value: shape, each theme and the size only (see `themeListIssues`). */

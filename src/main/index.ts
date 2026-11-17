@@ -5,7 +5,7 @@ import { analyticsOrigin, createAnalyticsTransport } from './analytics/transport
 import { ANNOUNCEMENT_URL, MAX_ANNOUNCEMENT_LENGTH } from '../shared/announcements'
 import { createAnnouncementService, type AnnouncementService } from './announcements/service'
 import {
-  app, BaseWindow, BrowserWindow, dialog, globalShortcut, Menu, nativeImage, nativeTheme, Notification, powerMonitor, protocol, session, shell, Tray,
+  app, BaseWindow, BrowserWindow, dialog, globalShortcut, Menu, nativeImage, Notification, powerMonitor, protocol, session, shell, Tray,
   type IpcMainInvokeEvent, type MenuItemConstructorOptions
 } from 'electron'
 import { createReadStream } from 'node:fs'
@@ -844,7 +844,6 @@ async function start(): Promise<void> {
       const result = window === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(window, options)
       return result.canceled ? null : (result.filePaths[0] ?? null)
     },
-    systemPrefersDark: () => nativeTheme.shouldUseDarkColors,
     isTrustedSender: (event: IpcMainInvokeEvent) =>
       mainWindow !== null &&
       event.sender === mainWindow.webContents &&

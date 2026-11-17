@@ -245,21 +245,28 @@ export interface SettingsUpdateResult {
 }
 
 /**
- * Theme import through the system open dialog. On `imported` the file's theme became the custom theme,
- * its reading parameters became the reading settings and the custom scheme is selected. Every other
+ * Theme import through the system open dialog. On `imported` the file's theme was added last to the
+ * list, under a numbered name when its name was taken, and is the theme in use; the reading font,
+ * size and width stay as they were. `full`: the list already has the most custom themes. Every other
  * outcome leaves the settings unchanged.
  */
 export type ThemeImportResult =
   | { status: 'imported'; settings: AppSettings }
   | { status: 'cancelled' }
   | { status: 'rejected'; issues: AppearanceIssue[] }
-  | { status: 'failed'; reason: 'read' | 'too-large' | 'not-saved' }
+  | { status: 'failed'; reason: 'read' | 'too-large' | 'full' | 'not-saved' }
+
+/** Which custom theme to export, by name; 汐岛 cannot be exported. */
+export interface ThemeExportInput {
+  name: string
+}
 
 /**
- * Theme export through the system save dialog: the custom theme (or, without one, a custom theme seeded
- * from the built-in scheme in effect) with the current reading parameters.
+ * Theme export of one custom theme, with the current reading parameters, through the system save
+ * dialog. `not-found`: no custom theme has the name (checked before the dialog and again before
+ * writing); nothing is written.
  */
-export type ThemeExportResult = { status: 'exported' } | { status: 'cancelled' } | { status: 'failed' }
+export type ThemeExportResult = { status: 'exported' } | { status: 'cancelled' } | { status: 'failed'; reason: 'not-found' | 'write' }
 
 /**
  * Why a thread page is read. `display`: a reader reads it to show the thread (opening, more pages,
@@ -464,10 +471,13 @@ export interface XidaoApi {
     /** Partial update of any `AppSettings` keys; validated as a whole (see `SettingsUpdateResult`). */
     update(input: Partial<AppSettings>): Promise<SettingsUpdateResult>
   }
-  /** Theme files. The renderer never sees or chooses a path: the main process shows the system dialog. */
+  /**
+   * Theme files. The renderer never sees or chooses a path: the main process shows the system dialog.
+   * Export names the custom theme; main checks it is one before showing the dialog.
+   */
   theme: {
     import(): Promise<ThemeImportResult>
-    export(): Promise<ThemeExportResult>
+    export(input: ThemeExportInput): Promise<ThemeExportResult>
   }
   /** Interface zoom of the window (also bound to Ctrl/Cmd + = / - / 0 by the main process). */
   view: {
