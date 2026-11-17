@@ -102,9 +102,24 @@ const KAOMOJI_FORBIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f]/
 /** A name is one line without control characters. */
 const KAOMOJI_NAME_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
 
-/** Whether `text` may be a kaomoji's text: not blank, within the length limit, no control characters but line feeds and tabs. */
+/** Whether `text` may be inserted as a kaomoji: not empty, within the length limit, no control characters but line feeds and tabs. */
+function isInsertableKaomojiText(text: string): boolean {
+  return text !== '' && [...text].length <= KAOMOJI_LIMITS.length && !KAOMOJI_FORBIDDEN.test(text)
+}
+
+/** Why a text may not be the text of one of the user's own kaomoji. */
+export type KaomojiTextProblem = 'blank' | 'too-long' | 'forbidden'
+
+/** What keeps `text` from being one of the user's own kaomoji (blank, too long, control characters), or null. */
+export function kaomojiTextProblem(text: string): KaomojiTextProblem | null {
+  if (text.trim() === '') return 'blank'
+  if ([...text].length > KAOMOJI_LIMITS.length) return 'too-long'
+  return KAOMOJI_FORBIDDEN.test(text) ? 'forbidden' : null
+}
+
+/** Whether `text` may be the text of one of the user's own kaomoji: insertable and not blank. */
 export function isKaomojiText(text: string): boolean {
-  return text.trim() !== '' && [...text].length <= KAOMOJI_LIMITS.length && !KAOMOJI_FORBIDDEN.test(text)
+  return kaomojiTextProblem(text) === null
 }
 
 /** Whether `name` may be a kaomoji's name: already trimmed, 1–16 characters, one line, no control characters. */
@@ -368,10 +383,13 @@ function storedKaomoji(value: unknown, field: string): Parsed<CustomKaomoji[]> {
   return { ok: true, value: list }
 }
 
-/** An update replaces the whole list: at most the limit, each a valid kaomoji text, none repeated. */
+/**
+ * An update replaces the whole list: at most the limit, each an insertable text, none repeated.
+ * A blank text is allowed here, unlike in the user's own kaomoji: the 全角空格 preset inserts one.
+ */
 function parseRecentKaomoji(value: unknown, field: string): Parsed<string[]> {
   const issues: Issues = []
-  const list = stringList(value, field, isKaomojiText, KAOMOJI_LIMITS.recent, issues)
+  const list = stringList(value, field, isInsertableKaomojiText, KAOMOJI_LIMITS.recent, issues)
   return list === null ? { ok: false, issues } : { ok: true, value: list }
 }
 
@@ -381,7 +399,7 @@ function storedRecentKaomoji(value: unknown, field: string): Parsed<string[]> {
   const list: string[] = []
   for (const item of value) {
     if (list.length === KAOMOJI_LIMITS.recent) break
-    if (typeof item === 'string' && isKaomojiText(item) && !list.includes(item)) list.push(item)
+    if (typeof item === 'string' && isInsertableKaomojiText(item) && !list.includes(item)) list.push(item)
   }
   return { ok: true, value: list }
 }

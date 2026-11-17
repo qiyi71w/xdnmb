@@ -24,15 +24,26 @@ export function copyNumberItem(postId: string): ContextMenuItem {
 }
 
 /**
- * 复制选中文字 for a context menu opening now: null without a selection that has visible text, or
- * (with `within`) whose range does not reach that element. The text is taken as the menu opens,
- * so focus moving into the menu cannot lose it.
+ * The selected text for a context menu opening now: null without a selection that has visible text,
+ * or (with `within`) whose range does not reach that element. Taken as the menu opens, so focus
+ * moving into the menu cannot lose it.
  */
-export function selectionCopyItem(label = '复制选中文字', within: Element | null = null): ContextMenuItem | null {
+export function selectedText(within: Element | null = null): string | null {
   const selection = window.getSelection()
   const text = selection?.toString() ?? ''
   if (text.trim() === '') return null
   if (within !== null && (selection === null || selection.rangeCount === 0 || !selection.getRangeAt(0).intersectsNode(within))) return null
+  return text
+}
+
+/** 复制选中文字 for a context menu opening now, with the text `selectedText` takes; null without one. */
+export function selectionCopyItem(label = '复制选中文字', within: Element | null = null): ContextMenuItem | null {
+  const text = selectedText(within)
+  return text === null ? null : selectionTextCopyItem(text, label)
+}
+
+/** 复制选中文字 for `text`, already taken by `selectedText`. */
+export function selectionTextCopyItem(text: string, label = '复制选中文字'): ContextMenuItem {
   return copyTextItem('copy-selection', label, text, '')
 }
 
