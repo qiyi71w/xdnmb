@@ -1183,14 +1183,10 @@ dialog.compose-image-preview:not([open]) {
   outline-offset: 0;
 }
 
-/* Named presets (骰子, 防剧透 …) and named custom kaomoji show the name in the interface face, not the drawing. */
+/* Named presets (骰子, 防剧透 …) and named custom kaomoji show the name in the interface face, not the drawing,
+   in the same ink as the drawings beside them. */
 .kaomoji-item.is-named {
   font-family: var(--font-ui);
-  color: var(--ink-2);
-}
-
-.kaomoji-item.is-named:hover {
-  color: var(--ink);
 }
 
 .kaomoji-add {
@@ -1203,13 +1199,9 @@ dialog.compose-image-preview:not([open]) {
   display: inline-flex;
 }
 
+/* Room for the × only; the user's own look like the presets until hovered or focused. */
 .kaomoji-custom .kaomoji-item {
   padding-right: 20px;
-  background: var(--hover);
-}
-
-.kaomoji-custom .kaomoji-item:hover {
-  background: color-mix(in oklch, var(--hover), var(--ink) 6%);
 }
 
 /* The user's own: × to remove on hover or focus (Delete does the same from the keyboard). */
